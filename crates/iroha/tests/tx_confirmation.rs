@@ -104,6 +104,38 @@ fn duplicate_queue_before_approval_is_tolerated() {
     assert_eq!(result.unwrap(), hash);
 }
 
+#[test]
+fn batched_pipeline_events_confirm_transaction() {
+    let hash = make_hash();
+    let height = NonZeroU64::new(1).unwrap();
+    let batched = EventBox::PipelineBatch(vec![
+        PipelineEventBox::Transaction(TransactionEvent {
+            hash,
+            block_height: None,
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::GLOBAL,
+            status: TransactionStatus::Queued,
+        }),
+        PipelineEventBox::Transaction(TransactionEvent {
+            hash,
+            block_height: Some(height),
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::GLOBAL,
+            status: TransactionStatus::Approved,
+        }),
+    ]);
+    let events = vec![
+        Ok::<_, Report>(batched),
+        Ok(block_event(height, BlockStatus::Applied)),
+    ];
+    let mut stream = stream::iter(events);
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let result = rt.block_on(async {
+        listen_for_tx_confirmation_stream(&mut stream, hash, Duration::from_secs(1)).await
+    });
+    assert_eq!(result.unwrap(), hash);
+}
+
 fn assert_confirmation(block_status: BlockStatus) {
     let hash = make_hash();
     let height = NonZeroU64::new(1).unwrap();

@@ -24,13 +24,13 @@ fast transaction validation.
 
 ## Current Implementation
 
-- `TieredStateBackend` (see `crates/iroha_core/src/state/tiered.rs`) now walks
-  the WSV after each committed block, ranks keys by their last mutation, and
-  spills entries beyond the configured hot capacity to the on-disk cold tier.
-  Cold payloads are written using Norito encoding alongside a snapshot manifest
-  (`manifest.json`) that records key hashes, value fingerprints, and relative
-  spill paths. The manifest is written atomically (temp file + fsync) before the
-  snapshot directory is promoted.
+- `TieredStateBackend` (see `crates/iroha_core/src/state/tiered.rs`) now processes
+  per-block WSV diffs after each committed block, ranks keys by their last
+  mutation, and spills entries beyond the configured hot capacity to the
+  on-disk cold tier. Cold payloads are written using Norito encoding alongside a
+  snapshot manifest (`manifest.json`) that records key hashes, value
+  fingerprints, and relative spill paths. The manifest is written atomically
+  (temp file + fsync) before the snapshot directory is promoted.
 - Runtime configuration lives under `iroha_config.parameters.tiered_state`
   (`enabled`, `hot_retained_keys`, `hot_retained_bytes`, `hot_retained_grace_snapshots`,
   `cold_store_root`, `da_store_root`, `max_snapshots`, `max_cold_bytes`). The node
@@ -53,9 +53,11 @@ fast transaction validation.
   (always retaining the newest snapshot).
 - Changing `cold_store_root` or `da_store_root` resets the in-memory tiering
   metadata and snapshot counter so new roots start with a clean hot/cold ordering.
-- `StateBlock::commit` records a fresh snapshot under the configured primary cold
-  root (pruning older directories according to `max_snapshots`) while holding
-  the world-state write lock, guaranteeing deterministic manifests across peers.
+- `StateBlock::commit` records a fresh snapshot under the configured primary
+  cold root (pruning older directories according to `max_snapshots`) after
+  releasing the world-state write lock. Snapshot processing may be offloaded to
+  a background worker to keep block commit latency low while preserving
+  deterministic manifests across peers.
 - Snapshot directories use a zero-padded 20-digit index (e.g., `00000000000000000001`);
   pruning only targets those canonical snapshot directories so auxiliary folders
   such as `lanes/` and `retired/` remain intact.

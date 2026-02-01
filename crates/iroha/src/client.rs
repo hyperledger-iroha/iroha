@@ -9009,69 +9009,83 @@ where
                 }
             }
             event = event_iterator.next(), if stream_open => {
-                match event {
-                    Some(Ok(EventBox::Pipeline(this_event))) => {
-                        match this_event {
-                            PipelineEventBox::Transaction(transaction_event) => {
-                                match transaction_event.status() {
-                                    TransactionStatus::Queued => {
-                                        if let Some(first) = queued_at {
-                                            let elapsed = first.elapsed();
-                                            if elapsed > max_queued_duration {
-                                                warn!(%hash, ?elapsed, "transaction remained queued");
-                                                return Err(tx_confirmation_final_report(eyre!(
-                                                    "transaction queued for too long"
-                                                )));
-                                            }
-                                            // Duplicate queued notifications are possible; keep waiting.
-                                        } else {
-                                            queued_at = Some(Instant::now());
-                                            debug!(%hash, "transaction entered queue");
+                let mut handle_event = |this_event: PipelineEventBox| {
+                    match this_event {
+                        PipelineEventBox::Transaction(transaction_event) => {
+                            match transaction_event.status() {
+                                TransactionStatus::Queued => {
+                                    if let Some(first) = queued_at {
+                                        let elapsed = first.elapsed();
+                                        if elapsed > max_queued_duration {
+                                            warn!(%hash, ?elapsed, "transaction remained queued");
+                                            return Some(Err(tx_confirmation_final_report(eyre!(
+                                                "transaction queued for too long"
+                                            ))));
                                         }
-                                    }
-                                    TransactionStatus::Approved => {
-                                        debug!(
-                                            %hash,
-                                            height = ?transaction_event.block_height(),
-                                            "transaction approved"
-                                        );
-                                        block_height = transaction_event.block_height();
-                                    }
-                                    TransactionStatus::Rejected(reason) => {
-                                        warn!(%hash, ?reason, "transaction rejected during confirmation stream");
-                                        return Err(tx_confirmation_final_report(
-                                            tx_rejection_to_report(reason),
-                                        ));
-                                    }
-                                    TransactionStatus::Expired => {
-                                        warn!(%hash, "transaction expired during confirmation stream");
-                                        return Err(tx_confirmation_final_report(eyre!(
-                                            "Transaction expired"
-                                        )));
+                                        // Duplicate queued notifications are possible; keep waiting.
+                                    } else {
+                                        queued_at = Some(Instant::now());
+                                        debug!(%hash, "transaction entered queue");
                                     }
                                 }
-                            }
-                            PipelineEventBox::Block(block_event) => {
-                                if Some(block_event.header().height()) == block_height
-                                    && matches!(block_event.status(), BlockStatus::Applied)
-                                {
+                                TransactionStatus::Approved => {
                                     debug!(
                                         %hash,
-                                        height = block_event.header().height().get(),
-                                        status = ?block_event.status(),
-                                        "transaction applied observed in block event"
+                                        height = ?transaction_event.block_height(),
+                                        "transaction approved"
                                     );
-                                    return Ok(hash);
+                                    block_height = transaction_event.block_height();
+                                }
+                                TransactionStatus::Rejected(reason) => {
+                                    warn!(%hash, ?reason, "transaction rejected during confirmation stream");
+                                    return Some(Err(tx_confirmation_final_report(
+                                        tx_rejection_to_report(reason),
+                                    )));
+                                }
+                                TransactionStatus::Expired => {
+                                    warn!(%hash, "transaction expired during confirmation stream");
+                                    return Some(Err(tx_confirmation_final_report(eyre!(
+                                        "Transaction expired"
+                                    ))));
                                 }
                             }
-                            PipelineEventBox::Warning(_w) => {
-                                // Ignore warnings for tx confirmation flow
+                        }
+                        PipelineEventBox::Block(block_event) => {
+                            if Some(block_event.header().height()) == block_height
+                                && matches!(block_event.status(), BlockStatus::Applied)
+                            {
+                                debug!(
+                                    %hash,
+                                    height = block_event.header().height().get(),
+                                    status = ?block_event.status(),
+                                    "transaction applied observed in block event"
+                                );
+                                return Some(Ok(hash));
                             }
-                            PipelineEventBox::Merge(_merge_event) => {
-                                // Merge-ledger commits are orthogonal to transaction confirmation flow
-                            }
-                            PipelineEventBox::Witness(_witness) => {
-                                // Witness events do not influence transaction confirmation flow.
+                        }
+                        PipelineEventBox::Warning(_w) => {
+                            // Ignore warnings for tx confirmation flow
+                        }
+                        PipelineEventBox::Merge(_merge_event) => {
+                            // Merge-ledger commits are orthogonal to transaction confirmation flow
+                        }
+                        PipelineEventBox::Witness(_witness) => {
+                            // Witness events do not influence transaction confirmation flow.
+                        }
+                    }
+                    None
+                };
+
+                match event {
+                    Some(Ok(EventBox::Pipeline(this_event))) => {
+                        if let Some(result) = handle_event(this_event) {
+                            return result;
+                        }
+                    }
+                    Some(Ok(EventBox::PipelineBatch(events))) => {
+                        for this_event in events {
+                            if let Some(result) = handle_event(this_event) {
+                                return result;
                             }
                         }
                     }

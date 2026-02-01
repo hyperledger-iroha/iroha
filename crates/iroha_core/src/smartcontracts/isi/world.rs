@@ -1189,6 +1189,7 @@ pub mod isi {
                 .world
                 .verifying_keys_by_circuit
                 .insert(circuit_key, id.clone());
+            state_transaction.mark_confidential_registry_dirty();
             // Emit verifying key registered event
             state_transaction.world.emit_events(Some(
                 iroha_data_model::events::data::verifying_keys::VerifyingKeyEvent::Registered(
@@ -4705,6 +4706,7 @@ pub mod isi {
                 .world
                 .verifying_keys_by_circuit
                 .insert(new_key, id.clone());
+            state_transaction.mark_confidential_registry_dirty();
             // Emit verifying key updated event
             state_transaction.world.emit_events(Some(
                 iroha_data_model::events::data::verifying_keys::VerifyingKeyEvent::Updated(
@@ -5069,6 +5071,7 @@ pub mod isi {
                 ));
             }
             state_transaction.world.pedersen_params.insert(id, params);
+            state_transaction.mark_confidential_registry_dirty();
             Ok(())
         }
     }
@@ -5108,6 +5111,7 @@ pub mod isi {
 
             state_transaction.world.pedersen_params.remove(*id);
             state_transaction.world.pedersen_params.insert(*id, current);
+            state_transaction.mark_confidential_registry_dirty();
             Ok(())
         }
     }
@@ -5143,6 +5147,7 @@ pub mod isi {
                 ));
             }
             state_transaction.world.poseidon_params.insert(id, params);
+            state_transaction.mark_confidential_registry_dirty();
             Ok(())
         }
     }
@@ -5182,6 +5187,7 @@ pub mod isi {
 
             state_transaction.world.poseidon_params.remove(*id);
             state_transaction.world.poseidon_params.insert(*id, current);
+            state_transaction.mark_confidential_registry_dirty();
             Ok(())
         }
     }

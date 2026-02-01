@@ -12,7 +12,12 @@ use iroha_data_model::events::prelude::EventBox;
 pub fn events_json_filtered(events: &[EventBox]) -> String {
     let mut filtered: Vec<_> = events
         .iter()
-        .filter(|e| !matches!(e, EventBox::Time(_) | EventBox::Pipeline(_)))
+        .filter(|e| {
+            !matches!(
+                e,
+                EventBox::Time(_) | EventBox::Pipeline(_) | EventBox::PipelineBatch(_)
+            )
+        })
         .cloned()
         .collect();
     // Sort deterministically by JSON representation so parallel/sequential ordering differences don't churn fixtures.

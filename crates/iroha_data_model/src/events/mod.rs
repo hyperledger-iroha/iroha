@@ -108,6 +108,7 @@ pub mod trigger_completed;
 mod tests {
     use std::{str::FromStr, sync::Arc};
 
+    use iroha_crypto::Hash;
     use iroha_primitives::json::Json;
 
     use super::*;
@@ -128,6 +129,44 @@ mod tests {
         let shared = SharedDataEvent::from_arc(Arc::clone(&event));
         assert!(Arc::ptr_eq(shared.as_arc(), &event));
     }
+
+    #[cfg(feature = "transparent_api")]
+    #[test]
+    fn pipeline_batch_filters_match_any_event() {
+        use crate::events::pipeline::{
+            PipelineEventBox, TransactionEvent, TransactionEventFilter, TransactionStatus,
+        };
+        use crate::nexus::{DataSpaceId, LaneId};
+        use iroha_crypto::HashOf;
+
+        let hash_a = HashOf::from_untyped_unchecked(Hash::prehashed([1_u8; Hash::LENGTH]));
+        let hash_b = HashOf::from_untyped_unchecked(Hash::prehashed([2_u8; Hash::LENGTH]));
+
+        let ev_a: PipelineEventBox = TransactionEvent {
+            hash: hash_a,
+            block_height: None,
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::GLOBAL,
+            status: TransactionStatus::Queued,
+        }
+        .into();
+        let ev_b: PipelineEventBox = TransactionEvent {
+            hash: hash_b,
+            block_height: None,
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::GLOBAL,
+            status: TransactionStatus::Queued,
+        }
+        .into();
+
+        let event = EventBox::PipelineBatch(vec![ev_a.clone(), ev_b.clone()]);
+        let filter: EventFilterBox = TransactionEventFilter::default().for_hash(hash_a).into();
+        assert!(filter.matches(&event));
+
+        let hash_c = HashOf::from_untyped_unchecked(Hash::prehashed([3_u8; Hash::LENGTH]));
+        let filter: EventFilterBox = TransactionEventFilter::default().for_hash(hash_c).into();
+        assert!(!filter.matches(&event));
+    }
 }
 
 #[model]
@@ -140,6 +179,8 @@ mod model {
     pub enum EventBox {
         /// Pipeline event.
         Pipeline(pipeline::PipelineEventBox),
+        /// Batch of pipeline events emitted together.
+        PipelineBatch(Vec<pipeline::PipelineEventBox>),
         /// Data event.
         Data(#[skip_from] super::SharedDataEvent),
         /// Time event.
@@ -350,6 +391,9 @@ impl EventFilter for EventFilterBox {
     fn matches(&self, event: &EventBox) -> bool {
         match (event, self) {
             (EventBox::Pipeline(event), Self::Pipeline(filter)) => filter.matches(event),
+            (EventBox::PipelineBatch(events), Self::Pipeline(filter)) => {
+                events.iter().any(|event| filter.matches(event))
+            }
             (EventBox::Data(event), Self::Data(filter)) => filter.matches(event),
             (EventBox::Time(event), Self::Time(filter)) => filter.matches(event),
             (EventBox::ExecuteTrigger(event), Self::ExecuteTrigger(filter)) => {
@@ -361,6 +405,7 @@ impl EventFilter for EventFilterBox {
             // Fail to compile in case when new variant to event or filter is added
             (
                 EventBox::Pipeline(_)
+                | EventBox::PipelineBatch(_)
                 | EventBox::Data(_)
                 | EventBox::Time(_)
                 | EventBox::ExecuteTrigger(_)

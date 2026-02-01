@@ -20090,50 +20090,77 @@ pub fn handle_v1_events_sse(
             proof_call_hash.as_ref(),
             proof_envelope_hash.as_ref(),
         );
-    let rx = events.subscribe();
-    let stream = stream::unfold(rx, move |mut rx| {
-        let filters = filters.clone();
-        let proof_backend = proof_backend.clone();
-        let proof_call_hash = proof_call_hash.clone();
-        let proof_envelope_hash = proof_envelope_hash.clone();
-        async move {
-            use tokio::sync::broadcast::error::RecvError;
-            loop {
-                match rx.recv().await {
-                    Ok(event_box) => {
-                        if let Some(flt) = filters.as_ref() {
-                            // Drop events that don't match any filter.
-                            if !flt.iter().any(|f| f.matches(&event_box)) {
-                                continue;
-                            }
-                        }
-                        if !crate::proof_filters::event_matches_proof_filters(
-                            &event_box,
-                            proof_backend.as_ref(),
-                            proof_call_hash.as_ref(),
-                            proof_envelope_hash.as_ref(),
-                            proof_only,
-                        ) {
-                            continue;
-                        }
+    let stream = stream::unfold(
+        EventsSseState {
+            rx: events.subscribe(),
+            pending: VecDeque::new(),
+        },
+        move |mut state| {
+            let filters = filters.clone();
+            let proof_backend = proof_backend.clone();
+            let proof_call_hash = proof_call_hash.clone();
+            let proof_envelope_hash = proof_envelope_hash.clone();
+            async move {
+                use tokio::sync::broadcast::error::RecvError;
+                loop {
+                    if let Some(event_box) = state.pending.pop_front() {
                         let json_val = event_to_json_value(&event_box);
                         let json =
                             norito::json::to_json(&json_val).unwrap_or_else(|_| "{}".to_owned());
                         let ev = SseEvent::default().data(json);
-                        return Some((Ok(ev), rx));
+                        return Some((Ok(ev), state));
                     }
-                    Err(RecvError::Lagged(_)) => {
-                        // Skip lagged messages but keep the stream alive.
-                        let ev = SseEvent::default().comment("lagged");
-                        return Some((Ok(ev), rx));
+                    match state.rx.recv().await {
+                        Ok(event_box) => {
+                            let mut consider_event = |event_box| {
+                                if let Some(flt) = filters.as_ref() {
+                                    // Drop events that don't match any filter.
+                                    if !flt.iter().any(|f| f.matches(&event_box)) {
+                                        return;
+                                    }
+                                }
+                                if !crate::proof_filters::event_matches_proof_filters(
+                                    &event_box,
+                                    proof_backend.as_ref(),
+                                    proof_call_hash.as_ref(),
+                                    proof_envelope_hash.as_ref(),
+                                    proof_only,
+                                ) {
+                                    return;
+                                }
+                                state.pending.push_back(event_box);
+                            };
+
+                            match event_box {
+                                EventBox::PipelineBatch(events) => {
+                                    for event in events {
+                                        consider_event(EventBox::Pipeline(event));
+                                    }
+                                }
+                                event_box => {
+                                    consider_event(event_box);
+                                }
+                            }
+                        }
+                        Err(RecvError::Lagged(_)) => {
+                            // Skip lagged messages but keep the stream alive.
+                            let ev = SseEvent::default().comment("lagged");
+                            return Some((Ok(ev), state));
+                        }
+                        Err(RecvError::Closed) => return None,
                     }
-                    Err(RecvError::Closed) => return None,
                 }
             }
-        }
-    });
+        },
+    );
 
     Ok(Sse::new(stream))
+}
+
+#[cfg(feature = "app_api")]
+struct EventsSseState {
+    rx: tokio::sync::broadcast::Receiver<EventBox>,
+    pending: VecDeque<EventBox>,
 }
 
 #[derive(Clone, Copy)]
@@ -20280,14 +20307,29 @@ fn populate_explorer_queue(
 
 #[cfg(feature = "app_api")]
 fn committed_block_height(event: &EventBox) -> Option<u64> {
-    let EventBox::Pipeline(pipeline_event) = event else {
-        return None;
-    };
-    let PipelineEventBox::Block(block_event) = pipeline_event else {
-        return None;
-    };
-    match block_event.status() {
-        BlockStatus::Committed | BlockStatus::Applied => Some(block_event.header().height().get()),
+    match event {
+        EventBox::Pipeline(pipeline_event) => {
+            let PipelineEventBox::Block(block_event) = pipeline_event else {
+                return None;
+            };
+            match block_event.status() {
+                BlockStatus::Committed | BlockStatus::Applied => {
+                    Some(block_event.header().height().get())
+                }
+                _ => None,
+            }
+        }
+        EventBox::PipelineBatch(events) => events.iter().find_map(|event| {
+            let PipelineEventBox::Block(block_event) = event else {
+                return None;
+            };
+            match block_event.status() {
+                BlockStatus::Committed | BlockStatus::Applied => {
+                    Some(block_event.header().height().get())
+                }
+                _ => None,
+            }
+        }),
         _ => None,
     }
 }
@@ -25143,73 +25185,78 @@ pub async fn handle_v1_sumeragi_commit_qc(
 pub fn event_to_json_value(ev: &iroha_data_model::events::EventBox) -> norito::json::Value {
     use iroha_data_model::events::pipeline::PipelineEventBox;
     use norito::json::{Map, Value};
+    let pipeline_event_json = |p: &PipelineEventBox| match p {
+        PipelineEventBox::Transaction(t) => {
+            let mut m = Map::new();
+            m.insert("category".into(), Value::from("Pipeline"));
+            m.insert("event".into(), Value::from("Transaction"));
+            m.insert("hash".into(), Value::from(format!("{}", t.hash)));
+            m.insert("lane_id".into(), Value::from(u64::from(t.lane_id.as_u32())));
+            m.insert("dataspace_id".into(), Value::from(t.dataspace_id.as_u64()));
+            if let Some(h) = t.block_height {
+                m.insert("block_height".into(), Value::from(h.get()));
+            } else {
+                m.insert("block_height".into(), Value::Null);
+            }
+            m.insert("status".into(), Value::from(format!("{:?}", t.status)));
+            Value::Object(m)
+        }
+        PipelineEventBox::Block(b) => {
+            let mut m = Map::new();
+            m.insert("category".into(), Value::from("Pipeline"));
+            m.insert("event".into(), Value::from("Block"));
+            m.insert("status".into(), Value::from(format!("{:?}", b.status)));
+            Value::Object(m)
+        }
+        PipelineEventBox::Warning(w) => {
+            let mut m = Map::new();
+            m.insert("category".into(), Value::from("Pipeline"));
+            m.insert("event".into(), Value::from("Warning"));
+            m.insert("kind".into(), Value::from(w.kind.clone()));
+            m.insert("details".into(), Value::from(w.details.clone()));
+            // include minimal header info
+            m.insert("height".into(), Value::from(w.header.height().get()));
+            Value::Object(m)
+        }
+        PipelineEventBox::Merge(m) => {
+            let mut map = Map::new();
+            map.insert("category".into(), Value::from("Pipeline"));
+            map.insert("event".into(), Value::from("MergeLedger"));
+            map.insert("epoch_id".into(), Value::from(m.entry.epoch_id));
+            map.insert(
+                "global_state_root".into(),
+                Value::from(m.entry.global_state_root.to_string()),
+            );
+            Value::Object(map)
+        }
+        PipelineEventBox::Witness(w) => {
+            let mut map = Map::new();
+            map.insert("category".into(), Value::from("Pipeline"));
+            map.insert("event".into(), Value::from("Witness"));
+            map.insert(
+                "block_hash".into(),
+                Value::from(format!("{}", w.block_hash)),
+            );
+            map.insert("height".into(), Value::from(w.height));
+            map.insert("view".into(), Value::from(w.view));
+            map.insert("epoch".into(), Value::from(w.epoch));
+            map.insert(
+                "read_count".into(),
+                Value::from(w.witness.reads.len() as u64),
+            );
+            map.insert(
+                "write_count".into(),
+                Value::from(w.witness.writes.len() as u64),
+            );
+            Value::Object(map)
+        }
+    };
+
     match ev {
-        iroha_data_model::events::EventBox::Pipeline(p) => match p {
-            PipelineEventBox::Transaction(t) => {
-                let mut m = Map::new();
-                m.insert("category".into(), Value::from("Pipeline"));
-                m.insert("event".into(), Value::from("Transaction"));
-                m.insert("hash".into(), Value::from(format!("{}", t.hash)));
-                m.insert("lane_id".into(), Value::from(u64::from(t.lane_id.as_u32())));
-                m.insert("dataspace_id".into(), Value::from(t.dataspace_id.as_u64()));
-                if let Some(h) = t.block_height {
-                    m.insert("block_height".into(), Value::from(h.get()));
-                } else {
-                    m.insert("block_height".into(), Value::Null);
-                }
-                m.insert("status".into(), Value::from(format!("{:?}", t.status)));
-                Value::Object(m)
-            }
-            PipelineEventBox::Block(b) => {
-                let mut m = Map::new();
-                m.insert("category".into(), Value::from("Pipeline"));
-                m.insert("event".into(), Value::from("Block"));
-                m.insert("status".into(), Value::from(format!("{:?}", b.status)));
-                Value::Object(m)
-            }
-            PipelineEventBox::Warning(w) => {
-                let mut m = Map::new();
-                m.insert("category".into(), Value::from("Pipeline"));
-                m.insert("event".into(), Value::from("Warning"));
-                m.insert("kind".into(), Value::from(w.kind.clone()));
-                m.insert("details".into(), Value::from(w.details.clone()));
-                // include minimal header info
-                m.insert("height".into(), Value::from(w.header.height().get()));
-                Value::Object(m)
-            }
-            PipelineEventBox::Merge(m) => {
-                let mut map = Map::new();
-                map.insert("category".into(), Value::from("Pipeline"));
-                map.insert("event".into(), Value::from("MergeLedger"));
-                map.insert("epoch_id".into(), Value::from(m.entry.epoch_id));
-                map.insert(
-                    "global_state_root".into(),
-                    Value::from(m.entry.global_state_root.to_string()),
-                );
-                Value::Object(map)
-            }
-            PipelineEventBox::Witness(w) => {
-                let mut map = Map::new();
-                map.insert("category".into(), Value::from("Pipeline"));
-                map.insert("event".into(), Value::from("Witness"));
-                map.insert(
-                    "block_hash".into(),
-                    Value::from(format!("{}", w.block_hash)),
-                );
-                map.insert("height".into(), Value::from(w.height));
-                map.insert("view".into(), Value::from(w.view));
-                map.insert("epoch".into(), Value::from(w.epoch));
-                map.insert(
-                    "read_count".into(),
-                    Value::from(w.witness.reads.len() as u64),
-                );
-                map.insert(
-                    "write_count".into(),
-                    Value::from(w.witness.writes.len() as u64),
-                );
-                Value::Object(map)
-            }
-        },
+        iroha_data_model::events::EventBox::Pipeline(p) => pipeline_event_json(p),
+        iroha_data_model::events::EventBox::PipelineBatch(batch) => {
+            Value::Array(batch.iter().map(pipeline_event_json).collect())
+        }
         iroha_data_model::events::EventBox::Data(d) => {
             use iroha_data_model::prelude as de;
             match d.as_ref() {
@@ -25905,6 +25952,62 @@ mod sse_filter_validation_tests {
         };
         let res = handle_v1_events_sse(events, crate::NoritoQuery(params));
         assert!(res.is_err());
+    }
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod sse_stream_tests {
+    use axum::response::IntoResponse as _;
+    use http_body_util::BodyExt as _;
+    use iroha_crypto::{Hash, HashOf};
+    use iroha_data_model::{
+        events::{
+            EventBox,
+            pipeline::{PipelineEventBox, TransactionEvent, TransactionStatus},
+        },
+        nexus::{DataSpaceId, LaneId},
+        transaction::SignedTransaction,
+    };
+    use tokio::time::{Duration, timeout};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn sse_stream_expands_pipeline_batches() {
+        let events: EventsSender = tokio::sync::broadcast::channel(8).0;
+        let params = EventsSseParams { filter: None };
+        let sse = handle_v1_events_sse(events.clone(), crate::NoritoQuery(params))
+            .expect("create SSE stream");
+        let response = sse.into_response();
+        let mut body = response.into_body();
+
+        let hash = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed(
+            [0x11; Hash::LENGTH],
+        ));
+        let batch =
+            EventBox::PipelineBatch(vec![PipelineEventBox::Transaction(TransactionEvent {
+                hash,
+                block_height: None,
+                lane_id: LaneId::new(0),
+                dataspace_id: DataSpaceId::new(0),
+                status: TransactionStatus::Queued,
+            })]);
+        events.send(batch).expect("send batch event");
+
+        let frame = timeout(Duration::from_secs(1), body.frame())
+            .await
+            .expect("timeout waiting for SSE frame")
+            .expect("frame")
+            .expect("frame data");
+        let data = frame.into_data().expect("data frame");
+        let payload = std::str::from_utf8(&data).expect("utf8");
+        let data_line = payload
+            .lines()
+            .find(|line| line.starts_with("data: "))
+            .expect("data line");
+        let json = data_line.trim_start_matches("data: ").trim();
+        let value: norito::json::Value = norito::json::from_str(json).expect("json payload");
+        assert!(matches!(value, norito::json::Value::Object(_)));
     }
 }
 
@@ -41883,6 +41986,22 @@ mod tests {
         }
         .into();
         assert_eq!(super::committed_block_height(&committed), Some(7));
+        let committed_batch = EventBox::PipelineBatch(vec![PipelineEventBox::from(BlockEvent {
+            header: BlockHeader {
+                height: NonZeroU64::new(7).unwrap(),
+                prev_block_hash: None,
+                merkle_root: None,
+                result_merkle_root: None,
+                da_proof_policies_hash: None,
+                da_commitments_hash: None,
+                da_pin_intents_hash: None,
+                creation_time_ms: 0,
+                view_change_index: 0,
+                confidential_features: None,
+            },
+            status: BlockStatus::Committed,
+        })]);
+        assert_eq!(super::committed_block_height(&committed_batch), Some(7));
 
         let created_header = BlockHeader {
             height: NonZeroU64::new(3).unwrap(),
@@ -41902,6 +42021,22 @@ mod tests {
         }
         .into();
         assert!(super::committed_block_height(&created).is_none());
+        let created_batch = EventBox::PipelineBatch(vec![PipelineEventBox::from(BlockEvent {
+            header: BlockHeader {
+                height: NonZeroU64::new(3).unwrap(),
+                prev_block_hash: None,
+                merkle_root: None,
+                result_merkle_root: None,
+                da_proof_policies_hash: None,
+                da_commitments_hash: None,
+                da_pin_intents_hash: None,
+                creation_time_ms: 0,
+                view_change_index: 0,
+                confidential_features: None,
+            },
+            status: BlockStatus::Created,
+        })]);
+        assert!(super::committed_block_height(&created_batch).is_none());
     }
 
     #[test]
@@ -42172,13 +42307,25 @@ mod event_stream_tests {
         let hash = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed(
             [0x11; Hash::LENGTH],
         ));
-        let queued_event = EventBox::Pipeline(PipelineEventBox::Transaction(TransactionEvent {
-            hash,
-            block_height: None,
-            lane_id: LaneId::new(0),
-            dataspace_id: DataSpaceId::new(0),
-            status: TransactionStatus::Queued,
-        }));
+        let other_hash = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed(
+            [0x22; Hash::LENGTH],
+        ));
+        let queued_event = EventBox::PipelineBatch(vec![
+            PipelineEventBox::Transaction(TransactionEvent {
+                hash,
+                block_height: None,
+                lane_id: LaneId::new(0),
+                dataspace_id: DataSpaceId::new(0),
+                status: TransactionStatus::Queued,
+            }),
+            PipelineEventBox::Transaction(TransactionEvent {
+                hash: other_hash,
+                block_height: None,
+                lane_id: LaneId::new(0),
+                dataspace_id: DataSpaceId::new(0),
+                status: TransactionStatus::Queued,
+            }),
+        ]);
 
         let rx_holder = Arc::new(Mutex::new(Some(events.subscribe())));
         events

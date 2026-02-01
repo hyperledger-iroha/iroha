@@ -231,7 +231,7 @@ fn encode_entry(signer: &SigningAuthority) -> Result<Value, SignerVaultError> {
     object.insert("label".into(), Value::from(signer.label().to_owned()));
     object.insert(
         "account".into(),
-        Value::from(signer.account_id().to_string()),
+        Value::from(account_literal(signer.account_id())),
     );
     let private_key = signer.key_pair().private_key().clone();
     let exposed = ExposedPrivateKey(private_key);
@@ -247,6 +247,10 @@ fn encode_entry(signer: &SigningAuthority) -> Result<Value, SignerVaultError> {
         .collect();
     object.insert("roles".into(), Value::Array(roles));
     Ok(Value::Object(object))
+}
+
+fn account_literal(account_id: &AccountId) -> String {
+    format!("{account_id}@{}", account_id.domain())
 }
 
 fn extract_string(object: &Map, key: &str) -> Result<String, SignerVaultError> {

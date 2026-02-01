@@ -106,6 +106,7 @@ pub fn insert_verifying_key_record_for_test(
     if !circuit_key.0.trim().is_empty() {
         stx.world.verifying_keys_by_circuit.insert(circuit_key, id);
     }
+    stx.mark_confidential_registry_dirty();
     stx.apply();
     block
         .transactions

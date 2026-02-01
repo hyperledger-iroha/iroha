@@ -9,7 +9,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, LazyLock,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -157,6 +157,7 @@ mod tiered;
 use hex;
 use ivm::IVM;
 pub(crate) use tiered::TieredStateBackend;
+use tiered::{TieredKeyHandle, TieredSnapshotDiff, TieredSnapshotPayload};
 
 #[cfg(feature = "telemetry")]
 use crate::telemetry::ConfidentialTreeStats;
@@ -1779,6 +1780,101 @@ impl<'world> WorldBlock<'world> {
         &mut self,
     ) -> &mut StorageBlock<'world, u64, iroha_data_model::consensus::VrfEpochRecord> {
         &mut self.vrf_epochs
+    }
+
+    fn tiered_snapshot_diff(&self) -> TieredSnapshotDiff {
+        let mut diff = TieredSnapshotDiff::default();
+
+        macro_rules! collect_reverts {
+            ($storage:expr, $variant:ident) => {
+                for key in $storage.revert_map().keys() {
+                    diff.push(TieredKeyHandle::$variant(key.clone()));
+                }
+            };
+        }
+
+        collect_reverts!(self.domains, Domain);
+        collect_reverts!(self.accounts, Account);
+        collect_reverts!(self.account_rekey_records, AccountRekey);
+        collect_reverts!(self.asset_definitions, AssetDefinition);
+        collect_reverts!(self.assets, Asset);
+        collect_reverts!(self.asset_metadata, AssetMetadata);
+        collect_reverts!(self.nfts, Nft);
+        collect_reverts!(self.roles, Role);
+        collect_reverts!(self.account_permissions, AccountPermission);
+        collect_reverts!(self.account_roles, AccountRole);
+        collect_reverts!(self.tx_sequences, TxSequence);
+        collect_reverts!(self.verifying_keys, VerifyingKey);
+        collect_reverts!(self.runtime_upgrades, RuntimeUpgrade);
+        collect_reverts!(self.proofs, Proof);
+        collect_reverts!(self.proof_tags, ProofTag);
+        collect_reverts!(self.proofs_by_tag, ProofByTag);
+        collect_reverts!(self.commit_qcs, CommitQc);
+        collect_reverts!(self.contract_manifests, ContractManifest);
+        collect_reverts!(self.contract_code, ContractCode);
+        collect_reverts!(self.contract_instances, ContractInstance);
+        collect_reverts!(self.smart_contract_state, SmartContractState);
+        collect_reverts!(self.zk_assets, ZkAsset);
+        collect_reverts!(self.elections, Election);
+        collect_reverts!(self.governance_proposals, GovernanceProposal);
+        collect_reverts!(self.governance_referenda, GovernanceReferendum);
+        collect_reverts!(self.governance_locks, GovernanceLock);
+        collect_reverts!(self.governance_slashes, GovernanceSlash);
+        collect_reverts!(self.council, Council);
+        collect_reverts!(self.parliament_bodies, ParliamentBodies);
+        collect_reverts!(self.offline_allowances, OfflineAllowance);
+        collect_reverts!(self.offline_verdict_revocations, OfflineVerdictRevocation);
+        collect_reverts!(self.offline_to_online_transfers, OfflineTransfer);
+
+        diff
+    }
+
+    fn tiered_snapshot_payload(&self) -> TieredSnapshotPayload {
+        let mut payload = TieredSnapshotPayload::default();
+
+        macro_rules! collect_payload {
+            ($storage:expr, $variant:ident) => {
+                for key in $storage.revert_map().keys() {
+                    let value = $storage.get(key).cloned();
+                    payload.push_value(TieredKeyHandle::$variant(key.clone()), value);
+                }
+            };
+        }
+
+        collect_payload!(self.domains, Domain);
+        collect_payload!(self.accounts, Account);
+        collect_payload!(self.account_rekey_records, AccountRekey);
+        collect_payload!(self.asset_definitions, AssetDefinition);
+        collect_payload!(self.assets, Asset);
+        collect_payload!(self.asset_metadata, AssetMetadata);
+        collect_payload!(self.nfts, Nft);
+        collect_payload!(self.roles, Role);
+        collect_payload!(self.account_permissions, AccountPermission);
+        collect_payload!(self.account_roles, AccountRole);
+        collect_payload!(self.tx_sequences, TxSequence);
+        collect_payload!(self.verifying_keys, VerifyingKey);
+        collect_payload!(self.runtime_upgrades, RuntimeUpgrade);
+        collect_payload!(self.proofs, Proof);
+        collect_payload!(self.proof_tags, ProofTag);
+        collect_payload!(self.proofs_by_tag, ProofByTag);
+        collect_payload!(self.commit_qcs, CommitQc);
+        collect_payload!(self.contract_manifests, ContractManifest);
+        collect_payload!(self.contract_code, ContractCode);
+        collect_payload!(self.contract_instances, ContractInstance);
+        collect_payload!(self.smart_contract_state, SmartContractState);
+        collect_payload!(self.zk_assets, ZkAsset);
+        collect_payload!(self.elections, Election);
+        collect_payload!(self.governance_proposals, GovernanceProposal);
+        collect_payload!(self.governance_referenda, GovernanceReferendum);
+        collect_payload!(self.governance_locks, GovernanceLock);
+        collect_payload!(self.governance_slashes, GovernanceSlash);
+        collect_payload!(self.council, Council);
+        collect_payload!(self.parliament_bodies, ParliamentBodies);
+        collect_payload!(self.offline_allowances, OfflineAllowance);
+        collect_payload!(self.offline_verdict_revocations, OfflineVerdictRevocation);
+        collect_payload!(self.offline_to_online_transfers, OfflineTransfer);
+
+        payload
     }
 }
 
@@ -4244,6 +4340,229 @@ mod stateless_validation_cache_tests {
     }
 }
 
+/// Background persistor for DA shard cursor journals.
+struct DaShardCursorJournalPersistor {
+    inner: Arc<DaShardCursorJournalPersistorInner>,
+    background_enabled: bool,
+}
+
+struct DaShardCursorJournalPersistorInner {
+    pending: parking_lot::Mutex<Option<DaShardCursorJournal>>,
+    cvar: parking_lot::Condvar,
+    shutdown: AtomicBool,
+}
+
+impl DaShardCursorJournalPersistor {
+    fn new() -> Self {
+        let inner = Arc::new(DaShardCursorJournalPersistorInner {
+            pending: parking_lot::Mutex::new(None),
+            cvar: parking_lot::Condvar::new(),
+            shutdown: AtomicBool::new(false),
+        });
+
+        let thread_inner = Arc::clone(&inner);
+        let background_enabled = match std::thread::Builder::new()
+            .name("da-shard-cursor-journal".to_string())
+            .spawn(move || {
+                loop {
+                    let journal = {
+                        let mut guard = thread_inner.pending.lock();
+                        while guard.is_none() && !thread_inner.shutdown.load(Ordering::Relaxed) {
+                            thread_inner.cvar.wait(&mut guard);
+                        }
+                        if guard.is_none() && thread_inner.shutdown.load(Ordering::Relaxed) {
+                            return;
+                        }
+                        guard.take()
+                    };
+
+                    if let Some(journal) = journal {
+                        if let Err(err) = journal.persist() {
+                            warn!(?err, "failed to persist DA shard cursor journal");
+                        }
+                    }
+                }
+            }) {
+            Ok(_handle) => true,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    "failed to spawn DA shard cursor journal persistor; falling back to synchronous writes"
+                );
+                false
+            }
+        };
+
+        Self {
+            inner,
+            background_enabled,
+        }
+    }
+
+    fn schedule(&self, journal: DaShardCursorJournal) {
+        if !self.background_enabled {
+            if let Err(err) = journal.persist() {
+                warn!(?err, "failed to persist DA shard cursor journal");
+            }
+            return;
+        }
+        let mut guard = self.inner.pending.lock();
+        *guard = Some(journal);
+        self.inner.cvar.notify_one();
+    }
+}
+
+impl Drop for DaShardCursorJournalPersistor {
+    fn drop(&mut self) {
+        if !self.background_enabled {
+            return;
+        }
+        self.inner.shutdown.store(true, Ordering::Relaxed);
+        self.inner.cvar.notify_one();
+    }
+}
+
+#[cfg(feature = "telemetry")]
+fn record_tiered_snapshot_metrics(backend: &TieredStateBackend, telemetry: &StateTelemetry) {
+    let manifest = backend.last_manifest().cloned();
+    let hot_limit = backend.hot_retained_bytes();
+    let cold_limit = backend.max_cold_bytes();
+    let cold_store_bytes = match backend.cold_store_bytes() {
+        Ok(value) => value,
+        Err(err) => {
+            warn!(?err, "tiered-state: failed to measure cold store bytes");
+            None
+        }
+    };
+    if let Some(manifest) = manifest {
+        let hot_bytes = manifest.hot_entries.iter().fold(0u64, |acc, entry| {
+            acc.saturating_add(u64::try_from(entry.value_size_bytes()).unwrap_or(u64::MAX))
+        });
+        crate::telemetry::record_state_tiered_snapshot(
+            telemetry,
+            manifest.snapshot_index,
+            manifest.hot_entries.len(),
+            hot_bytes,
+            manifest.cold_entries.len(),
+            manifest.cold_bytes_total,
+            manifest.hot_promotions,
+            manifest.hot_demotions,
+            manifest.hot_grace_overflow_keys,
+            manifest.hot_grace_overflow_bytes,
+            manifest.cold_reused_entries,
+            manifest.cold_reused_bytes,
+        );
+        telemetry.record_storage_budget_usage("wsv_hot", hot_bytes, hot_limit);
+        if hot_limit > 0 && manifest.hot_grace_overflow_bytes > 0 {
+            telemetry.inc_storage_budget_exceeded("wsv_hot");
+        }
+        if let Some(cold_used) = cold_store_bytes {
+            telemetry.record_storage_budget_usage("wsv_cold", cold_used, cold_limit);
+            if cold_limit > 0 && cold_used > cold_limit {
+                telemetry.inc_storage_budget_exceeded("wsv_cold");
+            }
+        }
+    }
+}
+
+/// Background worker for tiered snapshot processing.
+struct TieredSnapshotWorker {
+    inner: Arc<TieredSnapshotWorkerInner>,
+    background_enabled: bool,
+}
+
+struct TieredSnapshotWorkerInner {
+    backend: Arc<parking_lot::Mutex<TieredStateBackend>>,
+    pending: parking_lot::Mutex<Option<TieredSnapshotPayload>>,
+    cvar: parking_lot::Condvar,
+    shutdown: AtomicBool,
+    #[cfg(feature = "telemetry")]
+    telemetry: Option<StateTelemetry>,
+}
+
+impl TieredSnapshotWorker {
+    fn new(
+        backend: Arc<parking_lot::Mutex<TieredStateBackend>>,
+        #[cfg(feature = "telemetry")] telemetry: Option<StateTelemetry>,
+    ) -> Self {
+        let inner = Arc::new(TieredSnapshotWorkerInner {
+            backend,
+            pending: parking_lot::Mutex::new(None),
+            cvar: parking_lot::Condvar::new(),
+            shutdown: AtomicBool::new(false),
+            #[cfg(feature = "telemetry")]
+            telemetry,
+        });
+
+        let thread_inner = Arc::clone(&inner);
+        let background_enabled = match std::thread::Builder::new()
+            .name("tiered-snapshot".to_string())
+            .spawn(move || {
+                loop {
+                    let payload = {
+                        let mut guard = thread_inner.pending.lock();
+                        while guard.is_none() && !thread_inner.shutdown.load(Ordering::Relaxed) {
+                            thread_inner.cvar.wait(&mut guard);
+                        }
+                        if guard.is_none() && thread_inner.shutdown.load(Ordering::Relaxed) {
+                            return;
+                        }
+                        guard.take()
+                    };
+
+                    if let Some(payload) = payload {
+                        let mut backend = thread_inner.backend.lock();
+                        if let Err(err) = backend.record_world_snapshot_with_payload(&payload) {
+                            warn!(?err, "tiered-state: failed to record snapshot");
+                        }
+                        #[cfg(feature = "telemetry")]
+                        if let Some(telemetry) = thread_inner.telemetry.as_ref() {
+                            record_tiered_snapshot_metrics(&backend, telemetry);
+                        }
+                    }
+                }
+            }) {
+            Ok(_handle) => true,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    "failed to spawn tiered snapshot worker; falling back to synchronous snapshots"
+                );
+                false
+            }
+        };
+
+        Self {
+            inner,
+            background_enabled,
+        }
+    }
+
+    fn enabled(&self) -> bool {
+        self.background_enabled
+    }
+
+    fn schedule(&self, payload: TieredSnapshotPayload) -> bool {
+        if !self.background_enabled {
+            return false;
+        }
+        let mut guard = self.inner.pending.lock();
+        *guard = Some(payload);
+        self.inner.cvar.notify_one();
+        true
+    }
+}
+
+impl Drop for TieredSnapshotWorker {
+    fn drop(&mut self) {
+        if !self.background_enabled {
+            return;
+        }
+        self.inner.shutdown.store(true, Ordering::Relaxed);
+        self.inner.cvar.notify_one();
+    }
+}
+
 /// Current state of the blockchain.
 ///
 /// Merge-ledger finality plumbing is specified in `docs/source/merge_ledger.md`.
@@ -4271,6 +4590,8 @@ pub struct State {
     pub da_receipt_cursors: parking_lot::RwLock<DaReceiptCursorIndex>,
     /// In-memory DA shard cursor index reconstructed from committed DA bundles.
     pub da_shard_cursors: parking_lot::RwLock<DaShardCursorIndex>,
+    /// Background persistor for DA shard cursor journal snapshots.
+    da_shard_cursor_persistor: DaShardCursorJournalPersistor,
     /// Durable commit-roster journal reconstructed at startup for block sync.
     pub commit_roster_journal: parking_lot::RwLock<CommitRosterJournal>,
     /// In-memory DA pin intent index mirrored from the on-chain registry.
@@ -4294,6 +4615,8 @@ pub struct State {
     pipeline_parallelism: PipelineParallelism,
     /// Stateless validation cache shared across blocks.
     stateless_validation_cache: parking_lot::Mutex<StatelessValidationCache>,
+    /// Cached confidential feature digest for proposal assembly.
+    confidential_digest_cache: ConfidentialDigestCacheStore,
     /// Cache for IVM trigger program summaries and runtime templates.
     trigger_ivm_cache: parking_lot::Mutex<IvmCache>,
     /// Oracle aggregation configuration.
@@ -4312,7 +4635,9 @@ pub struct State {
     /// Last block height where Nexus storage budget enforcement ran.
     nexus_storage_budget_last_check_height: AtomicU64,
     /// Tiered state backend coordinating hot/cold snapshots.
-    pub tiered_backend: parking_lot::Mutex<TieredStateBackend>,
+    pub tiered_backend: Arc<parking_lot::Mutex<TieredStateBackend>>,
+    /// Background worker for tiered snapshot processing.
+    tiered_snapshot_worker: TieredSnapshotWorker,
     /// Fraud monitoring configuration snapshot.
     pub fraud_monitoring: iroha_config::parameters::actual::FraudMonitoring,
     /// Zero-knowledge verification configuration (Halo2 backend limits, etc.).
@@ -4408,6 +4733,8 @@ pub struct StateBlock<'state> {
     pub zk_verify_calls_in_block: u32,
     /// Total confidential proof bytes seen in this block.
     pub zk_proof_bytes_in_block: u64,
+    /// Tracks whether confidential registries changed during this block.
+    confidential_registry_dirty: bool,
     /// Implicit accounts created so far in this block.
     pub implicit_account_creations_in_block: u32,
     /// Whether a `next_mode` update was applied in this block.
@@ -4421,7 +4748,7 @@ pub struct StateBlock<'state> {
     pub telemetry: &'state StateTelemetry,
     /// Lock to prevent getting inconsistent view of the state
     view_lock: &'state parking_lot::RwLock<()>,
-    tiered_backend: &'state parking_lot::Mutex<TieredStateBackend>,
+    tiered_backend: Arc<parking_lot::Mutex<TieredStateBackend>>,
     /// DA commitments indexed while WSV wiring lands.
     pub(crate) da_commitments:
         &'state parking_lot::RwLock<crate::da::commitment_store::DaCommitmentStore>,
@@ -4682,6 +5009,8 @@ pub struct StateTransaction<'block, 'state> {
     pub(crate) mode_cutover_next_set_in_block: &'block mut bool,
     /// Tracks whether `mode_activation_height` was updated in this block.
     pub(crate) mode_cutover_activation_set_in_block: &'block mut bool,
+    /// Tracks whether confidential registries were updated in this block.
+    confidential_registry_dirty: &'block mut bool,
     /// The world. Contains `domains`, `triggers`, `roles` and other data representing the current state of the blockchain.
     pub world: WorldTransaction<'block, 'state>,
     /// Blockchain.
@@ -4829,6 +5158,10 @@ impl<'block, 'state> StateTransaction<'block, 'state> {
         &self.world
     }
 
+    pub(crate) fn mark_confidential_registry_dirty(&mut self) {
+        *self.confidential_registry_dirty = true;
+    }
+
     #[cfg(feature = "iroha-core-tests")]
     /// Returns a mutable handle to the world view; available only in test builds.
     #[inline]
@@ -4955,6 +5288,52 @@ impl Drop for StateViewContextGuard {
 
 fn current_state_view_context() -> Option<&'static str> {
     STATE_VIEW_CONTEXT.with(std::cell::Cell::get)
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ConfidentialDigestCacheEntry {
+    generation: u64,
+    height: u64,
+    digest: ConfidentialFeatureDigest,
+}
+
+#[derive(Debug, Default)]
+struct ConfidentialDigestCacheStore {
+    generation: AtomicU64,
+    cached: parking_lot::RwLock<Option<ConfidentialDigestCacheEntry>>,
+}
+
+impl ConfidentialDigestCacheStore {
+    fn bump(&self) {
+        self.generation.fetch_add(1, Ordering::Relaxed);
+        *self.cached.write() = None;
+    }
+
+    fn get_or_compute(
+        &self,
+        world: &impl WorldReadOnly,
+        zk_config: &iroha_config::parameters::actual::Zk,
+        height: u64,
+    ) -> ConfidentialFeatureDigest {
+        let generation = self.generation.load(Ordering::Relaxed);
+        if let Some(entry) = self.cached.read().as_ref() {
+            if entry.generation == generation && entry.height == height {
+                return entry.digest;
+            }
+        }
+
+        let digest = compute_confidential_feature_digest(world, zk_config, height);
+        let generation_after = self.generation.load(Ordering::Relaxed);
+        if generation_after == generation {
+            let mut cached = self.cached.write();
+            *cached = Some(ConfidentialDigestCacheEntry {
+                generation,
+                height,
+                digest,
+            });
+        }
+        digest
+    }
 }
 
 /// Consistent point in time view of the [`State`]
@@ -11226,6 +11605,19 @@ impl State {
         }
     }
 
+    fn schedule_da_shard_cursor_journal_persist(&self) {
+        let path = self.da_shard_cursor_journal_path();
+        if path.as_os_str().is_empty() {
+            return;
+        }
+        let snapshot = {
+            let cursors = self.da_shard_cursors.read().clone();
+            let lane_config = self.nexus_snapshot().lane_config.clone();
+            DaShardCursorJournal::from_index(&lane_config, &cursors, &path)
+        };
+        self.da_shard_cursor_persistor.schedule(snapshot);
+    }
+
     fn restore_da_cursors_from_journal(
         &self,
         journal: &DaShardCursorJournal,
@@ -11277,6 +11669,21 @@ impl State {
         if path.as_os_str().is_empty() {
             return;
         }
+        let tmp_path = path.with_extension("norito.tmp");
+        let measure_bytes = |path: &Path| -> Option<u64> {
+            match std::fs::metadata(path) {
+                Ok(meta) => Some(meta.len()),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => Some(0),
+                Err(err) => {
+                    warn!(?err, path = %path.display(), "failed to stat commit roster journal");
+                    None
+                }
+            }
+        };
+        let before_bytes = match (measure_bytes(&path), measure_bytes(&tmp_path)) {
+            (Some(main), Some(tmp)) => Some(main.saturating_add(tmp)),
+            _ => None,
+        };
         let mut journal = self.commit_roster_journal.write();
         journal.upsert(commit_qc.clone(), checkpoint.clone(), stake_snapshot);
         if let Err(err) = journal.persist() {
@@ -11285,6 +11692,13 @@ impl State {
                 path = %path.display(),
                 "failed to persist commit roster journal"
             );
+        }
+        let after_bytes = match (measure_bytes(&path), measure_bytes(&tmp_path)) {
+            (Some(main), Some(tmp)) => Some(main.saturating_add(tmp)),
+            _ => None,
+        };
+        if let (Some(before_bytes), Some(after_bytes)) = (before_bytes, after_bytes) {
+            self.kura.update_disk_usage_delta(before_bytes, after_bytes);
         }
     }
 
@@ -12296,6 +12710,12 @@ impl State {
         let pipeline_parallelism = PipelineParallelism::new(&pipeline);
         let stateless_cache_cap = pipeline.stateless_cache_cap;
         let pipeline_cache_size = pipeline.cache_size;
+        let tiered_backend = Arc::new(parking_lot::Mutex::new(TieredStateBackend::default()));
+        let tiered_snapshot_worker = TieredSnapshotWorker::new(
+            Arc::clone(&tiered_backend),
+            #[cfg(feature = "telemetry")]
+            Some(telemetry_seed.clone()),
+        );
         let mut s = Self {
             world,
             block_hashes: BlockHashes::default(),
@@ -12313,6 +12733,7 @@ impl State {
                 crate::da::confidential_store::ConfidentialComputeStore::default(),
             ),
             da_shard_cursors,
+            da_shard_cursor_persistor: DaShardCursorJournalPersistor::new(),
             da_receipt_cursors: parking_lot::RwLock::new(DaReceiptCursorIndex::default()),
             commit_roster_journal: parking_lot::RwLock::new(commit_roster_journal),
             da_pin_intents: parking_lot::RwLock::new(DaPinStore::default()),
@@ -12325,6 +12746,7 @@ impl State {
             stateless_validation_cache: parking_lot::Mutex::new(StatelessValidationCache::new(
                 stateless_cache_cap,
             )),
+            confidential_digest_cache: ConfidentialDigestCacheStore::default(),
             trigger_ivm_cache: parking_lot::Mutex::new(IvmCache::with_capacity(
                 pipeline_cache_size,
             )),
@@ -12333,7 +12755,8 @@ impl State {
             streaming,
             nexus: parking_lot::RwLock::new(nexus),
             nexus_storage_budget_last_check_height: AtomicU64::new(0),
-            tiered_backend: parking_lot::Mutex::new(TieredStateBackend::default()),
+            tiered_backend: Arc::clone(&tiered_backend),
+            tiered_snapshot_worker,
             fraud_monitoring: default_fraud_monitoring_cfg(),
             zk: iroha_config::parameters::actual::Zk {
                 halo2: iroha_config::parameters::actual::Halo2 {
@@ -12873,6 +13296,7 @@ impl State {
             zk_confidential_ops_in_block: 0,
             zk_verify_calls_in_block: 0,
             zk_proof_bytes_in_block: 0,
+            confidential_registry_dirty: false,
             implicit_account_creations_in_block: 0,
             mode_cutover_next_set_in_block: false,
             mode_cutover_activation_set_in_block: false,
@@ -12880,7 +13304,7 @@ impl State {
             #[cfg(feature = "telemetry")]
             telemetry: &self.telemetry,
             view_lock: &self.view_lock,
-            tiered_backend: &self.tiered_backend,
+            tiered_backend: Arc::clone(&self.tiered_backend),
             da_commitments: &self.da_commitments,
             da_receipt_cursors: &self.da_receipt_cursors,
             da_shard_cursors: &self.da_shard_cursors,
@@ -12920,11 +13344,14 @@ impl State {
                 &sb.nexus.lane_config,
                 current_slot,
             );
-            apply_confidential_transitions(
+            let applied = apply_confidential_transitions(
                 &mut wtx,
                 &transitions,
                 sb.zk.registry_max_delta_per_block,
             );
+            if applied > 0 {
+                sb.confidential_registry_dirty = true;
+            }
             let term_blocks = sb.gov.parliament_term_blocks.max(1);
             let council_epoch = now_h.saturating_sub(1).saturating_div(term_blocks);
             // Collect candidates to open (avoid borrow conflicts)
@@ -13263,6 +13690,7 @@ impl State {
             zk_confidential_ops_in_block: 0,
             zk_verify_calls_in_block: 0,
             zk_proof_bytes_in_block: 0,
+            confidential_registry_dirty: false,
             implicit_account_creations_in_block: 0,
             mode_cutover_next_set_in_block: false,
             mode_cutover_activation_set_in_block: false,
@@ -13270,7 +13698,7 @@ impl State {
             #[cfg(feature = "telemetry")]
             telemetry: &self.telemetry,
             view_lock: &self.view_lock,
-            tiered_backend: &self.tiered_backend,
+            tiered_backend: Arc::clone(&self.tiered_backend),
             da_commitments: &self.da_commitments,
             da_receipt_cursors: &self.da_receipt_cursors,
             da_shard_cursors: &self.da_shard_cursors,
@@ -13383,6 +13811,16 @@ impl State {
             chain_id: self.chain_id.clone(),
             created_at: Instant::now(),
         }
+    }
+
+    pub(crate) fn cached_confidential_feature_digest(
+        &self,
+        world: &impl WorldReadOnly,
+        zk_config: &iroha_config::parameters::actual::Zk,
+        height: u64,
+    ) -> ConfidentialFeatureDigest {
+        self.confidential_digest_cache
+            .get_or_compute(world, zk_config, height)
     }
 
     /// Access the in-memory merge-ledger cache.
@@ -14386,7 +14824,7 @@ impl State {
 
     /// Update tiered state backend settings from configuration.
     pub fn set_tiered_backend(&mut self, cfg: &iroha_config::parameters::actual::TieredState) {
-        let backend = self.tiered_backend.get_mut();
+        let mut backend = self.tiered_backend.lock();
         backend.reconfigure(
             cfg.enabled,
             cfg.hot_retained_keys,
@@ -14408,6 +14846,7 @@ impl State {
     pub fn set_zk(&mut self, zk: iroha_config::parameters::actual::Zk) {
         crate::gas::configure_confidential_gas(zk.gas.into());
         self.zk = zk;
+        self.confidential_digest_cache.bump();
     }
 
     /// Configure the merge-ledger in-memory cache capacity. A value of 0
@@ -15335,7 +15774,7 @@ fn apply_confidential_transitions(
     world_tx: &mut WorldTransaction<'_, '_>,
     transitions: &[ConfidentialTransition],
     delta_limit: u32,
-) {
+) -> usize {
     let mut applied = 0usize;
     let cap = if delta_limit == 0 {
         usize::MAX
@@ -15388,6 +15827,8 @@ fn apply_confidential_transitions(
             }
         }
     }
+
+    applied
 }
 
 fn compute_final_confidential_statuses(
@@ -15951,6 +16392,7 @@ impl<'state> StateBlock<'state> {
             touched_lanes: &mut self.touched_lanes,
             mode_cutover_next_set_in_block: &mut self.mode_cutover_next_set_in_block,
             mode_cutover_activation_set_in_block: &mut self.mode_cutover_activation_set_in_block,
+            confidential_registry_dirty: &mut self.confidential_registry_dirty,
             world: self.world.trasaction(
                 #[cfg(feature = "telemetry")]
                 Some(self.telemetry),
@@ -16039,12 +16481,24 @@ impl<'state> StateBlock<'state> {
             transactions,
             commit_topology: committed_topology,
             prev_commit_topology: prev_committed_topology,
+            confidential_registry_dirty,
             view_lock,
             tiered_backend,
             #[cfg(feature = "zk-preverify")]
                 zk_dedup: _,
             ..
         } = self;
+        let use_background = state_ref.tiered_snapshot_worker.enabled() && {
+            let backend = tiered_backend.lock();
+            backend.enabled() && backend.has_entries()
+        };
+        let (tiered_payload, tiered_diff) = if use_background {
+            let payload = world.tiered_snapshot_payload();
+            let diff = TieredSnapshotDiff::from(&payload);
+            (Some(payload), Some(diff))
+        } else {
+            (None, Some(world.tiered_snapshot_diff()))
+        };
         {
             let view_lock_wait_start = Instant::now();
             let _view_lock = view_lock.write();
@@ -16123,63 +16577,40 @@ impl<'state> StateBlock<'state> {
                 return Err(err);
             }
         }
+        if confidential_registry_dirty {
+            state_ref.confidential_digest_cache.bump();
+        }
         // Snapshot after releasing the view lock to avoid lock-order inversion
         // between `view_lock` and `tiered_backend`.
-        let snapshot_err = {
+        let mut snapshot_recorded = false;
+        let snapshot_err = if use_background {
+            let payload = tiered_payload.expect("tiered payload missing");
+            if state_ref.tiered_snapshot_worker.schedule(payload) {
+                None
+            } else {
+                snapshot_recorded = true;
+                let diff = tiered_diff.expect("tiered diff missing");
+                let mut backend_guard = tiered_backend.lock();
+                backend_guard
+                    .record_world_snapshot_with_diff(&state_ref.world, &diff)
+                    .err()
+            }
+        } else {
+            snapshot_recorded = true;
+            let diff = tiered_diff.expect("tiered diff missing");
             let mut backend_guard = tiered_backend.lock();
-            backend_guard.record_world_snapshot(&state_ref.world).err()
+            backend_guard
+                .record_world_snapshot_with_diff(&state_ref.world, &diff)
+                .err()
         };
         if let Some(err) = snapshot_err {
             warn!(?err, "tiered-state: failed to record snapshot");
         }
         #[cfg(feature = "telemetry")]
         {
-            let (manifest, hot_limit, cold_limit, cold_store_bytes) = {
+            if snapshot_recorded {
                 let backend = tiered_backend.lock();
-                let manifest = backend.last_manifest().cloned();
-                let hot_limit = backend.hot_retained_bytes();
-                let cold_limit = backend.max_cold_bytes();
-                let cold_store_bytes = match backend.cold_store_bytes() {
-                    Ok(value) => value,
-                    Err(err) => {
-                        warn!(?err, "tiered-state: failed to measure cold store bytes");
-                        None
-                    }
-                };
-                (manifest, hot_limit, cold_limit, cold_store_bytes)
-            };
-            if let Some(manifest) = manifest {
-                let hot_bytes = manifest.hot_entries.iter().fold(0u64, |acc, entry| {
-                    acc.saturating_add(u64::try_from(entry.value_size_bytes()).unwrap_or(u64::MAX))
-                });
-                crate::telemetry::record_state_tiered_snapshot(
-                    &state_ref.telemetry,
-                    manifest.snapshot_index,
-                    manifest.hot_entries.len(),
-                    hot_bytes,
-                    manifest.cold_entries.len(),
-                    manifest.cold_bytes_total,
-                    manifest.hot_promotions,
-                    manifest.hot_demotions,
-                    manifest.hot_grace_overflow_keys,
-                    manifest.hot_grace_overflow_bytes,
-                    manifest.cold_reused_entries,
-                    manifest.cold_reused_bytes,
-                );
-                state_ref
-                    .telemetry
-                    .record_storage_budget_usage("wsv_hot", hot_bytes, hot_limit);
-                if hot_limit > 0 && manifest.hot_grace_overflow_bytes > 0 {
-                    state_ref.telemetry.inc_storage_budget_exceeded("wsv_hot");
-                }
-                if let Some(cold_used) = cold_store_bytes {
-                    state_ref
-                        .telemetry
-                        .record_storage_budget_usage("wsv_cold", cold_used, cold_limit);
-                    if cold_limit > 0 && cold_used > cold_limit {
-                        state_ref.telemetry.inc_storage_budget_exceeded("wsv_cold");
-                    }
-                }
+                record_tiered_snapshot_metrics(&backend, &state_ref.telemetry);
             }
         }
         state_ref.enforce_nexus_storage_budget(block_height);
@@ -16225,7 +16656,7 @@ impl<'state> StateBlock<'state> {
             self.state_ref
                 .advance_da_shard_cursors_from_bundle(height, &bundle.commitments)
                 .expect("DA shard cursor advancement must succeed for committed blocks");
-            self.state_ref.persist_da_shard_cursor_journal();
+            self.state_ref.schedule_da_shard_cursor_journal_persist();
             self.state_ref
                 .advance_da_receipt_cursors_from_bundle(height, &bundle.commitments)
                 .expect("DA receipt cursor advancement must succeed for committed blocks");
@@ -16268,7 +16699,7 @@ impl<'state> StateBlock<'state> {
         let prev_topology = self.commit_topology.take_vec();
         self.prev_commit_topology
             .mutate_vec(|vec| *vec = prev_topology);
-        let checkpoint_topology = topology.clone();
+        let checkpoint_topology = topology;
         let mut world_peers: Vec<PeerId> = self.world.peers().iter().cloned().collect();
         let roster_source = if checkpoint_topology.is_empty() {
             if world_peers.is_empty() {
@@ -17010,6 +17441,42 @@ mod state_commit_lock_order_tests {
 
         lane_handle.join().expect("lane lifecycle thread");
         commit_handle.join().expect("commit thread");
+    }
+}
+
+#[cfg(test)]
+mod tiered_snapshot_diff_tests {
+    use super::*;
+
+    #[test]
+    fn world_block_tiered_snapshot_diff_collects_changed_keys() {
+        let world = World::default();
+        let mut block = world.block();
+        let hash = iroha_crypto::Hash::new([7_u8; 32]);
+        block.contract_code.insert(hash, vec![1, 2, 3]);
+
+        let diff = block.tiered_snapshot_diff();
+        assert!(
+            diff.entries().iter().any(|entry| {
+                matches!(entry, TieredKeyHandle::ContractCode(key) if *key == hash)
+            })
+        );
+    }
+
+    #[test]
+    fn world_block_tiered_snapshot_payload_collects_changed_keys() {
+        let world = World::default();
+        let mut block = world.block();
+        let hash = iroha_crypto::Hash::new([9_u8; 32]);
+        block.contract_code.insert(hash, vec![4, 5, 6]);
+
+        let payload = block.tiered_snapshot_payload();
+        let diff = TieredSnapshotDiff::from(&payload);
+        assert!(
+            diff.entries().iter().any(|entry| {
+                matches!(entry, TieredKeyHandle::ContractCode(key) if *key == hash)
+            })
+        );
     }
 }
 
@@ -21199,6 +21666,12 @@ pub(crate) mod deserialize {
         let pipeline_parallelism = PipelineParallelism::new(&pipeline);
         let stateless_cache_cap = pipeline.stateless_cache_cap;
         let pipeline_cache_size = pipeline.cache_size;
+        let tiered_backend = Arc::new(parking_lot::Mutex::new(TieredStateBackend::default()));
+        let tiered_snapshot_worker = TieredSnapshotWorker::new(
+            Arc::clone(&tiered_backend),
+            #[cfg(feature = "telemetry")]
+            Some(telemetry_seed.clone()),
+        );
         let state = State {
             world,
             block_hashes,
@@ -21210,6 +21683,7 @@ pub(crate) mod deserialize {
             da_confidential_compute: parking_lot::RwLock::new(ConfidentialComputeStore::default()),
             da_receipt_cursors,
             da_shard_cursors,
+            da_shard_cursor_persistor: DaShardCursorJournalPersistor::new(),
             commit_roster_journal: parking_lot::RwLock::new(commit_roster_journal),
             da_pin_intents: parking_lot::RwLock::new(DaPinStore::default()),
             lane_relays: parking_lot::RwLock::new(LaneRelayStore::default()),
@@ -21225,6 +21699,7 @@ pub(crate) mod deserialize {
             stateless_validation_cache: parking_lot::Mutex::new(StatelessValidationCache::new(
                 stateless_cache_cap,
             )),
+            confidential_digest_cache: ConfidentialDigestCacheStore::default(),
             trigger_ivm_cache: parking_lot::Mutex::new(IvmCache::with_capacity(
                 pipeline_cache_size,
             )),
@@ -21232,7 +21707,8 @@ pub(crate) mod deserialize {
             crypto: parking_lot::RwLock::new(Arc::new(initial_crypto.clone())),
             nexus: parking_lot::RwLock::new(nexus),
             nexus_storage_budget_last_check_height: AtomicU64::new(0),
-            tiered_backend: parking_lot::Mutex::new(TieredStateBackend::default()),
+            tiered_backend: Arc::clone(&tiered_backend),
+            tiered_snapshot_worker,
             fraud_monitoring: default_fraud_monitoring_cfg(),
             zk: default_zk(),
             gov: default_governance(),
@@ -21674,6 +22150,9 @@ mod tests {
     #[cfg(feature = "sm")]
     use iroha_crypto::sm::Sm2PublicKey;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
+    use iroha_data_model::isi::verifying_keys;
+    use iroha_data_model::proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord};
+    use iroha_data_model::zk::BackendTag;
     use iroha_data_model::{
         block::{
             BlockHeader, SignedBlock,
@@ -22486,7 +22965,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let cold_root = temp_dir.path().join("cold");
         std::fs::write(&cold_root, b"blocker file").expect("blocker file");
-        *state.tiered_backend.get_mut() =
+        *state.tiered_backend.lock() =
             TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 1, 0);
 
         let plan = iroha_data_model::nexus::LaneLifecyclePlan {
@@ -25208,6 +25687,91 @@ mod tests {
             (record.epoch, record.sequence)
         );
         assert_eq!(cursor.last_block_height, 1);
+    }
+
+    #[test]
+    fn apply_without_execution_persists_da_shard_cursor_journal_in_background() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let store_root = temp_dir.path().join("kura");
+        let lane_count = nonzero!(1_u32);
+        let catalog =
+            LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
+        let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(store_root),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity:
+                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+            block_sync_roster_retention:
+                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention:
+                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+        state
+            .set_nexus(iroha_config::parameters::actual::Nexus {
+                lane_catalog: catalog,
+                lane_config: lane_config.clone(),
+                ..Default::default()
+            })
+            .expect("apply Nexus catalog for apply persistence test");
+
+        let record = DaCommitmentRecord::new(
+            LaneId::new(0),
+            1,
+            2,
+            BlobDigest::new([0xAA; 32]),
+            iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xBB; 32]),
+            DaProofScheme::MerkleSha256,
+            Hash::prehashed([0xCC; 32]),
+            Some(KzgCommitment::new([0xDD; 48])),
+            None,
+            RetentionClass::default(),
+            StorageTicketId::new([0xEE; 32]),
+            Signature::from_bytes(&[0x11; 64]),
+        );
+        let bundle = DaCommitmentBundle::new(vec![record.clone()]);
+        let keypair = KeyPair::random();
+        let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, None)
+            .with_da_commitments(Some(bundle))
+            .sign(keypair.private_key())
+            .unpack(|_| {});
+        let signed: SignedBlock = block.into();
+        let mut state_block = state.block(signed.header());
+        let valid = ValidBlock::validate_unchecked(signed, &mut state_block).unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        let _ = state_block.apply_without_execution(&committed, Vec::new());
+        state_block.commit().expect("commit state block");
+
+        let path = state.da_shard_cursor_journal_path();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !path.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            path.exists(),
+            "journal path should exist after background persist"
+        );
+        let journal = DaShardCursorJournal::load(&lane_config, &path).expect("load journal");
+        let cursor = journal
+            .cursor_for_lane(record.lane_id)
+            .expect("cursor persisted");
+        assert_eq!(
+            (cursor.epoch, cursor.sequence),
+            (record.epoch, record.sequence)
+        );
+        assert_eq!(
+            cursor.last_block_height,
+            committed.as_ref().header().height().get()
+        );
     }
 
     #[test]
@@ -29377,6 +29941,73 @@ mod tests {
             digest.conf_rules_version,
             Some(iroha_config::parameters::defaults::confidential::RULES_VERSION)
         );
+    }
+
+    #[test]
+    fn confidential_digest_cache_invalidates_on_registry_commit() {
+        use iroha_data_model::confidential::ConfidentialStatus;
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query);
+
+        let header1 = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let mut block1 = state.block(header1);
+        {
+            let mut stx = block1.transaction();
+            let domain_id: DomainId = "wonderland".parse().expect("domain id");
+            Register::domain(Domain::new(domain_id))
+                .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)
+                .expect("register domain");
+            Register::account(Account::new(ALICE_ID.clone()))
+                .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)
+                .expect("register account");
+            let perm = Permission::new(
+                "CanManageVerifyingKeys".parse().expect("permission"),
+                Json::new(()),
+            );
+            Grant::account_permission(perm, ALICE_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant verify key permission");
+            stx.apply();
+        }
+        block1.commit().expect("commit bootstrap");
+
+        let view = state.view();
+        let digest_before = state.cached_confidential_feature_digest(view.world(), &view.zk, 2);
+        drop(view);
+
+        let header2 = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+        let mut block2 = state.block(header2);
+        {
+            let mut stx = block2.transaction();
+            let id = VerifyingKeyId::new("halo2/ipa", "vk_cache");
+            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
+            let mut rec = VerifyingKeyRecord::new_with_owner(
+                1,
+                "vk_cache",
+                None,
+                "test",
+                BackendTag::Halo2IpaPasta,
+                "pallas",
+                [0x11; 32],
+                crate::zk::hash_vk(&vk_box),
+            );
+            rec.vk_len = 3;
+            rec.status = ConfidentialStatus::Active;
+            rec.key = Some(vk_box);
+            rec.gas_schedule_id = Some("halo2_default".into());
+            verifying_keys::RegisterVerifyingKey { id, record: rec }
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register verifying key");
+            stx.apply();
+        }
+        block2.commit().expect("commit verifying key");
+
+        let view = state.view();
+        let digest_after = state.cached_confidential_feature_digest(view.world(), &view.zk, 2);
+        assert_ne!(digest_before, digest_after);
+        assert!(digest_after.vk_set_hash.is_some());
     }
 
     #[test]

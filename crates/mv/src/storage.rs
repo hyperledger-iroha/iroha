@@ -210,6 +210,11 @@ mod block {
             self.revert.commit();
         }
 
+        /// Read-only access to the block revert map (keys touched in this block).
+        pub fn revert_map(&self) -> &BTreeMap<K, Option<V>> {
+            &self.revert
+        }
+
         /// Get mutable access to the value stored in
         pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
             self.blocks.get_mut(key).inspect(|value| {
@@ -733,5 +738,19 @@ mod tests {
         for (k, v) in map.iter() {
             assert_eq!(view.get(k), Some(v));
         }
+    }
+
+    #[test]
+    fn revert_map_tracks_changed_keys() {
+        let storage = Storage::<u64, u64>::new();
+
+        let mut block = storage.block();
+        block.insert(1, 10);
+        block.insert(2, 20);
+        block.remove(1);
+
+        let revert = block.revert_map();
+        assert!(revert.contains_key(&1));
+        assert!(revert.contains_key(&2));
     }
 }

@@ -32,7 +32,7 @@ fn canonical_event_fixture_produces_expected_category() {
     let event_box: EventBox = message.into();
 
     let category = match &event_box {
-        EventBox::Pipeline(_) => EventCategory::Pipeline,
+        EventBox::Pipeline(_) | EventBox::PipelineBatch(_) => EventCategory::Pipeline,
         EventBox::Data(_) => EventCategory::Data,
         EventBox::Time(_) => EventCategory::Time,
         EventBox::ExecuteTrigger(_) => EventCategory::ExecuteTrigger,

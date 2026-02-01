@@ -66,26 +66,56 @@ impl<'ws> Consumer<'ws> {
     /// Can fail due to timeout or sending event. Also receiving might fail
     #[iroha_futures::telemetry_future]
     pub async fn consume(&mut self, event: EventBox) -> Result<()> {
-        if !self.filters.iter().any(|filter| filter.matches(&event)) {
-            return Ok(());
-        }
-        if proof_filters::has_any_proof_filters(
-            self.proof_backend.as_ref(),
-            self.proof_call_hash.as_ref(),
-            self.proof_envelope_hash.as_ref(),
-        ) && !proof_filters::event_matches_proof_filters(
-            &event,
-            self.proof_backend.as_ref(),
-            self.proof_call_hash.as_ref(),
-            self.proof_envelope_hash.as_ref(),
-            false,
-        ) {
-            return Ok(());
-        }
+        match event {
+            EventBox::PipelineBatch(events) => {
+                for event in events {
+                    let event = EventBox::Pipeline(event);
+                    if !self.filters.iter().any(|filter| filter.matches(&event)) {
+                        continue;
+                    }
+                    if proof_filters::has_any_proof_filters(
+                        self.proof_backend.as_ref(),
+                        self.proof_call_hash.as_ref(),
+                        self.proof_envelope_hash.as_ref(),
+                    ) && !proof_filters::event_matches_proof_filters(
+                        &event,
+                        self.proof_backend.as_ref(),
+                        self.proof_call_hash.as_ref(),
+                        self.proof_envelope_hash.as_ref(),
+                        false,
+                    ) {
+                        continue;
+                    }
+                    self.stream
+                        .send(EventMessage(event))
+                        .await
+                        .map_err(Error::from)?;
+                }
+                Ok(())
+            }
+            event => {
+                if !self.filters.iter().any(|filter| filter.matches(&event)) {
+                    return Ok(());
+                }
+                if proof_filters::has_any_proof_filters(
+                    self.proof_backend.as_ref(),
+                    self.proof_call_hash.as_ref(),
+                    self.proof_envelope_hash.as_ref(),
+                ) && !proof_filters::event_matches_proof_filters(
+                    &event,
+                    self.proof_backend.as_ref(),
+                    self.proof_call_hash.as_ref(),
+                    self.proof_envelope_hash.as_ref(),
+                    false,
+                ) {
+                    return Ok(());
+                }
 
-        self.stream
-            .send(EventMessage(event))
-            .await
-            .map_err(Into::into)
+                self.stream
+                    .send(EventMessage(event))
+                    .await
+                    .map_err(Error::from)
+            }
+        }
     }
 }

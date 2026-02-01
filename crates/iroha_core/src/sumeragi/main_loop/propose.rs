@@ -327,35 +327,6 @@ impl Actor {
         Some(NonZeroU64::new(capped).expect("non-zero by construction"))
     }
 
-    pub(super) fn proposal_gas_cost(tx: &AcceptedTransaction<'_>) -> u64 {
-        use iroha_data_model::transaction::Executable;
-
-        match tx.as_ref().instructions() {
-            Executable::Instructions(batch) => {
-                let instructions: Vec<_> = batch.iter().map(Clone::clone).collect();
-                crate::gas::meter_instructions(&instructions)
-            }
-            Executable::Ivm(_) => match crate::executor::parse_gas_limit(tx.as_ref().metadata()) {
-                Ok(Some(limit)) => limit,
-                Ok(None) => {
-                    warn!(
-                        tx = %tx.as_ref().hash(),
-                        "missing gas_limit metadata while deriving proposal gas cost"
-                    );
-                    0
-                }
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        tx = %tx.as_ref().hash(),
-                        "invalid gas_limit metadata while deriving proposal gas cost"
-                    );
-                    0
-                }
-            },
-        }
-    }
-
     pub(super) fn pull_transactions_for_proposal(
         &self,
         state_view: &StateView,
@@ -418,7 +389,7 @@ impl Actor {
             if let Some(limit) = gas_limit_per_block {
                 let mut accepted = Vec::with_capacity(fetched.len());
                 for guard in fetched {
-                    let gas_cost = Self::proposal_gas_cost(guard.as_ref());
+                    let gas_cost = guard.gas_cost();
                     let remaining_gas = limit.saturating_sub(gas_used_in_block);
                     let would_exceed = gas_cost > remaining_gas && gas_cost > 0;
                     let allow_oversized = gas_used_in_block == 0 && accepted.is_empty();
@@ -502,6 +473,7 @@ impl Actor {
         topology: &mut super::network_topology::Topology,
         leader_index: usize,
         local_validator_index: u32,
+        view_snapshot: Option<StateView<'_>>,
         _now: Instant,
     ) -> Result<bool> {
         if self.is_observer() {
@@ -560,14 +532,15 @@ impl Actor {
 
         let queue_len = self.queue.queued_len();
         let mut tx_guards = Vec::new();
+        let state_view = view_snapshot.unwrap_or_else(|| self.state.view());
         let (
             _block_digest,
             conf_features,
             mut transactions,
             mut routing_decisions,
+            mut tx_sizes,
             deferred_transactions,
         ) = {
-            let state_view = self.state.view();
             let block_max_param = state_view.world().parameters().block().max_transactions();
             let (max_tx_target, max_in_block) = Self::max_tx_budget(
                 queue_len,
@@ -621,7 +594,7 @@ impl Actor {
             let next_height = committed_height
                 .checked_add(1)
                 .expect("block height exceeds u64::MAX");
-            let digest = compute_confidential_feature_digest(
+            let digest = self.state.cached_confidential_feature_digest(
                 state_view.world(),
                 &state_view.zk,
                 next_height,
@@ -634,6 +607,10 @@ impl Actor {
                 .iter()
                 .map(crate::queue::TransactionGuard::routing)
                 .collect();
+            let tx_sizes: Vec<usize> = tx_guards
+                .iter()
+                .map(crate::queue::TransactionGuard::encoded_len)
+                .collect();
             let conf_features = if digest.is_empty() {
                 None
             } else {
@@ -644,22 +621,26 @@ impl Actor {
                 conf_features,
                 transactions,
                 routing_decisions,
+                tx_sizes,
                 deferred_accumulator,
             )
         };
 
-        let (filtered_guards, filtered_transactions, filtered_routing, _dropped_committed) =
+        let (filtered_guards, filtered_transactions, filtered_routing, filtered_sizes, _dropped) =
             Self::filter_committed_transactions_for_proposal(
-                &self.state,
+                &state_view,
                 tx_guards,
                 transactions,
                 routing_decisions,
+                tx_sizes,
                 height,
                 view,
             );
         tx_guards = filtered_guards;
         transactions = filtered_transactions;
         routing_decisions = filtered_routing;
+        tx_sizes = filtered_sizes;
+        drop(state_view);
 
         if transactions.len() > 1 {
             let order = interleave_lane_indices(&routing_decisions);
@@ -674,6 +655,7 @@ impl Actor {
                 }
                 reorder_vec(&mut transactions, &order);
                 reorder_vec(&mut routing_decisions, &order);
+                reorder_vec(&mut tx_sizes, &order);
             }
         }
 
@@ -703,6 +685,7 @@ impl Actor {
         let da_enabled = self.runtime_da_enabled();
         let mut overflow_transactions = Vec::new();
         let mut oversized_frame_len: Option<usize> = None;
+        let tx_sizes_in = tx_sizes;
         let mut tx_batch;
         let mut routing_batch;
         let mut tx_sizes;
@@ -716,9 +699,12 @@ impl Actor {
             );
             tx_batch = Vec::with_capacity(transactions.len());
             routing_batch = Vec::with_capacity(routing_decisions.len());
-            tx_sizes = Vec::with_capacity(transactions.len());
-            for (tx, routing) in transactions.into_iter().zip(routing_decisions.into_iter()) {
-                let encoded_len = tx.as_ref().encode().len();
+            let mut tx_sizes_out = Vec::with_capacity(transactions.len());
+            for ((tx, routing), encoded_len) in transactions
+                .into_iter()
+                .zip(routing_decisions.into_iter())
+                .zip(tx_sizes_in.into_iter())
+            {
                 if encoded_len > self.consensus_payload_frame_cap {
                     oversized_frame_len =
                         Some(oversized_frame_len.map_or(encoded_len, |prev| prev.max(encoded_len)));
@@ -728,10 +714,11 @@ impl Actor {
                     continue;
                 }
                 remaining_budget = remaining_budget.saturating_sub(encoded_len);
-                tx_sizes.push(encoded_len);
+                tx_sizes_out.push(encoded_len);
                 tx_batch.push(tx);
                 routing_batch.push(routing);
             }
+            tx_sizes = tx_sizes_out;
         } else {
             let mut payload_budget = Some(non_rbc_payload_budget(
                 self.config.block.max_payload_bytes,
@@ -739,20 +726,24 @@ impl Actor {
             ));
             tx_batch = Vec::with_capacity(transactions.len());
             routing_batch = Vec::with_capacity(routing_decisions.len());
-            tx_sizes = Vec::with_capacity(transactions.len());
-            for (tx, routing) in transactions.into_iter().zip(routing_decisions.into_iter()) {
+            let mut tx_sizes_out = Vec::with_capacity(transactions.len());
+            for ((tx, routing), encoded_len) in transactions
+                .into_iter()
+                .zip(routing_decisions.into_iter())
+                .zip(tx_sizes_in.into_iter())
+            {
                 if let Some(budget) = payload_budget {
-                    let encoded_len = tx.as_ref().encode().len();
                     if encoded_len > budget {
                         overflow_transactions.push(tx);
                         continue;
                     }
                     payload_budget = Some(budget.saturating_sub(encoded_len));
-                    tx_sizes.push(encoded_len);
+                    tx_sizes_out.push(encoded_len);
                 }
                 tx_batch.push(tx);
                 routing_batch.push(routing);
             }
+            tx_sizes = tx_sizes_out;
         }
 
         if tx_batch.len() > 1 {
@@ -1497,28 +1488,31 @@ impl Actor {
     }
 
     pub(super) fn filter_committed_transactions_for_proposal(
-        state: &State,
+        state_view: &StateView<'_>,
         tx_guards: Vec<crate::queue::TransactionGuard>,
         transactions: Vec<AcceptedTransaction<'static>>,
         routing_decisions: Vec<RoutingDecision>,
+        tx_sizes: Vec<usize>,
         height: u64,
         view: u64,
     ) -> (
         Vec<crate::queue::TransactionGuard>,
         Vec<AcceptedTransaction<'static>>,
         Vec<RoutingDecision>,
+        Vec<usize>,
         usize,
     ) {
-        let state_view = state.view();
         let mut retained_guards = Vec::with_capacity(tx_guards.len());
         let mut retained_transactions = Vec::with_capacity(transactions.len());
         let mut retained_routing = Vec::with_capacity(routing_decisions.len());
+        let mut retained_sizes = Vec::with_capacity(tx_sizes.len());
         let mut dropped = 0usize;
 
-        for ((guard, tx), routing) in tx_guards
+        for (((guard, tx), routing), size) in tx_guards
             .into_iter()
             .zip(transactions.into_iter())
             .zip(routing_decisions.into_iter())
+            .zip(tx_sizes.into_iter())
         {
             if state_view.has_transaction(tx.hash()) {
                 dropped = dropped.saturating_add(1);
@@ -1527,6 +1521,7 @@ impl Actor {
             retained_guards.push(guard);
             retained_transactions.push(tx);
             retained_routing.push(routing);
+            retained_sizes.push(size);
         }
 
         if dropped > 0 {
@@ -1540,6 +1535,7 @@ impl Actor {
             retained_guards,
             retained_transactions,
             retained_routing,
+            retained_sizes,
             dropped,
         )
     }
@@ -1767,17 +1763,18 @@ impl Actor {
     pub(super) fn on_pacemaker_propose_ready(&mut self, now: Instant) -> bool {
         trace!(?now, "pacemaker evaluating NEW_VIEW gating");
         let prev_attempt = self.subsystems.propose.last_pacemaker_attempt.replace(now);
-        let view_snapshot = self.state.view();
-        // Reuse the snapshot to avoid nested state views while writers are pending.
-        let tip_height = view_snapshot.height();
-        let tip_hash = view_snapshot.latest_block_hash();
-        let mut topology_peers = self.effective_commit_topology_from_view(&view_snapshot);
+        let (tip_height, tip_hash, topology_peers) = {
+            let view_ref = self.state.view();
+            let tip_height = view_ref.height();
+            let tip_hash = view_ref.latest_block_hash();
+            let topology_peers = self.effective_commit_topology_from_view(&view_ref);
+            (tip_height, tip_hash, topology_peers)
+        };
         let active_topology_peers = topology_peers.clone();
         let pending_queue_len = self.queue.queued_len();
         let active_pending = self.active_pending_blocks_len_for_tip(tip_height, tip_hash);
         let view_height = tip_height;
         let committed_height = view_height as u64;
-        drop(view_snapshot);
 
         // Drop NEW_VIEW entries that point at already-committed heights so the pacemaker
         // cannot re-propose a finalized height after a commit.
@@ -2175,20 +2172,14 @@ impl Actor {
             })
             .map(|(hash, pending)| (*hash, pending.block.header().prev_block_hash()))
         {
-            let view = self.state.view();
-            let committed_height = view.height();
-            let committed_hash = view.latest_block_hash();
-            drop(view);
-
-            if pending_block_stale_for_tip(height, pending_parent, committed_height, committed_hash)
-            {
+            if pending_block_stale_for_tip(height, pending_parent, tip_height, tip_hash) {
                 iroha_logger::info!(
                     height,
                     view = view_idx,
                     queue_len = pending_queue_len,
                     pending_hash = %pending_hash,
                     pending_parent = ?pending_parent,
-                    committed_hash = ?committed_hash,
+                    committed_hash = ?tip_hash,
                     "dropping stale pending proposal that no longer builds on committed chain"
                 );
                 if let Some((tx_count, requeued, failures, duplicate_failures)) =
@@ -2502,6 +2493,7 @@ impl Actor {
             "starting proposal assembly"
         );
 
+        let view_snapshot = None;
         let assembled = match self.assemble_and_broadcast_proposal(
             height,
             view_idx,
@@ -2509,6 +2501,7 @@ impl Actor {
             &mut topology,
             leader_index,
             local_idx_val,
+            view_snapshot,
             now,
         ) {
             Ok(assembled) => assembled,

@@ -14519,6 +14519,29 @@ impl Torii {
                                 TransactionStatus::Queued => {}
                             }
                         }
+                        Ok(EventBox::PipelineBatch(events)) => {
+                            for event in events {
+                                if let PipelineEventBox::Transaction(event) = event {
+                                    let tx_hash = event.hash().to_string();
+                                    match *event.status() {
+                                        TransactionStatus::Approved => {
+                                            runtime.mark_transaction_applied(
+                                                &tx_hash,
+                                                SystemTime::now(),
+                                            );
+                                        }
+                                        TransactionStatus::Rejected(ref reason) => {
+                                            runtime
+                                                .mark_transaction_rejected(&tx_hash, Some(reason));
+                                        }
+                                        TransactionStatus::Expired => {
+                                            runtime.mark_transaction_expired(&tx_hash);
+                                        }
+                                        TransactionStatus::Queued => {}
+                                    }
+                                }
+                            }
+                        }
                         Ok(_) => {}
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                             // Skip on lag to catch up with the latest events
@@ -14541,6 +14564,19 @@ impl Torii {
                         }
                         Ok(EventBox::Pipeline(PipelineEventBox::Block(event))) => {
                             cache.record_block_event(&event, &kura);
+                        }
+                        Ok(EventBox::PipelineBatch(events)) => {
+                            for event in events {
+                                match event {
+                                    PipelineEventBox::Transaction(event) => {
+                                        cache.record_transaction_event(&event);
+                                    }
+                                    PipelineEventBox::Block(event) => {
+                                        cache.record_block_event(&event, &kura);
+                                    }
+                                    _ => {}
+                                }
+                            }
                         }
                         Ok(_) => {}
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {

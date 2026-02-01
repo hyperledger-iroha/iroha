@@ -2592,6 +2592,7 @@ async fn observer_assemble_proposal_returns_false() {
             &mut topology,
             0,
             0,
+            None,
             Instant::now(),
         )
         .expect("assemble proposal");
@@ -22809,8 +22810,11 @@ async fn maybe_emit_rbc_deliver_recovers_block_created_locally() {
     let (policies, confidential_features) = {
         let view_snapshot = actor.state.view();
         let policies = crate::da::proof_policy_bundle(&view_snapshot.nexus.lane_config);
-        let digest =
-            compute_confidential_feature_digest(view_snapshot.world(), &view_snapshot.zk, height);
+        let digest = crate::state::compute_confidential_feature_digest(
+            view_snapshot.world(),
+            &view_snapshot.zk,
+            height,
+        );
         let confidential_features = if digest.is_empty() {
             None
         } else {
@@ -39711,6 +39715,7 @@ async fn assemble_proposal_skips_view_overflow() {
             &mut topology,
             /*leader_index*/ 0,
             /*local_validator_index*/ 0,
+            None,
             Instant::now(),
         )
         .expect("proposal assembly should skip overflow view");
@@ -39803,6 +39808,7 @@ async fn assemble_proposal_schedules_rbc_after_proposal_messages() {
             &mut topology,
             /*leader_index*/ leader_index,
             /*local_validator_index*/ local_idx,
+            None,
             Instant::now(),
         )
         .expect("proposal assembly should succeed");
@@ -39897,6 +39903,7 @@ async fn assemble_proposal_defers_when_highest_qc_block_missing() {
             &mut topology,
             /*leader_index*/ 0,
             /*local_validator_index*/ local_idx,
+            None,
             Instant::now(),
         )
         .expect("proposal assembly should succeed");
@@ -40019,6 +40026,10 @@ async fn proposal_filter_drops_committed_transactions_after_queue_scan() {
         .iter()
         .map(crate::queue::TransactionGuard::routing)
         .collect();
+    let tx_sizes: Vec<_> = tx_guards
+        .iter()
+        .map(crate::queue::TransactionGuard::encoded_len)
+        .collect();
 
     {
         let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
@@ -40032,15 +40043,18 @@ async fn proposal_filter_drops_committed_transactions_after_queue_scan() {
         tx_block.commit().expect("commit transactions block");
     }
 
-    let (filtered_guards, filtered_transactions, _filtered_routing, dropped) =
+    let state_view = actor.state.view();
+    let (filtered_guards, filtered_transactions, _filtered_routing, _filtered_sizes, dropped) =
         Actor::filter_committed_transactions_for_proposal(
-            &actor.state,
+            &state_view,
             tx_guards,
             transactions,
             routing,
+            tx_sizes,
             height,
             view,
         );
+    drop(state_view);
 
     assert_eq!(dropped, 1, "one committed transaction should be dropped");
     assert_eq!(
@@ -40190,6 +40204,7 @@ async fn da_proposal_rejects_single_tx_exceeding_consensus_payload_frame_cap() {
         &mut topology,
         /*leader_index*/ 0,
         /*local_validator_index*/ local_idx,
+        None,
         Instant::now(),
     );
     let err = result.expect_err("oversized BlockCreated should be rejected under DA");
@@ -40254,6 +40269,7 @@ async fn proposal_defers_when_all_txs_exceed_payload_budget() {
             &mut topology,
             /*leader_index*/ 0,
             /*local_validator_index*/ local_idx,
+            None,
             Instant::now(),
         )
         .expect("proposal assembly should defer");
@@ -52058,7 +52074,7 @@ fn proposal_gas_cost_matches_isi_metering() {
     assert!(expected > 0, "expected non-zero ISI gas cost");
 
     let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-    let measured = Actor::proposal_gas_cost(&accepted);
+    let measured = crate::queue::Queue::compute_proposal_gas_cost(&accepted);
     assert_eq!(measured, expected);
 }
 
@@ -52367,6 +52383,7 @@ async fn proposal_assembly_defers_without_draining_queue_and_preserves_view_when
             &mut topology,
             /*leader_index*/ 0,
             /*local_validator_index*/ 0,
+            None,
             Instant::now(),
         )
         .expect("proposal assembly should defer cleanly");
@@ -55505,7 +55522,8 @@ fn heartbeat_block_for_state(
         let view = state.view();
         let tx_params = view.world().parameters().transaction().clone();
         let policies = crate::da::proof_policy_bundle(&view.nexus.lane_config);
-        let digest = compute_confidential_feature_digest(view.world(), &view.zk, height);
+        let digest =
+            crate::state::compute_confidential_feature_digest(view.world(), &view.zk, height);
         let confidential_features = if digest.is_empty() {
             None
         } else {
@@ -57038,6 +57056,32 @@ fn emit_pipeline_events_forwards_messages() {
 
     let received_event = receiver.try_recv().expect("pipeline event delivered");
     assert!(matches!(received_event, EventBox::Pipeline(_)));
+}
+
+#[test]
+fn emit_pipeline_events_batches_multiple_messages() {
+    use iroha_data_model::events::pipeline::{BlockEvent, BlockStatus};
+
+    let (sender, mut receiver) = tokio::sync::broadcast::channel(4);
+    let block = sample_block(14, 0, None);
+    let event_a = PipelineEventBox::from(BlockEvent {
+        header: block.header(),
+        status: BlockStatus::Approved,
+    });
+    let event_b = PipelineEventBox::from(BlockEvent {
+        header: block.header(),
+        status: BlockStatus::Committed,
+    });
+
+    super::emit_pipeline_events(&sender, vec![event_a.clone(), event_b.clone()]);
+
+    let received_event = receiver.try_recv().expect("pipeline event delivered");
+    match received_event {
+        EventBox::PipelineBatch(events) => {
+            assert_eq!(events, vec![event_a, event_b]);
+        }
+        other => panic!("expected batch, got {other:?}"),
+    }
 }
 
 #[test]

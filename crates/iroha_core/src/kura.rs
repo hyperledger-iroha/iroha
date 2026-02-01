@@ -10,6 +10,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, OnceLock,
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, RecvTimeoutError},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -73,6 +74,7 @@ const ROSTER_SIDECARS_DATA_FILE: &str = "roster_sidecars.norito";
 const ROSTER_SIDECARS_INDEX_FILE: &str = "roster_sidecars.index";
 const PIPELINE_INDEX_ENTRY_SIZE: usize = core::mem::size_of::<u64>() * 2;
 const PIPELINE_INDEX_ENTRY_SIZE_U64: u64 = PIPELINE_INDEX_ENTRY_SIZE as u64;
+const DISK_USAGE_TOTAL_REFRESH_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 const SIZE_OF_BLOCK_HASH: u64 = Hash::LENGTH as u64;
 pub(crate) const STRICT_INIT_MAX_BLOCK_BYTES: u64 = 256 * 1024 * 1024;
@@ -108,6 +110,16 @@ pub struct Kura {
     active_merge_path: Mutex<PathBuf>,
     /// Maximum on-disk footprint for Kura block storage (0 = unlimited).
     max_disk_usage_bytes: u64,
+    /// Cached disk usage for budget enforcement (excludes DA payloads).
+    disk_usage: AtomicU64,
+    /// Cached total disk usage including DA payloads.
+    disk_usage_total: AtomicU64,
+    /// Indicates whether the budget usage cache was initialized successfully.
+    disk_usage_initialized: AtomicBool,
+    /// Indicates whether the total usage cache was initialized successfully.
+    disk_usage_total_initialized: AtomicBool,
+    /// Last successful total-usage refresh time (seconds since UNIX epoch).
+    disk_usage_total_last_refresh: AtomicU64,
     /// Number of most recent non-genesis blocks stored in memory.
     /// The genesis block is always retained for metrics and replay.
     blocks_in_memory: NonZeroUsize,
@@ -595,6 +607,11 @@ impl Kura {
             active_blocks_dir: Mutex::new(blocks_root.clone()),
             active_merge_path: Mutex::new(merge_log_path.clone()),
             max_disk_usage_bytes: config.max_disk_usage_bytes.get(),
+            disk_usage: AtomicU64::new(0),
+            disk_usage_total: AtomicU64::new(0),
+            disk_usage_initialized: AtomicBool::new(false),
+            disk_usage_total_initialized: AtomicBool::new(false),
+            disk_usage_total_last_refresh: AtomicU64::new(0),
             blocks_in_memory: config.blocks_in_memory,
             block_sync_roster_retention: roster_retention,
             roster_sidecar_retention,
@@ -603,6 +620,32 @@ impl Kura {
             roster_log: Mutex::new(roster_log),
             telemetry: OnceLock::new(),
         });
+
+        match kura.kura_disk_usage_bytes() {
+            Ok(bytes) => {
+                kura.disk_usage.store(bytes, Ordering::Relaxed);
+                kura.disk_usage_initialized.store(true, Ordering::Relaxed);
+            }
+            Err(err) => warn!(
+                ?err,
+                path = %kura.store_root.display(),
+                "failed to measure initial Kura disk usage"
+            ),
+        }
+        match kura.kura_total_disk_usage_bytes() {
+            Ok(bytes) => {
+                kura.disk_usage_total.store(bytes, Ordering::Relaxed);
+                kura.disk_usage_total_initialized
+                    .store(true, Ordering::Relaxed);
+                kura.disk_usage_total_last_refresh
+                    .store(Self::now_unix_secs(), Ordering::Relaxed);
+            }
+            Err(err) => warn!(
+                ?err,
+                path = %kura.store_root.display(),
+                "failed to measure initial total Kura disk usage"
+            ),
+        }
 
         Ok((kura, BlockCount(block_count)))
     }
@@ -627,6 +670,11 @@ impl Kura {
             active_blocks_dir: Mutex::new(PathBuf::new()),
             active_merge_path: Mutex::new(PathBuf::new()),
             max_disk_usage_bytes: MAX_DISK_USAGE_BYTES.get(),
+            disk_usage: AtomicU64::new(0),
+            disk_usage_total: AtomicU64::new(0),
+            disk_usage_initialized: AtomicBool::new(true),
+            disk_usage_total_initialized: AtomicBool::new(true),
+            disk_usage_total_last_refresh: AtomicU64::new(0),
             blocks_in_memory: BLOCKS_IN_MEMORY,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
@@ -651,11 +699,124 @@ impl Kura {
         self.store_root.clone()
     }
 
-    /// Return total on-disk bytes used by Kura (active + retired segments).
+    /// Return cached total on-disk bytes used by Kura (active + retired segments).
     ///
-    /// This mirrors the accounting used for storage budget enforcement.
+    /// This includes DA-backed payloads, which are excluded from budget accounting.
+    /// Use [`Self::refresh_disk_usage_bytes`] to resync budget usage, and
+    /// [`Self::refresh_total_disk_usage_bytes`] for the full on-disk view.
     pub(crate) fn disk_usage_bytes(&self) -> Result<u64> {
-        self.kura_disk_usage_bytes()
+        self.maybe_refresh_total_disk_usage_bytes()?;
+        Ok(self.disk_usage_total.load(Ordering::Relaxed))
+    }
+
+    /// Recompute on-disk bytes used by Kura and refresh the cached value.
+    pub(crate) fn refresh_disk_usage_bytes(&self) -> Result<u64> {
+        let usage = self.kura_disk_usage_bytes()?;
+        self.disk_usage.store(usage, Ordering::Relaxed);
+        self.disk_usage_initialized.store(true, Ordering::Relaxed);
+        let _ = self.refresh_total_disk_usage_bytes();
+        Ok(usage)
+    }
+
+    /// Recompute total on-disk bytes (including DA payloads) and refresh the cached value.
+    pub(crate) fn refresh_total_disk_usage_bytes(&self) -> Result<u64> {
+        let usage = self.kura_total_disk_usage_bytes()?;
+        self.disk_usage_total.store(usage, Ordering::Relaxed);
+        self.disk_usage_total_initialized
+            .store(true, Ordering::Relaxed);
+        self.disk_usage_total_last_refresh
+            .store(Self::now_unix_secs(), Ordering::Relaxed);
+        Ok(usage)
+    }
+
+    fn maybe_refresh_total_disk_usage_bytes(&self) -> Result<()> {
+        if !self.disk_usage_total_initialized.load(Ordering::Relaxed) {
+            let _ = self.refresh_total_disk_usage_bytes()?;
+            return Ok(());
+        }
+        let last_refresh = self.disk_usage_total_last_refresh.load(Ordering::Relaxed);
+        let now = Self::now_unix_secs();
+        if now.saturating_sub(last_refresh) >= DISK_USAGE_TOTAL_REFRESH_INTERVAL.as_secs() {
+            let _ = self.refresh_total_disk_usage_bytes()?;
+        }
+        Ok(())
+    }
+
+    fn ensure_disk_usage_initialized(&self) -> Result<()> {
+        if self.disk_usage_initialized.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        let _ = self.refresh_disk_usage_bytes()?;
+        Ok(())
+    }
+
+    /// Update the cached disk usage by applying a before/after delta.
+    pub(crate) fn update_disk_usage_delta(&self, before: u64, after: u64) {
+        if before == after {
+            return;
+        }
+        if after > before {
+            self.add_disk_usage_bytes(after - before);
+        } else {
+            self.sub_disk_usage_bytes(before - after);
+        }
+    }
+
+    fn update_total_disk_usage_delta(&self, before: u64, after: u64) {
+        if before == after {
+            return;
+        }
+        if after > before {
+            self.add_total_disk_usage_bytes(after - before);
+        } else {
+            self.sub_total_disk_usage_bytes(before - after);
+        }
+    }
+
+    fn add_disk_usage_bytes(&self, delta: u64) {
+        if delta == 0 {
+            return;
+        }
+        let _ = self
+            .disk_usage
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                Some(current.saturating_add(delta))
+            });
+        self.add_total_disk_usage_bytes(delta);
+    }
+
+    fn sub_disk_usage_bytes(&self, delta: u64) {
+        if delta == 0 {
+            return;
+        }
+        let _ = self
+            .disk_usage
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                Some(current.saturating_sub(delta))
+            });
+        self.sub_total_disk_usage_bytes(delta);
+    }
+
+    fn add_total_disk_usage_bytes(&self, delta: u64) {
+        if delta == 0 || !self.disk_usage_total_initialized.load(Ordering::Relaxed) {
+            return;
+        }
+        let _ =
+            self.disk_usage_total
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                    Some(current.saturating_add(delta))
+                });
+    }
+
+    fn sub_total_disk_usage_bytes(&self, delta: u64) {
+        if delta == 0 || !self.disk_usage_total_initialized.load(Ordering::Relaxed) {
+            return;
+        }
+        let _ =
+            self.disk_usage_total
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                    Some(current.saturating_sub(delta))
+                });
     }
 
     /// Attempt to purge retired Kura segments to reclaim disk budget.
@@ -706,6 +867,9 @@ impl Kura {
             return Ok(0);
         }
 
+        let before_bytes = Self::block_store_tracked_bytes(&mut block_store)?;
+        let mut da_added = 0u64;
+
         block_store.ensure_da_blocks_dir()?;
         let mut buffer = Vec::new();
         for idx in 1..evict_limit {
@@ -737,6 +901,7 @@ impl Kura {
             if let Some(parent) = path.parent() {
                 sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
             }
+            da_added = da_added.saturating_add(entry.length);
         }
 
         let data_path = block_store.path_to_blockchain.join(DATA_FILE_NAME);
@@ -797,6 +962,9 @@ impl Kura {
 
         block_store.fsync.clear();
         block_store.drop_cached_handles();
+        let after_bytes = Self::block_store_tracked_bytes(&mut block_store)?;
+        self.update_disk_usage_delta(before_bytes, after_bytes);
+        self.add_total_disk_usage_bytes(da_added);
 
         if freed > 0 {
             if let Some(telemetry) = self.telemetry.get() {
@@ -874,12 +1042,24 @@ impl Kura {
         if self.store_root.as_os_str().is_empty() {
             return Ok(());
         }
+        let mut changed = false;
         for entry in added {
             self.prepare_lane_storage(entry)?;
+            changed = true;
         }
 
         for entry in retired {
             self.retire_lane_storage(entry)?;
+            changed = true;
+        }
+
+        if changed {
+            if let Err(err) = self.refresh_disk_usage_bytes() {
+                warn!(
+                    ?err,
+                    "failed to refresh disk usage after lane reconciliation"
+                );
+            }
         }
 
         Ok(())
@@ -1165,12 +1345,25 @@ impl Kura {
     /// # Errors
     /// Returns an error if the merge-ledger entry cannot be persisted.
     pub fn append_merge_entry(&self, entry: &MergeLedgerEntry) -> Result<()> {
-        self.merge_log.lock().append(entry)
+        self.merge_log.lock().append(entry)?;
+        if !self.store_root.as_os_str().is_empty() {
+            let bytes = Self::merge_entry_bytes(entry)?;
+            self.add_disk_usage_bytes(bytes);
+        }
+        Ok(())
     }
 
     /// Snapshot merge-ledger entries retained in the in-memory cache.
     pub fn merge_ledger_snapshot(&self) -> Vec<MergeLedgerEntry> {
         self.merge_log.lock().snapshot()
+    }
+
+    fn truncate_merge_log_to_len(&self, keep: usize) -> Result<()> {
+        let before = self.merge_log_tracked_bytes()?;
+        self.merge_log.lock().truncate_to_len(keep)?;
+        let after = self.merge_log_tracked_bytes()?;
+        self.update_disk_usage_delta(before, after);
+        Ok(())
     }
 
     /// Start a thread that receives and stores new blocks
@@ -1569,13 +1762,38 @@ impl Kura {
             // We don't want to hold up other threads so we drop the lock on the block data.
             drop(block_data);
 
+            let start_height_u64 = u64::try_from(start_height).expect("start height fits in u64");
+
             if let Some(path) = kura.block_plain_text_path.lock().clone() {
+                let debug_before = match Self::file_len_or_zero(&path) {
+                    Ok(bytes) => Some(bytes),
+                    Err(err) => {
+                        warn!(
+                            ?err,
+                            path = %path.display(),
+                            "failed to measure debug block dump before append"
+                        );
+                        None
+                    }
+                };
                 if let Err(error) = Self::append_blocks_jsonl(&path, &blocks_to_be_written) {
                     warn!(
                         ?error,
                         path = %path.display(),
                         "Failed to append debug block dump"
                     );
+                }
+                if let Some(debug_before) = debug_before {
+                    match Self::file_len_or_zero(&path) {
+                        Ok(debug_after) => {
+                            kura.update_disk_usage_delta(debug_before, debug_after);
+                        }
+                        Err(err) => warn!(
+                            ?err,
+                            path = %path.display(),
+                            "failed to measure debug block dump after append"
+                        ),
+                    }
                 }
             }
 
@@ -1587,6 +1805,28 @@ impl Kura {
             );
             let lock_start = Instant::now();
             let mut block_store_guard = kura.block_store.lock();
+            let block_store_before = match Self::block_store_tracked_bytes(&mut block_store_guard) {
+                Ok(bytes) => Some(bytes),
+                Err(err) => {
+                    warn!(?err, "failed to measure block store bytes before append");
+                    None
+                }
+            };
+            let da_before = if kura.disk_usage_total_initialized.load(Ordering::Relaxed) {
+                match Self::da_payload_bytes_for_range(
+                    &block_store_guard,
+                    start_height_u64,
+                    blocks_to_be_written.len(),
+                ) {
+                    Ok(bytes) => Some(bytes),
+                    Err(err) => {
+                        warn!(?err, "failed to measure DA payload bytes before append");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
             let lock_ms = u64::try_from(lock_start.elapsed().as_millis()).unwrap_or(u64::MAX);
             debug!(
                 start_height,
@@ -1595,7 +1835,6 @@ impl Kura {
                 "kura writer acquired block_store for batch"
             );
             let end_height = start_height + blocks_to_be_written.len();
-            let start_height_u64 = u64::try_from(start_height).expect("start height fits in u64");
             let append_start = Instant::now();
             if let Err(error) = block_store_guard.append_block_batch_at(
                 start_height_u64,
@@ -1631,6 +1870,24 @@ impl Kura {
                 fsync_ms,
                 "persisted block batch to disk"
             );
+            if let Some(block_store_before) = block_store_before {
+                match Self::block_store_tracked_bytes(&mut block_store_guard) {
+                    Ok(after_bytes) => {
+                        kura.update_disk_usage_delta(block_store_before, after_bytes)
+                    }
+                    Err(err) => warn!(?err, "failed to measure block store bytes after append"),
+                }
+            }
+            if let Some(da_before) = da_before {
+                match Self::da_payload_bytes_for_range(
+                    &block_store_guard,
+                    start_height_u64,
+                    blocks_to_be_written.len(),
+                ) {
+                    Ok(da_after) => kura.update_total_disk_usage_delta(da_before, da_after),
+                    Err(err) => warn!(?err, "failed to measure DA payload bytes after append"),
+                }
+            }
             latest_written_block_hash = blocks_to_be_written.last().map(|block| block.hash());
             {
                 let mut block_data = kura.block_data.lock();
@@ -1800,7 +2057,7 @@ impl Kura {
         );
 
         if let Some(entry) = merge_entry
-            && let Err(err) = self.merge_log.lock().append(entry)
+            && let Err(err) = self.append_merge_entry(entry)
         {
             block_data.pop();
             error!(
@@ -1818,9 +2075,11 @@ impl Kura {
                 "Failed to notify block writer about new block; persistence thread unavailable"
             );
             if has_merge_entry {
-                let mut merge_log = self.merge_log.lock();
-                let keep = merge_log.total_entries.saturating_sub(1);
-                if let Err(rollback_err) = merge_log.truncate_to_len(keep) {
+                let keep = {
+                    let merge_log = self.merge_log.lock();
+                    merge_log.total_entries.saturating_sub(1)
+                };
+                if let Err(rollback_err) = self.truncate_merge_log_to_len(keep) {
                     error!(
                         ?rollback_err,
                         ?block_hash,
@@ -1846,6 +2105,92 @@ impl Kura {
         }
     }
 
+    fn block_store_tracked_bytes(block_store: &mut BlockStore) -> Result<u64> {
+        if block_store.path_to_blockchain.as_os_str().is_empty() {
+            return Ok(0);
+        }
+        let data_len = block_store.data_file_len()?;
+        let index_len = block_store.index_file_len()?;
+        let hashes_len = block_store.hashes_file_len()?;
+        let marker_path = block_store.commit_marker_path();
+        let marker_len = Self::file_len_or_zero(&marker_path)?;
+        let marker_tmp_len = Self::file_len_or_zero(&marker_path.with_extension("norito.tmp"))?;
+        let data_tmp_len = Self::file_len_or_zero(
+            &block_store
+                .path_to_blockchain
+                .join(format!("{DATA_FILE_NAME}.tmp")),
+        )?;
+        let index_tmp_len = Self::file_len_or_zero(
+            &block_store
+                .path_to_blockchain
+                .join(format!("{INDEX_FILE_NAME}.tmp")),
+        )?;
+        let hashes_tmp_len = Self::file_len_or_zero(
+            &block_store
+                .path_to_blockchain
+                .join(format!("{HASHES_FILE_NAME}.tmp")),
+        )?;
+        Ok(data_len
+            .saturating_add(index_len)
+            .saturating_add(hashes_len)
+            .saturating_add(marker_len)
+            .saturating_add(marker_tmp_len)
+            .saturating_add(data_tmp_len)
+            .saturating_add(index_tmp_len)
+            .saturating_add(hashes_tmp_len))
+    }
+
+    fn da_payload_bytes_for_range(
+        block_store: &BlockStore,
+        start_height: u64,
+        count: usize,
+    ) -> Result<u64> {
+        if block_store.da_blocks_dir.as_os_str().is_empty() || count == 0 {
+            return Ok(0);
+        }
+        let mut total = 0u64;
+        for offset in 0..count {
+            let height = start_height.saturating_add(offset as u64).saturating_add(1);
+            let path = block_store.da_block_path(height);
+            total = total.saturating_add(Self::file_len_or_zero(&path)?);
+        }
+        Ok(total)
+    }
+
+    fn merge_log_tracked_bytes(&self) -> Result<u64> {
+        if self.store_root.as_os_str().is_empty() {
+            return Ok(0);
+        }
+        let path = self.active_merge_path.lock().clone();
+        Self::file_len_or_zero(&path)
+    }
+
+    fn roster_journal_tracked_bytes(&self) -> Result<u64> {
+        if self.store_root.as_os_str().is_empty() {
+            return Ok(0);
+        }
+        let path = CommitRosterJournal::journal_path(&self.store_root);
+        let tmp_path = path.with_extension("norito.tmp");
+        Ok(Self::file_len_or_zero(&path)?.saturating_add(Self::file_len_or_zero(&tmp_path)?))
+    }
+
+    fn sidecar_tracked_bytes(
+        data_path: &Path,
+        index_path: &Path,
+        json_path: Option<&Path>,
+    ) -> Result<u64> {
+        let data_tmp = data_path.with_extension("norito.tmp");
+        let index_tmp = index_path.with_extension("index.tmp");
+        let mut total = Self::file_len_or_zero(data_path)?
+            .saturating_add(Self::file_len_or_zero(index_path)?)
+            .saturating_add(Self::file_len_or_zero(&data_tmp)?)
+            .saturating_add(Self::file_len_or_zero(&index_tmp)?);
+        if let Some(path) = json_path {
+            total = total.saturating_add(Self::file_len_or_zero(path)?);
+        }
+        Ok(total)
+    }
+
     fn block_required_bytes(block: &SignedBlock) -> Result<u64> {
         let wire = block.canonical_wire()?;
         let (frame, _) = wire.into_parts();
@@ -1853,6 +2198,12 @@ impl Kura {
         Ok(frame_len
             .saturating_add(BlockIndex::SIZE)
             .saturating_add(SIZE_OF_BLOCK_HASH))
+    }
+
+    fn merge_entry_bytes(entry: &MergeLedgerEntry) -> Result<u64> {
+        let encoded = Encode::encode(entry);
+        let encoded_len = u64::try_from(encoded.len())?;
+        Ok(encoded_len.saturating_add(std::mem::size_of::<u32>() as u64))
     }
 
     fn evicted_block_required_bytes() -> u64 {
@@ -1948,6 +2299,63 @@ impl Kura {
         Ok(total)
     }
 
+    fn dir_file_bytes(dir: &Path) -> Result<u64> {
+        if dir.as_os_str().is_empty() {
+            return Ok(0);
+        }
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(0),
+            Err(err) => return Err(Error::IO(err, dir.to_path_buf())),
+        };
+        let mut total = 0u64;
+        for entry in entries {
+            let entry = entry.map_err(|err| Error::IO(err, dir.to_path_buf()))?;
+            let path = entry.path();
+            let file_type = entry
+                .file_type()
+                .map_err(|err| Error::IO(err, path.clone()))?;
+            if file_type.is_file() {
+                let len = entry
+                    .metadata()
+                    .map_err(|err| Error::IO(err, path.clone()))?
+                    .len();
+                total = total.saturating_add(len);
+            }
+        }
+        Ok(total)
+    }
+
+    fn block_store_total_bytes(blocks_dir: &Path) -> Result<u64> {
+        let mut total = Self::block_store_bytes(blocks_dir)?;
+        let da_dir = blocks_dir.join(DA_BLOCKS_DIR_NAME);
+        total = total.saturating_add(Self::dir_file_bytes(&da_dir)?);
+        Ok(total)
+    }
+
+    fn blocks_root_total_bytes(root: &Path) -> Result<u64> {
+        if root.as_os_str().is_empty() {
+            return Ok(0);
+        }
+        let entries = match std::fs::read_dir(root) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(0),
+            Err(err) => return Err(Error::IO(err, root.to_path_buf())),
+        };
+        let mut total = 0u64;
+        for entry in entries {
+            let entry = entry.map_err(|err| Error::IO(err, root.to_path_buf()))?;
+            let path = entry.path();
+            let file_type = entry
+                .file_type()
+                .map_err(|err| Error::IO(err, path.clone()))?;
+            if file_type.is_dir() {
+                total = total.saturating_add(Self::block_store_total_bytes(&path)?);
+            }
+        }
+        Ok(total)
+    }
+
     fn merge_root_bytes(root: &Path) -> Result<u64> {
         if root.as_os_str().is_empty() {
             return Ok(0);
@@ -1994,6 +2402,29 @@ impl Kura {
         Ok(used)
     }
 
+    fn kura_total_disk_usage_bytes(&self) -> Result<u64> {
+        if self.store_root.as_os_str().is_empty() {
+            return Ok(0);
+        }
+        let blocks_root = self.store_root.join("blocks");
+        let merge_root = self.store_root.join("merge_ledger");
+        let retired_root = self.store_root.join("retired");
+        let retired_blocks_root = retired_root.join("blocks");
+        let retired_merge_root = retired_root.join("merge_ledger");
+
+        let mut used = 0u64;
+        used = used.saturating_add(Self::blocks_root_total_bytes(&blocks_root)?);
+        used = used.saturating_add(Self::merge_root_bytes(&merge_root)?);
+        used = used.saturating_add(Self::blocks_root_total_bytes(&retired_blocks_root)?);
+        used = used.saturating_add(Self::merge_root_bytes(&retired_merge_root)?);
+        let roster_journal = CommitRosterJournal::journal_path(&self.store_root);
+        used = used.saturating_add(Self::file_len_or_zero(&roster_journal)?);
+        used = used.saturating_add(Self::file_len_or_zero(
+            &roster_journal.with_extension("norito.tmp"),
+        )?);
+        Ok(used)
+    }
+
     fn purge_retired_storage(&self) -> bool {
         if self.store_root.as_os_str().is_empty() {
             return false;
@@ -2002,12 +2433,66 @@ impl Kura {
         if !retired_root.exists() {
             return false;
         }
+        let retired_blocks_root = retired_root.join("blocks");
+        let retired_merge_root = retired_root.join("merge_ledger");
+        let mut sizing_failed = false;
+        let retired_blocks_budget = match Self::blocks_root_bytes(&retired_blocks_root) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    path = %retired_blocks_root.display(),
+                    "failed to size retired block segments"
+                );
+                sizing_failed = true;
+                0
+            }
+        };
+        let retired_blocks_total = match Self::blocks_root_total_bytes(&retired_blocks_root) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    path = %retired_blocks_root.display(),
+                    "failed to size retired block segments including DA payloads"
+                );
+                sizing_failed = true;
+                0
+            }
+        };
+        let retired_merge_bytes = match Self::merge_root_bytes(&retired_merge_root) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    path = %retired_merge_root.display(),
+                    "failed to size retired merge-ledger segments"
+                );
+                sizing_failed = true;
+                0
+            }
+        };
+        let retired_budget_bytes = retired_blocks_budget.saturating_add(retired_merge_bytes);
+        let retired_total_bytes = retired_blocks_total.saturating_add(retired_merge_bytes);
         match std::fs::remove_dir_all(&retired_root) {
             Ok(()) => {
                 info!(
                     path = %retired_root.display(),
                     "purged retired Kura segments to reclaim disk budget"
                 );
+                if sizing_failed {
+                    if let Err(err) = self.refresh_disk_usage_bytes() {
+                        warn!(
+                            ?err,
+                            path = %retired_root.display(),
+                            "failed to refresh Kura disk usage after retired purge"
+                        );
+                    }
+                } else {
+                    self.sub_disk_usage_bytes(retired_budget_bytes);
+                    let extra = retired_total_bytes.saturating_sub(retired_budget_bytes);
+                    self.sub_total_disk_usage_bytes(extra);
+                }
                 true
             }
             Err(err) => {
@@ -2080,13 +2565,10 @@ impl Kura {
         if self.max_disk_usage_bytes == 0 || self.store_root.as_os_str().is_empty() {
             return Ok(());
         }
+        self.ensure_disk_usage_initialized()?;
 
         let merge_entry_bytes = match merge_entry {
-            Some(entry) => {
-                let encoded = Encode::encode(entry);
-                let encoded_len = u64::try_from(encoded.len())?;
-                encoded_len.saturating_add(std::mem::size_of::<u32>() as u64)
-            }
+            Some(entry) => Self::merge_entry_bytes(entry)?,
             None => 0,
         };
 
@@ -2094,7 +2576,7 @@ impl Kura {
 
         let limit = self.max_disk_usage_bytes;
         let block_required = Self::block_required_bytes_for_budget(block, limit)?;
-        let mut used = self.kura_disk_usage_bytes()?;
+        let mut used = self.disk_usage.load(Ordering::Relaxed);
         let pending_bytes = self.pending_block_bytes(persisted_count, unindexed_bytes)?;
         let mut budget_used = used.saturating_add(pending_bytes);
         let mut required = budget_used
@@ -2103,7 +2585,7 @@ impl Kura {
 
         if required > limit {
             if self.purge_retired_storage() {
-                used = self.kura_disk_usage_bytes()?;
+                used = self.disk_usage.load(Ordering::Relaxed);
                 budget_used = used.saturating_add(pending_bytes);
                 required = used
                     .saturating_add(pending_bytes)
@@ -2120,7 +2602,7 @@ impl Kura {
             if evict_needed > 0 {
                 match self.evict_block_bodies(evict_needed) {
                     Ok(freed) if freed > 0 => {
-                        used = self.kura_disk_usage_bytes()?;
+                        used = self.disk_usage.load(Ordering::Relaxed);
                         budget_used = used.saturating_add(pending_bytes);
                         required = used
                             .saturating_add(pending_bytes)
@@ -2169,6 +2651,7 @@ impl Kura {
         if self.max_disk_usage_bytes == 0 || self.store_root.as_os_str().is_empty() {
             return Ok(());
         }
+        self.ensure_disk_usage_initialized()?;
 
         let (block_count, old_block) = {
             let data = self.block_data.lock();
@@ -2200,7 +2683,7 @@ impl Kura {
         pending_raw_after = pending_raw_after.saturating_add(new_bytes);
 
         let pending_current = pending_raw.saturating_sub(unindexed_bytes);
-        let mut used = self.kura_disk_usage_bytes()?;
+        let mut used = self.disk_usage.load(Ordering::Relaxed);
         let mut budget_used = used.saturating_add(pending_current);
         let mut required = {
             let used_after = if top_is_pending {
@@ -2214,7 +2697,7 @@ impl Kura {
 
         if required > limit {
             if self.purge_retired_storage() {
-                used = self.kura_disk_usage_bytes()?;
+                used = self.disk_usage.load(Ordering::Relaxed);
                 budget_used = used.saturating_add(pending_current);
                 required = {
                     let used_after = if top_is_pending {
@@ -2236,7 +2719,7 @@ impl Kura {
             if evict_needed > 0 {
                 match self.evict_block_bodies(evict_needed) {
                     Ok(freed) if freed > 0 => {
-                        used = self.kura_disk_usage_bytes()?;
+                        used = self.disk_usage.load(Ordering::Relaxed);
                         budget_used = used.saturating_add(pending_current);
                         required = {
                             let used_after = if top_is_pending {
@@ -2362,15 +2845,41 @@ impl Kura {
 
         if !self.store_root.as_os_str().is_empty() {
             let mut store = self.block_store.lock();
+            let before_bytes = match Self::block_store_tracked_bytes(&mut store) {
+                Ok(bytes) => Some(bytes),
+                Err(err) => {
+                    warn!(?err, "failed to measure block store bytes before prune");
+                    None
+                }
+            };
             store.prune(height)?;
+            if let Some(before_bytes) = before_bytes {
+                match Self::block_store_tracked_bytes(&mut store) {
+                    Ok(after_bytes) => self.update_disk_usage_delta(before_bytes, after_bytes),
+                    Err(err) => warn!(?err, "failed to measure block store bytes after prune"),
+                }
+            }
         }
 
-        self.merge_log.lock().truncate_to_len(keep)?;
+        self.truncate_merge_log_to_len(keep)?;
+        let roster_before = match self.roster_journal_tracked_bytes() {
+            Ok(bytes) => Some(bytes),
+            Err(err) => {
+                warn!(?err, "failed to measure commit roster journal before prune");
+                None
+            }
+        };
         if let Err(err) = self.roster_log.lock().truncate_to_height(height) {
             warn!(
                 ?err,
                 height, "failed to truncate commit roster journal after Kura prune"
             );
+        }
+        if let Some(roster_before) = roster_before {
+            match self.roster_journal_tracked_bytes() {
+                Ok(after_bytes) => self.update_disk_usage_delta(roster_before, after_bytes),
+                Err(err) => warn!(?err, "failed to measure commit roster journal after prune"),
+            }
         }
 
         Ok(())
@@ -2403,10 +2912,15 @@ impl Kura {
 #[cfg(test)]
 impl Kura {
     pub(crate) fn persist_block_immediate_for_tests(&self, block: &Arc<SignedBlock>) {
-        self.block_store
-            .lock()
+        let mut store = self.block_store.lock();
+        let before_bytes = Self::block_store_tracked_bytes(&mut store)
+            .expect("measure block store bytes before test append");
+        store
             .append_block_to_chain(block.as_ref())
             .expect("persist block for tests");
+        let after_bytes = Self::block_store_tracked_bytes(&mut store)
+            .expect("measure block store bytes after test append");
+        self.update_disk_usage_delta(before_bytes, after_bytes);
     }
 
     pub(crate) fn fail_next_store_for_tests(&self) {
@@ -2878,6 +3392,13 @@ impl SidecarIndexEntry {
 }
 
 impl Kura {
+    fn now_unix_secs() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|dur| dur.as_secs())
+            .unwrap_or(0)
+    }
+
     /// Return the path to the block storage directory, if configured.
     /// For in-memory test Kura, returns `None`.
     fn store_dir(&self) -> Option<PathBuf> {
@@ -2933,6 +3454,22 @@ impl Kura {
             }
             let data_path = dir.join(PIPELINE_SIDECARS_DATA_FILE);
             let index_path = dir.join(PIPELINE_SIDECARS_INDEX_FILE);
+            let json_sidecar_path = dir.join(format!("block_{}.json", sidecar.height));
+            let before_bytes = match Self::sidecar_tracked_bytes(
+                &data_path,
+                &index_path,
+                Some(&json_sidecar_path),
+            ) {
+                Ok(bytes) => Some(bytes),
+                Err(err) => {
+                    iroha_logger::warn!(
+                        ?err,
+                        ?dir,
+                        "failed to measure pipeline sidecar bytes before write"
+                    );
+                    None
+                }
+            };
             let fsync_mode = self.sidecar_fsync_mode();
             let wrote_norito = match sidecar.encode_framed() {
                 Ok(buf) => Self::append_indexed_sidecar(
@@ -2955,7 +3492,6 @@ impl Kura {
             };
 
             if wrote_norito {
-                let json_sidecar_path = dir.join(format!("block_{}.json", sidecar.height));
                 if json_sidecar_path.exists()
                     && let Err(e) = std::fs::remove_file(&json_sidecar_path)
                 {
@@ -2964,6 +3500,17 @@ impl Kura {
                         ?json_sidecar_path,
                         "failed to remove JSON pipeline sidecar"
                     );
+                }
+            }
+            if let Some(before_bytes) = before_bytes {
+                match Self::sidecar_tracked_bytes(&data_path, &index_path, Some(&json_sidecar_path))
+                {
+                    Ok(after_bytes) => self.update_disk_usage_delta(before_bytes, after_bytes),
+                    Err(err) => iroha_logger::warn!(
+                        ?err,
+                        ?dir,
+                        "failed to measure pipeline sidecar bytes after write"
+                    ),
                 }
             }
         }
@@ -2985,6 +3532,17 @@ impl Kura {
             }
             let data_path = dir.join(ROSTER_SIDECARS_DATA_FILE);
             let index_path = dir.join(ROSTER_SIDECARS_INDEX_FILE);
+            let before_bytes = match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
+                Ok(bytes) => Some(bytes),
+                Err(err) => {
+                    iroha_logger::warn!(
+                        ?err,
+                        ?dir,
+                        "failed to measure roster sidecar bytes before write"
+                    );
+                    None
+                }
+            };
             let fsync_mode = self.sidecar_fsync_mode();
             let wrote_norito = match sidecar.encode_framed() {
                 Ok(buf) => Self::append_indexed_sidecar(
@@ -3010,6 +3568,16 @@ impl Kura {
                     height = sidecar.height,
                     "failed to persist roster metadata sidecar"
                 );
+            }
+            if let Some(before_bytes) = before_bytes {
+                match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
+                    Ok(after_bytes) => self.update_disk_usage_delta(before_bytes, after_bytes),
+                    Err(err) => iroha_logger::warn!(
+                        ?err,
+                        ?dir,
+                        "failed to measure roster sidecar bytes after write"
+                    ),
+                }
             }
         }
     }
@@ -6479,6 +7047,24 @@ mod tests {
         };
         assert!(index.is_evicted());
         assert!(da_path.exists(), "expected DA payload for block1");
+        let da_path2 = {
+            let mut store = kura.block_store.lock();
+            store.da_block_path(2)
+        };
+        assert!(da_path2.exists(), "expected DA payload for block2");
+        let da_len1 = std::fs::metadata(&da_path)
+            .expect("da payload metadata")
+            .len();
+        let da_len2 = std::fs::metadata(&da_path2)
+            .expect("da payload metadata")
+            .len();
+        let budget_used = kura.kura_disk_usage_bytes().expect("budget usage");
+        let total_used = kura.disk_usage_bytes().expect("total usage");
+        let expected_total = budget_used.saturating_add(da_len1).saturating_add(da_len2);
+        assert_eq!(
+            total_used, expected_total,
+            "total usage should include DA payloads"
+        );
 
         let height = NonZeroUsize::new(1).expect("non-zero");
         let block = kura.get_block(height).expect("rehydrate block1");
@@ -6585,6 +7171,8 @@ mod tests {
         std::fs::create_dir_all(&pipeline_dir).expect("create pipeline dir");
         std::fs::write(pipeline_dir.join(PIPELINE_SIDECARS_DATA_FILE), [0u8; 1])
             .expect("write sidecar data");
+        kura.refresh_disk_usage_bytes()
+            .expect("refresh disk usage after sidecar write");
 
         let err = kura
             .store_block(block)
@@ -6634,7 +7222,7 @@ mod tests {
             .with_extension("norito.tmp");
         std::fs::write(&temp_sidecar, [0u8; 3]).expect("write temp sidecar");
 
-        let updated = kura.disk_usage_bytes().expect("usage with extras");
+        let updated = kura.refresh_disk_usage_bytes().expect("usage with extras");
         let extra = 7u64 + 5 + 3;
         assert_eq!(updated, base.saturating_add(extra));
     }
@@ -6704,6 +7292,8 @@ mod tests {
         let lane1_entry = lane_config.entry(LaneId::from(1)).expect("lane 1 entry");
         let lane1_blocks = lane1_entry.blocks_dir(&store_root);
         std::fs::write(lane1_blocks.join(DATA_FILE_NAME), [0u8; 1]).expect("seed lane1 data");
+        kura.refresh_disk_usage_bytes()
+            .expect("refresh disk usage after lane1 seed");
 
         let err = kura
             .store_block(block)
@@ -6740,6 +7330,8 @@ mod tests {
         let retired_dir = lane_cfg.primary().blocks_dir(&retired_root);
         std::fs::create_dir_all(&retired_dir).expect("create retired dir");
         std::fs::write(retired_dir.join(DATA_FILE_NAME), [0u8; 1]).expect("seed retired file");
+        kura.refresh_disk_usage_bytes()
+            .expect("refresh disk usage after retired seed");
 
         kura.store_block(block)
             .expect("store block after retired purge");

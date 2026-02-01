@@ -6178,7 +6178,12 @@ pub mod tests {
         let expected = expect_test::expect_file![snapshot_path_buf.clone()];
         let actual = actual
             .iter()
-            .filter(|e| !matches!(e, EventBox::Time(_) | EventBox::Pipeline(_)))
+            .filter(|e| {
+                !matches!(
+                    e,
+                    EventBox::Time(_) | EventBox::Pipeline(_) | EventBox::PipelineBatch(_)
+                )
+            })
             .map(EventSnapshot::from_event)
             .collect::<Vec<_>>();
         let rendered = if actual.is_empty() {

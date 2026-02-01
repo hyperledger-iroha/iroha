@@ -4,6 +4,8 @@
 //! demoting colder entries to an on-disk spill. Each snapshot computes
 //! recency-based priorities, writes cold payloads using the canonical Norito
 //! encoding, and emits a manifest so hosts can hydrate cold shards lazily.
+//! Snapshots can be built incrementally from per-block diffs to avoid full WSV scans,
+//! and heavy snapshot work can be offloaded after commit to reduce block latency.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -59,6 +61,8 @@ pub struct TieredStateBackend {
     snapshot_counter_seeded: bool,
     /// Per-entry metadata tracking heat and payload hashes.
     entries: BTreeMap<TieredEntryId, EntryMetadata>,
+    /// Stable key metadata required to rebuild snapshot manifests incrementally.
+    entry_keys: BTreeMap<TieredEntryId, EntryKey>,
     /// Cached manifest of the latest snapshot for diagnostics.
     last_manifest: Option<TieredSnapshotManifest>,
     /// Optional telemetry sink for DA-backed cold storage activity.
@@ -79,6 +83,86 @@ struct TieredSnapshotPlan {
     snapshot_dir: PathBuf,
     manifest: TieredSnapshotManifest,
     cold_entries: Vec<ColdEntryPlan>,
+}
+
+#[derive(Default)]
+struct SnapshotPayloadCache {
+    payloads: BTreeMap<TieredEntryId, Vec<u8>>,
+}
+
+/// Changed WSV keys captured during a block for incremental snapshotting.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct TieredSnapshotDiff {
+    entries: Vec<TieredKeyHandle>,
+}
+
+impl TieredSnapshotDiff {
+    /// Record a touched entry.
+    pub(crate) fn push(&mut self, entry: TieredKeyHandle) {
+        self.entries.push(entry);
+    }
+
+    /// Read the captured entries.
+    #[cfg(test)]
+    pub(crate) fn entries(&self) -> &[TieredKeyHandle] {
+        &self.entries
+    }
+}
+
+/// Changed WSV keys captured with their updated payloads for background snapshots.
+#[derive(Default)]
+pub(crate) struct TieredSnapshotPayload {
+    entries: Vec<TieredSnapshotPayloadEntry>,
+}
+
+struct TieredSnapshotPayloadEntry {
+    key: TieredKeyHandle,
+    value: Option<Box<dyn TieredSnapshotValue>>,
+}
+
+impl TieredSnapshotPayload {
+    pub(crate) fn push_value<T>(&mut self, key: TieredKeyHandle, value: Option<T>)
+    where
+        T: json::JsonSerialize + MeasuredBytes + Send + Sync + 'static,
+    {
+        let value = value.map(|value| {
+            let boxed: Box<dyn TieredSnapshotValue> = Box::new(value);
+            boxed
+        });
+        self.entries.push(TieredSnapshotPayloadEntry { key, value });
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+impl From<&TieredSnapshotPayload> for TieredSnapshotDiff {
+    fn from(payload: &TieredSnapshotPayload) -> Self {
+        let mut diff = TieredSnapshotDiff::default();
+        for entry in &payload.entries {
+            diff.push(entry.key.clone());
+        }
+        diff
+    }
+}
+
+trait TieredSnapshotValue: Send + Sync {
+    fn measured_bytes(&self) -> usize;
+    fn encode_json(&self) -> Result<Vec<u8>>;
+}
+
+impl<T> TieredSnapshotValue for T
+where
+    T: json::JsonSerialize + MeasuredBytes + Send + Sync + 'static,
+{
+    fn measured_bytes(&self) -> usize {
+        MeasuredBytes::measured_bytes(self)
+    }
+
+    fn encode_json(&self) -> Result<Vec<u8>> {
+        json::to_vec(self).wrap_err("failed to encode snapshot value as JSON")
+    }
 }
 
 struct CollectContext<'a> {
@@ -113,6 +197,7 @@ impl TieredStateBackend {
             snapshot_counter: 0,
             snapshot_counter_seeded: false,
             entries: BTreeMap::new(),
+            entry_keys: BTreeMap::new(),
             last_manifest: None,
             telemetry: None,
         };
@@ -133,6 +218,51 @@ impl TieredStateBackend {
         if let Some(plan) = self.plan_world_snapshot(world)? {
             self.execute_snapshot_plan(plan, world)?;
         }
+        Ok(())
+    }
+
+    /// Record a snapshot using a diff of touched entries.
+    pub(crate) fn record_world_snapshot_with_diff(
+        &mut self,
+        world: &World,
+        diff: &TieredSnapshotDiff,
+    ) -> Result<()> {
+        if self.entries.is_empty() {
+            return self.record_world_snapshot(world);
+        }
+        if let Some(plan) = self.plan_world_snapshot_with_diff(world, diff)? {
+            self.execute_snapshot_plan(plan, world)?;
+        }
+        Ok(())
+    }
+
+    /// Record a snapshot using a diff payload without accessing the live world.
+    pub(crate) fn record_world_snapshot_with_payload(
+        &mut self,
+        payload: &TieredSnapshotPayload,
+    ) -> Result<()> {
+        if self.entries.is_empty() {
+            return Ok(());
+        }
+        let Some((root, snapshot_idx, snapshot_dir)) = self.prepare_snapshot()? else {
+            return Ok(());
+        };
+
+        let payload_cache = if payload.is_empty() {
+            SnapshotPayloadCache::default()
+        } else {
+            self.apply_snapshot_payload(snapshot_idx, payload)?
+        };
+
+        let scores = self.build_scores_from_keys(snapshot_idx);
+        let plan = self.build_snapshot_plan(
+            root,
+            snapshot_idx,
+            snapshot_dir,
+            scores,
+            Some(&payload_cache.payloads),
+        )?;
+        self.execute_snapshot_plan_with_payload(plan, &payload_cache.payloads)?;
         Ok(())
     }
 
@@ -307,8 +437,41 @@ impl TieredStateBackend {
         Ok(())
     }
 
-    #[allow(clippy::too_many_lines)]
     fn plan_world_snapshot(&mut self, world: &World) -> Result<Option<TieredSnapshotPlan>> {
+        let Some((root, snapshot_idx, snapshot_dir)) = self.prepare_snapshot()? else {
+            return Ok(None);
+        };
+
+        let mut scores = Vec::new();
+        let mut seen = BTreeSet::new();
+
+        self.collect_world_entries(world, snapshot_idx, &mut scores, &mut seen)?;
+        self.entries.retain(|id, _| seen.contains(id));
+        self.entry_keys.retain(|id, _| seen.contains(id));
+
+        let plan = self.build_snapshot_plan(root, snapshot_idx, snapshot_dir, scores, None)?;
+        Ok(Some(plan))
+    }
+
+    fn plan_world_snapshot_with_diff(
+        &mut self,
+        world: &World,
+        diff: &TieredSnapshotDiff,
+    ) -> Result<Option<TieredSnapshotPlan>> {
+        let Some((root, snapshot_idx, snapshot_dir)) = self.prepare_snapshot()? else {
+            return Ok(None);
+        };
+
+        if !diff.entries.is_empty() {
+            self.apply_snapshot_diff(world, snapshot_idx, diff)?;
+        }
+
+        let scores = self.build_scores_from_keys(snapshot_idx);
+        let plan = self.build_snapshot_plan(root, snapshot_idx, snapshot_dir, scores, None)?;
+        Ok(Some(plan))
+    }
+
+    fn prepare_snapshot(&mut self) -> Result<Option<(PathBuf, u64, PathBuf)>> {
         if !self.enabled {
             return Ok(None);
         }
@@ -333,13 +496,28 @@ impl TieredStateBackend {
         self.snapshot_counter = self.snapshot_counter.saturating_add(1);
         let snapshot_idx = self.snapshot_counter;
         let snapshot_dir = root.join(format!("{snapshot_idx:020}"));
+        Ok(Some((root, snapshot_idx, snapshot_dir)))
+    }
 
-        let mut scores = Vec::new();
-        let mut seen = BTreeSet::new();
+    fn build_scores_from_keys(&mut self, snapshot_idx: u64) -> Vec<EntryScore> {
+        let mut scores = Vec::with_capacity(self.entry_keys.len());
+        for (id, entry_key) in &self.entry_keys {
+            let meta = self.entries.get_mut(id).expect("metadata populated");
+            meta.last_present_snapshot = snapshot_idx;
+            scores.push(entry_key.score(*id));
+        }
+        scores
+    }
 
-        self.collect_world_entries(world, snapshot_idx, &mut scores, &mut seen)?;
-        self.entries.retain(|id, _| seen.contains(id));
-
+    #[allow(clippy::too_many_lines)]
+    fn build_snapshot_plan(
+        &mut self,
+        root: PathBuf,
+        snapshot_idx: u64,
+        snapshot_dir: PathBuf,
+        mut scores: Vec<EntryScore>,
+        payloads: Option<&BTreeMap<TieredEntryId, Vec<u8>>>,
+    ) -> Result<TieredSnapshotPlan> {
         if scores.is_empty() {
             let manifest = TieredSnapshotManifest {
                 snapshot_index: snapshot_idx,
@@ -354,12 +532,12 @@ impl TieredStateBackend {
                 hot_grace_overflow_keys: 0,
                 hot_grace_overflow_bytes: 0,
             };
-            return Ok(Some(TieredSnapshotPlan {
+            return Ok(TieredSnapshotPlan {
                 root,
                 snapshot_dir,
                 manifest,
                 cold_entries: Vec::new(),
-            }));
+            });
         }
 
         scores.sort_by(|a, b| {
@@ -439,6 +617,54 @@ impl TieredStateBackend {
             }
         }
 
+        let mut hot_manifest_entries = Vec::with_capacity(hot_list.len());
+        let mut cold_manifest_entries = Vec::with_capacity(scores.len());
+        let mut cold_plans = Vec::with_capacity(scores.len());
+
+        for entry in &scores {
+            let meta = self.entries.get(&entry.id).expect("metadata populated");
+            if hot_ids.contains(&entry.id) {
+                hot_manifest_entries.push(entry.manifest_entry(meta, None));
+            } else {
+                let rel_path = entry.relative_payload_path(snapshot_idx);
+                let reuse_source = if meta.last_cold_snapshot > 0
+                    && meta.last_cold_snapshot >= meta.last_mutated_snapshot
+                {
+                    meta.last_cold_rel_path.as_ref().and_then(|rel_path| {
+                        let candidate = root
+                            .join(format!("{index:020}", index = meta.last_cold_snapshot))
+                            .join(rel_path);
+                        candidate.exists().then_some(candidate)
+                    })
+                } else {
+                    None
+                };
+                if let Some(payloads) = payloads
+                    && reuse_source.is_none()
+                    && !payloads.contains_key(&entry.id)
+                {
+                    if hot_ids.insert(entry.id) {
+                        retained_bytes = retained_bytes.saturating_add(
+                            u64::try_from(meta.value_size_bytes).unwrap_or(u64::MAX),
+                        );
+                        hot_list.push(entry.id);
+                    }
+                    hot_manifest_entries.push(entry.manifest_entry(meta, None));
+                    continue;
+                }
+                let manifest_index = cold_manifest_entries.len();
+                let mut manifest_entry = entry.manifest_entry(meta, Some((rel_path.clone(), 0)));
+                manifest_entry.spill_bytes = None;
+                cold_manifest_entries.push(manifest_entry);
+                cold_plans.push(ColdEntryPlan {
+                    rel_path,
+                    entry: entry.clone(),
+                    manifest_index,
+                    reuse_source,
+                });
+            }
+        }
+
         let mut hot_promotions = 0usize;
         let mut hot_demotions = 0usize;
         for entry in &scores {
@@ -489,41 +715,6 @@ impl TieredStateBackend {
             );
         }
 
-        let mut hot_manifest_entries = Vec::with_capacity(hot_list.len());
-        let mut cold_manifest_entries = Vec::with_capacity(scores.len());
-        let mut cold_plans = Vec::with_capacity(scores.len());
-
-        for entry in &scores {
-            let meta = self.entries.get(&entry.id).expect("metadata populated");
-            if hot_ids.contains(&entry.id) {
-                hot_manifest_entries.push(entry.manifest_entry(meta, None));
-            } else {
-                let rel_path = entry.relative_payload_path(snapshot_idx);
-                let reuse_source = if meta.last_cold_snapshot > 0
-                    && meta.last_cold_snapshot >= meta.last_mutated_snapshot
-                {
-                    meta.last_cold_rel_path.as_ref().and_then(|rel_path| {
-                        let candidate = root
-                            .join(format!("{index:020}", index = meta.last_cold_snapshot))
-                            .join(rel_path);
-                        candidate.exists().then_some(candidate)
-                    })
-                } else {
-                    None
-                };
-                let manifest_index = cold_manifest_entries.len();
-                let mut manifest_entry = entry.manifest_entry(meta, Some((rel_path.clone(), 0)));
-                manifest_entry.spill_bytes = None;
-                cold_manifest_entries.push(manifest_entry);
-                cold_plans.push(ColdEntryPlan {
-                    rel_path,
-                    entry: entry.clone(),
-                    manifest_index,
-                    reuse_source,
-                });
-            }
-        }
-
         let manifest = TieredSnapshotManifest {
             snapshot_index: snapshot_idx,
             total_entries: scores.len(),
@@ -538,12 +729,85 @@ impl TieredStateBackend {
             hot_grace_overflow_bytes,
         };
 
-        Ok(Some(TieredSnapshotPlan {
+        Ok(TieredSnapshotPlan {
             root,
             snapshot_dir,
             manifest,
             cold_entries: cold_plans,
-        }))
+        })
+    }
+
+    fn apply_snapshot_diff(
+        &mut self,
+        world: &World,
+        snapshot_idx: u64,
+        diff: &TieredSnapshotDiff,
+    ) -> Result<()> {
+        for entry in &diff.entries {
+            let (id, key_encoded) = entry.entry_id()?;
+            let Some((value_hash, value_size_bytes)) = entry.measure_value(world)? else {
+                self.entries.remove(&id);
+                self.entry_keys.remove(&id);
+                continue;
+            };
+
+            let meta = self
+                .entries
+                .entry(id)
+                .or_insert_with(|| EntryMetadata::new(snapshot_idx, value_hash, value_size_bytes));
+            if meta.last_value_hash != value_hash {
+                meta.last_value_hash = value_hash;
+                meta.last_mutated_snapshot = snapshot_idx;
+            }
+            meta.value_size_bytes = value_size_bytes;
+            self.entry_keys.insert(
+                id,
+                EntryKey {
+                    key: entry.clone(),
+                    key_encoded,
+                },
+            );
+        }
+        Ok(())
+    }
+
+    fn apply_snapshot_payload(
+        &mut self,
+        snapshot_idx: u64,
+        payload: &TieredSnapshotPayload,
+    ) -> Result<SnapshotPayloadCache> {
+        let mut cache = SnapshotPayloadCache::default();
+        for entry in &payload.entries {
+            let (id, key_encoded) = entry.key.entry_id()?;
+            let Some(value) = entry.value.as_ref() else {
+                self.entries.remove(&id);
+                self.entry_keys.remove(&id);
+                continue;
+            };
+
+            let payload = value.encode_json()?;
+            let value_hash = sha256(&payload);
+            let value_size_bytes = value.measured_bytes();
+
+            let meta = self
+                .entries
+                .entry(id)
+                .or_insert_with(|| EntryMetadata::new(snapshot_idx, value_hash, value_size_bytes));
+            if meta.last_value_hash != value_hash {
+                meta.last_value_hash = value_hash;
+                meta.last_mutated_snapshot = snapshot_idx;
+            }
+            meta.value_size_bytes = value_size_bytes;
+            self.entry_keys.insert(
+                id,
+                EntryKey {
+                    key: entry.key.clone(),
+                    key_encoded,
+                },
+            );
+            cache.payloads.insert(id, payload);
+        }
+        Ok(cache)
     }
 
     #[allow(clippy::too_many_lines)]
@@ -740,6 +1004,201 @@ impl TieredStateBackend {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
+    fn execute_snapshot_plan_with_payload(
+        &mut self,
+        mut plan: TieredSnapshotPlan,
+        payloads: &BTreeMap<TieredEntryId, Vec<u8>>,
+    ) -> Result<()> {
+        self.ensure_cold_roots()
+            .wrap_err("failed to prepare cold tier root directory")?;
+
+        let staging_dir = plan.snapshot_dir.with_extension("staging");
+        if staging_dir.exists() {
+            fs::remove_dir_all(&staging_dir).wrap_err_with(|| {
+                format!(
+                    "failed to clear previous staging directory {path}",
+                    path = staging_dir.display()
+                )
+            })?;
+        }
+        fs::create_dir_all(&staging_dir).wrap_err_with(|| {
+            format!(
+                "failed to create staging directory {path}",
+                path = staging_dir.display()
+            )
+        })?;
+
+        let mut cold_bytes_total: u64 = 0;
+        let mut cold_reused_entries: usize = 0;
+        let mut cold_reused_bytes: u64 = 0;
+        let mut dirs_to_sync = BTreeSet::new();
+        for cold in &plan.cold_entries {
+            let abs_path = staging_dir.join(&cold.rel_path);
+            let mut parent_dirs = Vec::new();
+            if let Some(parent) = abs_path.parent() {
+                fs::create_dir_all(parent).wrap_err_with(|| {
+                    format!(
+                        "failed to create cold shard directory {dir}",
+                        dir = parent.display()
+                    )
+                })?;
+                for ancestor in parent.ancestors() {
+                    parent_dirs.push(ancestor.to_path_buf());
+                    if ancestor == staging_dir {
+                        break;
+                    }
+                }
+            }
+            let mut payload_len = None;
+            let mut reused = false;
+            if let Some(source) = cold.reuse_source.as_ref() {
+                match Self::try_reuse_cold_payload(source, &abs_path) {
+                    Ok(Some(bytes)) => {
+                        payload_len = Some(bytes);
+                        reused = true;
+                    }
+                    Ok(None) => {}
+                    Err(err) => {
+                        iroha_logger::warn!(
+                            ?err,
+                            source = %source.display(),
+                            target = %abs_path.display(),
+                            "tiered-state: failed to reuse cold shard payload"
+                        );
+                    }
+                }
+            }
+
+            let payload_len = if let Some(bytes) = payload_len {
+                bytes
+            } else {
+                let payload = payloads.get(&cold.entry.id).ok_or_else(|| {
+                    eyre::eyre!("tiered-state: missing payload for {}", cold.entry.key)
+                })?;
+                let mut file = BufWriter::new(fs::File::create(&abs_path).wrap_err_with(|| {
+                    format!(
+                        "failed to open cold shard {path} for writing",
+                        path = abs_path.display()
+                    )
+                })?);
+                file.write_all(payload).wrap_err_with(|| {
+                    format!(
+                        "failed to persist cold shard {path}",
+                        path = abs_path.display()
+                    )
+                })?;
+                file.flush().wrap_err_with(|| {
+                    format!(
+                        "failed to flush cold shard {path}",
+                        path = abs_path.display()
+                    )
+                })?;
+                file.get_ref().sync_all().wrap_err_with(|| {
+                    format!(
+                        "failed to sync cold shard {path}",
+                        path = abs_path.display()
+                    )
+                })?;
+                payload.len() as u64
+            };
+            cold_bytes_total = cold_bytes_total.saturating_add(payload_len);
+            if reused {
+                cold_reused_entries = cold_reused_entries.saturating_add(1);
+                cold_reused_bytes = cold_reused_bytes.saturating_add(payload_len);
+            }
+            if let Some(entry) = plan.manifest.cold_entries.get_mut(cold.manifest_index) {
+                entry.spill_bytes = Some(payload_len);
+            }
+            if let Some(meta) = self.entries.get_mut(&cold.entry.id) {
+                meta.last_cold_snapshot = plan.manifest.snapshot_index;
+                meta.last_cold_rel_path = Some(cold.rel_path.clone());
+            }
+            for dir in parent_dirs {
+                dirs_to_sync.insert(dir);
+            }
+        }
+
+        plan.manifest.cold_bytes_total = cold_bytes_total;
+        plan.manifest.cold_reused_entries = cold_reused_entries;
+        plan.manifest.cold_reused_bytes = cold_reused_bytes;
+
+        for dir in dirs_to_sync {
+            Self::sync_dir(&dir).wrap_err_with(|| {
+                format!(
+                    "failed to sync cold shard directory {path}",
+                    path = dir.display()
+                )
+            })?;
+        }
+
+        Self::write_manifest(&staging_dir, &plan.manifest)?;
+        Self::sync_dir(&staging_dir).wrap_err_with(|| {
+            format!(
+                "failed to sync staging directory {path}",
+                path = staging_dir.display()
+            )
+        })?;
+
+        let backup = if plan.snapshot_dir.exists() {
+            let backup_path = plan.snapshot_dir.with_extension("bak");
+            if backup_path.exists() {
+                fs::remove_dir_all(&backup_path).wrap_err_with(|| {
+                    format!(
+                        "failed to clear previous backup {path}",
+                        path = backup_path.display()
+                    )
+                })?;
+            }
+            fs::rename(&plan.snapshot_dir, &backup_path).wrap_err_with(|| {
+                format!(
+                    "failed to move existing snapshot to backup {path}",
+                    path = backup_path.display()
+                )
+            })?;
+            Some(backup_path)
+        } else {
+            None
+        };
+
+        fs::rename(&staging_dir, &plan.snapshot_dir).wrap_err_with(|| {
+            format!(
+                "failed to promote staging snapshot into place at {path}",
+                path = plan.snapshot_dir.display()
+            )
+        })?;
+
+        Self::sync_dir(&plan.snapshot_dir).wrap_err_with(|| {
+            format!(
+                "failed to sync snapshot directory {path}",
+                path = plan.snapshot_dir.display()
+            )
+        })?;
+        if let Some(parent) = plan.snapshot_dir.parent() {
+            Self::sync_dir(parent).wrap_err_with(|| {
+                format!(
+                    "failed to sync snapshot parent {path}",
+                    path = parent.display()
+                )
+            })?;
+        }
+        if let Some(backup_path) = backup {
+            if let Err(err) = fs::remove_dir_all(&backup_path) {
+                iroha_logger::warn!(
+                    ?err,
+                    path = %backup_path.display(),
+                    "tiered-state: failed to remove snapshot backup directory"
+                );
+            }
+        }
+
+        self.last_manifest = Some(plan.manifest);
+        self.prune_old_snapshots(&plan.root)?;
+        self.prune_to_cold_bytes(&plan.root)?;
+
+        Ok(())
+    }
+
     /// Returns the currently configured hot key retention limit.
     #[must_use]
     pub fn hot_retained_keys(&self) -> usize {
@@ -794,6 +1253,12 @@ impl TieredStateBackend {
     #[must_use]
     pub fn enabled(&self) -> bool {
         self.enabled
+    }
+
+    /// Returns whether the backend has been seeded with at least one entry.
+    #[must_use]
+    pub(crate) fn has_entries(&self) -> bool {
+        !self.entries.is_empty()
     }
 
     /// Returns the cached manifest of the latest snapshot, if any.
@@ -1023,6 +1488,7 @@ impl TieredStateBackend {
         }
         if cold_root_changed {
             self.entries.clear();
+            self.entry_keys.clear();
             self.snapshot_counter = 0;
             self.snapshot_counter_seeded = false;
             self.last_manifest = None;
@@ -1496,6 +1962,13 @@ impl TieredStateBackend {
         }
         meta.last_present_snapshot = ctx.snapshot_idx;
         meta.value_size_bytes = value_size_bytes;
+        self.entry_keys.insert(
+            id,
+            EntryKey {
+                key: key_handle.clone(),
+                key_encoded: key_encoded.clone(),
+            },
+        );
         ctx.seen.insert(id);
 
         ctx.scores.push(EntryScore {
@@ -1939,9 +2412,12 @@ fn compute_json_hash(value: &impl json::JsonSerialize) -> Result<([u8; 32], usiz
     Ok((sha256(&encoded), encoded.len()))
 }
 
-trait MeasuredBytes {
+/// Deterministic byte estimate for hot-tier sizing.
+pub(crate) trait MeasuredBytes {
+    /// Return the total measured byte footprint used for hot-tier budgeting.
     fn measured_bytes(&self) -> usize;
 
+    /// Return bytes beyond the stack size of the value.
     fn measured_bytes_extra(&self) -> usize
     where
         Self: Sized,
@@ -3562,6 +4038,23 @@ impl Ord for EntryMetadata {
 }
 
 #[derive(Debug, Clone)]
+struct EntryKey {
+    key: TieredKeyHandle,
+    key_encoded: Vec<u8>,
+}
+
+impl EntryKey {
+    fn score(&self, id: TieredEntryId) -> EntryScore {
+        EntryScore {
+            id,
+            segment: id.segment,
+            key: self.key.clone(),
+            key_encoded: self.key_encoded.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 struct EntryScore {
     id: TieredEntryId,
     segment: TieredSegment,
@@ -3607,8 +4100,9 @@ impl EntryScore {
     }
 }
 
+/// Key handle for tiered snapshot entries.
 #[derive(Debug, Clone)]
-enum TieredKeyHandle {
+pub(crate) enum TieredKeyHandle {
     Domain(iroha_data_model::domain::DomainId),
     Account(iroha_data_model::account::AccountId),
     AccountRekey(iroha_data_model::account::rekey::AccountLabel),
@@ -3644,6 +4138,146 @@ enum TieredKeyHandle {
 }
 
 impl TieredKeyHandle {
+    fn segment(&self) -> TieredSegment {
+        match self {
+            TieredKeyHandle::Domain(_) => TieredSegment::Domains,
+            TieredKeyHandle::Account(_) => TieredSegment::Accounts,
+            TieredKeyHandle::AccountRekey(_) => TieredSegment::AccountRekeyRecords,
+            TieredKeyHandle::AssetDefinition(_) => TieredSegment::AssetDefinitions,
+            TieredKeyHandle::Asset(_) => TieredSegment::Assets,
+            TieredKeyHandle::AssetMetadata(_) => TieredSegment::AssetMetadata,
+            TieredKeyHandle::Nft(_) => TieredSegment::Nfts,
+            TieredKeyHandle::Role(_) => TieredSegment::Roles,
+            TieredKeyHandle::AccountPermission(_) => TieredSegment::AccountPermissions,
+            TieredKeyHandle::AccountRole(_) => TieredSegment::AccountRoles,
+            TieredKeyHandle::TxSequence(_) => TieredSegment::TxSequences,
+            TieredKeyHandle::VerifyingKey(_) => TieredSegment::VerifyingKeys,
+            TieredKeyHandle::RuntimeUpgrade(_) => TieredSegment::RuntimeUpgrades,
+            TieredKeyHandle::Proof(_) => TieredSegment::Proofs,
+            TieredKeyHandle::ProofTag(_) => TieredSegment::ProofTags,
+            TieredKeyHandle::ProofByTag(_) => TieredSegment::ProofsByTag,
+            TieredKeyHandle::CommitQc(_) => TieredSegment::CommitQcs,
+            TieredKeyHandle::ContractManifest(_) => TieredSegment::ContractManifests,
+            TieredKeyHandle::ContractCode(_) => TieredSegment::ContractCode,
+            TieredKeyHandle::ContractInstance(_) => TieredSegment::ContractInstances,
+            TieredKeyHandle::SmartContractState(_) => TieredSegment::SmartContractState,
+            TieredKeyHandle::ZkAsset(_) => TieredSegment::ZkAssets,
+            TieredKeyHandle::Election(_) => TieredSegment::Elections,
+            TieredKeyHandle::GovernanceProposal(_) => TieredSegment::GovernanceProposals,
+            TieredKeyHandle::GovernanceReferendum(_) => TieredSegment::GovernanceReferenda,
+            TieredKeyHandle::GovernanceLock(_) => TieredSegment::GovernanceLocks,
+            TieredKeyHandle::GovernanceSlash(_) => TieredSegment::GovernanceSlashes,
+            TieredKeyHandle::Council(_) => TieredSegment::Council,
+            TieredKeyHandle::ParliamentBodies(_) => TieredSegment::ParliamentBodies,
+            TieredKeyHandle::OfflineAllowance(_) => TieredSegment::OfflineAllowances,
+            TieredKeyHandle::OfflineVerdictRevocation(_) => {
+                TieredSegment::OfflineVerdictRevocations
+            }
+            TieredKeyHandle::OfflineTransfer(_) => TieredSegment::OfflineTransfers,
+        }
+    }
+
+    fn encode_key(&self) -> Result<Vec<u8>> {
+        match self {
+            TieredKeyHandle::ContractInstance(key) => {
+                json::to_vec(&vec![key.0.clone(), key.1.clone()])
+                    .wrap_err("failed to encode contract instance key for tiered snapshot")
+            }
+            TieredKeyHandle::Domain(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::Account(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::AccountRekey(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::AssetDefinition(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::Asset(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::AssetMetadata(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::Nft(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::Role(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::AccountPermission(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::AccountRole(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::TxSequence(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::VerifyingKey(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::RuntimeUpgrade(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::Proof(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::ProofTag(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::ProofByTag(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::CommitQc(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::ContractManifest(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::ContractCode(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::SmartContractState(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::ZkAsset(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::Election(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::GovernanceProposal(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::GovernanceReferendum(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::GovernanceLock(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::GovernanceSlash(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::Council(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::ParliamentBodies(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::OfflineAllowance(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::OfflineVerdictRevocation(key) => {
+                Ok(norito::codec::Encode::encode(key))
+            }
+            TieredKeyHandle::OfflineTransfer(key) => Ok(norito::codec::Encode::encode(key)),
+        }
+    }
+
+    fn entry_id(&self) -> Result<(TieredEntryId, Vec<u8>)> {
+        let key_encoded = self.encode_key()?;
+        let key_hash = sha256(&key_encoded);
+        Ok((TieredEntryId::new(self.segment(), key_hash), key_encoded))
+    }
+
+    fn measure_value(&self, world: &World) -> Result<Option<([u8; 32], usize)>> {
+        macro_rules! fetch {
+            ($storage:expr, $key:expr) => {{
+                let view = $storage.view();
+                let Some(value) = view.get($key) else {
+                    return Ok(None);
+                };
+                let (value_hash, _json_len) = compute_json_hash(value)
+                    .wrap_err("failed to encode value for tiered snapshot")?;
+                let value_size_bytes = compute_hot_bytes(value)
+                    .wrap_err("failed to compute WSV hot-tier size estimate")?;
+                Ok(Some((value_hash, value_size_bytes)))
+            }};
+        }
+
+        match self {
+            TieredKeyHandle::Domain(id) => fetch!(world.domains, id),
+            TieredKeyHandle::Account(id) => fetch!(world.accounts, id),
+            TieredKeyHandle::AccountRekey(id) => fetch!(world.account_rekey_records, id),
+            TieredKeyHandle::AssetDefinition(id) => fetch!(world.asset_definitions, id),
+            TieredKeyHandle::Asset(id) => fetch!(world.assets, id),
+            TieredKeyHandle::AssetMetadata(id) => fetch!(world.asset_metadata, id),
+            TieredKeyHandle::Nft(id) => fetch!(world.nfts, id),
+            TieredKeyHandle::Role(id) => fetch!(world.roles, id),
+            TieredKeyHandle::AccountPermission(id) => fetch!(world.account_permissions, id),
+            TieredKeyHandle::AccountRole(id) => fetch!(world.account_roles, id),
+            TieredKeyHandle::TxSequence(id) => fetch!(world.tx_sequences, id),
+            TieredKeyHandle::VerifyingKey(id) => fetch!(world.verifying_keys, id),
+            TieredKeyHandle::RuntimeUpgrade(id) => fetch!(world.runtime_upgrades, id),
+            TieredKeyHandle::Proof(id) => fetch!(world.proofs, id),
+            TieredKeyHandle::ProofTag(id) => fetch!(world.proof_tags, id),
+            TieredKeyHandle::ProofByTag(tag) => fetch!(world.proofs_by_tag, tag),
+            TieredKeyHandle::CommitQc(hash) => fetch!(world.commit_qcs, hash),
+            TieredKeyHandle::ContractManifest(hash) => fetch!(world.contract_manifests, hash),
+            TieredKeyHandle::ContractCode(hash) => fetch!(world.contract_code, hash),
+            TieredKeyHandle::ContractInstance(key) => fetch!(world.contract_instances, key),
+            TieredKeyHandle::SmartContractState(key) => fetch!(world.smart_contract_state, key),
+            TieredKeyHandle::ZkAsset(id) => fetch!(world.zk_assets, id),
+            TieredKeyHandle::Election(id) => fetch!(world.elections, id),
+            TieredKeyHandle::GovernanceProposal(id) => fetch!(world.governance_proposals, id),
+            TieredKeyHandle::GovernanceReferendum(id) => fetch!(world.governance_referenda, id),
+            TieredKeyHandle::GovernanceLock(id) => fetch!(world.governance_locks, id),
+            TieredKeyHandle::GovernanceSlash(id) => fetch!(world.governance_slashes, id),
+            TieredKeyHandle::Council(id) => fetch!(world.council, id),
+            TieredKeyHandle::ParliamentBodies(id) => fetch!(world.parliament_bodies, id),
+            TieredKeyHandle::OfflineAllowance(id) => fetch!(world.offline_allowances, id),
+            TieredKeyHandle::OfflineVerdictRevocation(id) => {
+                fetch!(world.offline_verdict_revocations, id)
+            }
+            TieredKeyHandle::OfflineTransfer(id) => fetch!(world.offline_to_online_transfers, id),
+        }
+    }
+
     fn encode_value(&self, world: &World) -> Result<Vec<u8>> {
         macro_rules! fetch {
             ($storage:expr, $key:expr) => {{
@@ -3852,7 +4486,7 @@ mod tests {
             required: 2,
             quorum_bps: 5000,
         };
-        let empty_bytes = approval.measured_bytes();
+        let empty_bytes = MeasuredBytes::measured_bytes(&approval);
         let keypair = iroha_crypto::KeyPair::from_seed(
             b"tiered-approval".to_vec(),
             iroha_crypto::Algorithm::Ed25519,
@@ -3864,16 +4498,16 @@ mod tests {
                 domain,
                 keypair.public_key().clone(),
             ));
-        let filled_bytes = approval.measured_bytes();
+        let filled_bytes = MeasuredBytes::measured_bytes(&approval);
         assert!(filled_bytes >= empty_bytes);
 
         let mut approvals = crate::state::GovernanceStageApprovals::default();
-        let base_bytes = approvals.measured_bytes();
+        let base_bytes = MeasuredBytes::measured_bytes(&approvals);
         approvals.stages.insert(
             iroha_data_model::governance::types::ParliamentBody::AgendaCouncil,
             approval,
         );
-        let updated_bytes = approvals.measured_bytes();
+        let updated_bytes = MeasuredBytes::measured_bytes(&approvals);
         assert!(updated_bytes >= base_bytes);
     }
 
@@ -3888,16 +4522,19 @@ mod tests {
         let repeats = Repeats::Exactly(1);
         let filter = EventFilterBox::Data(DataEventFilter::Any);
 
-        assert!(trigger_id.measured_bytes() >= std::mem::size_of::<TriggerId>());
-        assert_eq!(repeats.measured_bytes(), std::mem::size_of::<Repeats>());
-        assert!(filter.measured_bytes() >= std::mem::size_of::<EventFilterBox>());
+        assert!(MeasuredBytes::measured_bytes(&trigger_id) >= std::mem::size_of::<TriggerId>());
+        assert_eq!(
+            MeasuredBytes::measured_bytes(&repeats),
+            std::mem::size_of::<Repeats>()
+        );
+        assert!(MeasuredBytes::measured_bytes(&filter) >= std::mem::size_of::<EventFilterBox>());
     }
 
     #[test]
     fn measured_bytes_cover_opaque_account_id() {
         let opaque = OpaqueAccountId::from_hash(Hash::new([7_u8; 32]));
         assert_eq!(
-            opaque.measured_bytes(),
+            MeasuredBytes::measured_bytes(&opaque),
             std::mem::size_of::<OpaqueAccountId>()
         );
     }
@@ -4034,6 +4671,144 @@ mod tests {
             .count();
         assert_eq!(retained, 1);
         assert_eq!(manifest2.snapshot_index, 2);
+    }
+
+    #[test]
+    fn record_world_snapshot_with_diff_updates_touched_entries() {
+        let temp = tempdir().expect("tmpdir");
+        let mut backend =
+            TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), None, 0, 0);
+        let mut world = World::default();
+
+        let qc1 = dummy_qc(1);
+        let qc2 = dummy_qc(2);
+        world.commit_qcs.insert(qc1.subject_block_hash, qc1.clone());
+        world.commit_qcs.insert(qc2.subject_block_hash, qc2.clone());
+
+        backend
+            .record_world_snapshot(&world)
+            .expect("initial snapshot");
+        let snapshot1 = backend
+            .last_manifest()
+            .expect("manifest recorded")
+            .snapshot_index;
+
+        let mut qc1_updated = qc1.clone();
+        qc1_updated.view = qc1_updated.view.saturating_add(1);
+        world.commit_qcs.insert(qc1.subject_block_hash, qc1_updated);
+
+        let mut diff = TieredSnapshotDiff::default();
+        diff.push(TieredKeyHandle::CommitQc(qc1.subject_block_hash));
+
+        backend
+            .record_world_snapshot_with_diff(&world, &diff)
+            .expect("diff snapshot");
+        let manifest = backend.last_manifest().expect("manifest recorded");
+
+        let qc1_key = TieredKeyHandle::CommitQc(qc1.subject_block_hash)
+            .encode_key()
+            .expect("qc1 key encode");
+        let qc2_key = TieredKeyHandle::CommitQc(qc2.subject_block_hash)
+            .encode_key()
+            .expect("qc2 key encode");
+
+        let mut entries = manifest.hot_entries.iter().chain(&manifest.cold_entries);
+        let entry1 = entries
+            .clone()
+            .find(|entry| entry.key_payload == qc1_key)
+            .expect("qc1 entry present");
+        let entry2 = entries
+            .find(|entry| entry.key_payload == qc2_key)
+            .expect("qc2 entry present");
+
+        assert_eq!(entry1.last_mutated_snapshot, manifest.snapshot_index);
+        assert_eq!(entry2.last_mutated_snapshot, snapshot1);
+    }
+
+    #[test]
+    fn record_world_snapshot_with_payload_updates_touched_entries() {
+        let temp = tempdir().expect("tmpdir");
+        let mut backend =
+            TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), None, 0, 0);
+        let mut world = World::default();
+
+        let qc1 = dummy_qc(1);
+        let qc2 = dummy_qc(2);
+        world.commit_qcs.insert(qc1.subject_block_hash, qc1.clone());
+        world.commit_qcs.insert(qc2.subject_block_hash, qc2.clone());
+
+        backend
+            .record_world_snapshot(&world)
+            .expect("initial snapshot");
+        let snapshot1 = backend
+            .last_manifest()
+            .expect("manifest recorded")
+            .snapshot_index;
+
+        let mut qc1_updated = qc1.clone();
+        qc1_updated.view = qc1_updated.view.saturating_add(1);
+        world
+            .commit_qcs
+            .insert(qc1.subject_block_hash, qc1_updated.clone());
+
+        let mut payload = TieredSnapshotPayload::default();
+        payload.push_value(
+            TieredKeyHandle::CommitQc(qc1.subject_block_hash),
+            Some(qc1_updated),
+        );
+
+        backend
+            .record_world_snapshot_with_payload(&payload)
+            .expect("payload snapshot");
+        let manifest = backend.last_manifest().expect("manifest recorded");
+
+        let qc1_key = TieredKeyHandle::CommitQc(qc1.subject_block_hash)
+            .encode_key()
+            .expect("qc1 key encode");
+        let qc2_key = TieredKeyHandle::CommitQc(qc2.subject_block_hash)
+            .encode_key()
+            .expect("qc2 key encode");
+
+        let mut entries = manifest.hot_entries.iter().chain(&manifest.cold_entries);
+        let entry1 = entries
+            .clone()
+            .find(|entry| entry.key_payload == qc1_key)
+            .expect("qc1 entry present");
+        let entry2 = entries
+            .find(|entry| entry.key_payload == qc2_key)
+            .expect("qc2 entry present");
+
+        assert_eq!(entry1.last_mutated_snapshot, manifest.snapshot_index);
+        assert_eq!(entry2.last_mutated_snapshot, snapshot1);
+    }
+
+    #[test]
+    fn record_world_snapshot_with_payload_keeps_unspillable_entries_hot() {
+        let temp = tempdir().expect("tmpdir");
+        let mut backend =
+            TieredStateBackend::new(true, 1, 0, 0, Some(temp.path().to_path_buf()), None, 0, 0);
+        let mut world = World::default();
+
+        let qc1 = dummy_qc(1);
+        world.commit_qcs.insert(qc1.subject_block_hash, qc1.clone());
+
+        backend
+            .record_world_snapshot(&world)
+            .expect("initial snapshot");
+
+        let qc2 = dummy_qc(2);
+        world.commit_qcs.insert(qc2.subject_block_hash, qc2.clone());
+
+        let mut payload = TieredSnapshotPayload::default();
+        payload.push_value(TieredKeyHandle::CommitQc(qc2.subject_block_hash), Some(qc2));
+
+        backend
+            .record_world_snapshot_with_payload(&payload)
+            .expect("payload snapshot");
+        let manifest = backend.last_manifest().expect("manifest recorded");
+
+        assert_eq!(manifest.hot_entries.len(), 2);
+        assert!(manifest.cold_entries.is_empty());
     }
 
     #[test]
