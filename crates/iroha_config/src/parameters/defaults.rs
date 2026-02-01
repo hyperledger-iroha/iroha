@@ -2484,6 +2484,8 @@ pub mod sumeragi {
     pub const PACEMAKER_JITTER_FRAC_PERMILLE: u32 = 0;
     /// Grace period (ms) before a pending block counts as stalled for pacemaker backpressure.
     pub const PACEMAKER_PENDING_STALL_GRACE_MS: u64 = 250;
+    /// Allow fast quorum reschedules in DA mode when payloads are locally available.
+    pub const PACEMAKER_DA_FAST_RESCHEDULE: bool = false;
     /// Soft limit for blocking pending blocks before pacemaker backpressure defers proposals.
     /// 0 keeps strict gating (any pending block defers).
     pub const PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT: usize = 1;

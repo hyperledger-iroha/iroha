@@ -321,6 +321,10 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
                 pending_stall_grace_ms(npos_timing.block_ms),
             )
             .write(
+                ["sumeragi", "advanced", "pacemaker", "da_fast_reschedule"],
+                true,
+            )
+            .write(
                 [
                     "sumeragi",
                     "advanced",

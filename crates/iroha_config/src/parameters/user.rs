@@ -5415,6 +5415,12 @@ pub struct SumeragiPacemaker {
         default = "defaults::sumeragi::PACEMAKER_PENDING_STALL_GRACE_MS"
     )]
     pub pending_stall_grace_ms: u64,
+    /// Allow fast quorum reschedules in DA mode when payloads are locally available.
+    #[config(
+        env = "SUMERAGI_PACEMAKER_DA_FAST_RESCHEDULE",
+        default = "defaults::sumeragi::PACEMAKER_DA_FAST_RESCHEDULE"
+    )]
+    pub da_fast_reschedule: bool,
     /// Soft limit for blocking pending blocks before pacemaker backpressure defers proposals.
     /// 0 keeps strict gating (any pending block defers).
     #[config(
@@ -6597,6 +6603,7 @@ impl Sumeragi {
                 pending_stall_grace: std::time::Duration::from_millis(
                     pacemaker.pending_stall_grace_ms,
                 ),
+                da_fast_reschedule: pacemaker.da_fast_reschedule,
                 active_pending_soft_limit: pacemaker.active_pending_soft_limit,
                 rbc_backlog_session_soft_limit: pacemaker.rbc_backlog_session_soft_limit,
                 rbc_backlog_chunk_soft_limit: pacemaker.rbc_backlog_chunk_soft_limit,

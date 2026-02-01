@@ -130,7 +130,7 @@ Katakana overlay (v26-style boxes + diff glyphs)
 - `SS_RING_DIM_ANGLES=0,120,240` and `SS_RING_DIM_TOL=4` tune the orientation dot pattern.
 Logo emphasis
 - `SS_LOGO_SCALE` controls logo size (v27 default 0.318; katabox default 0.12).
-- Katabox defaults bias toward a denser v26-like grid (`SS_GRID_N=50`, `SS_CELL_SIZE=10`, `SS_GRID_OFFSET=6`) and smaller glyphs (`SS_GLYPH_SIZE=9`, `SS_GLYPH_THRESH=70`).
+- Katabox defaults match the v26 preview grid (`SS_GRID_N=32`, `SS_CELL_SIZE=16`, `SS_GRID_OFFSET=0`) with slimmer glyphs (`SS_GLYPH_SIZE=10`, `SS_GLYPH_THRESH=140`) to match v26 density.
 - `SS_LOGO_THRESH_1/2/3` adjust logo shade thresholds (lower = bolder logo).
 - `SS_LOGO_OVERLAY=1` draws the logo on top of data (for visibility).
 - `SS_LOGO_OVERLAY_ALPHA` controls overlay strength (0-255).

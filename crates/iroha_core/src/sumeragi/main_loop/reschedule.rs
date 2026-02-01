@@ -217,12 +217,22 @@ impl Actor {
                         status.stake_quorum_missing,
                     )
                 };
-            let has_votes = pending.precommit_vote_sent
-                || self.pending_block_has_votes(*hash, pending.height, pending.view);
             let has_qc = pending.commit_qc_seen || commit_qc_cached || qc_any.is_some();
             let validation_inflight = pending.validation_status == ValidationStatus::Pending
                 && self.subsystems.validation.inflight.contains_key(hash);
-            let fast_path_allowed = !da_enabled && !has_votes && !has_qc && !validation_inflight;
+            let payload_available = da_enabled
+                && Self::payload_available_for_da(
+                    &self.subsystems.da_rbc.rbc.sessions,
+                    &self.subsystems.da_rbc.rbc.status_handle,
+                    pending,
+                );
+            let allow_da_fast_reschedule =
+                da_enabled && self.config.pacemaker.da_fast_reschedule && payload_available;
+            let has_votes = vote_count > 0;
+            let fast_path_allowed = (!da_enabled || allow_da_fast_reschedule)
+                && !has_votes
+                && !has_qc
+                && !validation_inflight;
             let effective_quorum_timeout = if fast_path_allowed {
                 fast_timeout.min(quorum_timeout)
             } else {
@@ -258,12 +268,6 @@ impl Actor {
                     );
                     continue;
                 }
-                let payload_available = da_enabled
-                    && Self::payload_available_for_da(
-                        &self.subsystems.da_rbc.rbc.sessions,
-                        &self.subsystems.da_rbc.rbc.status_handle,
-                        pending,
-                    );
                 let missing_local_data = da_enabled && !payload_available;
                 if (missing_local_data
                     || matches!(pending.last_gate, Some(GateReason::MissingLocalData)))
