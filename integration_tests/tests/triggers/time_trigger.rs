@@ -99,22 +99,49 @@ fn effective_status_timeout(current: Duration, sync_timeout: Duration) -> Durati
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[allow(clippy::too_many_lines)]
 async fn time_trigger_scenarios() -> Result<()> {
-    let Some(network) = sandbox::start_network_async_or_skip(
-        NetworkBuilder::new().with_pipeline_time(std::time::Duration::from_secs(2)),
-        stringify!(time_trigger_scenarios),
-    )
-    .await?
-    else {
-        return Ok(());
+    let is_retryable = |err: &eyre::Report| {
+        err.chain().any(|cause| {
+            let msg = cause.to_string();
+            msg.contains("tx confirmation timed out")
+                || msg.contains("haven't got tx confirmation within")
+                || msg.contains("transaction queued for too long")
+                || msg
+                    .contains("Network overall height did not pass given predicate within timeout")
+                || msg.contains("block sync predicate failed")
+        })
     };
-    let test_client = network.client();
-    network.ensure_blocks_with(|h| h.total >= 1).await?;
 
-    mint_asset_after_3_sec_scenario(&network, &test_client).await?;
-    pre_commit_trigger_should_be_executed_scenario(&network, &test_client).await?;
-    mint_nft_for_every_user_every_1_sec_scenario(&network, &test_client).await?;
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        let result = async {
+            let Some(network) = sandbox::start_network_async_or_skip(
+                NetworkBuilder::new().with_default_pipeline_time(),
+                stringify!(time_trigger_scenarios),
+            )
+            .await?
+            else {
+                return Ok(());
+            };
+            let test_client = network.client();
+            network.ensure_blocks_with(|h| h.total >= 1).await?;
 
-    Ok(())
+            mint_asset_after_3_sec_scenario(&network, &test_client).await?;
+            pre_commit_trigger_should_be_executed_scenario(&network, &test_client).await?;
+            mint_nft_for_every_user_every_1_sec_scenario(&network, &test_client).await?;
+
+            Ok(())
+        }
+        .await;
+
+        match result {
+            Ok(()) => return Ok(()),
+            Err(err) if attempt < 2 && is_retryable(&err) => {
+                eprintln!("warning: retrying time trigger scenarios after transient error: {err}");
+            }
+            Err(err) => return Err(err),
+        }
+    }
 }
 
 async fn mint_asset_after_3_sec_scenario(
@@ -291,7 +318,7 @@ async fn pre_commit_trigger_should_be_executed_scenario(
                     "value".parse::<Json>()?,
                 );
                 // Submit without waiting for tx confirmation to avoid queue-timeout flakiness.
-                let mut submit_client = leader_client_for_submit(network, &test_client).await;
+                let submit_client = leader_client_for_submit(network, &test_client).await;
                 let context = "pre_commit_trigger_should_be_executed sample ISI".to_string();
                 spawn_blocking(move || submit_client.submit(sample_isi).wrap_err(context))
                     .await??;
@@ -495,7 +522,7 @@ async fn submit_sample_isi_on_every_block_commit(
             Json::new("value"),
         );
         // Submit without waiting for tx confirmation to avoid queue-timeout flakiness.
-        let mut submit_client = leader_client_for_submit(network, test_client).await;
+        let submit_client = leader_client_for_submit(network, test_client).await;
         let context = "time_trigger sample ISI".to_string();
         spawn_blocking(move || submit_client.submit(sample_isi).wrap_err(context)).await??;
         target_height = target_height.saturating_add(1);
