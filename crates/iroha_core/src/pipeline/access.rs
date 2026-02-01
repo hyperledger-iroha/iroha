@@ -39,6 +39,7 @@ use parking_lot::RwLock;
 use crate::{
     executor::parse_gas_limit,
     smartcontracts::ivm::host::QueryStateSource,
+    smartcontracts::triggers::set::{ExecutableRef, SetReadOnly},
     state::{StateReadOnly, WorldReadOnly},
 };
 
@@ -238,7 +239,10 @@ where
     R: StateReadOnly + QueryStateSource,
 {
     match tx.instructions() {
-        Executable::Instructions(batch) => (derive_from_isi_batch(batch.as_ref()), None),
+        Executable::Instructions(batch) => (
+            derive_from_isi_batch_with_state(batch.as_ref(), state_ro),
+            None,
+        ),
         Executable::Ivm(bytecode) => {
             let bytecode_ref = bytecode.as_ref();
             if let Ok(parsed) = ivm::ProgramMetadata::parse(bytecode_ref) {
@@ -760,16 +764,38 @@ fn is_state_only_syscall(number: u8) -> bool {
     )
 }
 
-fn derive_from_isi_batch(batch: &[InstructionBox]) -> AccessSet {
+fn derive_from_isi_batch_with_state<R>(batch: &[InstructionBox], state_ro: Option<&R>) -> AccessSet
+where
+    R: StateReadOnly + QueryStateSource,
+{
     let mut set = AccessSet::new();
+    let max_depth = state_ro
+        .map(|view| view.world().parameters().smart_contract().execution_depth())
+        .unwrap_or(0);
+    let mut visited_triggers = BTreeSet::new();
     for instr in batch {
-        set.union_with(derive_from_instruction(instr));
+        set.union_with(derive_from_instruction(
+            instr,
+            state_ro,
+            &mut visited_triggers,
+            0,
+            max_depth,
+        ));
     }
     set
 }
 
 #[allow(clippy::too_many_lines)]
-fn derive_from_instruction(instr: &InstructionBox) -> AccessSet {
+fn derive_from_instruction<R>(
+    instr: &InstructionBox,
+    state_ro: Option<&R>,
+    visited_triggers: &mut BTreeSet<TriggerId>,
+    depth: u8,
+    max_depth: u8,
+) -> AccessSet
+where
+    R: StateReadOnly + QueryStateSource,
+{
     let mut set = AccessSet::new();
     let any = instr.as_any();
 
@@ -972,8 +998,22 @@ fn derive_from_instruction(instr: &InstructionBox) -> AccessSet {
 
     // Execute trigger
     if let Some(exe) = any.downcast_ref::<ExecuteTrigger>() {
-        set.add_read(key_trigger(&exe.trigger));
-        set.add_write(key_trigger_repetitions(&exe.trigger));
+        // Executing a trigger can mutate its own action (e.g., via Mint::trigger_repetitions or metadata updates),
+        // so treat it as a full trigger write to avoid under-reporting conflicts.
+        add_trigger_rw(&mut set, &exe.trigger);
+        if let Some(view) = state_ro {
+            let can_recurse = depth < max_depth && !visited_triggers.contains(&exe.trigger);
+            if can_recurse {
+                visited_triggers.insert(exe.trigger.clone());
+                set.union_with(derive_from_trigger_executable(
+                    &exe.trigger,
+                    view,
+                    visited_triggers,
+                    depth.saturating_add(1),
+                    max_depth,
+                ));
+            }
+        }
         return set;
     }
     if let Some(act) =
@@ -991,6 +1031,66 @@ fn derive_from_instruction(instr: &InstructionBox) -> AccessSet {
 
     // Fallback: unknown instruction kind — be conservative.
     AccessSet::global()
+}
+
+fn derive_from_trigger_executable<R>(
+    trigger_id: &TriggerId,
+    state_ro: &R,
+    visited_triggers: &mut BTreeSet<TriggerId>,
+    depth: u8,
+    max_depth: u8,
+) -> AccessSet
+where
+    R: StateReadOnly + QueryStateSource,
+{
+    let mut set = AccessSet::new();
+    let triggers = state_ro.world().triggers();
+    let Some(executable) = triggers.inspect_by_id(trigger_id, |action| action.executable().clone())
+    else {
+        return set;
+    };
+    match executable {
+        ExecutableRef::Instructions(instructions) => {
+            for instr in instructions.as_ref() {
+                set.union_with(derive_from_instruction(
+                    instr,
+                    Some(state_ro),
+                    visited_triggers,
+                    depth,
+                    max_depth,
+                ));
+            }
+        }
+        ExecutableRef::Ivm(hash) => {
+            let Some(code) = triggers.get_original_contract(&hash) else {
+                return set;
+            };
+            if let Some(hinted) = derive_access_from_ivm_trigger(code, state_ro) {
+                set.union_with(hinted);
+            }
+        }
+    }
+    set
+}
+
+fn derive_access_from_ivm_trigger<R>(
+    bytecode: &iroha_data_model::transaction::IvmBytecode,
+    state_ro: &R,
+) -> Option<AccessSet>
+where
+    R: StateReadOnly + QueryStateSource,
+{
+    let bytecode_ref = bytecode.as_ref();
+    let parsed = ivm::ProgramMetadata::parse(bytecode_ref).ok()?;
+    let code_hash = IrohaHash::new(&bytecode_ref[parsed.header_len..]);
+    let manifest = state_ro.world().contract_manifests().get(&code_hash)?;
+    manifest_access_set(
+        manifest,
+        code_hash,
+        bytecode_ref,
+        state_ro.pipeline().access_set_cache_enabled,
+    )
+    .map(|(set, _source)| set)
 }
 
 fn key_account(id: &AccountId) -> AccessKey {
@@ -1167,8 +1267,20 @@ where
         .map_err(|e| format!("ivm.run: {e}"))?;
     let mut set = AccessSet::new();
     let mut access_log: Option<ivm::host::AccessLog> = None;
+    let max_depth = state_ro
+        .world()
+        .parameters()
+        .smart_contract()
+        .execution_depth();
+    let mut visited_triggers = BTreeSet::new();
     for isi in host.drain_instructions() {
-        set.union_with(derive_from_instruction(&isi));
+        set.union_with(derive_from_instruction(
+            &isi,
+            Some(state_ro),
+            &mut visited_triggers,
+            0,
+            max_depth,
+        ));
     }
     if host.access_logging_supported() {
         access_log = Some(
@@ -1214,6 +1326,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::smartcontracts::Execute;
     use crate::state::{State, World};
 
     const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
@@ -2111,9 +2224,224 @@ mod tests {
             IvmStrategy::Conservative,
         );
         assert!(set.read_keys.contains(&format!("trigger:{}", &trig)));
+        assert!(set.write_keys.contains(&format!("trigger:{}", &trig)));
         assert!(
             set.write_keys
                 .contains(&format!("trigger.repetitions:{}", &trig))
+        );
+    }
+
+    #[test]
+    fn execute_trigger_includes_access_from_trigger_instructions() {
+        use nonzero_ext::nonzero;
+
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query);
+        let alice = iroha_test_samples::ALICE_ID.clone();
+
+        let header =
+            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut st_block = state.block(header);
+        {
+            let mut stx = st_block.transaction();
+            let domain_id: DomainId = "wonderland".parse().unwrap();
+            Register::domain(Domain::new(domain_id))
+                .execute(&alice, &mut stx)
+                .unwrap();
+            Register::account(Account::new(alice.clone()))
+                .execute(&alice, &mut stx)
+                .unwrap();
+            let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+            Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone()))
+                .execute(&alice, &mut stx)
+                .unwrap();
+            let asset_id = AssetId::of(asset_def_id.clone(), alice.clone());
+            let trigger_id: TriggerId = "mint_asset_trigger".parse().unwrap();
+            let trigger = Trigger::new(
+                trigger_id.clone(),
+                Action::new(
+                    vec![InstructionBox::from(Mint::asset_numeric(
+                        1_u32,
+                        asset_id.clone(),
+                    ))],
+                    Repeats::Exactly(1),
+                    alice.clone(),
+                    iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter::new()
+                        .for_trigger(trigger_id.clone())
+                        .under_authority(alice.clone()),
+                ),
+            );
+            Register::trigger(trigger)
+                .execute(&alice, &mut stx)
+                .unwrap();
+            stx.apply();
+        }
+        st_block.commit().unwrap();
+
+        let tx = TransactionBuilder::new("chain".parse().unwrap(), alice.clone())
+            .with_instructions([InstructionBox::from(ExecuteTrigger::new(
+                "mint_asset_trigger".parse().unwrap(),
+            ))])
+            .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+        let set = derive_for_transaction::<crate::state::StateView<'_>>(
+            &tx,
+            Some(&state.view()),
+            IvmStrategy::Conservative,
+        );
+
+        let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_id = AssetId::of(asset_def_id.clone(), alice.clone());
+        let asset_key = key_asset(&asset_id);
+        let asset_def_key = key_asset_def(&asset_def_id);
+        assert!(set.write_keys.contains(&asset_key));
+        assert!(set.write_keys.contains(&asset_def_key));
+    }
+
+    #[test]
+    fn execute_trigger_includes_trigger_metadata_keys() {
+        use nonzero_ext::nonzero;
+
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query);
+        let alice = iroha_test_samples::ALICE_ID.clone();
+
+        let header =
+            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut st_block = state.block(header);
+        {
+            let mut stx = st_block.transaction();
+            Register::domain(Domain::new("wonderland".parse().unwrap()))
+                .execute(&alice, &mut stx)
+                .unwrap();
+            Register::account(Account::new(alice.clone()))
+                .execute(&alice, &mut stx)
+                .unwrap();
+            let trigger_id: TriggerId = "meta_trigger".parse().unwrap();
+            let key: Name = "flag".parse().unwrap();
+            let trigger = Trigger::new(
+                trigger_id.clone(),
+                Action::new(
+                    vec![InstructionBox::from(SetKeyValue::trigger(
+                        trigger_id.clone(),
+                        key.clone(),
+                        iroha_primitives::json::Json::from(norito::json!("ok")),
+                    ))],
+                    Repeats::Exactly(1),
+                    alice.clone(),
+                    iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter::new()
+                        .for_trigger(trigger_id.clone())
+                        .under_authority(alice.clone()),
+                ),
+            );
+            Register::trigger(trigger)
+                .execute(&alice, &mut stx)
+                .unwrap();
+            stx.apply();
+        }
+        st_block.commit().unwrap();
+
+        let tx = TransactionBuilder::new("chain".parse().unwrap(), alice.clone())
+            .with_instructions([InstructionBox::from(ExecuteTrigger::new(
+                "meta_trigger".parse().unwrap(),
+            ))])
+            .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+        let set = derive_for_transaction::<crate::state::StateView<'_>>(
+            &tx,
+            Some(&state.view()),
+            IvmStrategy::Conservative,
+        );
+        let detail_key = format!("trigger.detail:{}:{}", "meta_trigger", "flag");
+        assert!(set.write_keys.contains(&detail_key));
+    }
+
+    #[test]
+    fn execute_trigger_uses_manifest_hints_for_ivm_triggers() {
+        use iroha_data_model::smart_contract::manifest::{AccessSetHints, ContractManifest};
+        use nonzero_ext::nonzero;
+
+        access_set_cache_clear();
+
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query);
+        let alice = iroha_test_samples::ALICE_ID.clone();
+
+        let header =
+            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut st_block = state.block(header);
+        let (code_hash, trigger_id, hints) = {
+            let mut stx = st_block.transaction();
+            Register::domain(Domain::new("wonderland".parse().unwrap()))
+                .execute(&alice, &mut stx)
+                .unwrap();
+            Register::account(Account::new(alice.clone()))
+                .execute(&alice, &mut stx)
+                .unwrap();
+
+            let mut prog = ivm::ProgramMetadata::default().encode();
+            prog.extend_from_slice(b"trigger-manifest-hints");
+            let parsed = ivm::ProgramMetadata::parse(&prog).expect("header parse");
+            let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
+            let hints = AccessSetHints {
+                read_keys: vec![format!("account:{alice}")],
+                write_keys: vec![format!("state:trigger_hint")],
+            };
+            let manifest = ContractManifest {
+                code_hash: Some(code_hash),
+                abi_hash: None,
+                compiler_fingerprint: None,
+                features_bitmap: None,
+                access_set_hints: Some(hints.clone()),
+                entrypoints: None,
+                kotoba: None,
+                provenance: None,
+            }
+            .signed(&iroha_test_samples::ALICE_KEYPAIR);
+            stx.world.contract_manifests.insert(code_hash, manifest);
+
+            let trigger_id: TriggerId = "ivm_trigger".parse().unwrap();
+            let trigger = Trigger::new(
+                trigger_id.clone(),
+                Action::new(
+                    Executable::Ivm(IvmBytecode::from_compiled(prog)),
+                    Repeats::Exactly(1),
+                    alice.clone(),
+                    iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter::new()
+                        .for_trigger(trigger_id.clone())
+                        .under_authority(alice.clone()),
+                ),
+            );
+            Register::trigger(trigger)
+                .execute(&alice, &mut stx)
+                .unwrap();
+            stx.apply();
+
+            (code_hash, trigger_id, hints)
+        };
+        st_block.commit().unwrap();
+
+        let tx = TransactionBuilder::new("chain".parse().unwrap(), alice.clone())
+            .with_instructions([InstructionBox::from(ExecuteTrigger::new(
+                trigger_id.clone(),
+            ))])
+            .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+        let set = derive_for_transaction::<crate::state::StateView<'_>>(
+            &tx,
+            Some(&state.view()),
+            IvmStrategy::Conservative,
+        );
+
+        assert!(set.read_keys.contains(&hints.read_keys[0]));
+        assert!(set.write_keys.contains(&hints.write_keys[0]));
+        assert!(
+            state
+                .view()
+                .world()
+                .contract_manifests()
+                .get(&code_hash)
+                .is_some()
         );
     }
 
