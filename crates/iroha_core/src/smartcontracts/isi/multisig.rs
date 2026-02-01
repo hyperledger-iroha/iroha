@@ -173,7 +173,9 @@ fn proposal_key(hash: &HashOf<Vec<InstructionBox>>) -> Name {
 fn multisig_role_for(account: &AccountId) -> RoleId {
     let suffix = match account.controller() {
         iroha_data_model::account::AccountController::Single(_) => account.signatory().to_string(),
-        iroha_data_model::account::AccountController::Multisig(_) => account.to_string(),
+        iroha_data_model::account::AccountController::Multisig(_) => account
+            .canonical_ih58()
+            .unwrap_or_else(|_| HashOf::new(account).to_string()),
     };
     format!(
         "{MULTISIG_SIGNATORY}{DELIMITER}{}{DELIMITER}{}",
@@ -2482,6 +2484,33 @@ mod tests {
             ValidationFail::QueryFailed(QueryExecutionFail::Find(FindError::MetadataKey(_))) => {}
             other => panic!("unexpected error for missing multisig spec: {other:?}"),
         }
+    }
+
+    #[test]
+    fn multisig_role_for_large_policy_uses_hash_suffix() {
+        let domain_id: iroha_data_model::domain::DomainId = "weights".parse().unwrap();
+        let member_count = (u8::MAX as usize) + 1;
+        let mut members = Vec::with_capacity(member_count);
+        for _ in 0..member_count {
+            let key = KeyPair::random();
+            let member =
+                MultisigMember::new(key.public_key().clone(), 1).expect("multisig member");
+            members.push(member);
+        }
+        let policy = MultisigPolicy::new(1, members).expect("multisig policy");
+        let account = AccountId::new_multisig(domain_id, policy);
+        assert!(
+            account.canonical_ih58().is_err(),
+            "large multisig policy should not encode into IH58"
+        );
+
+        let role_id = multisig_role_for(&account);
+        let role_name = role_id.name().to_string();
+        let expected_suffix = HashOf::new(&account).to_string();
+        assert!(
+            role_name.ends_with(&expected_suffix),
+            "role name should use hash suffix for large multisig policy"
+        );
     }
 
     #[test]

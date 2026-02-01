@@ -488,12 +488,13 @@ fn sign_vote_for_canonical_signer(
 ) {
     let canonical_roster = super::roster::canonicalize_roster(topology.as_ref().to_vec());
     let canonical_topology = super::network_topology::Topology::new(canonical_roster);
+    let prf_seed = Some(prf_seed_for_chain(chain));
     let signature_topology = super::topology_for_view(
         &canonical_topology,
         vote.height,
         vote.view,
         super::PERMISSIONED_TAG,
-        None,
+        prf_seed,
     );
     let canonical = ValidatorIndex::try_from(vote.signer).expect("signer fits u32");
     let view_idx =
@@ -506,7 +507,7 @@ fn sign_vote_for_canonical_signer(
         &canonical_topology,
         keypairs,
         super::PERMISSIONED_TAG,
-        None,
+        prf_seed,
     );
 }
 
@@ -16915,9 +16916,11 @@ async fn block_created_applies_cached_precommit_qc() {
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
+    let genesis_hash = seed_genesis_block_for_state(&actor.state);
     let height = 2u64;
     let view = 0u64;
-    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, None);
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(genesis_hash));
     let block_hash = block.hash();
 
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());

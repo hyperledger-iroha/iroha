@@ -1915,8 +1915,28 @@ impl Actor {
         // If votes or cached QCs already exist for this block, re-evaluate now that the payload is
         // present so late-arriving block payloads can still finalize with previously collected votes.
         let (consensus_mode, _, _) = self.consensus_context_for_height(height);
-        let commit_topology =
-            self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
+        let mut commit_topology = if self.vote_roster_cache.contains_key(&block_hash) {
+            Vec::new()
+        } else {
+            super::persisted_roster_for_block(
+                self.state.as_ref(),
+                &self.kura,
+                consensus_mode,
+                height,
+                block_hash,
+                Some(view),
+                &self.roster_validation_cache,
+                Some(&mut self.block_sync_roster_cache),
+            )
+            .map(|selection| {
+                self.cache_vote_roster(block_hash, height, view, selection.roster.clone());
+                selection.roster
+            })
+            .unwrap_or_default()
+        };
+        if commit_topology.is_empty() {
+            commit_topology = self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
+        }
         let qc_replay_start = Instant::now();
         if !commit_topology.is_empty() {
             let topology = super::network_topology::Topology::new(commit_topology.clone());
