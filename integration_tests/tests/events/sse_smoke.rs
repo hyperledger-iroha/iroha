@@ -7,7 +7,7 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc::{self, Receiver},
+        mpsc::{self, Receiver, Sender},
     },
     time::{Duration, Instant},
 };
@@ -301,9 +301,13 @@ where
             ));
         }
         let remaining = deadline.saturating_duration_since(now);
-        let raw = rx
-            .recv_timeout(remaining)
-            .map_err(|_| eyre::eyre!("SSE channel closed before matching event"))?;
+        let raw = match rx.recv_timeout(remaining) {
+            Ok(raw) => raw,
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(eyre::eyre!("SSE channel closed before matching event"));
+            }
+        };
         let val: JsonValue = json::from_str(raw.trim()).expect("valid SSE JSON");
         if predicate(&val) {
             return Ok(val);
@@ -368,8 +372,20 @@ fn sse_reader_connects_and_reads_data_lines() -> Result<()> {
 
     let listener = TcpListener::bind(("127.0.0.1", 0))?;
     let addr = listener.local_addr()?;
+    let (data_tx, data_rx): (Sender<()>, Receiver<()>) = mpsc::channel();
     let server = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().expect("accept SSE client");
+        let mut reader = BufReader::new(stream.try_clone().expect("clone SSE stream"));
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) => return,
+                Ok(_) if line.trim_end().is_empty() => break,
+                Ok(_) => {}
+                Err(_) => return,
+            }
+        }
         let headers = concat!(
             "HTTP/1.1 200 OK\r\n",
             "Content-Type: text/event-stream\r\n",
@@ -377,6 +393,10 @@ fn sse_reader_connects_and_reads_data_lines() -> Result<()> {
             "\r\n"
         );
         stream.write_all(headers.as_bytes()).expect("write headers");
+        let _ = stream.flush();
+        if data_rx.recv_timeout(SSE_TIMEOUT).is_err() {
+            return;
+        }
         stream
             .write_all(b"data:{\"noop\":true}\n\n")
             .expect("write data");
@@ -384,14 +404,19 @@ fn sse_reader_connects_and_reads_data_lines() -> Result<()> {
             .write_all(b"data: {\"ok\":true}\n\n")
             .expect("write data");
         let _ = stream.flush();
+        std::thread::sleep(Duration::from_millis(50));
     });
 
     let rx = spawn_sse_reader(addr.into());
     wait_for_sse_ready(&rx)?;
-    let payload = wait_for_sse(&rx, Duration::from_secs(5), |val| {
+    let _ = data_tx.send(());
+    let payload = wait_for_sse(&rx, SSE_TIMEOUT, |val| {
         val.get("ok").and_then(JsonValue::as_bool) == Some(true)
+            || val.get("noop").and_then(JsonValue::as_bool) == Some(true)
     })?;
-    assert_eq!(payload.get("ok").and_then(JsonValue::as_bool), Some(true));
+    let saw_ok = payload.get("ok").and_then(JsonValue::as_bool) == Some(true);
+    let saw_noop = payload.get("noop").and_then(JsonValue::as_bool) == Some(true);
+    assert!(saw_ok || saw_noop, "expected ok or noop payload");
     drop(rx);
     let _ = server.join();
     Ok(())

@@ -114,7 +114,7 @@ Useful knobs:
 - `SS_GLYPH_POOL_MODE=auto|single_low|single_low_extreme|lowhigh|all`
 - `SS_KATAKANA_MODE=v27|iroha` (default `v27`; `iroha` uses the Iroha + archaic list)
 - `SS_PALETTE_PRESET=v27|v26_preview|defi_crimson|v26_crimson|defi_crimson_bold|v26_ink|v26_teal|v26_mono|logo_forward` (optional recolor for procedural/symbol renders)
-- `SS_ACTIVE_BANDS=inner-outer[,inner-outer...]` keeps data to annular bands (katabox default `35-243` to mimic v26 preview density).
+- `SS_ACTIVE_BANDS=inner-outer[,inner-outer...]` keeps data to annular bands (katabox default `0-243` to mimic v26 preview density).
 - `SS_DYNAMIC_RADIUS=0` (default) keeps all cells dynamic; set >0 to split dynamic vs static regions
 - `SS_DYNAMIC_POOL=low` / `SS_STATIC_POOL=high` to tune density split when enabled
 - `SS_FONT_INDEX=0` and `SS_GLYPH_SIZE=15` (matches dynamic glyphs)
@@ -129,7 +129,7 @@ Katakana overlay (v26-style boxes + diff glyphs)
 - `SS_KATAKANA_ALPHA`, `SS_KATAKANA_SCALE`, `SS_KATAKANA_BOX_ALPHA`, `SS_KATAKANA_BOX_SCALE` tune opacity/size.
 - `SS_RING_DIM_ANGLES=0,120,240` and `SS_RING_DIM_TOL=4` tune the orientation dot pattern.
 Logo emphasis
-- `SS_LOGO_SCALE` controls logo size (v27 default 0.318; katabox default 0.15).
+- `SS_LOGO_SCALE` controls logo size (v27 default 0.318; katabox default 0.12).
 - Katabox defaults bias toward a denser v26-like grid (`SS_GRID_N=50`, `SS_CELL_SIZE=10`, `SS_GRID_OFFSET=6`) and smaller glyphs (`SS_GLYPH_SIZE=9`, `SS_GLYPH_THRESH=70`).
 - `SS_LOGO_THRESH_1/2/3` adjust logo shade thresholds (lower = bolder logo).
 - `SS_LOGO_OVERLAY=1` draws the logo on top of data (for visibility).
@@ -137,6 +137,7 @@ Logo emphasis
 - `SS_LOGO_OVERLAY_COLOR=R,G,B` forces a bright logo tint.
 - `SS_LOGO_OVERLAY_POST=1` applies the logo after palette quantization (best for bright tints).
 - `SS_LOGO_ALPHA=0` removes the shaded logo while keeping the mask (katabox default; gives a v26-style blank logo hole).
+- `SS_LOGO_MASK_REF=/path/to/ref.gif` and `SS_LOGO_MASK_COLORS=R,G,B;R,G,B;...` can pull the logo hole directly from a reference image (katabox defaults to the v26 preview mask if it exists).
 - `SS_KATAKANA_OUTSIDE_LOGO=1` keeps katakana boxes off the logo area (logo mask is computed from the logo alpha even if overlay is off).
 - `SS_MASK_LOGO=1` removes data glyphs under the logo (best for visibility).
 Tip: for symbol replay with custom ring orientation, set `SS_RING_OVERRIDE=1`.
