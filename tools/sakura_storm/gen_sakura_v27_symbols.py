@@ -1,7 +1,7 @@
 import math
 import os
 import random
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -48,6 +48,8 @@ LOGO_OVERLAY = os.getenv("SS_LOGO_OVERLAY", "0").strip() == "1"
 LOGO_OVERLAY_ALPHA = int(os.getenv("SS_LOGO_OVERLAY_ALPHA", "255"))
 LOGO_OVERLAY_COLOR = os.getenv("SS_LOGO_OVERLAY_COLOR", "")
 LOGO_OVERLAY_POST = os.getenv("SS_LOGO_OVERLAY_POST", "0").strip() == "1"
+LOGO_MASK_REF = os.getenv("SS_LOGO_MASK_REF", "").strip()
+LOGO_MASK_COLORS = os.getenv("SS_LOGO_MASK_COLORS", "").strip()
 
 # Outer mask
 OUTER_RADIUS = float(os.getenv("SS_OUTER_RADIUS", str(V27.outer_radius)))
@@ -112,6 +114,43 @@ def parse_color(text: str, default: Tuple[int, int, int]) -> Tuple[int, int, int
     except ValueError:
         return default
     return vals
+
+
+def parse_color_list(text: str) -> List[Tuple[int, int, int]]:
+    if not text:
+        return []
+    parts = [p.strip() for p in text.split(";") if p.strip()]
+    colors: List[Tuple[int, int, int]] = []
+    for item in parts:
+        cols = parse_color(item, None)
+        if cols is None:
+            continue
+        colors.append(cols)
+    return colors
+
+
+def build_logo_mask_from_ref(logo_shades: np.ndarray, bg_color: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    if not LOGO_MASK_REF or not os.path.exists(LOGO_MASK_REF):
+        return None, None
+    ref = Image.open(LOGO_MASK_REF)
+    if ref.n_frames > 1:
+        ref.seek(0)
+    ref = ref.convert("RGB")
+    if ref.size != (W, H):
+        ref = ref.resize((W, H), resample=Image.NEAREST)
+    arr = np.array(ref, dtype=np.uint8)
+    colors = parse_color_list(LOGO_MASK_COLORS)
+    if not colors and PALETTE_PRESET == "v26_preview":
+        colors = [tuple(c) for c in logo_shades]
+    if not colors:
+        return None, None
+    mask = np.zeros((H, W), dtype=bool)
+    for col in colors:
+        mask |= (arr == np.array(col, dtype=np.uint8)).all(axis=2)
+    logo_arr = np.zeros((H, W, 3), dtype=np.uint8)
+    logo_arr[:] = bg_color
+    logo_arr[mask] = np.array(colors[0], dtype=np.uint8)
+    return logo_arr, mask
 
 
 def apply_logo_overlay(arr: np.ndarray, logo_arr: np.ndarray, logo_mask_arr: np.ndarray, fallback: Tuple[int, int, int]) -> np.ndarray:
@@ -316,6 +355,11 @@ def main() -> None:
     if logo_layer is not None:
         logo_arr = np.array(logo_layer, dtype=np.uint8)
         logo_mask_arr = (logo_arr != bg).any(axis=2)
+    if LOGO_MASK_REF:
+        ref_logo_arr, ref_logo_mask = build_logo_mask_from_ref(logo_shades, bg)
+        if ref_logo_mask is not None:
+            logo_arr = ref_logo_arr
+            logo_mask_arr = ref_logo_mask
     ring_layer_img = None
     if ring_layer is None and (static_layer is None or RING_OVERRIDE) and ring_idx is None:
         ring_layer_img = build_ring_layer(W, H, ring_bright, ring_dim)

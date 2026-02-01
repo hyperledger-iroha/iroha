@@ -33,6 +33,8 @@ DATA_DENSITY = float(os.getenv("SS_DATA_DENSITY", "1.0"))
 ACTIVE_BANDS = os.getenv("SS_ACTIVE_BANDS", "").strip()
 MASK_LOGO = os.getenv("SS_MASK_LOGO", "0").strip() == "1"
 LOGO_MASK_THRESH = int(os.getenv("SS_LOGO_MASK_THRESH", str(V27.logo_thresh_1)))
+LOGO_MASK_REF = os.getenv("SS_LOGO_MASK_REF", "").strip()
+LOGO_MASK_COLORS = os.getenv("SS_LOGO_MASK_COLORS", "").strip()
 DYNAMIC_RADIUS = float(os.getenv("SS_DYNAMIC_RADIUS", "0.0"))
 DYNAMIC_POOL = os.getenv("SS_DYNAMIC_POOL", "low").strip().lower()
 STATIC_POOL = os.getenv("SS_STATIC_POOL", "low").strip().lower()
@@ -95,6 +97,40 @@ def parse_color(text: str, default: Tuple[int, int, int]) -> Tuple[int, int, int
     except ValueError:
         return default
     return vals
+
+
+def parse_color_list(text: str) -> List[Tuple[int, int, int]]:
+    if not text:
+        return []
+    parts = [p.strip() for p in text.split(";") if p.strip()]
+    colors: List[Tuple[int, int, int]] = []
+    for item in parts:
+        cols = parse_color(item, None)
+        if cols is None:
+            continue
+        colors.append(cols)
+    return colors
+
+
+def build_logo_mask_from_ref() -> Optional[np.ndarray]:
+    if not LOGO_MASK_REF or not os.path.exists(LOGO_MASK_REF):
+        return None
+    ref = Image.open(LOGO_MASK_REF)
+    if ref.n_frames > 1:
+        ref.seek(0)
+    ref = ref.convert("RGB")
+    if ref.size != (W, H):
+        ref = ref.resize((W, H), resample=Image.NEAREST)
+    arr = np.array(ref, dtype=np.uint8)
+    colors = parse_color_list(LOGO_MASK_COLORS)
+    if not colors and PALETTE_PRESET == "v26_preview":
+        colors = [tuple(c) for c in LOGO_SHADES]
+    if not colors:
+        return None
+    mask = np.zeros((H, W), dtype=bool)
+    for col in colors:
+        mask |= (arr == np.array(col, dtype=np.uint8)).all(axis=2)
+    return mask
 
 
 def apply_logo_overlay(arr: np.ndarray, logo_arr: np.ndarray, logo_mask_arr: np.ndarray) -> np.ndarray:
@@ -311,6 +347,9 @@ def build_logo_layer() -> Image.Image:
 def build_logo_mask() -> Optional[np.ndarray]:
     if not MASK_LOGO or not os.path.exists(LOGO_PATH):
         return None
+    ref_mask = build_logo_mask_from_ref()
+    if ref_mask is not None:
+        return ref_mask
     logo = Image.open(LOGO_PATH).convert("RGBA")
     target = int(min(W, H) * LOGO_SCALE)
     target = max(8, min(min(W, H), target))
