@@ -3,20 +3,20 @@
     "2025-q2",
     "current"
   ],
-  "generatedAt": "2026-01-30T13:02:26Z",
+  "generatedAt": "2026-02-02T19:08:53.775Z",
   "entries": [
     {
       "label": "latest",
       "path": "torii.json",
-      "bytes": 412393,
-      "sha256": "890eee4496e0fe201135b2154dc91a6feb7d89203b3facb783c99e3e9b84b438",
-      "blake3": "bb2e4b2607e03873fa4533f71ddcdc980369a3ff7b670f9b390791e2f6ddaf15",
-      "updatedAt": "2026-01-30T13:02:26Z",
+      "bytes": 412756,
+      "sha256": "138c129cd3c4bd11ac1e3e5511c0fbb3280877b5984cc91a32b51c2fac4e5cc5",
+      "blake3": "b6c8999c5550af01d0910f6e70bae5211294264ddc6ff0e9b4e2c9b5fcd62323",
+      "updatedAt": "2026-02-02T19:08:53.747Z",
       "signed": true,
       "manifestPath": "manifest.json",
       "signatureAlgorithm": "ed25519",
       "signaturePublicKeyHex": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
-      "signatureHex": "69eb3ac20888c098615a47a56fe6949627f5554a81b12a046160c5b3f4f8b3cdd523a880f18ed749f464f6337db36c2e6e2ac6e46b032f08198662244f547709"
+      "signatureHex": "d725d40b4c7bfad426033b02d2a1c1a1e5884da1d128d08d1ab857b868a91a13eca31b5347a7a742d429904aa5a027608acd4144f7498f5d4ac044ab82e81a09"
     },
     {
       "label": "2025-q2",
@@ -24,7 +24,7 @@
       "bytes": 14924,
       "sha256": "c0bfde8fc7ba186d1b7dce5af217958e177e1530bdbd1dfa8b105c20101513a7",
       "blake3": null,
-      "updatedAt": "2025-12-29T18:16:35.903Z",
+      "updatedAt": "2025-11-04T12:24:02.000Z",
       "signed": false,
       "manifestPath": null,
       "signatureAlgorithm": null,
@@ -34,15 +34,15 @@
     {
       "label": "current",
       "path": "versions/current/torii.json",
-      "bytes": 412393,
-      "sha256": "890eee4496e0fe201135b2154dc91a6feb7d89203b3facb783c99e3e9b84b438",
-      "blake3": "bb2e4b2607e03873fa4533f71ddcdc980369a3ff7b670f9b390791e2f6ddaf15",
-      "updatedAt": "2026-01-30T13:02:26Z",
+      "bytes": 412756,
+      "sha256": "138c129cd3c4bd11ac1e3e5511c0fbb3280877b5984cc91a32b51c2fac4e5cc5",
+      "blake3": "b6c8999c5550af01d0910f6e70bae5211294264ddc6ff0e9b4e2c9b5fcd62323",
+      "updatedAt": "2026-02-02T19:08:53.725Z",
       "signed": true,
       "manifestPath": "versions/current/manifest.json",
       "signatureAlgorithm": "ed25519",
       "signaturePublicKeyHex": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
-      "signatureHex": "69eb3ac20888c098615a47a56fe6949627f5554a81b12a046160c5b3f4f8b3cdd523a880f18ed749f464f6337db36c2e6e2ac6e46b032f08198662244f547709"
+      "signatureHex": "d725d40b4c7bfad426033b02d2a1c1a1e5884da1d128d08d1ab857b868a91a13eca31b5347a7a742d429904aa5a027608acd4144f7498f5d4ac044ab82e81a09"
     }
   ]
 }

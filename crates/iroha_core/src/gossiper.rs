@@ -22,8 +22,9 @@ use iroha_data_model::{
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_p2p::{Broadcast, Post, Priority};
 use norito::{
+    NoritoDeserialize, NoritoSerialize,
     codec::{Decode, Encode},
-    core::{Archived, Error as NoritoError, NoritoDeserialize, NoritoSerialize},
+    core as ncore,
 };
 use tokio::sync::mpsc;
 
@@ -1299,7 +1300,7 @@ impl TransactionGossip {
     }
 }
 
-/// Gossip payload wrapper that can reuse pre-serialized transaction bytes.
+/// Gossip payload wrapper for signed transactions.
 #[derive(Debug, Clone)]
 pub struct GossipTransaction {
     signed: Arc<SignedTransaction>,
@@ -1344,53 +1345,43 @@ impl From<SignedTransaction> for GossipTransaction {
 }
 
 impl NoritoSerialize for GossipTransaction {
-    fn schema_hash() -> [u8; 16] {
-        <SignedTransaction as NoritoSerialize>::schema_hash()
-    }
-
-    fn serialize<W: Write>(&self, mut writer: W) -> Result<(), NoritoError> {
+    fn serialize<W: Write>(&self, mut writer: W) -> Result<(), ncore::Error> {
         if let Some(encoded) = self.encoded.as_ref() {
             writer.write_all(encoded)?;
             return Ok(());
         }
         self.signed.serialize(writer)
     }
-
-    fn encoded_len_hint(&self) -> Option<usize> {
-        self.encoded
-            .as_ref()
-            .map(|bytes| bytes.len())
-            .or_else(|| self.signed.as_ref().encoded_len_hint())
-    }
-
-    fn encoded_len_exact(&self) -> Option<usize> {
-        self.encoded
-            .as_ref()
-            .map(|bytes| bytes.len())
-            .or_else(|| self.signed.as_ref().encoded_len_exact())
-    }
 }
 
 impl<'a> NoritoDeserialize<'a> for GossipTransaction {
-    fn schema_hash() -> [u8; 16] {
-        <SignedTransaction as NoritoSerialize>::schema_hash()
+    fn deserialize(archived: &'a ncore::Archived<Self>) -> Self {
+        Self::try_deserialize(archived).expect("decode gossip transaction")
     }
 
-    fn deserialize(archived: &'a Archived<Self>) -> Self {
-        Self::try_deserialize(archived).expect("GossipTransaction decode")
-    }
-
-    fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, NoritoError> {
+    fn try_deserialize(archived: &'a ncore::Archived<Self>) -> Result<Self, ncore::Error> {
         let ptr = core::ptr::from_ref(archived).cast::<u8>();
-        let bytes = norito::core::payload_slice_from_ptr(ptr)?;
-        let (signed, consumed) = norito::core::decode_field_canonical::<SignedTransaction>(bytes)?;
-        if consumed != bytes.len() {
-            return Err(NoritoError::LengthMismatch);
-        }
+        let bytes = ncore::payload_slice_from_ptr(ptr)?;
+        let (signed, consumed) = ncore::decode_field_canonical::<SignedTransaction>(bytes)?;
+        let encoded = Arc::new(bytes[..consumed].to_vec());
         Ok(Self {
             signed: Arc::new(signed),
-            encoded: None,
+            encoded: Some(encoded),
         })
+    }
+}
+
+impl<'a> ncore::DecodeFromSlice<'a> for GossipTransaction {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+        let (signed, consumed) = ncore::decode_field_canonical::<SignedTransaction>(bytes)?;
+        let encoded = Arc::new(bytes[..consumed].to_vec());
+        Ok((
+            Self {
+                signed: Arc::new(signed),
+                encoded: Some(encoded),
+            },
+            consumed,
+        ))
     }
 }
 
@@ -1411,8 +1402,6 @@ pub struct GossipRoute {
     /// Dataspace assigned to the transaction at the sender.
     pub dataspace_id: DataSpaceId,
 }
-
-// Derive Encode/Decode above; custom impls not needed.
 
 struct PartitionedGossipBatch {
     message: TransactionGossip,
@@ -1888,9 +1877,15 @@ mod tests {
         assert_eq!(decoded.txs.len(), 1);
         assert_eq!(decoded.routes.len(), 1);
         assert_eq!(decoded.txs[0].as_signed().hash(), signed.hash());
+        let decoded_payload = decoded.txs[0]
+            .encoded
+            .as_ref()
+            .expect("cached payload");
+        assert_eq!(decoded_payload.as_slice(), payload.as_slice());
         assert_eq!(decoded.routes[0].lane_id, LaneId::SINGLE);
         assert_eq!(decoded.routes[0].dataspace_id, DataSpaceId::GLOBAL);
         assert_eq!(decoded.plane, GossipPlane::Public);
+        assert_eq!(decoded.txs[0].encode().as_slice(), payload.as_slice());
     }
 
     #[test]
@@ -1919,6 +1914,11 @@ mod tests {
                 assert_eq!(message.txs.len(), 1);
                 assert_eq!(message.routes.len(), 1);
                 assert_eq!(message.txs[0].as_signed().hash(), signed.hash());
+                let decoded_payload = message.txs[0]
+                    .encoded
+                    .as_ref()
+                    .expect("cached payload");
+                assert_eq!(decoded_payload.as_slice(), payload.as_slice());
                 assert_eq!(message.routes[0].lane_id, LaneId::SINGLE);
                 assert_eq!(message.routes[0].dataspace_id, DataSpaceId::GLOBAL);
                 assert_eq!(message.plane, GossipPlane::Public);

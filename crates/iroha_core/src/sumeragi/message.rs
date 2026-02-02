@@ -8,8 +8,9 @@ use iroha_data_model::{
 };
 use iroha_macro::*;
 use norito::{
+    NoritoDeserialize, NoritoSerialize,
     codec::{Decode, Encode},
-    core::{Archived, Error as NoritoError, NoritoDeserialize, NoritoSerialize},
+    core as ncore,
 };
 
 use crate::block::NewBlock;
@@ -125,7 +126,7 @@ impl BlockMessage {
     }
 }
 
-/// Wire wrapper that can reuse pre-serialized consensus payload bytes.
+/// Wire wrapper for consensus payloads.
 #[derive(Debug, Clone)]
 pub struct BlockMessageWire {
     message: Arc<BlockMessage>,
@@ -206,53 +207,43 @@ impl From<BlockMessage> for BlockMessageWire {
 }
 
 impl NoritoSerialize for BlockMessageWire {
-    fn schema_hash() -> [u8; 16] {
-        <BlockMessage as NoritoSerialize>::schema_hash()
-    }
-
-    fn serialize<W: Write>(&self, mut writer: W) -> Result<(), NoritoError> {
+    fn serialize<W: Write>(&self, mut writer: W) -> Result<(), ncore::Error> {
         if let Some(encoded) = self.encoded.as_ref() {
             writer.write_all(encoded)?;
             return Ok(());
         }
-        self.message.serialize(writer)
-    }
-
-    fn encoded_len_hint(&self) -> Option<usize> {
-        self.encoded
-            .as_ref()
-            .map(|bytes| bytes.len())
-            .or_else(|| self.message.as_ref().encoded_len_hint())
-    }
-
-    fn encoded_len_exact(&self) -> Option<usize> {
-        self.encoded
-            .as_ref()
-            .map(|bytes| bytes.len())
-            .or_else(|| self.message.as_ref().encoded_len_exact())
+        self.message.as_ref().serialize(writer)
     }
 }
 
 impl<'a> NoritoDeserialize<'a> for BlockMessageWire {
-    fn schema_hash() -> [u8; 16] {
-        <BlockMessage as NoritoSerialize>::schema_hash()
+    fn deserialize(archived: &'a ncore::Archived<Self>) -> Self {
+        Self::try_deserialize(archived).expect("decode block message wire")
     }
 
-    fn deserialize(archived: &'a Archived<Self>) -> Self {
-        Self::try_deserialize(archived).expect("BlockMessageWire decode")
-    }
-
-    fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, NoritoError> {
+    fn try_deserialize(archived: &'a ncore::Archived<Self>) -> Result<Self, ncore::Error> {
         let ptr = core::ptr::from_ref(archived).cast::<u8>();
-        let bytes = norito::core::payload_slice_from_ptr(ptr)?;
-        let (message, consumed) = norito::core::decode_field_canonical::<BlockMessage>(bytes)?;
-        if consumed != bytes.len() {
-            return Err(NoritoError::LengthMismatch);
-        }
+        let bytes = ncore::payload_slice_from_ptr(ptr)?;
+        let (message, consumed) = ncore::decode_field_canonical::<BlockMessage>(bytes)?;
+        let encoded = Arc::new(bytes[..consumed].to_vec());
         Ok(Self {
             message: Arc::new(message),
-            encoded: None,
+            encoded: Some(encoded),
         })
+    }
+}
+
+impl<'a> ncore::DecodeFromSlice<'a> for BlockMessageWire {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+        let (message, consumed) = ncore::decode_field_canonical::<BlockMessage>(bytes)?;
+        let encoded = Arc::new(bytes[..consumed].to_vec());
+        Ok((
+            Self {
+                message: Arc::new(message),
+                encoded: Some(encoded),
+            },
+            consumed,
+        ))
     }
 }
 
@@ -593,7 +584,13 @@ mod tests {
         let wire = BlockMessageWire::with_encoded(Arc::new(msg), Arc::new(encoded.clone()));
 
         assert_eq!(wire.encoded_len(), Some(encoded.len()));
-        assert_eq!(wire.encode(), encoded);
+        let bytes = wire.encode();
+        assert_eq!(bytes, encoded);
+        let decoded: BlockMessageWire =
+            Decode::decode(&mut bytes.as_slice()).expect("decode block message wire");
+        assert!(matches!(decoded.as_ref(), BlockMessage::ConsensusParams(_)));
+        assert_eq!(decoded.encoded_len(), Some(encoded.len()));
+        assert_eq!(decoded.encode(), encoded);
     }
 
     #[test]
@@ -619,6 +616,8 @@ mod tests {
             }
             other => panic!("expected consensus params, got {other:?}"),
         }
+        assert_eq!(decoded.encoded_len(), Some(bytes.len()));
+        assert_eq!(decoded.encode(), bytes);
     }
 
     #[test]

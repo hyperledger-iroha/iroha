@@ -242,10 +242,35 @@ public struct ToriiExplorerInstructionItem: Decodable, Sendable, Equatable {
         case createdAt = "created_at"
         case kind
         case box = "r#box"
+        case legacyBox = "box"
         case transactionHash = "transaction_hash"
         case transactionStatus = "transaction_status"
         case block
         case index
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        authority = try container.decode(String.self, forKey: .authority)
+        createdAt = try container.decode(String.self, forKey: .createdAt)
+        kind = try container.decode(String.self, forKey: .kind)
+        if let decodedBox = try container.decodeIfPresent(ToriiExplorerInstructionBox.self, forKey: .box) {
+            box = decodedBox
+        } else if let decodedBox = try container.decodeIfPresent(ToriiExplorerInstructionBox.self, forKey: .legacyBox) {
+            box = decodedBox
+        } else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.box,
+                DecodingError.Context(
+                    codingPath: container.codingPath,
+                    debugDescription: "Expected key \"r#box\" or \"box\"."
+                )
+            )
+        }
+        transactionHash = try container.decode(String.self, forKey: .transactionHash)
+        transactionStatus = try container.decode(String.self, forKey: .transactionStatus)
+        block = try container.decode(UInt64.self, forKey: .block)
+        index = try container.decode(UInt32.self, forKey: .index)
     }
 }
 
