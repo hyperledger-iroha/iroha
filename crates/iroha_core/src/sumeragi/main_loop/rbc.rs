@@ -45,7 +45,7 @@ use crate::{
         consensus::{
             RbcChunk, RbcDeliver, RbcInit, RbcReady, rbc_deliver_preimage, rbc_ready_preimage,
         },
-        message::BlockMessage,
+        message::{BlockMessage, BlockMessageWire},
         network_topology::commit_quorum_from_len,
         rbc_status,
         rbc_store::{ChunkStore, PersistOutcome, PersistedSession, SessionKey, StorePressure},
@@ -1321,47 +1321,82 @@ impl Actor {
 
     pub(super) fn schedule_rbc_chunk_posts(
         &mut self,
-        chunk: &crate::sumeragi::consensus::RbcChunk,
+        chunk: &super::OutboundRbcChunk,
         targets: &[(usize, PeerId)],
     ) {
         if targets.is_empty() {
             return;
         }
+        let (block_hash, height, view, epoch, chunk_idx, bytes) = match chunk.message.as_ref() {
+            BlockMessage::RbcChunk(inner) => (
+                inner.block_hash,
+                inner.height,
+                inner.view,
+                inner.epoch,
+                inner.idx,
+                inner.bytes.as_slice(),
+            ),
+            BlockMessage::RbcChunkCompact(inner) => (
+                inner.block_hash,
+                u64::from(inner.height),
+                u64::from(inner.view),
+                u64::from(inner.epoch),
+                inner.idx,
+                inner.bytes.as_slice(),
+            ),
+            other => {
+                debug!(
+                    kind = ?other,
+                    "skipping outbound RBC chunk post: unexpected message variant"
+                );
+                return;
+            }
+        };
         let local_peer_id = self.common_config.peer.id().clone();
-        for (idx, peer_id) in targets {
+        for (target_idx, peer_id) in targets {
             if peer_id == &local_peer_id {
                 continue;
             }
-            let Ok(validator_idx) = u32::try_from(*idx) else {
+            let Ok(validator_idx) = u32::try_from(*target_idx) else {
                 continue;
             };
 
             if self.should_drop_rbc_for(validator_idx) {
                 debug!(
-                    height = chunk.height,
-                    view = chunk.view,
-                    chunk_idx = chunk.idx,
-                    validator_idx,
-                    "dropping RBC chunk due to debug mask"
+                    height,
+                    view, chunk_idx, validator_idx, "dropping RBC chunk due to debug mask"
                 );
                 continue;
             }
 
-            let mut message_chunk = chunk.clone();
-            if self.should_equivocate_rbc_chunk(validator_idx, message_chunk.idx) {
-                Self::mutate_chunk_for_equivocation(&mut message_chunk.bytes);
+            if self.should_equivocate_rbc_chunk(validator_idx, chunk_idx) {
+                let mut bytes = bytes.to_vec();
+                Self::mutate_chunk_for_equivocation(&mut bytes);
+                let message_chunk =
+                    BlockMessage::from_rbc_chunk(crate::sumeragi::consensus::RbcChunk {
+                        block_hash,
+                        height,
+                        view,
+                        epoch,
+                        idx: chunk_idx,
+                        bytes,
+                    });
                 debug!(
-                    height = message_chunk.height,
-                    view = message_chunk.view,
-                    chunk_idx = message_chunk.idx,
-                    validator_idx,
-                    "equivocating RBC chunk due to debug mask"
+                    height,
+                    view, chunk_idx, validator_idx, "equivocating RBC chunk due to debug mask"
                 );
+                self.schedule_background(BackgroundRequest::Post {
+                    peer: peer_id.clone(),
+                    msg: BlockMessageWire::new(message_chunk),
+                });
+                continue;
             }
-
             self.schedule_background(BackgroundRequest::Post {
                 peer: peer_id.clone(),
-                msg: BlockMessage::RbcChunk(message_chunk),
+                msg: BlockMessageWire::with_encoded(
+                    Arc::clone(&chunk.message),
+                    Arc::clone(&chunk.encoded),
+                ),
             });
         }
     }
@@ -1395,13 +1430,18 @@ impl Actor {
             return Ok(());
         }
         let local_peer_id = self.common_config.peer.id().clone();
+        let init_message = Arc::new(BlockMessage::RbcInit(plan.init));
+        let init_encoded = Arc::new(BlockMessageWire::encode_message(init_message.as_ref()));
         for peer in &topology_peers {
             if peer == &local_peer_id {
                 continue;
             }
             self.schedule_background(BackgroundRequest::Post {
                 peer: peer.clone(),
-                msg: BlockMessage::RbcInit(plan.init.clone()),
+                msg: BlockMessageWire::with_encoded(
+                    Arc::clone(&init_message),
+                    Arc::clone(&init_encoded),
+                ),
             });
         }
         let queued = self.enqueue_rbc_payload_chunks(key, plan.chunks, &topology_peers);
@@ -3939,11 +3979,12 @@ impl Actor {
             let gossip_targets =
                 self.new_view_gossip_targets(signature_topology.as_ref(), Some(ready_sender));
             if !gossip_targets.is_empty() {
-                let msg = BlockMessage::RbcReady(ready.clone());
+                let msg = Arc::new(BlockMessage::RbcReady(ready.clone()));
+                let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
                 for peer in gossip_targets {
                     self.schedule_background(BackgroundRequest::Post {
                         peer,
-                        msg: msg.clone(),
+                        msg: BlockMessageWire::with_encoded(Arc::clone(&msg), Arc::clone(&encoded)),
                     });
                 }
             }
@@ -4734,8 +4775,10 @@ impl Actor {
                 );
             }
             if self.rbc_deliver_rebroadcast_due(&key, now, self.rebroadcast_cooldown()) {
+                let msg = Arc::new(BlockMessage::RbcDeliver(deliver.clone()));
+                let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
                 self.schedule_background(BackgroundRequest::Broadcast {
-                    msg: BlockMessage::RbcDeliver(deliver.clone()),
+                    msg: BlockMessageWire::with_encoded(Arc::clone(&msg), Arc::clone(&encoded)),
                 });
                 self.subsystems
                     .da_rbc

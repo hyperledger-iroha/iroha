@@ -216,6 +216,8 @@ pub struct Queue {
     tx_encoded_len: DashMap<SignedTxHash, usize>,
     /// Cached proposal gas cost per queued transaction hash.
     tx_gas_cost: DashMap<SignedTxHash, u64>,
+    /// Cached Norito-encoded transaction payloads for gossip retransmit.
+    tx_gossip_payloads: DashMap<SignedTxHash, Arc<Vec<u8>>>,
     /// Hashes of transactions removed from `txs` but still present in `tx_hashes`
     removed_hashes: DashMap<SignedTxHash, ()>,
     /// Amount of transactions per user in the queue
@@ -343,6 +345,8 @@ pub struct GossipBatchEntry {
     pub tx: AcceptedTransaction<'static>,
     /// Lane/dataspace routing decision cached at admission time.
     pub routing: RoutingDecision,
+    /// Pre-serialized transaction payload for retransmit.
+    pub payload: Arc<Vec<u8>>,
 }
 
 #[cfg(feature = "telemetry")]
@@ -525,7 +529,7 @@ impl Queue {
     }
 
     fn compute_tx_encoded_len(tx: &AcceptedTransaction<'_>) -> usize {
-        tx.as_ref().encode().len()
+        tx.as_ref().encoded_len()
     }
 
     pub(crate) fn compute_proposal_gas_cost(tx: &AcceptedTransaction<'_>) -> u64 {
@@ -1342,6 +1346,7 @@ impl Queue {
                 routing_decisions: DashMap::new(),
                 tx_encoded_len: DashMap::new(),
                 tx_gas_cost: DashMap::new(),
+                tx_gossip_payloads: DashMap::new(),
                 push_remove_lock: parking_lot::Mutex::new(()),
                 guard_sequence: AtomicU64::new(0),
                 inflight_guards: AtomicUsize::new(0),
@@ -1463,10 +1468,26 @@ impl Queue {
                     );
                     continue;
                 };
+                let payload = if let Some(entry) = self.tx_gossip_payloads.get(&hash) {
+                    Arc::clone(entry.value())
+                } else {
+                    let signed = tx_ref.as_accepted().as_ref();
+                    let encoded_len = self
+                        .tx_encoded_len
+                        .get(&hash)
+                        .map(|entry| *entry.value())
+                        .unwrap_or_else(|| Self::compute_tx_encoded_len(tx_ref.as_accepted()));
+                    let mut buf = Vec::with_capacity(encoded_len);
+                    signed.encode_to(&mut buf);
+                    let payload = Arc::new(buf);
+                    self.tx_gossip_payloads.insert(hash, Arc::clone(&payload));
+                    payload
+                };
                 // Deep clone to produce an owned AcceptedTransaction for gossip
                 batch.push(GossipBatchEntry {
                     tx: tx_ref.as_accepted().clone(),
                     routing,
+                    payload,
                 });
                 if batch.len() >= n as usize {
                     break;
@@ -1938,6 +1959,7 @@ impl Queue {
         self.expiry_ring.lock().clear();
         self.tx_encoded_len.clear();
         self.tx_gas_cost.clear();
+        self.tx_gossip_payloads.clear();
         #[cfg(feature = "telemetry")]
         {
             self.tx_teu.clear();
@@ -2017,6 +2039,7 @@ impl Queue {
                 }
                 self.tx_encoded_len.remove(&hash);
                 self.tx_gas_cost.remove(&hash);
+                self.tx_gossip_payloads.remove(&hash);
                 continue;
             }
 
@@ -2377,6 +2400,7 @@ impl Queue {
             }
             self.tx_encoded_len.remove(&hash);
             self.tx_gas_cost.remove(&hash);
+            self.tx_gossip_payloads.remove(&hash);
         }
         let remove_ms = Self::duration_to_millis(remove_start.elapsed());
         if removed > 0 && !self.removed_hashes.is_empty() && !self.tx_hashes.is_empty() {
@@ -2460,6 +2484,7 @@ impl Queue {
         }
         self.tx_encoded_len.remove(&hash);
         self.tx_gas_cost.remove(&hash);
+        self.tx_gossip_payloads.remove(&hash);
         // Transaction guards always represent popped hashes; clear any stale marker even if
         // the entry was culled while the guard was in-flight.
         self.removed_hashes.remove(&hash);
@@ -2484,6 +2509,7 @@ impl Queue {
             let _ = routing_ledger::take(&hash);
             self.tx_encoded_len.remove(&hash);
             self.tx_gas_cost.remove(&hash);
+            self.tx_gossip_payloads.remove(&hash);
             if let Some(tx_arc) = tx_arc {
                 self.removed_hashes.insert(hash, ());
                 self.decrease_per_user_tx_count(tx_arc.as_ref().as_ref().authority());
@@ -2968,6 +2994,7 @@ pub mod tests {
                     routing_decisions: DashMap::new(),
                     tx_encoded_len: DashMap::new(),
                     tx_gas_cost: DashMap::new(),
+                    tx_gossip_payloads: DashMap::new(),
                     removed_hashes: DashMap::new(),
                     txs_per_user: DashMap::new(),
                     push_remove_lock: parking_lot::Mutex::new(()),
@@ -4161,7 +4188,7 @@ pub mod tests {
 
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let tx = accepted_tx_by_someone(&time_source);
-        let encoded_len = tx.as_ref().encode().len();
+        let encoded_len = tx.as_ref().encoded_len();
         let expected_gas = match tx.as_ref().instructions() {
             iroha_data_model::transaction::Executable::Instructions(batch) => {
                 crate::gas::meter_instructions(batch.as_ref())
@@ -4203,18 +4230,24 @@ pub mod tests {
         let tx = accepted_tx_by_someone(&time_source);
         let hash = tx.as_ref().hash();
         queue.push(tx, state.view()).expect("push tx");
+        let _ = queue.gossip_batch(1, &state.view());
+        assert!(!queue.tx_gossip_payloads.is_empty());
 
         let removed = queue.remove_committed_hashes(std::iter::once(hash), None);
         assert_eq!(removed, 1);
         assert!(queue.tx_encoded_len.is_empty());
         assert!(queue.tx_gas_cost.is_empty());
+        assert!(queue.tx_gossip_payloads.is_empty());
 
         let tx = accepted_tx_by_someone(&time_source);
         queue.push(tx, state.view()).expect("push tx");
         assert!(!queue.tx_encoded_len.is_empty());
+        let _ = queue.gossip_batch(1, &state.view());
+        assert!(!queue.tx_gossip_payloads.is_empty());
         queue.clear_all();
         assert!(queue.tx_encoded_len.is_empty());
         assert!(queue.tx_gas_cost.is_empty());
+        assert!(queue.tx_gossip_payloads.is_empty());
     }
 
     #[tokio::test]
@@ -4660,6 +4693,8 @@ pub mod tests {
         assert_eq!(batch.len(), 1);
         let entry = &batch[0];
         assert_eq!(entry.tx.as_ref().hash(), hash);
+        let expected_payload = entry.tx.as_ref().encode();
+        assert_eq!(entry.payload.as_slice(), expected_payload.as_slice());
         assert_eq!(entry.routing.lane_id, LaneId::SINGLE);
         assert_eq!(entry.routing.dataspace_id, DataSpaceId::GLOBAL);
     }

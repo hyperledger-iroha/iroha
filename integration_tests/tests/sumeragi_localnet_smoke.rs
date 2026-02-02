@@ -29,6 +29,7 @@ use rand_chacha::ChaCha8Rng;
 use reqwest::Client as HttpClient;
 use tempfile::tempdir;
 use tokio::{sync::Mutex, task, time::sleep};
+use toml::Value as TomlValue;
 
 static LOCALNET_SMOKE_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
 const SMOKE_PIPELINE_TIME: Duration = Duration::from_secs(2);
@@ -126,13 +127,19 @@ async fn submit_logs(
     start_idx: u64,
     tx_count: u64,
     network: &Network,
-    client: &iroha::client::Client,
+    submit_clients: &[iroha::client::Client],
     submit_batch: u64,
     submit_parallelism: usize,
     queue_soft_limit: u64,
     payload_bytes: usize,
     rng_seed: u64,
 ) -> Result<Duration> {
+    let submit_clients = std::sync::Arc::new(submit_clients.to_vec());
+    ensure!(
+        !submit_clients.is_empty(),
+        "submit_logs requires at least one client"
+    );
+    let client_count = u64::try_from(submit_clients.len()).unwrap_or(1);
     let submit_start = Instant::now();
     let mut submitted = 0_u64;
     while submitted < tx_count {
@@ -141,7 +148,7 @@ async fn submit_logs(
         let batch_start = start_idx.saturating_add(submitted);
         stream::iter(batch_start..batch_start.saturating_add(batch_count))
             .map(|idx| {
-                let client = client.clone();
+                let submit_clients = std::sync::Arc::clone(&submit_clients);
                 async move {
                     if let Ok(delay) = std::env::var("IROHA_THROUGHPUT_DELAY_MS") {
                         if let Ok(ms) = delay.parse::<u64>() {
@@ -149,6 +156,8 @@ async fn submit_logs(
                         }
                     }
                     let payload = throughput_payload(idx, payload_bytes, rng_seed);
+                    let client_idx = usize::try_from(idx % client_count).unwrap_or_default();
+                    let client = submit_clients[client_idx].clone();
                     let handle = task::spawn_blocking(move || {
                         client
                             .submit::<InstructionBox>(Log::new(Level::INFO, payload).into())
@@ -373,6 +382,11 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
             layer
                 .write(["sumeragi", "consensus_mode"], "permissioned")
                 .write(["network", "transaction_gossip_period_ms"], 200_i64)
+                .write(["network", "transaction_gossip_public_target_cap"], 3_i64)
+                .write(
+                    ["network", "transaction_gossip_restricted_target_cap"],
+                    3_i64,
+                )
                 .write(
                     ["network", "transaction_gossip_restricted_fallback"],
                     "public_overlay",
@@ -381,6 +395,10 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
                     ["network", "transaction_gossip_restricted_public_payload"],
                     "forward",
                 )
+                .write(["network", "p2p_post_queue_cap"], 8192_i64)
+                .write(["network", "p2p_queue_cap_high"], 16384_i64)
+                .write(["network", "p2p_queue_cap_low"], 65536_i64)
+                .write(["network", "disconnect_on_post_overflow"], false)
                 // Tighten local timeouts to keep proposal/view-change cadence bounded.
                 .write(
                     ["sumeragi", "advanced", "npos", "timeouts", "propose_ms"],
@@ -647,6 +665,11 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
             layer
                 .write(["sumeragi", "consensus_mode"], "permissioned")
                 .write(["network", "transaction_gossip_period_ms"], 200_i64)
+                .write(["network", "transaction_gossip_public_target_cap"], 3_i64)
+                .write(
+                    ["network", "transaction_gossip_restricted_target_cap"],
+                    3_i64,
+                )
                 .write(
                     ["network", "transaction_gossip_restricted_fallback"],
                     "public_overlay",
@@ -655,6 +678,10 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
                     ["network", "transaction_gossip_restricted_public_payload"],
                     "forward",
                 )
+                .write(["network", "p2p_post_queue_cap"], 8192_i64)
+                .write(["network", "p2p_queue_cap_high"], 16384_i64)
+                .write(["network", "p2p_queue_cap_low"], 65536_i64)
+                .write(["network", "disconnect_on_post_overflow"], false)
                 // Tighten local timeouts to keep proposal/view-change cadence bounded.
                 .write(
                     ["sumeragi", "advanced", "npos", "timeouts", "propose_ms"],
@@ -854,6 +881,11 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
                 .write(["sumeragi", "collectors", "k"], 3_i64)
                 .write(["sumeragi", "collectors", "redundant_send_r"], 2_i64)
                 .write(["network", "transaction_gossip_period_ms"], 200_i64)
+                .write(["network", "transaction_gossip_public_target_cap"], 3_i64)
+                .write(
+                    ["network", "transaction_gossip_restricted_target_cap"],
+                    3_i64,
+                )
                 .write(
                     ["network", "transaction_gossip_restricted_fallback"],
                     "public_overlay",
@@ -862,6 +894,10 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
                     ["network", "transaction_gossip_restricted_public_payload"],
                     "forward",
                 )
+                .write(["network", "p2p_post_queue_cap"], 8192_i64)
+                .write(["network", "p2p_queue_cap_high"], 16384_i64)
+                .write(["network", "p2p_queue_cap_low"], 65536_i64)
+                .write(["network", "disconnect_on_post_overflow"], false)
                 // Tighten local timeouts to keep proposal/view-change cadence bounded.
                 .write(
                     ["sumeragi", "advanced", "npos", "timeouts", "propose_ms"],
@@ -904,7 +940,29 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
                 .write(
                     ["sumeragi", "advanced", "pacemaker", "rtt_floor_multiplier"],
                     1_i64,
-                );
+                )
+                // Lift Torii limits for sustained local throughput runs.
+                .write(
+                    ["torii", "preauth_allow_cidrs"],
+                    TomlValue::Array(vec![
+                        TomlValue::String("127.0.0.0/8".into()),
+                        TomlValue::String("::1/128".into()),
+                    ]),
+                )
+                .write(
+                    ["torii", "api_allow_cidrs"],
+                    TomlValue::Array(vec![
+                        TomlValue::String("127.0.0.0/8".into()),
+                        TomlValue::String("::1/128".into()),
+                    ]),
+                )
+                .write(["torii", "preauth_rate_per_ip_per_sec"], 1_000_000_i64)
+                .write(["torii", "preauth_burst_per_ip"], 2_000_000_i64)
+                .write(["torii", "query_rate_per_authority_per_sec"], 0_i64)
+                .write(["torii", "query_burst_per_authority"], 0_i64)
+                .write(["torii", "tx_rate_per_authority_per_sec"], 0_i64)
+                .write(["torii", "tx_burst_per_authority"], 0_i64)
+                .write(["torii", "api_high_load_tx_threshold"], 262_144_i64);
         });
 
     let result: Result<()> = async {
@@ -1014,12 +1072,12 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
             queue_saturation_max: slo_queue_saturation,
         });
 
-        let submit_peer = network
-            .peers()
-            .first()
-            .cloned()
-            .ok_or_else(|| eyre!("network must have at least one peer"))?;
-        let client = submit_peer.client();
+        let submit_clients: Vec<_> =
+            network.peers().iter().map(|peer| peer.client()).collect();
+        ensure!(
+            !submit_clients.is_empty(),
+            "network must have at least one peer"
+        );
         eprintln!(
             "localnet throughput recipe: peers={}, block_time_ms={}, commit_time_ms={}, block_max_txs={}, warmup_blocks={}, steady_blocks={}, total_blocks={}, payload_bytes={}, submit_batch={}, submit_parallelism={}, queue_soft_limit={}, rng_seed={}, baseline_non_empty={}, baseline_approved={}",
             network.peers().len(),
@@ -1042,7 +1100,7 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
             0,
             warmup_txs,
             &network,
-            &client,
+            &submit_clients,
             submit_batch,
             submit_parallelism,
             queue_soft_limit,
@@ -1117,7 +1175,7 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
             warmup_txs,
             steady_txs,
             &network,
-            &client,
+            &submit_clients,
             submit_batch,
             submit_parallelism,
             queue_soft_limit,
@@ -1484,6 +1542,11 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
                 .write(["sumeragi", "collectors", "k"], 3_i64)
                 .write(["sumeragi", "collectors", "redundant_send_r"], 2_i64)
                 .write(["network", "transaction_gossip_period_ms"], 200_i64)
+                .write(["network", "transaction_gossip_public_target_cap"], 3_i64)
+                .write(
+                    ["network", "transaction_gossip_restricted_target_cap"],
+                    3_i64,
+                )
                 .write(
                     ["network", "transaction_gossip_restricted_fallback"],
                     "public_overlay",
@@ -1492,6 +1555,10 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
                     ["network", "transaction_gossip_restricted_public_payload"],
                     "forward",
                 )
+                .write(["network", "p2p_post_queue_cap"], 8192_i64)
+                .write(["network", "p2p_queue_cap_high"], 16384_i64)
+                .write(["network", "p2p_queue_cap_low"], 65536_i64)
+                .write(["network", "disconnect_on_post_overflow"], false)
                 // Give DA quorum extra breathing room under sustained load.
                 .write(
                     ["sumeragi", "advanced", "da", "quorum_timeout_multiplier"],
@@ -1513,7 +1580,29 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
                 .write(
                     ["sumeragi", "advanced", "pacemaker", "rtt_floor_multiplier"],
                     1_i64,
-                );
+                )
+                // Lift Torii limits for sustained local throughput runs.
+                .write(
+                    ["torii", "preauth_allow_cidrs"],
+                    TomlValue::Array(vec![
+                        TomlValue::String("127.0.0.0/8".into()),
+                        TomlValue::String("::1/128".into()),
+                    ]),
+                )
+                .write(
+                    ["torii", "api_allow_cidrs"],
+                    TomlValue::Array(vec![
+                        TomlValue::String("127.0.0.0/8".into()),
+                        TomlValue::String("::1/128".into()),
+                    ]),
+                )
+                .write(["torii", "preauth_rate_per_ip_per_sec"], 1_000_000_i64)
+                .write(["torii", "preauth_burst_per_ip"], 2_000_000_i64)
+                .write(["torii", "query_rate_per_authority_per_sec"], 0_i64)
+                .write(["torii", "query_burst_per_authority"], 0_i64)
+                .write(["torii", "tx_rate_per_authority_per_sec"], 0_i64)
+                .write(["torii", "tx_burst_per_authority"], 0_i64)
+                .write(["torii", "api_high_load_tx_threshold"], 262_144_i64);
         });
 
     let result: Result<()> = async {
@@ -1622,12 +1711,12 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
             queue_saturation_max: slo_queue_saturation,
         });
 
-        let submit_peer = network
-            .peers()
-            .first()
-            .cloned()
-            .ok_or_else(|| eyre!("network must have at least one peer"))?;
-        let client = submit_peer.client();
+        let submit_clients: Vec<_> =
+            network.peers().iter().map(|peer| peer.client()).collect();
+        ensure!(
+            !submit_clients.is_empty(),
+            "network must have at least one peer"
+        );
         eprintln!(
             "localnet throughput recipe: peers={}, block_time_ms={}, commit_time_ms={}, block_max_txs={}, warmup_blocks={}, steady_blocks={}, total_blocks={}, payload_bytes={}, submit_batch={}, submit_parallelism={}, queue_soft_limit={}, rng_seed={}, baseline_non_empty={}, baseline_approved={}",
             network.peers().len(),
@@ -1650,7 +1739,7 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
             0,
             warmup_txs,
             &network,
-            &client,
+            &submit_clients,
             submit_batch,
             submit_parallelism,
             queue_soft_limit,
@@ -1714,7 +1803,7 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
             warmup_txs,
             steady_txs,
             &network,
-            &client,
+            &submit_clients,
             submit_batch,
             submit_parallelism,
             queue_soft_limit,
@@ -2188,8 +2277,9 @@ async fn wait_for_queue_depth(
         match collect_statuses(network, status_timeout).await {
             Ok(statuses) => {
                 let submitter_queue = statuses
-                    .first()
+                    .iter()
                     .map(|status| status.queue_size)
+                    .max()
                     .unwrap_or_default();
                 let min_non_empty = statuses
                     .iter()

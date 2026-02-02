@@ -4397,7 +4397,7 @@ mod tests {
         fn on_block_message(&mut self, msg: InboundBlockMessage) -> Result<()> {
             let label = match msg.message {
                 BlockMessage::QcVote(_) => "vote",
-                BlockMessage::RbcChunk(_) => "rbc",
+                BlockMessage::RbcChunk(_) | BlockMessage::RbcChunkCompact(_) => "rbc",
                 BlockMessage::Proposal(_) => "payload",
                 BlockMessage::ConsensusParams(_) => "block",
                 _ => "other",
@@ -4628,7 +4628,7 @@ mod tests {
         fn on_block_message(&mut self, msg: InboundBlockMessage) -> Result<()> {
             let label = match msg.message {
                 BlockMessage::QcVote(_) => "vote",
-                BlockMessage::RbcChunk(_) => "rbc",
+                BlockMessage::RbcChunk(_) | BlockMessage::RbcChunkCompact(_) => "rbc",
                 BlockMessage::Proposal(_) => "payload",
                 BlockMessage::ConsensusParams(_) => "block",
                 _ => "other",
@@ -7221,11 +7221,13 @@ mod tests {
 
             background_tx
                 .send(BackgroundRequest::Broadcast {
-                    msg: BlockMessage::ConsensusParams(message::ConsensusParamsAdvert {
-                        collectors_k: 2,
-                        redundant_send_r: 2,
-                        membership: None,
-                    }),
+                    msg: BlockMessageWire::new(BlockMessage::ConsensusParams(
+                        message::ConsensusParamsAdvert {
+                            collectors_k: 2,
+                            redundant_send_r: 2,
+                            membership: None,
+                        },
+                    )),
                 })
                 .expect("send background request");
             status::record_worker_queue_enqueue(status::WorkerQueueKind::Background);
@@ -7856,7 +7858,7 @@ pub enum BackgroundPost {
         /// Destination peer identifier.
         peer: PeerId,
         /// Message to dispatch.
-        msg: BlockMessage,
+        msg: BlockMessageWire,
         /// Time when the task was enqueued.
         enqueued_at: Instant,
     },
@@ -7872,7 +7874,7 @@ pub enum BackgroundPost {
     /// Broadcast a consensus message to all peers.
     Broadcast {
         /// Message to broadcast.
-        msg: BlockMessage,
+        msg: BlockMessageWire,
         /// Time when the task was enqueued.
         enqueued_at: Instant,
     },
@@ -7894,7 +7896,7 @@ pub enum BackgroundRequest {
         /// Peer that should receive the consensus message.
         peer: PeerId,
         /// Consensus message to send to the peer.
-        msg: BlockMessage,
+        msg: BlockMessageWire,
     },
     /// Send a point-to-point control-flow frame to the given peer.
     PostControlFlow {
@@ -7906,7 +7908,7 @@ pub enum BackgroundRequest {
     /// Broadcast a `BlockMessage` to all peers.
     Broadcast {
         /// Consensus message to broadcast.
-        msg: BlockMessage,
+        msg: BlockMessageWire,
     },
     /// Broadcast a control-flow frame to all peers.
     BroadcastControlFlow {
@@ -8294,7 +8296,7 @@ pub(crate) struct InboundBlockMessage {
 impl InboundBlockMessage {
     pub(crate) fn new(message: BlockMessage, sender: Option<PeerId>) -> Self {
         Self {
-            message,
+            message: message.normalize(),
             sender,
             enqueued_at: None,
             queue: None,
@@ -8442,6 +8444,7 @@ impl SumeragiHandle {
     /// (block creation, proposals, and RBC INIT), plus RBC READY/DELIVER and QC votes/certificates,
     /// always use blocking semantics because dropping them can stall consensus recovery.
     pub fn try_incoming_block_message(&self, msg: BlockMessage) -> bool {
+        let msg = msg.normalize();
         let blocking = matches!(
             &msg,
             BlockMessage::BlockSyncUpdate(_)
@@ -8464,6 +8467,7 @@ impl SumeragiHandle {
     /// Enqueue an incoming block message from a known peer without blocking the caller.
     /// Returns `true` if the message was accepted by the queue.
     pub fn try_incoming_block_message_from(&self, sender: PeerId, msg: BlockMessage) -> bool {
+        let msg = msg.normalize();
         let blocking = matches!(
             &msg,
             BlockMessage::BlockSyncUpdate(_)
@@ -8878,6 +8882,49 @@ impl SumeragiHandle {
                 }
                 accepted
             }
+            BlockMessage::RbcChunkCompact(chunk) => {
+                let chunk = chunk.into_chunk();
+                let height = chunk.height;
+                let view = chunk.view;
+                let epoch = chunk.epoch;
+                let block_hash = chunk.block_hash;
+                let idx = chunk.idx;
+                let bytes_hash = CryptoHash::new(&chunk.bytes);
+                let dedup_key = BlockPayloadDedupKey::RbcChunk {
+                    height,
+                    view,
+                    epoch,
+                    block_hash,
+                    idx,
+                    bytes_hash,
+                };
+                let inserted = self.dedup_block_payload(dedup_key);
+                let duplicate = !inserted;
+                if duplicate {
+                    iroha_logger::debug!(
+                        height,
+                        view,
+                        epoch,
+                        idx,
+                        block = %block_hash,
+                        "dropping duplicate RBC chunk from network"
+                    );
+                    return false;
+                }
+                // Avoid blocking consensus ingress on bulk RBC chunks; rely on rebroadcasts.
+                let accepted = enqueue_with_mode(
+                    &self.rbc_chunks,
+                    InboundBlockMessage::new(BlockMessage::RbcChunk(chunk), sender),
+                    "RbcChunk",
+                    status::WorkerQueueKind::RbcChunks,
+                    IngressMode::NonBlocking,
+                );
+                if !accepted {
+                    // Allow rebroadcasts to be enqueued if the queue was full.
+                    self.release_block_payload_dedup(&dedup_key);
+                }
+                accepted
+            }
             BlockMessage::RbcChunk(chunk) => {
                 let height = chunk.height;
                 let view = chunk.view;
@@ -9149,7 +9196,10 @@ impl SumeragiHandle {
     pub fn post_to_peer(&self, peer: PeerId, msg: BlockMessage) {
         self.wake();
         let start = Instant::now();
-        match self.background.send(BackgroundRequest::Post { peer, msg }) {
+        match self.background.send(BackgroundRequest::Post {
+            peer,
+            msg: BlockMessageWire::new(msg),
+        }) {
             Ok(()) => {
                 status::record_worker_queue_enqueue(status::WorkerQueueKind::Background);
                 status::record_worker_queue_blocked(
@@ -9168,7 +9218,9 @@ impl SumeragiHandle {
     pub fn broadcast(&self, msg: BlockMessage) {
         self.wake();
         let start = Instant::now();
-        match self.background.send(BackgroundRequest::Broadcast { msg }) {
+        match self.background.send(BackgroundRequest::Broadcast {
+            msg: BlockMessageWire::new(msg),
+        }) {
             Ok(()) => {
                 status::record_worker_queue_enqueue(status::WorkerQueueKind::Background);
                 status::record_worker_queue_blocked(

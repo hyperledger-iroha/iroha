@@ -11,7 +11,7 @@ use std::{
     time::SystemTime,
 };
 
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, BytesMut};
 #[cfg(not(feature = "noise_handshake"))]
 use iroha_crypto::SessionKey;
 #[cfg(feature = "noise_handshake")]
@@ -2173,18 +2173,22 @@ mod run {
         cryptographer: Cryptographer<E>,
         /// Reusable buffer to encode messages
         buffer: Vec<u8>,
+        /// Reusable buffers for framing outbound messages.
+        frame_pool: Vec<BytesMut>,
         /// Queue of encrypted messages waiting to be sent (high priority).
-        queue_high: VecDeque<Bytes>,
+        queue_high: VecDeque<BytesMut>,
         /// Queue of encrypted messages waiting to be sent (low priority).
-        queue_low: VecDeque<Bytes>,
+        queue_low: VecDeque<BytesMut>,
         /// In-flight frame currently being written to the socket.
-        inflight: Option<Bytes>,
+        inflight: Option<BytesMut>,
+        inflight_offset: usize,
         /// Maximum payload size accepted per encrypted frame
         max_frame_bytes: usize,
     }
 
     impl<E: Enc> MessageSender<E> {
         const U32_SIZE: usize = core::mem::size_of::<u32>();
+        const FRAME_POOL_MAX: usize = 32;
 
         fn new(
             write: Box<dyn AsyncWrite + Send + Unpin>,
@@ -2195,9 +2199,11 @@ mod run {
                 write,
                 cryptographer,
                 buffer: Vec::with_capacity(DEFAULT_BUFFER_CAPACITY),
+                frame_pool: Vec::new(),
                 queue_high: VecDeque::new(),
                 queue_low: VecDeque::new(),
                 inflight: None,
+                inflight_offset: 0,
                 max_frame_bytes,
             }
         }
@@ -2209,6 +2215,11 @@ mod run {
         fn prepare_message<T: Pload>(&mut self, msg: &T, priority: Priority) -> Result<(), Error> {
             // Start with fresh buffer
             self.buffer.clear();
+            if let Some(hint) = msg.encoded_len_exact().or_else(|| msg.encoded_len_hint()) {
+                if self.buffer.capacity() < hint {
+                    self.buffer.reserve_exact(hint - self.buffer.capacity());
+                }
+            }
             msg.encode_to(&mut self.buffer);
             let encrypted = self.cryptographer.encrypt(&self.buffer)?;
 
@@ -2216,11 +2227,15 @@ mod run {
             if size > self.max_frame_bytes {
                 return Err(Error::FrameTooLarge);
             }
-            let mut frame = BytesMut::with_capacity(size + Self::U32_SIZE);
+            let mut frame = self.frame_pool.pop().unwrap_or_default();
+            frame.clear();
+            let needed = size.saturating_add(Self::U32_SIZE);
+            if frame.capacity() < needed {
+                frame.reserve(needed - frame.capacity());
+            }
             #[allow(clippy::cast_possible_truncation)]
             frame.put_u32(size as u32);
             frame.put_slice(encrypted.as_slice());
-            let frame = frame.freeze();
             match priority {
                 Priority::High => self.queue_high.push_back(frame),
                 Priority::Low => self.queue_low.push_back(frame),
@@ -2242,18 +2257,24 @@ mod run {
                     .queue_high
                     .pop_front()
                     .or_else(|| self.queue_low.pop_front());
+                self.inflight_offset = 0;
             }
             let Some(frame) = self.inflight.as_mut() else {
                 return Ok(());
             };
-            let chunk = frame.as_ref();
+            let chunk = &frame[self.inflight_offset..];
             if !chunk.is_empty() {
                 let n = self.write.write(chunk).await?;
-                frame.advance(n);
+                self.inflight_offset = self.inflight_offset.saturating_add(n);
                 self.write.flush().await?;
             }
-            if frame.is_empty() {
-                self.inflight = None;
+            if self.inflight_offset >= frame.len() {
+                let mut finished = self.inflight.take().expect("inflight present");
+                finished.clear();
+                if self.frame_pool.len() < Self::FRAME_POOL_MAX {
+                    self.frame_pool.push(finished);
+                }
+                self.inflight_offset = 0;
             }
             Ok(())
         }
@@ -2273,7 +2294,7 @@ mod run {
     }
 
     pub fn data_message_wire_len<T: Encode>(payload: T) -> usize {
-        Message::Data(payload).encode().len()
+        Message::Data(payload).encoded_len()
     }
 
     #[cfg(test)]
@@ -2388,6 +2409,32 @@ mod run {
             let stats = stats.lock().expect("stats lock");
             assert!(stats.writes > 0, "expected at least one write");
             assert!(stats.flushes > 0, "expected at least one flush");
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn message_sender_reuses_frame_buffers() {
+            let stats = Arc::new(Mutex::new(WriteStats::default()));
+            let writer = TrackingWrite { stats };
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[7u8; 32])
+                    .expect("valid key length");
+            let mut sender = MessageSender::new(Box::new(writer), cryptographer, 1024);
+
+            sender
+                .prepare_message(&Message::Data(Dummy), Priority::High)
+                .expect("prepare first message");
+            while sender.ready() {
+                sender.send().await.expect("send");
+            }
+            assert_eq!(sender.frame_pool.len(), 1, "expected one pooled frame");
+
+            sender
+                .prepare_message(&Message::Data(Dummy), Priority::High)
+                .expect("prepare second message");
+            while sender.ready() {
+                sender.send().await.expect("send");
+            }
+            assert_eq!(sender.frame_pool.len(), 1, "expected pooled frame reuse");
         }
 
         #[tokio::test(flavor = "current_thread")]

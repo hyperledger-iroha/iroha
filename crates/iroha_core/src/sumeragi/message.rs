@@ -1,11 +1,16 @@
 //! Contains message structures for p2p communication during consensus.
+use std::{io::Write, sync::Arc};
+
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     block::{BlockHeader, SignedBlock, consensus::SumeragiMembershipStatus},
     peer::PeerId,
 };
 use iroha_macro::*;
-use norito::codec::{Decode, Encode};
+use norito::{
+    codec::{Decode, Encode},
+    core::{Archived, Error as NoritoError, NoritoDeserialize, NoritoSerialize},
+};
 
 use crate::block::NewBlock;
 
@@ -32,6 +37,8 @@ pub enum BlockMessage {
     RbcInit(#[skip_try_from] super::consensus::RbcInit),
     /// RBC payload chunk.
     RbcChunk(#[skip_try_from] super::consensus::RbcChunk),
+    /// RBC payload chunk with compact height/view/epoch headers.
+    RbcChunkCompact(#[skip_try_from] RbcChunkCompact),
     /// RBC READY signal.
     RbcReady(#[skip_try_from] super::consensus::RbcReady),
     /// RBC DELIVER notification.
@@ -49,13 +56,247 @@ pub enum BlockMessage {
 }
 
 impl BlockMessage {
+    /// Normalize compact message variants into their full forms.
+    pub fn normalize(self) -> Self {
+        match self {
+            Self::RbcChunkCompact(chunk) => Self::RbcChunk(chunk.into_chunk()),
+            other => other,
+        }
+    }
+
+    /// Build an RBC chunk message, using the compact variant when fields fit.
+    pub fn from_rbc_chunk(chunk: super::consensus::RbcChunk) -> Self {
+        let super::consensus::RbcChunk {
+            block_hash,
+            height,
+            view,
+            epoch,
+            idx,
+            bytes,
+        } = chunk;
+        let Ok(height_u32) = u32::try_from(height) else {
+            return Self::RbcChunk(super::consensus::RbcChunk {
+                block_hash,
+                height,
+                view,
+                epoch,
+                idx,
+                bytes,
+            });
+        };
+        let Ok(view_u32) = u32::try_from(view) else {
+            return Self::RbcChunk(super::consensus::RbcChunk {
+                block_hash,
+                height,
+                view,
+                epoch,
+                idx,
+                bytes,
+            });
+        };
+        let Ok(epoch_u32) = u32::try_from(epoch) else {
+            return Self::RbcChunk(super::consensus::RbcChunk {
+                block_hash,
+                height,
+                view,
+                epoch,
+                idx,
+                bytes,
+            });
+        };
+        Self::RbcChunkCompact(RbcChunkCompact {
+            block_hash,
+            height: height_u32,
+            view: view_u32,
+            epoch: epoch_u32,
+            idx,
+            bytes,
+        })
+    }
+
     /// Network priority for this consensus message.
     ///
     /// RBC chunks are bulk payload data and should not preempt votes/control flow.
     pub fn priority(&self) -> iroha_p2p::Priority {
         match self {
-            Self::RbcChunk(_) => iroha_p2p::Priority::Low,
+            Self::RbcChunk(_) | Self::RbcChunkCompact(_) => iroha_p2p::Priority::Low,
             _ => iroha_p2p::Priority::High,
+        }
+    }
+}
+
+/// Wire wrapper that can reuse pre-serialized consensus payload bytes.
+#[derive(Debug, Clone)]
+pub struct BlockMessageWire {
+    message: Arc<BlockMessage>,
+    encoded: Option<Arc<Vec<u8>>>,
+}
+
+impl BlockMessageWire {
+    /// Wrap a consensus message without cached bytes.
+    pub fn new(message: BlockMessage) -> Self {
+        Self {
+            message: Arc::new(message),
+            encoded: None,
+        }
+    }
+
+    /// Wrap an `Arc`-backed message with cached encoded bytes.
+    pub fn with_encoded(message: Arc<BlockMessage>, encoded: Arc<Vec<u8>>) -> Self {
+        Self {
+            message,
+            encoded: Some(encoded),
+        }
+    }
+
+    /// Wrap an owned message with cached encoded bytes.
+    pub fn with_encoded_owned(message: BlockMessage, encoded: Arc<Vec<u8>>) -> Self {
+        Self {
+            message: Arc::new(message),
+            encoded: Some(encoded),
+        }
+    }
+
+    /// Borrow the underlying consensus message.
+    pub fn as_message(&self) -> &BlockMessage {
+        self.message.as_ref()
+    }
+
+    /// Acquire a mutable reference, clearing cached encoded bytes.
+    pub fn make_mut(&mut self) -> &mut BlockMessage {
+        self.encoded = None;
+        Arc::make_mut(&mut self.message)
+    }
+
+    /// Consume the wrapper and return the consensus message.
+    pub fn into_message(self) -> BlockMessage {
+        Arc::try_unwrap(self.message).unwrap_or_else(|arc| (*arc).clone())
+    }
+
+    /// Cached encoded length if available.
+    pub fn encoded_len(&self) -> Option<usize> {
+        self.encoded.as_ref().map(|bytes| bytes.len())
+    }
+
+    pub(crate) fn encode_message(message: &BlockMessage) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(message.encoded_len());
+        message.encode_to(&mut buf);
+        buf
+    }
+}
+
+impl AsRef<BlockMessage> for BlockMessageWire {
+    fn as_ref(&self) -> &BlockMessage {
+        self.message.as_ref()
+    }
+}
+
+impl std::ops::Deref for BlockMessageWire {
+    type Target = BlockMessage;
+
+    fn deref(&self) -> &Self::Target {
+        self.message.as_ref()
+    }
+}
+
+impl From<BlockMessage> for BlockMessageWire {
+    fn from(message: BlockMessage) -> Self {
+        Self::new(message)
+    }
+}
+
+impl NoritoSerialize for BlockMessageWire {
+    fn schema_hash() -> [u8; 16] {
+        <BlockMessage as NoritoSerialize>::schema_hash()
+    }
+
+    fn serialize<W: Write>(&self, mut writer: W) -> Result<(), NoritoError> {
+        if let Some(encoded) = self.encoded.as_ref() {
+            writer.write_all(encoded)?;
+            return Ok(());
+        }
+        self.message.serialize(writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        self.encoded
+            .as_ref()
+            .map(|bytes| bytes.len())
+            .or_else(|| self.message.as_ref().encoded_len_hint())
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        self.encoded
+            .as_ref()
+            .map(|bytes| bytes.len())
+            .or_else(|| self.message.as_ref().encoded_len_exact())
+    }
+}
+
+impl<'a> NoritoDeserialize<'a> for BlockMessageWire {
+    fn schema_hash() -> [u8; 16] {
+        <BlockMessage as NoritoSerialize>::schema_hash()
+    }
+
+    fn deserialize(archived: &'a Archived<Self>) -> Self {
+        let message = BlockMessage::deserialize(archived.cast());
+        Self {
+            message: Arc::new(message),
+            encoded: None,
+        }
+    }
+
+    fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, NoritoError> {
+        let message = BlockMessage::try_deserialize(archived.cast())?;
+        Ok(Self {
+            message: Arc::new(message),
+            encoded: None,
+        })
+    }
+}
+
+/// Compact RBC payload chunk header (u32 height/view/epoch).
+#[derive(Debug, Clone, Decode, Encode)]
+pub struct RbcChunkCompact {
+    /// Subject block hash.
+    pub block_hash: HashOf<BlockHeader>,
+    /// Height (u32-compact).
+    pub height: u32,
+    /// View (u32-compact).
+    pub view: u32,
+    /// Epoch (u32-compact).
+    pub epoch: u32,
+    /// Chunk index (0-based).
+    pub idx: u32,
+    /// Chunk bytes.
+    pub bytes: Vec<u8>,
+}
+
+impl RbcChunkCompact {
+    /// Build a compact chunk when headers fit into u32.
+    pub fn try_from_chunk(chunk: &super::consensus::RbcChunk) -> Option<Self> {
+        let height = u32::try_from(chunk.height).ok()?;
+        let view = u32::try_from(chunk.view).ok()?;
+        let epoch = u32::try_from(chunk.epoch).ok()?;
+        Some(Self {
+            block_hash: chunk.block_hash,
+            height,
+            view,
+            epoch,
+            idx: chunk.idx,
+            bytes: chunk.bytes.clone(),
+        })
+    }
+
+    /// Convert into the full `RbcChunk` form.
+    pub fn into_chunk(self) -> super::consensus::RbcChunk {
+        super::consensus::RbcChunk {
+            block_hash: self.block_hash,
+            height: u64::from(self.height),
+            view: u64::from(self.view),
+            epoch: u64::from(self.epoch),
+            idx: self.idx,
+            bytes: self.bytes,
         }
     }
 }
@@ -209,7 +450,7 @@ pub struct FetchPendingBlock {
 
 #[cfg(test)]
 mod tests {
-    use std::{borrow::Cow, time::Duration};
+    use std::{borrow::Cow, sync::Arc, time::Duration};
 
     use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
     use iroha_data_model::{
@@ -225,7 +466,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{block::BlockBuilder, tx::AcceptedTransaction};
+    use crate::{block::BlockBuilder, sumeragi::consensus, tx::AcceptedTransaction};
 
     fn dummy_accepted_transaction() -> AcceptedTransaction<'static> {
         let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
@@ -337,6 +578,83 @@ mod tests {
             priority: None,
         });
         assert_eq!(fetch.priority(), iroha_p2p::Priority::High);
+    }
+
+    #[test]
+    fn block_message_wire_prefers_preencoded_payload() {
+        let advert = ConsensusParamsAdvert {
+            collectors_k: 1,
+            redundant_send_r: 1,
+            membership: None,
+        };
+        let msg = BlockMessage::ConsensusParams(advert);
+        let encoded = BlockMessageWire::encode_message(&msg);
+        let wire = BlockMessageWire::with_encoded(Arc::new(msg), Arc::new(encoded.clone()));
+
+        assert_eq!(wire.encoded_len(), Some(encoded.len()));
+        assert_eq!(wire.encode(), encoded);
+    }
+
+    #[test]
+    fn block_message_wire_roundtrip_with_cached_payload() {
+        let advert = ConsensusParamsAdvert {
+            collectors_k: 2,
+            redundant_send_r: 3,
+            membership: None,
+        };
+        let msg = BlockMessage::ConsensusParams(advert);
+        let encoded = BlockMessageWire::encode_message(&msg);
+        let wire = BlockMessageWire::with_encoded(Arc::new(msg), Arc::new(encoded));
+
+        let bytes = wire.encode();
+        let decoded: BlockMessageWire =
+            Decode::decode(&mut bytes.as_slice()).expect("decode block message wire");
+
+        match decoded.as_ref() {
+            BlockMessage::ConsensusParams(decoded_advert) => {
+                assert_eq!(decoded_advert.collectors_k, 2);
+                assert_eq!(decoded_advert.redundant_send_r, 3);
+                assert!(decoded_advert.membership.is_none());
+            }
+            other => panic!("expected consensus params, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rbc_chunk_compact_roundtrip_normalizes() {
+        let chunk = consensus::RbcChunk {
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([4u8; 32])),
+            height: 10,
+            view: 2,
+            epoch: 3,
+            idx: 1,
+            bytes: vec![0xAB; 8],
+        };
+        let msg = BlockMessage::from_rbc_chunk(chunk.clone());
+        let compact = match msg {
+            BlockMessage::RbcChunkCompact(compact) => compact,
+            other => panic!("expected compact RBC chunk, got {other:?}"),
+        };
+        let normalized = BlockMessage::RbcChunkCompact(compact).normalize();
+        match normalized {
+            BlockMessage::RbcChunk(full) => assert_eq!(full, chunk),
+            other => panic!("expected normalized RBC chunk, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rbc_chunk_compact_falls_back_on_large_headers() {
+        let large_height = u64::from(u32::MAX) + 1;
+        let chunk = consensus::RbcChunk {
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([5u8; 32])),
+            height: large_height,
+            view: 1,
+            epoch: 1,
+            idx: 2,
+            bytes: vec![0xCD; 4],
+        };
+        let msg = BlockMessage::from_rbc_chunk(chunk.clone());
+        assert!(matches!(msg, BlockMessage::RbcChunk(inner) if inner == chunk));
     }
 
     #[cfg(feature = "bls")]

@@ -100,6 +100,10 @@ use crate::{
     tx::{AcceptTransactionFail, AcceptedTransaction},
 };
 
+fn wire(msg: BlockMessage) -> BlockMessageWire {
+    BlockMessageWire::new(msg)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn select_block_sync_roster(
     block: &SignedBlock,
@@ -3605,6 +3609,99 @@ async fn vote_verify_worker_records_vote_after_async_check() {
             panic!("vote verify worker panicked: {err:?}");
         }
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn vote_signature_cache_skips_async_dispatch() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let worker_joins = actor.attach_vote_verify_worker();
+
+    let height = 1;
+    let view = 0u64;
+    let topology_peers = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(topology_peers);
+    let chain_id = actor.chain_id.clone();
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x77; Hash::LENGTH]));
+
+    let mut vote = crate::sumeragi::consensus::Vote {
+        phase: crate::sumeragi::consensus::Phase::Commit,
+        block_hash,
+        parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+        post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+        height,
+        view,
+        epoch: 0,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    sign_vote_for_view(&mut vote, &chain_id, &topology, &harness.key_pairs);
+
+    actor
+        .subsystems
+        .vote_verify
+        .verified_cache
+        .insert(VoteVerifyCacheKey::from_vote(&vote));
+
+    actor.handle_vote(vote.clone());
+
+    let verify_key = VoteVerifyKey::from_vote(&vote);
+    assert!(
+        !actor
+            .subsystems
+            .vote_verify
+            .inflight
+            .contains_key(&verify_key),
+        "cached signature should skip async dispatch"
+    );
+    let vote_key = (vote.phase, vote.height, vote.view, vote.epoch, vote.signer);
+    assert!(
+        actor.vote_log.contains_key(&vote_key),
+        "cached signature should still record the vote"
+    );
+
+    harness.shutdown.send();
+    drop(harness);
+    for join in worker_joins {
+        if let Err(err) = join.join() {
+            panic!("vote verify worker panicked: {err:?}");
+        }
+    }
+}
+
+#[test]
+fn qc_verify_cache_key_tracks_signature_and_bitmap() {
+    let qc = crate::sumeragi::consensus::Qc {
+        phase: crate::sumeragi::consensus::Phase::Commit,
+        subject_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [0x11; Hash::LENGTH],
+        )),
+        parent_state_root: Hash::prehashed([0x22; Hash::LENGTH]),
+        post_state_root: Hash::prehashed([0x33; Hash::LENGTH]),
+        height: 1,
+        view: 0,
+        epoch: 0,
+        mode_tag: "cache-key-test".to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x44; Hash::LENGTH])),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: Vec::new(),
+        aggregate: crate::sumeragi::consensus::QcAggregate {
+            signers_bitmap: vec![0x01],
+            bls_aggregate_signature: vec![0xAA],
+        },
+    };
+
+    let mut qc_sig = qc.clone();
+    qc_sig.aggregate.bls_aggregate_signature = vec![0xBB];
+    let mut qc_bitmap = qc.clone();
+    qc_bitmap.aggregate.signers_bitmap = vec![0x02];
+
+    let base_key = QcVerifyCacheKey::from_qc(&qc);
+    assert_ne!(base_key, QcVerifyCacheKey::from_qc(&qc_sig));
+    assert_ne!(base_key, QcVerifyCacheKey::from_qc(&qc_bitmap));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -7975,20 +8072,19 @@ async fn fetch_pending_block_attaches_cached_qc() {
     let posts: Vec<_> = harness.background_rx.try_iter().collect();
     let mut found = false;
     for post in posts {
-        if let BackgroundPost::Post {
-            msg: BlockMessage::BlockSyncUpdate(update),
-            ..
-        } = post
-        {
-            if update.block.hash() == block_hash {
-                let qc = update
-                    .commit_qc
-                    .expect("cached commit certificate should be attached");
-                assert_eq!(qc.height, block.header().height().get());
-                assert_eq!(qc.view, block.header().view_change_index());
-                assert_eq!(qc.aggregate.signers_bitmap, signers_bitmap);
-                assert_eq!(qc.aggregate.bls_aggregate_signature, aggregate_signature);
-                found = true;
+        if let BackgroundPost::Post { msg, .. } = post {
+            if let BlockMessage::BlockSyncUpdate(update) = msg.as_ref() {
+                if update.block.hash() == block_hash {
+                    let qc = update
+                        .commit_qc
+                        .as_ref()
+                        .expect("cached commit certificate should be attached");
+                    assert_eq!(qc.height, block.header().height().get());
+                    assert_eq!(qc.view, block.header().view_change_index());
+                    assert_eq!(qc.aggregate.signers_bitmap, signers_bitmap);
+                    assert_eq!(qc.aggregate.bls_aggregate_signature, aggregate_signature);
+                    found = true;
+                }
             }
         }
     }
@@ -8108,26 +8204,20 @@ async fn fetch_pending_block_uses_block_sync_update_when_roster_available() {
     let mut found = false;
     let mut found_created = false;
     for post in posts {
-        if let BackgroundPost::Post {
-            msg: BlockMessage::BlockSyncUpdate(update),
-            ..
-        } = &post
-        {
-            if update.block.hash() == block_hash {
-                assert!(
-                    update.commit_qc.is_some() || update.validator_checkpoint.is_some(),
-                    "expected roster hints for pending block"
-                );
-                found = true;
+        if let BackgroundPost::Post { msg, .. } = &post {
+            if let BlockMessage::BlockSyncUpdate(update) = msg.as_ref() {
+                if update.block.hash() == block_hash {
+                    assert!(
+                        update.commit_qc.is_some() || update.validator_checkpoint.is_some(),
+                        "expected roster hints for pending block"
+                    );
+                    found = true;
+                }
             }
-        }
-        if let BackgroundPost::Post {
-            msg: BlockMessage::BlockCreated(created),
-            ..
-        } = &post
-        {
-            if created.block.hash() == block_hash {
-                found_created = true;
+            if let BlockMessage::BlockCreated(created) = msg.as_ref() {
+                if created.block.hash() == block_hash {
+                    found_created = true;
+                }
             }
         }
     }
@@ -8293,13 +8383,12 @@ async fn fetch_pending_block_npos_falls_back_without_roster_hints() {
 
     let posts: Vec<_> = harness.background_rx.try_iter().collect();
     let saw_update = posts.iter().any(|post| {
-        matches!(
-            post,
-            BackgroundPost::Post {
-                msg: BlockMessage::BlockSyncUpdate(update),
-                ..
-            } if update.block.hash() == block_hash
-        )
+        if let BackgroundPost::Post { msg, .. } = post {
+            if let BlockMessage::BlockSyncUpdate(update) = msg.as_ref() {
+                return update.block.hash() == block_hash;
+            }
+        }
+        false
     });
     assert!(
         !saw_update,
@@ -8464,10 +8553,10 @@ async fn fetch_pending_block_falls_back_to_block_created_when_oversized() {
     let posts: Vec<_> = harness.background_rx.try_iter().collect();
     assert!(
         posts.iter().any(|post| match post {
-            BackgroundPost::Post {
-                msg: BlockMessage::BlockCreated(created),
-                ..
-            } => created.block.hash() == block_hash,
+            BackgroundPost::Post { msg, .. } => matches!(
+                msg.as_ref(),
+                BlockMessage::BlockCreated(created) if created.block.hash() == block_hash
+            ),
             _ => false,
         }),
         "expected BlockCreated fallback when update exceeds payload cap"
@@ -8565,14 +8654,15 @@ async fn fetch_pending_block_stashes_and_serves_when_block_arrives() {
     let posts: Vec<_> = harness.background_rx.try_iter().collect();
     assert!(
         posts.iter().any(|post| match post {
-            BackgroundPost::Post {
-                msg: BlockMessage::BlockCreated(created),
-                ..
-            } => created.block.hash() == block_hash,
-            BackgroundPost::Post {
-                msg: BlockMessage::BlockSyncUpdate(update),
-                ..
-            } => update.block.hash() == block_hash,
+            BackgroundPost::Post { msg, .. } => {
+                matches!(
+                    msg.as_ref(),
+                    BlockMessage::BlockCreated(created) if created.block.hash() == block_hash
+                ) || matches!(
+                    msg.as_ref(),
+                    BlockMessage::BlockSyncUpdate(update) if update.block.hash() == block_hash
+                )
+            }
             _ => false,
         }),
         "expected missing-block fetch response after payload is available"
@@ -8680,14 +8770,15 @@ async fn fetch_pending_block_serves_aborted_pending() {
     let posts: Vec<_> = harness.background_rx.try_iter().collect();
     assert!(
         posts.iter().any(|post| match post {
-            BackgroundPost::Post {
-                msg: BlockMessage::BlockCreated(created),
-                ..
-            } => created.block.hash() == block_hash,
-            BackgroundPost::Post {
-                msg: BlockMessage::BlockSyncUpdate(update),
-                ..
-            } => update.block.hash() == block_hash,
+            BackgroundPost::Post { msg, .. } => {
+                matches!(
+                    msg.as_ref(),
+                    BlockMessage::BlockCreated(created) if created.block.hash() == block_hash
+                ) || matches!(
+                    msg.as_ref(),
+                    BlockMessage::BlockSyncUpdate(update) if update.block.hash() == block_hash
+                )
+            }
             _ => false,
         }),
         "expected aborted pending block payload to be served"
@@ -9637,10 +9728,11 @@ async fn quorum_reschedule_rebroadcasts_block_created_without_roster() {
         .filter(|post| {
             matches!(
                 post,
-                BackgroundPost::Post {
-                    msg: BlockMessage::BlockSyncUpdate(update),
-                    ..
-                } if update.block.hash() == block_hash
+                BackgroundPost::Post { msg, .. }
+                    if matches!(
+                        msg.as_ref(),
+                        BlockMessage::BlockSyncUpdate(update) if update.block.hash() == block_hash
+                    )
             )
         })
         .count();
@@ -9649,10 +9741,11 @@ async fn quorum_reschedule_rebroadcasts_block_created_without_roster() {
         .filter(|post| {
             matches!(
                 post,
-                BackgroundPost::Post {
-                    msg: BlockMessage::BlockCreated(created),
-                    ..
-                } if created.block.hash() == block_hash
+                BackgroundPost::Post { msg, .. }
+                    if matches!(
+                        msg.as_ref(),
+                        BlockMessage::BlockCreated(created) if created.block.hash() == block_hash
+                    )
             )
         })
         .count();
@@ -9742,10 +9835,11 @@ async fn quorum_reschedule_skips_duplicate_block_rebroadcasts() {
         .filter(|post| {
             matches!(
                 post,
-                BackgroundPost::Post {
-                    msg: BlockMessage::BlockSyncUpdate(update),
-                    ..
-                } if update.block.hash() == block_hash
+                BackgroundPost::Post { msg, .. }
+                    if matches!(
+                        msg.as_ref(),
+                        BlockMessage::BlockSyncUpdate(update) if update.block.hash() == block_hash
+                    )
             )
         })
         .count();
@@ -9754,10 +9848,11 @@ async fn quorum_reschedule_skips_duplicate_block_rebroadcasts() {
         .filter(|post| {
             matches!(
                 post,
-                BackgroundPost::Post {
-                    msg: BlockMessage::BlockCreated(created),
-                    ..
-                } if created.block.hash() == block_hash
+                BackgroundPost::Post { msg, .. }
+                    if matches!(
+                        msg.as_ref(),
+                        BlockMessage::BlockCreated(created) if created.block.hash() == block_hash
+                    )
             )
         })
         .count();
@@ -9791,10 +9886,11 @@ async fn quorum_reschedule_skips_duplicate_block_rebroadcasts() {
         .filter(|post| {
             matches!(
                 post,
-                BackgroundPost::Post {
-                    msg: BlockMessage::BlockSyncUpdate(update),
-                    ..
-                } if update.block.hash() == block_hash
+                BackgroundPost::Post { msg, .. }
+                    if matches!(
+                        msg.as_ref(),
+                        BlockMessage::BlockSyncUpdate(update) if update.block.hash() == block_hash
+                    )
             )
         })
         .count();
@@ -9803,10 +9899,11 @@ async fn quorum_reschedule_skips_duplicate_block_rebroadcasts() {
         .filter(|post| {
             matches!(
                 post,
-                BackgroundPost::Post {
-                    msg: BlockMessage::BlockCreated(created),
-                    ..
-                } if created.block.hash() == block_hash
+                BackgroundPost::Post { msg, .. }
+                    if matches!(
+                        msg.as_ref(),
+                        BlockMessage::BlockCreated(created) if created.block.hash() == block_hash
+                    )
             )
         })
         .count();
@@ -10165,17 +10262,12 @@ async fn payload_rebroadcast_targets_only_highest_pending_block() {
         .rebroadcast_stalled_rbc_payloads(Instant::now());
 
     let posts: Vec<_> = harness.background_rx.try_iter().collect();
-    let has_payload_posts = posts.iter().any(|post| {
-        matches!(
-            post,
-            BackgroundPost::Post {
-                msg: BlockMessage::RbcInit(_) | BlockMessage::RbcChunk(_),
-                ..
-            } | BackgroundPost::Broadcast {
-                msg: BlockMessage::RbcInit(_) | BlockMessage::RbcChunk(_),
-                ..
-            }
-        )
+    let has_payload_posts = posts.iter().any(|post| match post {
+        BackgroundPost::Post { msg, .. } | BackgroundPost::Broadcast { msg, .. } => matches!(
+            msg.as_ref(),
+            BlockMessage::RbcInit(_) | BlockMessage::RbcChunk(_) | BlockMessage::RbcChunkCompact(_)
+        ),
+        _ => false,
     });
     assert!(
         !has_payload_posts,
@@ -11747,11 +11839,11 @@ async fn commit_vote_targets_collectors_or_topology() {
         .background_rx
         .try_iter()
         .filter_map(|post| match post {
-            BackgroundPost::Post {
-                peer,
-                msg: BlockMessage::QcVote(_),
-                ..
-            } => Some(peer),
+            BackgroundPost::Post { peer, msg, .. }
+                if matches!(msg.as_ref(), BlockMessage::QcVote(_)) =>
+            {
+                Some(peer)
+            }
             _ => None,
         })
         .collect();
@@ -12851,17 +12943,12 @@ async fn tick_rebroadcasts_stalled_rbc_payloads_and_respects_cooldown() {
     harness.actor.tick();
 
     let posts: Vec<_> = harness.background_rx.try_iter().collect();
-    let has_payload_posts = posts.iter().any(|post| {
-        matches!(
-            post,
-            BackgroundPost::Post {
-                msg: BlockMessage::RbcInit(_) | BlockMessage::RbcChunk(_),
-                ..
-            } | BackgroundPost::Broadcast {
-                msg: BlockMessage::RbcInit(_) | BlockMessage::RbcChunk(_),
-                ..
-            }
-        )
+    let has_payload_posts = posts.iter().any(|post| match post {
+        BackgroundPost::Post { msg, .. } | BackgroundPost::Broadcast { msg, .. } => matches!(
+            msg.as_ref(),
+            BlockMessage::RbcInit(_) | BlockMessage::RbcChunk(_) | BlockMessage::RbcChunkCompact(_)
+        ),
+        _ => false,
     });
     assert!(
         !has_payload_posts,
@@ -12918,10 +13005,11 @@ async fn rebroadcast_highest_pending_block_picks_latest() {
     let broadcasted = posts.iter().any(|post| {
         matches!(
             post,
-            BackgroundPost::Post {
-                msg: BlockMessage::BlockCreated(created),
-                ..
-            } if created.block.hash() == high.hash()
+            BackgroundPost::Post { msg, .. }
+                if matches!(
+                    msg.as_ref(),
+                    BlockMessage::BlockCreated(created) if created.block.hash() == high.hash()
+                )
         )
     });
     assert!(
@@ -12961,19 +13049,21 @@ async fn rebroadcast_highest_pending_block_skips_aborted() {
     let broadcast_low = posts.iter().any(|post| {
         matches!(
             post,
-            BackgroundPost::Post {
-                msg: BlockMessage::BlockCreated(created),
-                ..
-            } if created.block.hash() == low.hash()
+            BackgroundPost::Post { msg, .. }
+                if matches!(
+                    msg.as_ref(),
+                    BlockMessage::BlockCreated(created) if created.block.hash() == low.hash()
+                )
         )
     });
     let broadcast_high = posts.iter().any(|post| {
         matches!(
             post,
-            BackgroundPost::Post {
-                msg: BlockMessage::BlockCreated(created),
-                ..
-            } if created.block.hash() == high.hash()
+            BackgroundPost::Post { msg, .. }
+                if matches!(
+                    msg.as_ref(),
+                    BlockMessage::BlockCreated(created) if created.block.hash() == high.hash()
+                )
         )
     });
     assert!(
@@ -13181,10 +13271,11 @@ async fn precommit_vote_payload_broadcast_is_rate_limited() {
         .filter(|post| {
             matches!(
                 post,
-                BackgroundPost::Post {
-                    msg: BlockMessage::BlockCreated(created),
-                    ..
-                } if created.block.hash() == block_hash
+                BackgroundPost::Post { msg, .. }
+                    if matches!(
+                        msg.as_ref(),
+                        BlockMessage::BlockCreated(created) if created.block.hash() == block_hash
+                    )
             )
         })
         .count();
@@ -13286,10 +13377,11 @@ async fn precommit_vote_payload_broadcast_cooldown_uses_chain_block_time() {
         .filter(|post| {
             matches!(
                 post,
-                BackgroundPost::Post {
-                    msg: BlockMessage::BlockCreated(created),
-                    ..
-                } if created.block.hash() == block_hash
+                BackgroundPost::Post { msg, .. }
+                    if matches!(
+                        msg.as_ref(),
+                        BlockMessage::BlockCreated(created) if created.block.hash() == block_hash
+                    )
             )
         })
         .count();
@@ -13348,10 +13440,11 @@ async fn precommit_vote_skips_payload_broadcast_for_aborted_pending() {
         .filter(|post| {
             matches!(
                 post,
-                BackgroundPost::Post {
-                    msg: BlockMessage::BlockCreated(created),
-                    ..
-                } if created.block.hash() == block_hash
+                BackgroundPost::Post { msg, .. }
+                    if matches!(
+                        msg.as_ref(),
+                        BlockMessage::BlockCreated(created) if created.block.hash() == block_hash
+                    )
             )
         })
         .count();
@@ -13409,10 +13502,11 @@ async fn precommit_vote_broadcasts_payload_when_pending_tracked() {
         .filter(|post| {
             matches!(
                 post,
-                BackgroundPost::Post {
-                    msg: BlockMessage::BlockCreated(created),
-                    ..
-                } if created.block.hash() == block_hash
+                BackgroundPost::Post { msg, .. }
+                    if matches!(
+                        msg.as_ref(),
+                        BlockMessage::BlockCreated(created) if created.block.hash() == block_hash
+                    )
             )
         })
         .count();
@@ -13469,10 +13563,11 @@ async fn precommit_vote_payload_broadcast_skips_aborted_pending_tracked() {
         .filter(|post| {
             matches!(
                 post,
-                BackgroundPost::Post {
-                    msg: BlockMessage::BlockCreated(created),
-                    ..
-                } if created.block.hash() == block_hash
+                BackgroundPost::Post { msg, .. }
+                    if matches!(
+                        msg.as_ref(),
+                        BlockMessage::BlockCreated(created) if created.block.hash() == block_hash
+                    )
             )
         })
         .count();
@@ -13590,11 +13685,14 @@ async fn precommit_vote_block_sync_update_targets_snapshot_roster() {
         .background_rx
         .try_iter()
         .filter_map(|post| match post {
-            BackgroundPost::Post {
-                peer,
-                msg: BlockMessage::BlockSyncUpdate(update),
-                ..
-            } if update.block.hash() == block_hash => Some(peer),
+            BackgroundPost::Post { peer, msg, .. }
+                if matches!(
+                    msg.as_ref(),
+                    BlockMessage::BlockSyncUpdate(update) if update.block.hash() == block_hash
+                ) =>
+            {
+                Some(peer)
+            }
             _ => None,
         })
         .collect();
@@ -13818,11 +13916,11 @@ async fn rebroadcast_precommit_votes_keep_collectors_when_below_quorum() {
         .background_rx
         .try_iter()
         .filter_map(|post| match post {
-            BackgroundPost::Post {
-                peer,
-                msg: BlockMessage::QcVote(_),
-                ..
-            } => Some(peer),
+            BackgroundPost::Post { peer, msg, .. }
+                if matches!(msg.as_ref(), BlockMessage::QcVote(_)) =>
+            {
+                Some(peer)
+            }
             _ => None,
         })
         .collect();
@@ -13900,11 +13998,11 @@ async fn exec_witness_targets_collectors_even_when_redundant_r_below_quorum() {
         .background_rx
         .try_iter()
         .filter_map(|post| match post {
-            BackgroundPost::Post {
-                peer,
-                msg: BlockMessage::ExecWitness(_),
-                ..
-            } => Some(peer),
+            BackgroundPost::Post { peer, msg, .. }
+                if matches!(msg.as_ref(), BlockMessage::ExecWitness(_)) =>
+            {
+                Some(peer)
+            }
             _ => None,
         })
         .collect();
@@ -14020,11 +14118,11 @@ async fn rebroadcast_block_votes_targets_snapshot_roster() {
         .background_rx
         .try_iter()
         .filter_map(|post| match post {
-            BackgroundPost::Post {
-                peer,
-                msg: BlockMessage::QcVote(_),
-                ..
-            } => Some(peer),
+            BackgroundPost::Post { peer, msg, .. }
+                if matches!(msg.as_ref(), BlockMessage::QcVote(_)) =>
+            {
+                Some(peer)
+            }
             _ => None,
         })
         .collect();
@@ -14110,11 +14208,14 @@ async fn qc_broadcast_targets_snapshot_roster() {
         .background_rx
         .try_iter()
         .filter_map(|post| match post {
-            BackgroundPost::Post {
-                peer,
-                msg: BlockMessage::Qc(qc),
-                ..
-            } if qc.subject_block_hash == block_hash => Some(peer),
+            BackgroundPost::Post { peer, msg, .. }
+                if matches!(
+                    msg.as_ref(),
+                    BlockMessage::Qc(qc) if qc.subject_block_hash == block_hash
+                ) =>
+            {
+                Some(peer)
+            }
             _ => None,
         })
         .collect();
@@ -24183,10 +24284,10 @@ async fn init_collector_plan_broadcasts_membership_advert() {
         .background_rx
         .try_iter()
         .find_map(|post| match post {
-            BackgroundPost::Broadcast {
-                msg: BlockMessage::ConsensusParams(advert),
-                ..
-            } => Some(advert),
+            BackgroundPost::Broadcast { msg, .. } => match msg.as_ref() {
+                BlockMessage::ConsensusParams(advert) => Some(*advert),
+                _ => None,
+            },
             _ => None,
         })
         .expect("consensus params broadcast");
@@ -24237,10 +24338,10 @@ async fn init_collector_plan_uses_epoch_for_height() {
         .background_rx
         .try_iter()
         .find_map(|post| match post {
-            BackgroundPost::Broadcast {
-                msg: BlockMessage::ConsensusParams(advert),
-                ..
-            } => Some(advert),
+            BackgroundPost::Broadcast { msg, .. } => match msg.as_ref() {
+                BlockMessage::ConsensusParams(advert) => Some(*advert),
+                _ => None,
+            },
             _ => None,
         })
         .expect("consensus params broadcast");
@@ -24833,7 +24934,8 @@ fn consensus_block_wire_len_matches_network_message() {
     };
     let msg = BlockMessage::ProposalHint(hint);
     let origin = PeerId::from(KeyPair::random().public_key().clone());
-    let payload = crate::NetworkMessage::SumeragiBlock(Box::new(msg.clone()));
+    let payload =
+        crate::NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(msg.clone())));
     let expected = iroha_p2p::network::data_frame_wire_len(
         &origin,
         Some(&origin),
@@ -39962,10 +40064,11 @@ async fn assemble_proposal_defers_when_highest_qc_block_missing() {
     assert!(
         !posts.iter().any(|post| matches!(
             post,
-            BackgroundPost::Post {
-                msg: BlockMessage::Proposal(_) | BlockMessage::BlockCreated(_),
-                ..
-            }
+            BackgroundPost::Post { msg, .. }
+                if matches!(
+                    msg.as_ref(),
+                    BlockMessage::Proposal(_) | BlockMessage::BlockCreated(_)
+                )
         )),
         "proposal messages should not be enqueued while waiting on missing block"
     );
@@ -41248,7 +41351,7 @@ async fn pacemaker_rebroadcasts_new_view_votes_when_quorum_missing() {
         .iter()
         .filter(|post| match post {
             BackgroundPost::Post { msg, .. } => matches!(
-                msg,
+                msg.as_ref(),
                 BlockMessage::QcVote(vote)
                     if vote.phase == Phase::NewView
                         && vote.height == tracked_height
@@ -41687,7 +41790,7 @@ async fn pacemaker_rebroadcasts_cached_proposal_when_leader() {
         .iter()
         .filter(|post| match post {
             BackgroundPost::Post { msg, .. } => matches!(
-                msg,
+                msg.as_ref(),
                 BlockMessage::Proposal(proposal)
                     if proposal.header.height == height && proposal.header.view == view
             ),
@@ -41698,7 +41801,7 @@ async fn pacemaker_rebroadcasts_cached_proposal_when_leader() {
         .iter()
         .filter(|post| match post {
             BackgroundPost::Post { msg, .. } => matches!(
-                msg,
+                msg.as_ref(),
                 BlockMessage::BlockCreated(created)
                     if created.block.header().height().get() == height
                         && created.block.header().view_change_index() == view
@@ -51395,11 +51498,13 @@ fn dispatch_background_request_post_enqueues() {
     let peer = PeerId::from(KeyPair::random().public_key().clone());
     let request = BackgroundRequest::Post {
         peer: peer.clone(),
-        msg: BlockMessage::ConsensusParams(super::message::ConsensusParamsAdvert {
-            collectors_k: 1,
-            redundant_send_r: 1,
-            membership: None,
-        }),
+        msg: wire(BlockMessage::ConsensusParams(
+            super::message::ConsensusParamsAdvert {
+                collectors_k: 1,
+                redundant_send_r: 1,
+                membership: None,
+            },
+        )),
     };
 
     assert!(dispatch_background_request(Some(&tx), request, &telemetry).is_ok());
@@ -51416,11 +51521,13 @@ fn dispatch_background_request_full_returns_err() {
 
     let (tx, _rx) = mpsc::sync_channel(1);
     tx.send(BackgroundPost::Broadcast {
-        msg: BlockMessage::ConsensusParams(super::message::ConsensusParamsAdvert {
-            collectors_k: 1,
-            redundant_send_r: 1,
-            membership: None,
-        }),
+        msg: wire(BlockMessage::ConsensusParams(
+            super::message::ConsensusParamsAdvert {
+                collectors_k: 1,
+                redundant_send_r: 1,
+                membership: None,
+            },
+        )),
         enqueued_at: Instant::now(),
     })
     .expect("prefill background queue");
@@ -51429,11 +51536,13 @@ fn dispatch_background_request_full_returns_err() {
     let peer = PeerId::from(KeyPair::random().public_key().clone());
     let request = BackgroundRequest::Post {
         peer,
-        msg: BlockMessage::ConsensusParams(super::message::ConsensusParamsAdvert {
-            collectors_k: 1,
-            redundant_send_r: 1,
-            membership: None,
-        }),
+        msg: wire(BlockMessage::ConsensusParams(
+            super::message::ConsensusParamsAdvert {
+                collectors_k: 1,
+                redundant_send_r: 1,
+                membership: None,
+            },
+        )),
     };
 
     let result = dispatch_background_request(Some(&tx), request, &telemetry);
@@ -51454,11 +51563,13 @@ fn dispatch_background_request_rbc_chunk_returns_err_when_full() {
 
     let (tx, _rx) = mpsc::sync_channel(1);
     tx.send(BackgroundPost::Broadcast {
-        msg: BlockMessage::ConsensusParams(super::message::ConsensusParamsAdvert {
-            collectors_k: 1,
-            redundant_send_r: 1,
-            membership: None,
-        }),
+        msg: wire(BlockMessage::ConsensusParams(
+            super::message::ConsensusParamsAdvert {
+                collectors_k: 1,
+                redundant_send_r: 1,
+                membership: None,
+            },
+        )),
         enqueued_at: Instant::now(),
     })
     .expect("prefill background queue");
@@ -51468,7 +51579,7 @@ fn dispatch_background_request_rbc_chunk_returns_err_when_full() {
     let chunk = sample_chunk_with_len(0, 4);
     let request = BackgroundRequest::Post {
         peer,
-        msg: BlockMessage::RbcChunk(chunk),
+        msg: wire(BlockMessage::RbcChunk(chunk)),
     };
 
     let result = dispatch_background_request(Some(&tx), request, &telemetry);
@@ -51498,11 +51609,13 @@ fn dispatch_background_request_post_enqueues() {
     let peer = PeerId::from(KeyPair::random().public_key().clone());
     let request = BackgroundRequest::Post {
         peer: peer.clone(),
-        msg: BlockMessage::ConsensusParams(super::message::ConsensusParamsAdvert {
-            collectors_k: 1,
-            redundant_send_r: 1,
-            membership: None,
-        }),
+        msg: wire(BlockMessage::ConsensusParams(
+            super::message::ConsensusParamsAdvert {
+                collectors_k: 1,
+                redundant_send_r: 1,
+                membership: None,
+            },
+        )),
     };
 
     assert!(dispatch_background_request(Some(&tx), request).is_ok());
@@ -51519,22 +51632,26 @@ fn dispatch_background_request_full_returns_err() {
 
     let (tx, _rx) = mpsc::sync_channel(1);
     tx.send(BackgroundPost::Broadcast {
-        msg: BlockMessage::ConsensusParams(super::message::ConsensusParamsAdvert {
-            collectors_k: 1,
-            redundant_send_r: 1,
-            membership: None,
-        }),
+        msg: wire(BlockMessage::ConsensusParams(
+            super::message::ConsensusParamsAdvert {
+                collectors_k: 1,
+                redundant_send_r: 1,
+                membership: None,
+            },
+        )),
         enqueued_at: Instant::now(),
     })
     .expect("prefill background queue");
     let peer = PeerId::from(KeyPair::random().public_key().clone());
     let request = BackgroundRequest::Post {
         peer,
-        msg: BlockMessage::ConsensusParams(super::message::ConsensusParamsAdvert {
-            collectors_k: 1,
-            redundant_send_r: 1,
-            membership: None,
-        }),
+        msg: wire(BlockMessage::ConsensusParams(
+            super::message::ConsensusParamsAdvert {
+                collectors_k: 1,
+                redundant_send_r: 1,
+                membership: None,
+            },
+        )),
     };
 
     let result = dispatch_background_request(Some(&tx), request);
@@ -51548,11 +51665,13 @@ fn dispatch_background_request_rbc_chunk_returns_err_when_full() {
 
     let (tx, _rx) = mpsc::sync_channel(1);
     tx.send(BackgroundPost::Broadcast {
-        msg: BlockMessage::ConsensusParams(super::message::ConsensusParamsAdvert {
-            collectors_k: 1,
-            redundant_send_r: 1,
-            membership: None,
-        }),
+        msg: wire(BlockMessage::ConsensusParams(
+            super::message::ConsensusParamsAdvert {
+                collectors_k: 1,
+                redundant_send_r: 1,
+                membership: None,
+            },
+        )),
         enqueued_at: Instant::now(),
     })
     .expect("prefill background queue");
@@ -51560,7 +51679,7 @@ fn dispatch_background_request_rbc_chunk_returns_err_when_full() {
     let chunk = sample_chunk_with_len(0, 4);
     let request = BackgroundRequest::Post {
         peer,
-        msg: BlockMessage::RbcChunk(chunk),
+        msg: wire(BlockMessage::RbcChunk(chunk)),
     };
 
     let result = dispatch_background_request(Some(&tx), request);
@@ -51597,7 +51716,7 @@ async fn precommit_vote_broadcast_uses_background_queue() {
     );
     vote.bls_sig = signature.payload().to_vec();
 
-    let msg = BlockMessage::QcVote(vote);
+    let msg = wire(BlockMessage::QcVote(vote));
     harness
         .actor
         .schedule_background(BackgroundRequest::Broadcast { msg });
@@ -51606,10 +51725,8 @@ async fn precommit_vote_broadcast_uses_background_queue() {
     assert!(
         matches!(
             queued,
-            Some(BackgroundPost::Broadcast {
-                msg: BlockMessage::QcVote(_),
-                ..
-            })
+            Some(BackgroundPost::Broadcast { msg, .. })
+                if matches!(msg.as_ref(), BlockMessage::QcVote(_))
         ),
         "precommit votes should be queued for background posting"
     );
@@ -51647,7 +51764,7 @@ async fn qc_vote_post_bypasses_background_queue() {
     );
     vote.bls_sig = signature.payload().to_vec();
 
-    let msg = BlockMessage::QcVote(vote);
+    let msg = wire(BlockMessage::QcVote(vote));
     let peer = PeerId::from(KeyPair::random().public_key().clone());
     harness
         .actor
@@ -51694,7 +51811,7 @@ async fn background_posts_dispatch_inline_when_worker_disabled() {
     );
     vote.bls_sig = signature.payload().to_vec();
 
-    let msg = BlockMessage::QcVote(vote);
+    let msg = wire(BlockMessage::QcVote(vote));
     harness
         .actor
         .schedule_background(BackgroundRequest::Broadcast { msg });
@@ -51716,7 +51833,7 @@ async fn proposal_broadcast_bypasses_background_queue() {
 
     let parent = sample_block(1, 0, None).hash();
     let proposal = sample_proposal(parent, 2, 0);
-    let msg = BlockMessage::Proposal(proposal);
+    let msg = wire(BlockMessage::Proposal(proposal));
     harness
         .actor
         .schedule_background(BackgroundRequest::Broadcast { msg });
@@ -51737,7 +51854,9 @@ async fn block_created_broadcast_bypasses_background_queue() {
     let _ = harness.background_rx.try_iter().collect::<Vec<_>>();
 
     let block = sample_block(1, 0, None);
-    let msg = BlockMessage::BlockCreated(super::message::BlockCreated { block });
+    let msg = wire(BlockMessage::BlockCreated(super::message::BlockCreated {
+        block,
+    }));
     harness
         .actor
         .schedule_background(BackgroundRequest::Broadcast { msg });
@@ -51776,7 +51895,7 @@ async fn rbc_init_broadcast_bypasses_background_queue() {
         block_header,
         leader_signature,
     };
-    let msg = BlockMessage::RbcInit(init);
+    let msg = wire(BlockMessage::RbcInit(init));
     harness
         .actor
         .schedule_background(BackgroundRequest::Broadcast { msg });
@@ -51797,7 +51916,7 @@ async fn rbc_chunk_post_bypasses_background_queue() {
     let _ = harness.background_rx.try_iter().collect::<Vec<_>>();
 
     let peer = harness.actor.common_config.peer.id().clone();
-    let msg = BlockMessage::RbcChunk(sample_chunk_with_len(0, 8));
+    let msg = wire(BlockMessage::RbcChunk(sample_chunk_with_len(0, 8)));
     harness
         .actor
         .schedule_background(BackgroundRequest::Post { peer, msg });
@@ -51829,7 +51948,7 @@ async fn rbc_ready_post_bypasses_background_queue() {
         signature: vec![0xAA; 64],
     };
     let peer = harness.actor.common_config.peer.id().clone();
-    let msg = BlockMessage::RbcReady(ready);
+    let msg = wire(BlockMessage::RbcReady(ready));
     harness
         .actor
         .schedule_background(BackgroundRequest::Post { peer, msg });
@@ -51867,7 +51986,7 @@ async fn rbc_deliver_post_bypasses_background_queue() {
         ready_signatures: vec![ready_signature],
     };
     let peer = harness.actor.common_config.peer.id().clone();
-    let msg = BlockMessage::RbcDeliver(deliver);
+    let msg = wire(BlockMessage::RbcDeliver(deliver));
     harness
         .actor
         .schedule_background(BackgroundRequest::Post { peer, msg });
@@ -54207,7 +54326,7 @@ async fn reschedule_stale_pending_blocks_targets_snapshot_roster() {
         let BackgroundPost::Post { peer, msg, .. } = post else {
             continue;
         };
-        if let BlockMessage::BlockCreated(created) = msg {
+        if let BlockMessage::BlockCreated(created) = msg.as_ref() {
             if created.block.hash() == block_hash {
                 targets.insert(peer);
             }

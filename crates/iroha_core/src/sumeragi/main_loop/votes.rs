@@ -546,6 +546,31 @@ impl Actor {
             stale_view,
             pops,
         };
+        let cache_key = super::VoteVerifyCacheKey::from_vote(&vote);
+        if self
+            .subsystems
+            .vote_verify
+            .verified_cache
+            .contains(&cache_key)
+        {
+            let chain_id = self.common_config.chain.clone();
+            let evidence_context = super::evidence::EvidenceValidationContext {
+                topology: &context.topology,
+                chain_id: &chain_id,
+                mode_tag,
+                prf_seed,
+            };
+            if self.validate_and_record_vote_with_signature_result(
+                &vote,
+                context.signature_topology.as_ref(),
+                &evidence_context,
+                mode_tag,
+                Some(Ok(())),
+            ) {
+                self.apply_validated_vote(vote, context);
+            }
+            return;
+        }
         if self.try_dispatch_vote_verification(&vote, &context) {
             return;
         }
@@ -850,6 +875,10 @@ impl Actor {
             .retain(|(_, _, height, view, _), _| should_keep(*height, *view));
         self.qc_signer_tally
             .retain(|(_, _, height, view, _), _| should_keep(*height, *view));
+        self.subsystems
+            .qc_verify
+            .verified_cache
+            .retain(|key| should_keep(key.key.height, key.key.view));
         self.vote_roster_cache
             .retain(|_, entry| should_keep(entry.height, entry.view));
         self.deferred_qcs
@@ -870,6 +899,10 @@ impl Actor {
             .vote_verify
             .signature_topology_cache
             .retain(|key, _| should_keep(key.height, key.view));
+        self.subsystems
+            .vote_verify
+            .verified_cache
+            .retain(|key| should_keep(key.key.height, key.key.view));
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1415,6 +1448,12 @@ impl Actor {
                 mode_tag,
             )
         });
+        if signature_result.is_ok() {
+            self.subsystems
+                .vote_verify
+                .verified_cache
+                .insert(super::VoteVerifyCacheKey::from_vote(vote));
+        }
         match signature_result {
             Ok(()) => {}
             Err(err) => {

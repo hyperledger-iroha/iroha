@@ -264,6 +264,36 @@ pub mod codec {
         LAST_ENCODE_FLAGS.with(|cell| cell.set(Some(flags)));
     }
 
+    struct CountingWriter<'a, W: Write> {
+        inner: &'a mut W,
+        bytes_written: usize,
+    }
+
+    impl<'a, W: Write> CountingWriter<'a, W> {
+        fn new(inner: &'a mut W) -> Self {
+            Self {
+                inner,
+                bytes_written: 0,
+            }
+        }
+
+        fn bytes_written(&self) -> usize {
+            self.bytes_written
+        }
+    }
+
+    impl<W: Write> Write for CountingWriter<'_, W> {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            let written = self.inner.write(buf)?;
+            self.bytes_written = self.bytes_written.saturating_add(written);
+            Ok(written)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.inner.flush()
+        }
+    }
+
     /// Encode values into bytes using Norito.
     pub trait Encode: NoritoSerialize + Sized {
         /// Encode `self` into a new `Vec<u8>` without compression.
@@ -275,8 +305,13 @@ pub mod codec {
 
         /// Encode `self` into the given writer without compression.
         fn encode_to<W: Write>(&self, writer: &mut W) {
-            let bytes = encode_adaptive(self);
-            writer.write_all(&bytes).expect("encoding should not fail");
+            encode_adaptive_into(self, writer).expect("encoding should not fail");
+        }
+
+        /// Return the encoded length for `self` without allocating a buffer.
+        fn encoded_len(&self) -> usize {
+            let mut sink = std::io::sink();
+            encode_adaptive_into(self, &mut sink).expect("encoding should not fail")
         }
     }
 
@@ -416,6 +451,128 @@ pub mod codec {
         store_last_encode_flags(final_flags);
         core::record_last_header_flags(final_flags);
         payload
+    }
+
+    /// Bare encode into the provided writer using the fixed v1 layout flags.
+    ///
+    /// Returns the number of payload bytes written.
+    pub fn encode_adaptive_into<T: NoritoSerialize, W: Write>(
+        value: &T,
+        writer: &mut W,
+    ) -> Result<usize, Error> {
+        let encode_guard = core::EncodeContextGuard::enter();
+        let base: u8 = core::default_encode_flags();
+        let _disable_packed_struct = packed_struct_disabled();
+        let flags = base;
+        #[cfg(debug_assertions)]
+        if crate::debug_trace_enabled() {
+            eprintln!("norito.codec.encode_adaptive_into: flags=0x{flags:02x}");
+        }
+
+        #[cfg(feature = "adaptive-telemetry")]
+        let __t0 = std::time::Instant::now();
+        let mut counting = CountingWriter::new(writer);
+        {
+            let _fg = core::DecodeFlagsGuard::enter(flags);
+            NoritoSerialize::serialize(value, &mut counting).expect("encode pass 1");
+        }
+        #[cfg(feature = "adaptive-telemetry")]
+        let __pass1_ns = __t0.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+        #[cfg(not(feature = "adaptive-telemetry"))]
+        let __pass1_ns: u64 = 0;
+
+        let payload_len = counting.bytes_written();
+        let mut final_flags = flags;
+        let fixed_offsets_used = core::fixed_offsets_used();
+        let field_bitset_used = core::field_bitset_used();
+        let compact_len_used = core::compact_len_used();
+
+        {
+            telemetry::record(false, payload_len, payload_len, __pass1_ns, 0);
+            #[cfg(feature = "adaptive-telemetry-log")]
+            eprintln!(
+                "norito.codec.adapt: reencode=0 len={} pass1_ns={}",
+                payload_len, __pass1_ns
+            );
+        }
+
+        drop(encode_guard);
+
+        if field_bitset_used {
+            final_flags |= core::header_flags::FIELD_BITSET;
+        } else {
+            final_flags &= !core::header_flags::FIELD_BITSET;
+        }
+        if compact_len_used {
+            final_flags |= core::header_flags::COMPACT_LEN;
+        } else {
+            final_flags &= !core::header_flags::COMPACT_LEN;
+        }
+        let packed_seq_used = fixed_offsets_used;
+        if packed_seq_used {
+            final_flags |= core::header_flags::PACKED_SEQ;
+        } else {
+            final_flags &= !core::header_flags::PACKED_SEQ;
+        }
+        #[cfg(debug_assertions)]
+        if crate::debug_trace_enabled() {
+            eprintln!("norito.codec.encode_adaptive_into: final_flags=0x{final_flags:02x}");
+        }
+        store_last_encode_flags(final_flags);
+        core::record_last_header_flags(final_flags);
+        Ok(payload_len)
+    }
+
+    #[cfg(test)]
+    mod encode_tests {
+        use super::Encode;
+        use crate::NoritoSerialize;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        static HINT_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+        #[derive(Clone, Copy)]
+        struct Hinted(u8);
+
+        impl NoritoSerialize for Hinted {
+            fn serialize<W: std::io::Write>(&self, mut writer: W) -> Result<(), crate::Error> {
+                writer.write_all(&[self.0])?;
+                Ok(())
+            }
+
+            fn encoded_len_hint(&self) -> Option<usize> {
+                HINT_CALLS.fetch_add(1, Ordering::Relaxed);
+                Some(1)
+            }
+
+            fn encoded_len_exact(&self) -> Option<usize> {
+                None
+            }
+        }
+
+        #[test]
+        fn encode_to_matches_encode() {
+            let value = vec![1u8, 2, 3, 4, 5];
+            let bytes = value.encode();
+            let mut out = Vec::new();
+            value.encode_to(&mut out);
+            assert_eq!(bytes, out);
+        }
+
+        #[test]
+        fn encoded_len_matches_encoded_bytes() {
+            let value = (42u32, vec![7u8, 8, 9]);
+            let bytes = value.encode();
+            assert_eq!(value.encoded_len(), bytes.len());
+        }
+
+        #[test]
+        fn seq_encodes_with_len_hints() {
+            HINT_CALLS.store(0, Ordering::Relaxed);
+            let items = vec![Hinted(1), Hinted(2), Hinted(3)];
+            let _ = items.encode();
+            assert!(HINT_CALLS.load(Ordering::Relaxed) > 0);
+        }
     }
 
     /// Encode `value` and return both the bare payload and the exact header flags required
@@ -8764,6 +8921,19 @@ thread_local! {
     static DECODE_PANIC_DEPTH: Cell<u32> = const { Cell::new(0) };
 }
 
+/// Returns true when a Norito decode is running under panic suppression.
+#[must_use]
+pub fn decode_panic_suppressed() -> bool {
+    #[cfg(feature = "strict-safe")]
+    {
+        return DECODE_PANIC_DEPTH.with(|depth| depth.get() > 0);
+    }
+    #[cfg(not(feature = "strict-safe"))]
+    {
+        false
+    }
+}
+
 #[cfg(all(test, feature = "strict-safe"))]
 thread_local! {
     static SUPPRESSED_DECODE_PANICS: Cell<usize> = const { Cell::new(0) };
@@ -8790,7 +8960,9 @@ fn install_decode_panic_hook() {
 
 #[cfg(all(test, feature = "strict-safe"))]
 mod guarded_tests {
-    use super::{Error, SUPPRESSED_DECODE_PANICS, guarded_try_deserialize};
+    use super::{
+        Error, SUPPRESSED_DECODE_PANICS, decode_panic_suppressed, guarded_try_deserialize,
+    };
 
     #[test]
     fn guarded_try_deserialize_catches_panics() {
@@ -8804,6 +8976,17 @@ mod guarded_tests {
             1,
             "panic hook suppression counter should increment"
         );
+    }
+
+    #[test]
+    fn decode_panic_suppressed_tracks_scope() {
+        assert!(!decode_panic_suppressed());
+        let result = guarded_try_deserialize::<(), _>(|| -> Result<(), Error> {
+            assert!(decode_panic_suppressed());
+            Ok(())
+        });
+        assert!(result.is_ok());
+        assert!(!decode_panic_suppressed());
     }
 }
 

@@ -5,11 +5,14 @@ use std::sync::Arc;
 
 use iroha_logger::prelude::*;
 
+use crate::sumeragi::message::BlockMessageWire;
+
 use super::message::FetchPendingBlockPriority;
 use super::*;
 
 impl Actor {
-    fn enqueue_fetch_pending_block_response(&mut self, peer: PeerId, mut msg: BlockMessage) {
+    fn enqueue_fetch_pending_block_response(&mut self, peer: PeerId, msg: BlockMessage) {
+        let mut msg = BlockMessageWire::new(msg);
         if !self.prepare_background_block_message(&mut msg) {
             return;
         }
@@ -36,10 +39,11 @@ impl Actor {
     fn dispatch_fetch_pending_block_response(
         &mut self,
         peer: PeerId,
-        mut msg: BlockMessage,
+        msg: BlockMessage,
         priority: FetchPendingBlockPriority,
     ) {
         if matches!(priority, FetchPendingBlockPriority::Consensus) {
+            let mut msg = BlockMessageWire::new(msg);
             if !self.prepare_background_block_message(&mut msg) {
                 return;
             }
@@ -79,6 +83,11 @@ impl Actor {
             }
             BlockMessage::RbcInit(init) => (init.block_hash, init.height, init.view),
             BlockMessage::RbcChunk(chunk) => (chunk.block_hash, chunk.height, chunk.view),
+            BlockMessage::RbcChunkCompact(chunk) => (
+                chunk.block_hash,
+                u64::from(chunk.height),
+                u64::from(chunk.view),
+            ),
             _ => return priority,
         };
         if highest.subject_block_hash == block_hash
@@ -1579,7 +1588,7 @@ impl Actor {
                     for peer in targets {
                         self.schedule_background(BackgroundRequest::Post {
                             peer,
-                            msg: msg.clone(),
+                            msg: msg.clone().into(),
                         });
                     }
                     info!(

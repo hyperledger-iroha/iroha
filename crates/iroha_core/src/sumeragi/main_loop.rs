@@ -648,6 +648,42 @@ impl VoteVerifyKey {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct VoteVerifyCacheKey {
+    key: VoteVerifyKey,
+    signature_hash: Hash,
+}
+
+impl VoteVerifyCacheKey {
+    fn from_vote(vote: &crate::sumeragi::consensus::Vote) -> Self {
+        Self {
+            key: VoteVerifyKey::from_vote(vote),
+            signature_hash: Hash::new(&vote.bls_sig),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct QcVerifyCacheKey {
+    key: QcVerifyKey,
+    validator_set_hash: HashOf<Vec<PeerId>>,
+    validator_set_hash_version: u16,
+    signers_bitmap_hash: Hash,
+    aggregate_signature_hash: Hash,
+}
+
+impl QcVerifyCacheKey {
+    fn from_qc(qc: &Qc) -> Self {
+        Self {
+            key: QcVerifyKey::from_qc(qc),
+            validator_set_hash: qc.validator_set_hash,
+            validator_set_hash_version: qc.validator_set_hash_version,
+            signers_bitmap_hash: Hash::new(&qc.aggregate.signers_bitmap),
+            aggregate_signature_hash: Hash::new(&qc.aggregate.bls_aggregate_signature),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct VoteProcessingContext {
     topology: super::network_topology::Topology,
@@ -2230,6 +2266,7 @@ fn validate_qc_against_votes(
     if !aggregate_ok {
         return Err(QcValidationError::AggregateMismatch);
     }
+    let skip_vote_sig_check = matches!(consensus_mode, ConsensusMode::Npos) && aggregate_ok;
     let mut missing = 0usize;
 
     for signer in &parsed_signers.voting {
@@ -2250,7 +2287,9 @@ fn validate_qc_against_votes(
         if vote.block_hash != qc.subject_block_hash {
             return Err(QcValidationError::SubjectMismatch { signer: *signer });
         }
-        if !vote_signature_valid(vote, &signature_topology, chain_id, mode_tag) {
+        if !skip_vote_sig_check
+            && !vote_signature_valid(vote, &signature_topology, chain_id, mode_tag)
+        {
             return Err(QcValidationError::InvalidSignature { signer: *signer });
         }
         if let Some(qc_highest) = qc_highest {
@@ -2904,8 +2943,12 @@ fn send_missing_block_request(
         view,
         priority,
     };
-    let message = BlockMessage::FetchPendingBlock(request);
-    let post = crate::NetworkMessage::SumeragiBlock(Box::new(message));
+    let message = Arc::new(BlockMessage::FetchPendingBlock(request));
+    let encoded = Arc::new(BlockMessageWire::encode_message(message.as_ref()));
+    let post = crate::NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::with_encoded(
+        Arc::clone(&message),
+        Arc::clone(&encoded),
+    )));
     for peer in targets {
         network.post(Post {
             data: post.clone(),
@@ -3628,8 +3671,19 @@ fn consensus_block_wire_len(origin: &PeerId, msg: &BlockMessage) -> usize {
     consensus_block_wire_len_owned(origin, msg.clone())
 }
 
+fn consensus_block_wire_len_wire(origin: &PeerId, msg: &BlockMessageWire) -> usize {
+    let payload = NetworkMessage::SumeragiBlock(Box::new(msg.clone()));
+    data_frame_wire_len(
+        origin,
+        Some(origin),
+        iroha_config::parameters::defaults::network::RELAY_TTL,
+        Priority::High,
+        &payload,
+    )
+}
+
 fn consensus_block_wire_len_owned(origin: &PeerId, msg: BlockMessage) -> usize {
-    let payload = NetworkMessage::SumeragiBlock(Box::new(msg));
+    let payload = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(msg)));
     data_frame_wire_len(
         origin,
         Some(origin),
@@ -3653,6 +3707,7 @@ fn rbc_chunk_payload_cap(origin: &PeerId, payload_frame_cap: usize) -> usize {
     if base_len >= payload_frame_cap {
         return 0;
     }
+    // TODO: cache a serialized BlockMessage header for chunk sizing to avoid re-encoding per step.
     let mut low = 0usize;
     let mut high = payload_frame_cap - base_len;
     while low < high {
@@ -4925,9 +4980,15 @@ struct RbcState {
 
 #[derive(Debug)]
 struct RbcOutboundChunks {
-    chunks: Vec<crate::sumeragi::consensus::RbcChunk>,
+    chunks: Vec<OutboundRbcChunk>,
     cursor: usize,
     targets: Vec<(usize, PeerId)>,
+}
+
+#[derive(Debug, Clone)]
+struct OutboundRbcChunk {
+    message: Arc<BlockMessage>,
+    encoded: Arc<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -5078,6 +5139,7 @@ struct QcVerifyState {
     work_txs: Vec<mpsc::SyncSender<qc_verify::QcVerifyWork>>,
     result_rx: Option<mpsc::Receiver<qc_verify::QcVerifyResult>>,
     inflight: BTreeMap<QcVerifyKey, QcVerifyInFlight>,
+    verified_cache: BTreeSet<QcVerifyCacheKey>,
     next_id: u64,
     next_worker: usize,
 }
@@ -5088,6 +5150,7 @@ impl QcVerifyState {
             work_txs: Vec::new(),
             result_rx: None,
             inflight: BTreeMap::new(),
+            verified_cache: BTreeSet::new(),
             next_id: 0,
             next_worker: 0,
         }
@@ -5130,6 +5193,7 @@ struct VoteVerifyState {
     pop_cache: BTreeMap<HashOf<Vec<PeerId>>, Arc<BTreeMap<PublicKey, Vec<u8>>>>,
     signature_topology_cache:
         BTreeMap<SignatureTopologyCacheKey, Arc<super::network_topology::Topology>>,
+    verified_cache: BTreeSet<VoteVerifyCacheKey>,
     next_id: u64,
     next_worker: usize,
 }
@@ -5144,6 +5208,7 @@ impl VoteVerifyState {
             pending: BTreeMap::new(),
             pop_cache: BTreeMap::new(),
             signature_topology_cache: BTreeMap::new(),
+            verified_cache: BTreeSet::new(),
             next_id: 0,
             next_worker: 0,
         }
@@ -7813,7 +7878,7 @@ impl Actor {
             membership: Some(membership),
         };
         self.schedule_background(BackgroundRequest::Broadcast {
-            msg: BlockMessage::ConsensusParams(advert),
+            msg: BlockMessageWire::new(BlockMessage::ConsensusParams(advert)),
         });
     }
 
@@ -10378,6 +10443,23 @@ impl Actor {
                             None,
                         );
                     }
+                    BlockMessage::RbcChunkCompact(chunk) => {
+                        self.record_consensus_message_handling(
+                            super::status::ConsensusMessageKind::RbcChunk,
+                            super::status::ConsensusMessageOutcome::Dropped,
+                            super::status::ConsensusMessageReason::FutureWindow,
+                        );
+                        let key = Self::session_key(
+                            &chunk.block_hash,
+                            u64::from(chunk.height),
+                            u64::from(chunk.view),
+                        );
+                        self.request_missing_block_for_pending_rbc(
+                            key,
+                            "rbc_chunk_future_window",
+                            None,
+                        );
+                    }
                     BlockMessage::RbcReady(ready) => {
                         self.record_consensus_message_handling(
                             super::status::ConsensusMessageKind::RbcReady,
@@ -10437,6 +10519,9 @@ impl Actor {
             }
             BlockMessage::RbcInit(init) => self.handle_rbc_init(init, sender),
             BlockMessage::RbcChunk(chunk) => self.handle_rbc_chunk(chunk, sender),
+            BlockMessage::RbcChunkCompact(chunk) => {
+                self.handle_rbc_chunk(chunk.into_chunk(), sender)
+            }
             BlockMessage::RbcReady(ready) => self.handle_rbc_ready(ready),
             BlockMessage::RbcDeliver(deliver) => self.handle_rbc_deliver(deliver),
             BlockMessage::FetchPendingBlock(request) => self.handle_fetch_pending_block(request),
@@ -10857,6 +10942,7 @@ impl Actor {
             | BlockMessage::FetchPendingBlock(_)
             | BlockMessage::Proposal(_)
             | BlockMessage::RbcChunk(_)
+            | BlockMessage::RbcChunkCompact(_)
             | BlockMessage::RbcInit(_)
             | BlockMessage::RbcDeliver(_)
             | BlockMessage::RbcReady(_) => self.consensus_payload_frame_cap,
@@ -10870,25 +10956,33 @@ impl Actor {
         }
     }
 
-    fn prepare_background_block_message(&self, msg: &mut BlockMessage) -> bool {
+    fn prepare_background_block_message(&self, msg: &mut BlockMessageWire) -> bool {
         let origin = self.common_config.peer.id();
-        let mut wire_len = consensus_block_wire_len(origin, msg);
-        let cap = self.block_message_frame_cap(msg);
-        if let BlockMessage::BlockSyncUpdate(update) = msg {
-            if wire_len > cap {
-                if !self.trim_block_sync_update_for_frame_cap(update) {
-                    warn!(
-                        kind = Self::block_message_kind(msg),
-                        wire_len, cap, "dropping consensus message over frame cap"
+        let mut wire_len = consensus_block_wire_len_wire(origin, msg);
+        let cap = self.block_message_frame_cap(msg.as_ref());
+        if matches!(msg.as_ref(), BlockMessage::BlockSyncUpdate(_)) && wire_len > cap {
+            let update = match msg.make_mut() {
+                BlockMessage::BlockSyncUpdate(update) => update,
+                other => {
+                    debug_assert!(
+                        !matches!(other, BlockMessage::BlockSyncUpdate(_)),
+                        "BlockSyncUpdate variant should be preserved"
                     );
-                    return false;
+                    return true;
                 }
-                wire_len = consensus_block_wire_len(origin, msg);
+            };
+            if !self.trim_block_sync_update_for_frame_cap(update) {
+                warn!(
+                    kind = Self::block_message_kind(msg.as_ref()),
+                    wire_len, cap, "dropping consensus message over frame cap"
+                );
+                return false;
             }
+            wire_len = consensus_block_wire_len_wire(origin, msg);
         }
         if wire_len > cap {
             warn!(
-                kind = Self::block_message_kind(msg),
+                kind = Self::block_message_kind(msg.as_ref()),
                 wire_len, cap, "dropping consensus message over frame cap"
             );
             return false;
@@ -10918,43 +11012,22 @@ impl Actor {
             self.dispatch_background_inline(request);
             return;
         }
-        let bypass_queue = matches!(
-            &request,
-            BackgroundRequest::Post {
-                msg: BlockMessage::Proposal(_),
-                ..
-            } | BackgroundRequest::Post {
-                msg: BlockMessage::BlockCreated(_),
-                ..
-            } | BackgroundRequest::Post {
-                msg: BlockMessage::QcVote(_),
-                ..
-            } | BackgroundRequest::Post {
-                msg: BlockMessage::RbcInit(_),
-                ..
-            } | BackgroundRequest::Post {
-                msg: BlockMessage::RbcChunk(_),
-                ..
-            } | BackgroundRequest::Post {
-                msg: BlockMessage::RbcReady(_),
-                ..
-            } | BackgroundRequest::Post {
-                msg: BlockMessage::RbcDeliver(_),
-                ..
-            } | BackgroundRequest::Broadcast {
-                msg: BlockMessage::Proposal(_),
-            } | BackgroundRequest::Broadcast {
-                msg: BlockMessage::BlockCreated(_),
-            } | BackgroundRequest::Broadcast {
-                msg: BlockMessage::RbcInit(_),
-            } | BackgroundRequest::Broadcast {
-                msg: BlockMessage::RbcChunk(_),
-            } | BackgroundRequest::Broadcast {
-                msg: BlockMessage::RbcReady(_),
-            } | BackgroundRequest::Broadcast {
-                msg: BlockMessage::RbcDeliver(_),
+        let bypass_queue = match &request {
+            BackgroundRequest::Post { msg, .. } | BackgroundRequest::Broadcast { msg } => {
+                matches!(
+                    msg.as_ref(),
+                    BlockMessage::Proposal(_)
+                        | BlockMessage::BlockCreated(_)
+                        | BlockMessage::QcVote(_)
+                        | BlockMessage::RbcInit(_)
+                        | BlockMessage::RbcChunk(_)
+                        | BlockMessage::RbcChunkCompact(_)
+                        | BlockMessage::RbcReady(_)
+                        | BlockMessage::RbcDeliver(_)
+                )
             }
-        );
+            _ => false,
+        };
         if bypass_queue {
             self.dispatch_background_fallback(request);
             return;
@@ -10986,12 +11059,12 @@ impl Actor {
         let entry = match request {
             BackgroundRequest::Post { peer, msg } => BackgroundRequestLogEntry {
                 kind: BackgroundRequestLogKind::Post,
-                msg_kind: Some(Self::block_message_kind(msg)),
+                msg_kind: Some(Self::block_message_kind(msg.as_ref())),
                 peer: Some(peer.clone()),
             },
             BackgroundRequest::Broadcast { msg } => BackgroundRequestLogEntry {
                 kind: BackgroundRequestLogKind::Broadcast,
-                msg_kind: Some(Self::block_message_kind(msg)),
+                msg_kind: Some(Self::block_message_kind(msg.as_ref())),
                 peer: None,
             },
             BackgroundRequest::PostControlFlow { peer, .. } => BackgroundRequestLogEntry {
@@ -11015,11 +11088,13 @@ impl Actor {
         let enqueued_at = Instant::now();
         #[cfg(feature = "telemetry")]
         let (kind, peer_for_metrics, msg_for_metrics) = match &request {
-            BackgroundRequest::Post { peer, msg } => ("Post", Some(peer.clone()), Some(msg)),
+            BackgroundRequest::Post { peer, msg } => {
+                ("Post", Some(peer.clone()), Some(msg.as_ref()))
+            }
             BackgroundRequest::PostControlFlow { peer, .. } => {
                 ("PostControlFlow", Some(peer.clone()), None)
             }
-            BackgroundRequest::Broadcast { msg } => ("Broadcast", None, Some(msg)),
+            BackgroundRequest::Broadcast { msg } => ("Broadcast", None, Some(msg.as_ref())),
             BackgroundRequest::BroadcastControlFlow { .. } => ("BroadcastControlFlow", None, None),
         };
 
@@ -11051,7 +11126,7 @@ impl Actor {
     fn dispatch_background_fallback(&mut self, request: BackgroundRequest) {
         match request {
             BackgroundRequest::Post { peer, msg } => {
-                let priority = msg.priority();
+                let priority = msg.as_ref().priority();
                 self.network.post(iroha_p2p::Post {
                     data: NetworkMessage::SumeragiBlock(Box::new(msg)),
                     peer_id: peer,
@@ -11066,7 +11141,7 @@ impl Actor {
                 });
             }
             BackgroundRequest::Broadcast { msg } => {
-                let priority = msg.priority();
+                let priority = msg.as_ref().priority();
                 self.network.broadcast(iroha_p2p::Broadcast {
                     data: NetworkMessage::SumeragiBlock(Box::new(msg)),
                     priority,
@@ -11095,6 +11170,9 @@ impl Actor {
             BlockMessage::ExecWitness(witness) => Some((witness.height, witness.view)),
             BlockMessage::RbcInit(init) => Some((init.height, init.view)),
             BlockMessage::RbcChunk(chunk) => Some((chunk.height, chunk.view)),
+            BlockMessage::RbcChunkCompact(chunk) => {
+                Some((u64::from(chunk.height), u64::from(chunk.view)))
+            }
             BlockMessage::RbcReady(ready) => Some((ready.height, ready.view)),
             BlockMessage::RbcDeliver(deliver) => Some((deliver.height, deliver.view)),
             BlockMessage::ProposalHint(hint) => Some((hint.height, hint.view)),
@@ -11126,6 +11204,7 @@ impl Actor {
             BlockMessage::ExecWitness(_) => "ExecWitness",
             BlockMessage::RbcInit(_) => "RbcInit",
             BlockMessage::RbcChunk(_) => "RbcChunk",
+            BlockMessage::RbcChunkCompact(_) => "RbcChunk",
             BlockMessage::RbcReady(_) => "RbcReady",
             BlockMessage::RbcDeliver(_) => "RbcDeliver",
             BlockMessage::FetchPendingBlock(_) => "FetchPendingBlock",
@@ -11839,12 +11918,16 @@ impl Actor {
                     sender = forked.sender,
                     "sending conflicting RBC READY to commit topology due to debug mask"
                 );
+                let msg = Arc::new(BlockMessage::RbcReady(forked));
+                let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
                 self.schedule_background(BackgroundRequest::Broadcast {
-                    msg: BlockMessage::RbcReady(forked),
+                    msg: BlockMessageWire::with_encoded(Arc::clone(&msg), Arc::clone(&encoded)),
                 });
             }
+            let msg = Arc::new(BlockMessage::RbcReady(ready));
+            let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
             self.schedule_background(BackgroundRequest::Broadcast {
-                msg: BlockMessage::RbcReady(ready),
+                msg: BlockMessageWire::with_encoded(Arc::clone(&msg), Arc::clone(&encoded)),
             });
         }
 
@@ -11956,8 +12039,10 @@ impl Actor {
             }
         }
         for ready in readies {
+            let msg = Arc::new(BlockMessage::RbcReady(ready));
+            let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
             self.schedule_background(BackgroundRequest::Broadcast {
-                msg: BlockMessage::RbcReady(ready),
+                msg: BlockMessageWire::with_encoded(Arc::clone(&msg), Arc::clone(&encoded)),
             });
         }
         self.subsystems
@@ -12106,10 +12191,16 @@ impl Actor {
                 return false;
             }
         }
+        let mut outbound_chunks = Vec::with_capacity(chunks.len());
+        for chunk in chunks {
+            let message = Arc::new(BlockMessage::from_rbc_chunk(chunk));
+            let encoded = Arc::new(BlockMessageWire::encode_message(message.as_ref()));
+            outbound_chunks.push(OutboundRbcChunk { message, encoded });
+        }
         self.subsystems.da_rbc.rbc.outbound_chunks.insert(
             key,
             RbcOutboundChunks {
-                chunks,
+                chunks: outbound_chunks,
                 cursor: 0,
                 targets,
             },
@@ -12153,13 +12244,18 @@ impl Actor {
             "queued RBC INIT and chunk rebroadcast while awaiting READY quorum"
         );
         let local_peer_id = self.common_config.peer.id().clone();
+        let init_message = Arc::new(BlockMessage::RbcInit(init));
+        let init_encoded = Arc::new(BlockMessageWire::encode_message(init_message.as_ref()));
         for peer in &topology_peers {
             if peer == &local_peer_id {
                 continue;
             }
             self.schedule_background(BackgroundRequest::Post {
                 peer: peer.clone(),
-                msg: BlockMessage::RbcInit(init.clone()),
+                msg: BlockMessageWire::with_encoded(
+                    Arc::clone(&init_message),
+                    Arc::clone(&init_encoded),
+                ),
             });
         }
         self.subsystems
@@ -12476,8 +12572,13 @@ impl Actor {
             if delivered {
                 if self.rbc_deliver_rebroadcast_due(&key, now, ready_cooldown) {
                     if let Some(deliver) = self.build_rbc_deliver(key, &session) {
+                        let msg = Arc::new(BlockMessage::RbcDeliver(deliver));
+                        let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
                         self.schedule_background(BackgroundRequest::Broadcast {
-                            msg: BlockMessage::RbcDeliver(deliver),
+                            msg: BlockMessageWire::with_encoded(
+                                Arc::clone(&msg),
+                                Arc::clone(&encoded),
+                            ),
                         });
                         self.subsystems
                             .da_rbc
@@ -13025,8 +13126,10 @@ impl Actor {
             senders = ?ready_senders,
             "sending RBC DELIVER to commit topology after READY quorum"
         );
+        let msg = Arc::new(BlockMessage::RbcDeliver(deliver));
+        let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
         self.schedule_background(BackgroundRequest::Broadcast {
-            msg: BlockMessage::RbcDeliver(deliver),
+            msg: BlockMessageWire::with_encoded(Arc::clone(&msg), Arc::clone(&encoded)),
         });
 
         self.recover_block_from_rbc_session(key);

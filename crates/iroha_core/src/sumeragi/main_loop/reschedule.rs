@@ -388,27 +388,35 @@ impl Actor {
                         "skipping prevote-timeout rebroadcast due to relay backpressure"
                     );
                 } else {
-                    let msg = BlockMessage::BlockCreated(super::message::BlockCreated {
+                    let msg = Arc::new(BlockMessage::BlockCreated(super::message::BlockCreated {
                         block: pending.block.clone(),
-                    });
+                    }));
+                    let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
                     for peer in &commit_roster {
                         if peer == &local_peer_id {
                             continue;
                         }
                         self.schedule_background(BackgroundRequest::Post {
                             peer: peer.clone(),
-                            msg: msg.clone(),
+                            msg: BlockMessageWire::with_encoded(
+                                Arc::clone(&msg),
+                                Arc::clone(&encoded),
+                            ),
                         });
                     }
                     if let Some(qc) = qc {
-                        let msg = BlockMessage::Qc(qc.clone());
+                        let msg = Arc::new(BlockMessage::Qc(qc.clone()));
+                        let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
                         for peer in &commit_roster {
                             if peer == &local_peer_id {
                                 continue;
                             }
                             self.schedule_background(BackgroundRequest::Post {
                                 peer: peer.clone(),
-                                msg: msg.clone(),
+                                msg: BlockMessageWire::with_encoded(
+                                    Arc::clone(&msg),
+                                    Arc::clone(&encoded),
+                                ),
                             });
                         }
                     }
