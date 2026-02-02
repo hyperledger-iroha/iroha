@@ -1,6 +1,10 @@
 # Status
 
 Last update: 2026-02-02
+- Norito: packed-seq encoding now pre-reserves payload buffers using length hints, and owned payloads with exact lengths encode directly into writers; added packed-seq hint coverage.
+- Gossip: `GossipTransaction` now stores `Arc<SignedTransaction>` to avoid cloning large tx payloads during multi-peer fanout while keeping cached encoded bytes for retransmit.
+- Config/docs: raised RBC store caps/backlog soft limits and NPoS timeout defaults; templates and sumeragi docs refreshed to match.
+- Tests: `cargo test -p norito encode_seq_payloads_packed_uses_hints_and_keeps_layout -- --nocapture` (timed out after 120s; test passed before timeout); `cargo test -p iroha_core gossip_roundtrip_preserves_cached_payload -- --nocapture` (timed out during compile); `cargo fmt --all` (stable rustfmt warns about nightly-only options). Full workspace tests not run (user requested no full workspace tests).
 - Sumeragi: fix `BlockMessageWire` length hints to use the inner `BlockMessage` (avoids decode length mismatches when wrapped in `NetworkMessage`).
 - P2P/gossip: switch cached gossip transaction decode to slice-based `payload_slice_from_ptr` + `decode_field_canonical` (avoids `DecodePanic` when reusing pre-encoded gossip bytes); `BlockMessageWire` decode now uses the same slice-based path (no `unsafe`).
 - Profiling: 7-peer permissioned 100 TPS run blocked by `DecodePanic` when gossip caching enabled (repro after a single ping); fix above applied but release build for profiling binary (`cargo build --release -p irohad --features profiling-endpoint`) timed out (>20m), so re-profile still pending.
