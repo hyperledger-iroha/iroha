@@ -2829,6 +2829,17 @@ pub mod message {
                     latest_hash,
                     seen_blocks,
                 }) => {
+                    let is_registered = {
+                        let view = block_sync.state.view();
+                        view.world.peers().iter().any(|peer| peer == peer_id)
+                    };
+                    if !is_registered {
+                        debug!(
+                            requester = %peer_id,
+                            "dropping block sync request from unregistered peer"
+                        );
+                        return;
+                    }
                     if let Err(err) =
                         validate_get_blocks_after_request(prev_hash.as_ref(), latest_hash.as_ref())
                     {
@@ -3319,7 +3330,7 @@ pub mod message {
         };
 
         use iroha_config::parameters::actual::ConsensusMode;
-        use iroha_crypto::KeyPair;
+        use iroha_crypto::{Hash, KeyPair};
         use iroha_data_model::peer::{Peer, PeerId};
         use tokio::sync::oneshot;
 
@@ -3520,6 +3531,170 @@ pub mod message {
                 assert!(
                     block_sync.seen_blocks.is_empty(),
                     "uncommitted blocks should not be marked seen"
+                );
+            });
+        }
+
+        #[test]
+        fn get_blocks_after_drops_unregistered_peer_requests() {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .expect("tokio runtime");
+
+            runtime.block_on(async {
+                let (sumeragi, _block_rx) = test_sumeragi_handle(1);
+                let kura = Kura::blank_kura_for_testing();
+                let state = State::new_for_testing(
+                    World::new(),
+                    Arc::clone(&kura),
+                    LiveQueryStore::start_test(),
+                );
+
+                let registered_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                {
+                    let mut peers_block = state.world.peers.block();
+                    let mut peers_tx = peers_block.transaction();
+                    peers_tx.push(registered_peer_id);
+                    peers_tx.apply();
+                    peers_block.commit();
+                }
+
+                let state = Arc::new(state);
+                let local_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let peer = Peer::new(
+                    "127.0.0.1:0".parse().expect("valid socket address"),
+                    local_peer_id,
+                );
+
+                let mut block_sync = BlockSynchronizer {
+                    sumeragi,
+                    kura,
+                    peer,
+                    gossip_period: Duration::from_secs(1),
+                    gossip_max_period: Duration::from_secs(1),
+                    gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
+                    gossip_backoff: Duration::from_secs(1),
+                    gossip_next_deadline: Instant::now(),
+                    network: crate::IrohaNetwork::closed_for_tests(),
+                    relay_ttl: 1,
+                    block_sync_frame_cap: 1024,
+                    state,
+                    telemetry: None,
+                    seen_blocks: BTreeSet::new(),
+                    unknown_prev_hashes: BTreeMap::new(),
+                    request_tracker: BlockSyncRequestTracker::new(block_sync_request_ttl(
+                        Duration::from_secs(1),
+                        Duration::from_secs(1),
+                    )),
+                    latest_height: 0,
+                    last_peers: BTreeSet::new(),
+                    last_drop_count: 0,
+                    last_drop_at: None,
+                    fallback_consensus_mode: ConsensusMode::Permissioned,
+                };
+
+                let unregistered_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let prev_hash =
+                    HashOf::from_untyped_unchecked(Hash::prehashed([0x11; Hash::LENGTH]));
+                let latest_hash =
+                    HashOf::from_untyped_unchecked(Hash::prehashed([0x22; Hash::LENGTH]));
+                let msg = message::Message::GetBlocksAfter(message::GetBlocksAfter::new(
+                    unregistered_peer_id,
+                    Some(prev_hash),
+                    Some(latest_hash),
+                    BTreeSet::new(),
+                ));
+
+                msg.handle_message(&mut block_sync).await;
+
+                assert!(block_sync.unknown_prev_hashes.is_empty());
+                assert!(block_sync.request_tracker.pending.is_empty());
+            });
+        }
+
+        #[test]
+        fn get_blocks_after_allows_registered_peer_requests() {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .expect("tokio runtime");
+
+            runtime.block_on(async {
+                let (sumeragi, _block_rx) = test_sumeragi_handle(1);
+                let kura = Kura::blank_kura_for_testing();
+                let state = State::new_for_testing(
+                    World::new(),
+                    Arc::clone(&kura),
+                    LiveQueryStore::start_test(),
+                );
+
+                let registered_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                {
+                    let mut peers_block = state.world.peers.block();
+                    let mut peers_tx = peers_block.transaction();
+                    peers_tx.push(registered_peer_id.clone());
+                    peers_tx.apply();
+                    peers_block.commit();
+                }
+
+                let state = Arc::new(state);
+                let local_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let peer = Peer::new(
+                    "127.0.0.1:0".parse().expect("valid socket address"),
+                    local_peer_id,
+                );
+
+                let mut block_sync = BlockSynchronizer {
+                    sumeragi,
+                    kura,
+                    peer,
+                    gossip_period: Duration::from_secs(1),
+                    gossip_max_period: Duration::from_secs(1),
+                    gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
+                    gossip_backoff: Duration::from_secs(1),
+                    gossip_next_deadline: Instant::now(),
+                    network: crate::IrohaNetwork::closed_for_tests(),
+                    relay_ttl: 1,
+                    block_sync_frame_cap: 1024,
+                    state,
+                    telemetry: None,
+                    seen_blocks: BTreeSet::new(),
+                    unknown_prev_hashes: BTreeMap::new(),
+                    request_tracker: BlockSyncRequestTracker::new(block_sync_request_ttl(
+                        Duration::from_secs(1),
+                        Duration::from_secs(1),
+                    )),
+                    latest_height: 0,
+                    last_peers: BTreeSet::new(),
+                    last_drop_count: 0,
+                    last_drop_at: None,
+                    fallback_consensus_mode: ConsensusMode::Permissioned,
+                };
+
+                let prev_hash =
+                    HashOf::from_untyped_unchecked(Hash::prehashed([0x33; Hash::LENGTH]));
+                let latest_hash =
+                    HashOf::from_untyped_unchecked(Hash::prehashed([0x44; Hash::LENGTH]));
+                let msg = message::Message::GetBlocksAfter(message::GetBlocksAfter::new(
+                    registered_peer_id.clone(),
+                    Some(prev_hash),
+                    Some(latest_hash),
+                    BTreeSet::new(),
+                ));
+
+                msg.handle_message(&mut block_sync).await;
+
+                assert!(
+                    block_sync
+                        .unknown_prev_hashes
+                        .contains_key(&registered_peer_id)
+                );
+                assert!(
+                    block_sync
+                        .request_tracker
+                        .pending
+                        .contains_key(&registered_peer_id)
                 );
             });
         }

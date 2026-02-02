@@ -2493,8 +2493,7 @@ mod tests {
         let mut members = Vec::with_capacity(member_count);
         for _ in 0..member_count {
             let key = KeyPair::random();
-            let member =
-                MultisigMember::new(key.public_key().clone(), 1).expect("multisig member");
+            let member = MultisigMember::new(key.public_key().clone(), 1).expect("multisig member");
             members.push(member);
         }
         let policy = MultisigPolicy::new(1, members).expect("multisig policy");
