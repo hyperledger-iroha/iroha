@@ -1,6 +1,8 @@
 # Status
 
-Last update: 2026-02-01
+Last update: 2026-02-02
+- Sumeragi: block-sync fetch-pending responses now respect `sumeragi.debug.disable_background_worker` and dispatch inline when the worker is disabled; added unit coverage. Time-trigger integration scenario now drives one extra block to cover end-exclusive schedule boundaries.
+- Tests: not run (not requested).
 - Block sync: drop `GetBlocksAfter` requests from peers no longer in the world roster so unregistered peers stop syncing past removal; added runtime coverage for registered vs unregistered requests.
 - Tests: `cargo test -p iroha_core get_blocks_after_ -- --nocapture` (ok; warnings about unused `mut` in `crates/iroha_core/src/kura.rs`, `crates/iroha_core/src/smartcontracts/isi/staking.rs`, `crates/iroha_core/src/state.rs`). `cargo test --workspace` timed out after 20m while running tests (last seen `integration_tests` unittests). 
 - Formatting: `cargo fmt --all` (stable rustfmt warns about nightly-only options).
