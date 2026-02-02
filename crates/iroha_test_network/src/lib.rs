@@ -5509,8 +5509,8 @@ impl NetworkPeer {
 
     /// Best-effort block height based on the latest in-memory observation and disk layout.
     ///
-    /// Prefer in-memory updates from the block watcher, but fall back to indexed pipeline data
-    /// if HTTP status polling is unavailable.
+    /// Prefer in-memory updates from the block watcher, then committed block hashes on disk.
+    /// Pipeline sidecar indices are only used when no hashes are available.
     pub fn best_effort_block_height(&self) -> Option<BlockHeight> {
         let observed = *self.block_height.borrow();
         let current_total = observed.map(|height| height.total).unwrap_or(0);
@@ -6621,32 +6621,33 @@ impl BlockHeight {
 }
 
 fn detect_block_height_from_storage(storage_dir: &Path, current_total: u64) -> Option<BlockHeight> {
-    let mut max_height = current_total;
+    let mut pipeline_height: Option<u64> = None;
 
-    // Prefer pipeline markers when present.
+    // Pipeline markers can advance ahead of committed blocks; only trust them if no hashes exist.
     for pipeline_dir in pipeline_dirs(storage_dir) {
-        if let Some(height) = NetworkPeer::pipeline_height_from_index(&pipeline_dir)
-            && height > max_height
-        {
-            max_height = height;
+        if let Some(height) = NetworkPeer::pipeline_height_from_index(&pipeline_dir) {
+            pipeline_height = Some(pipeline_height.map_or(height, |prev| prev.max(height)));
         }
     }
 
-    // Fall back to the on-disk block hashes (current Kura layout) when no pipeline
-    // markers are present. hashes.len() / 32 == total blocks stored.
-    if max_height == current_total
-        && let Ok(entries) = fs::read_dir(storage_dir.join("blocks"))
-    {
+    let mut hashes_height: Option<u64> = None;
+    let mut saw_hashes = false;
+    if let Ok(entries) = fs::read_dir(storage_dir.join("blocks")) {
         for entry in entries.flatten() {
             let hashes_path = entry.path().join("blocks.hashes");
             if let Ok(meta) = fs::metadata(&hashes_path) {
+                saw_hashes = true;
                 let blocks = meta.len() / 32;
-                if blocks > max_height {
-                    max_height = blocks;
-                }
+                hashes_height = Some(hashes_height.map_or(blocks, |prev| prev.max(blocks)));
             }
         }
     }
+
+    let max_height = if saw_hashes {
+        hashes_height.unwrap_or(0)
+    } else {
+        pipeline_height.unwrap_or(0)
+    };
 
     if max_height > current_total {
         Some(BlockHeight {
@@ -7293,6 +7294,26 @@ mod tests {
             detect_block_height_from_storage(&peer.dir.join("storage"), 0).expect("detect height");
         assert_eq!(height.total, 3);
         assert_eq!(height.non_empty, 3);
+    }
+
+    #[test]
+    fn detect_block_height_prefers_block_hashes_over_pipeline() {
+        let env = Environment::new();
+        let peer = NetworkPeer::builder().build(&env);
+        let lane_dir = peer
+            .dir
+            .join("storage")
+            .join("blocks")
+            .join("lane_000_default");
+        let pipeline_dir = lane_dir.join("pipeline");
+        fs::create_dir_all(&pipeline_dir).expect("create lane pipeline dir");
+        write_sidecar_index(&pipeline_dir, 3);
+        fs::write(lane_dir.join("blocks.hashes"), vec![0u8; 32]).expect("write blocks hash file");
+
+        let height =
+            detect_block_height_from_storage(&peer.dir.join("storage"), 0).expect("detect height");
+        assert_eq!(height.total, 1);
+        assert_eq!(height.non_empty, 1);
     }
 
     #[test]

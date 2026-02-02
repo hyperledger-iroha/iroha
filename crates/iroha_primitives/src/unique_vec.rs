@@ -144,12 +144,12 @@ where
 {
     fn deserialize(archived: &'a ncore::Archived<Self>) -> Self {
         let vec = Vec::<T>::deserialize(archived.cast::<Vec<T>>());
-        let mut unique = Vec::with_capacity(vec.len());
-        for value in vec {
-            assert!(!unique.contains(&value), "duplicated value in UniqueVec");
-            unique.push(value);
-        }
-        UniqueVec(unique)
+        UniqueVec::from_iter(vec)
+    }
+
+    fn try_deserialize(archived: &'a ncore::Archived<Self>) -> Result<Self, ncore::Error> {
+        let vec = Vec::<T>::try_deserialize(archived.cast::<Vec<T>>())?;
+        Ok(UniqueVec::from_iter(vec))
     }
 }
 
@@ -274,17 +274,18 @@ mod tests {
         assert_eq!(unique_vec, decoded);
     }
 
-    // Decoding should panic if the serialized data contains duplicates.
+    // Decoding should deduplicate serialized data that contains duplicates.
     #[test]
-    fn decode_panics_on_duplicates() {
-        use norito::{Compression, Error, serialize_into};
+    fn decode_deduplicates_duplicates() {
+        use norito::{Compression, serialize_into};
 
         let unique_vec = UniqueVec(vec![1u32, 2, 2]);
         let mut bytes = Vec::new();
         serialize_into(&mut bytes, &unique_vec, Compression::None).expect("serialize");
 
-        let decoded: Result<UniqueVec<u32>, Error> = norito::deserialize_from(bytes.as_slice());
-        assert!(matches!(decoded, Err(Error::DecodePanic { .. })));
+        let decoded: UniqueVec<u32> =
+            norito::deserialize_from(bytes.as_slice()).expect("decode duplicates");
+        assert_eq!(decoded, unique_vec![1u32, 2]);
     }
 
     // JSON serialization and deserialization should round-trip and detect

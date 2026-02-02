@@ -5801,8 +5801,8 @@ fn validate_zstd_stream(compressed: &[u8]) -> Result<(), Error> {
     if compressed.is_empty() {
         return Err(Error::LengthMismatch);
     }
-    let frame_len =
-        zstd::zstd_safe::find_frame_compressed_size(compressed).map_err(|_| Error::LengthMismatch)?;
+    let frame_len = zstd::zstd_safe::find_frame_compressed_size(compressed)
+        .map_err(|_| Error::LengthMismatch)?;
     if frame_len != compressed.len() {
         return Err(Error::LengthMismatch);
     }
