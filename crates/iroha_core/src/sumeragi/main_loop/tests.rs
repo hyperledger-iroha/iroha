@@ -52022,7 +52022,9 @@ async fn fetch_pending_block_response_dispatches_inline_when_worker_disabled() {
         membership: None,
     });
 
-    harness.actor.enqueue_fetch_pending_block_response(peer, msg);
+    harness
+        .actor
+        .enqueue_fetch_pending_block_response(peer, msg);
 
     let queued = harness.background_rx.try_iter().next();
     assert!(

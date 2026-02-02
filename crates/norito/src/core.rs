@@ -1433,6 +1433,10 @@ where
             if buf.capacity() < hint {
                 buf.reserve_exact(hint - buf.capacity());
             }
+            let needed = data.len().saturating_add(hint);
+            if data.capacity() < needed {
+                data.reserve_exact(needed - data.capacity());
+            }
         }
         encode_elem(item, &mut buf)?;
         lengths.push(buf.len());
@@ -1447,6 +1451,49 @@ where
 
     writer.write_all(&data)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod encode_seq_payloads_tests {
+    use super::{DecodeFlagsGuard, encode_seq_payloads, header_flags};
+
+    #[test]
+    fn encode_seq_payloads_packed_uses_hints_and_keeps_layout() {
+        let _guard = DecodeFlagsGuard::enter(header_flags::PACKED_SEQ);
+        let items: Vec<Vec<u8>> = vec![vec![1, 2], vec![3], vec![4, 5, 6]];
+        let mut out = Vec::new();
+        encode_seq_payloads(
+            &mut out,
+            items.len(),
+            items.iter(),
+            |item, buf| {
+                buf.extend_from_slice(item);
+                Ok(())
+            },
+            |item| Some(item.len().saturating_add(4)),
+        )
+        .expect("encode packed seq");
+
+        let mut cursor = 0usize;
+        let len_bytes: [u8; 8] = out[cursor..cursor + 8].try_into().expect("len bytes");
+        let len = u64::from_le_bytes(len_bytes) as usize;
+        cursor += 8;
+        assert_eq!(len, items.len());
+
+        let mut offsets = Vec::with_capacity(len + 1);
+        for _ in 0..=len {
+            let off_bytes: [u8; 8] = out[cursor..cursor + 8].try_into().expect("off bytes");
+            offsets.push(u64::from_le_bytes(off_bytes) as usize);
+            cursor += 8;
+        }
+        assert_eq!(offsets.first().copied(), Some(0));
+        let expected_total: usize = items.iter().map(|item| item.len()).sum();
+        assert_eq!(offsets.last().copied(), Some(expected_total));
+
+        let data = &out[cursor..];
+        let expected: Vec<u8> = items.iter().flatten().copied().collect();
+        assert_eq!(data, expected.as_slice());
+    }
 }
 
 /// Emit a length prefix honoring the `COMPACT_LEN` layout flag.

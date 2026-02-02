@@ -439,10 +439,7 @@ unsafe fn init_backend() -> Option<Backend> {
         let decompress_fn: DecompressFn = mem::transmute(decompress);
         if let Err(err) = gpu_self_test(compress_fn, decompress_fn) {
             let _ = FreeLibrary(lib);
-            report_gpu_load_failure(format!(
-                "CUDA backend failed self-test ({})",
-                err
-            ));
+            report_gpu_load_failure(format!("CUDA backend failed self-test ({})", err));
             return None;
         }
         return Some(Backend::Cuda {

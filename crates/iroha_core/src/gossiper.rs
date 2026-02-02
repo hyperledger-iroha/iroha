@@ -1302,7 +1302,7 @@ impl TransactionGossip {
 /// Gossip payload wrapper that can reuse pre-serialized transaction bytes.
 #[derive(Debug, Clone)]
 pub struct GossipTransaction {
-    signed: SignedTransaction,
+    signed: Arc<SignedTransaction>,
     encoded: Option<Arc<Vec<u8>>>,
 }
 
@@ -1310,7 +1310,7 @@ impl GossipTransaction {
     /// Wrap an accepted transaction, dropping acceptance metadata for gossip.
     pub fn new(tx: AcceptedTransaction<'static>) -> Self {
         Self {
-            signed: tx.into(),
+            signed: Arc::new(tx.into()),
             encoded: None,
         }
     }
@@ -1318,26 +1318,26 @@ impl GossipTransaction {
     /// Wrap an already-signed transaction with cached encoded bytes.
     pub fn with_encoded(signed: SignedTransaction, encoded: Arc<Vec<u8>>) -> Self {
         Self {
-            signed,
+            signed: Arc::new(signed),
             encoded: Some(encoded),
         }
     }
 
     /// Borrow the signed transaction payload.
     pub fn as_signed(&self) -> &SignedTransaction {
-        &self.signed
+        self.signed.as_ref()
     }
 
     /// Consume the wrapper and return the signed transaction.
     pub fn into_signed(self) -> SignedTransaction {
-        self.signed
+        Arc::try_unwrap(self.signed).unwrap_or_else(|arc| (*arc).clone())
     }
 }
 
 impl From<SignedTransaction> for GossipTransaction {
     fn from(signed: SignedTransaction) -> Self {
         Self {
-            signed,
+            signed: Arc::new(signed),
             encoded: None,
         }
     }
@@ -1360,14 +1360,14 @@ impl NoritoSerialize for GossipTransaction {
         self.encoded
             .as_ref()
             .map(|bytes| bytes.len())
-            .or_else(|| self.signed.encoded_len_hint())
+            .or_else(|| self.signed.as_ref().encoded_len_hint())
     }
 
     fn encoded_len_exact(&self) -> Option<usize> {
         self.encoded
             .as_ref()
             .map(|bytes| bytes.len())
-            .or_else(|| self.signed.encoded_len_exact())
+            .or_else(|| self.signed.as_ref().encoded_len_exact())
     }
 }
 
@@ -1383,13 +1383,12 @@ impl<'a> NoritoDeserialize<'a> for GossipTransaction {
     fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, NoritoError> {
         let ptr = core::ptr::from_ref(archived).cast::<u8>();
         let bytes = norito::core::payload_slice_from_ptr(ptr)?;
-        let (signed, consumed) =
-            norito::core::decode_field_canonical::<SignedTransaction>(bytes)?;
+        let (signed, consumed) = norito::core::decode_field_canonical::<SignedTransaction>(bytes)?;
         if consumed != bytes.len() {
             return Err(NoritoError::LengthMismatch);
         }
         Ok(Self {
-            signed,
+            signed: Arc::new(signed),
             encoded: None,
         })
     }

@@ -147,6 +147,13 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 - [x] Liveness bottlenecks: cap block-queue drain per iteration under backlog (adaptive drain cap) and add coverage to keep worker-loop drain latency bounded. (touch `crates/iroha_core/src/sumeragi/mod.rs`)
 - [x] Re-run Izanami 1 TPS + NPoS localnet 1 Hz after the drain-cap change and capture results in `status.md`. (2026-02-01: Izanami 1 TPS run `/tmp/iroha-test-network-izanami-1tps-20260201T054440/irohad_test_network_56VhGX` + log `/tmp/izanami_1tps_20260201T054440.log`; NPoS localnet 1 Hz run `/private/tmp/iroha-localnet-npos-1hz-20260201T101516` with `sumeragi_status_1hz_20260201T130626.jsonl` + `ping_1hz_20260201T130626.log`.) (touch `status.md`)
 
+7. **PERF-100TPS-PIPELINE — Tx pipeline & consensus hot-spot cleanup** (Consensus/Perf, Line: Shared, Owner: Core WG, Priority: High, Status: 🈴 Completed, target TBD)
+- [x] Norito encode: direct encode-into-writer for owned payloads when exact length is known; use seq size hints to reserve packed payload buffers.
+- [x] P2P/gossip: reuse outbound frames, avoid cloning large tx payloads by arcing gossip transactions, and keep cached encoded bytes for retransmit.
+- [x] BLS verification: reuse verified vote/QC caches and prepared-key cache; skip per-vote checks on aggregate-pass for NPoS.
+- [x] Consensus payload churn: cache pre-encoded BlockMessage/RBC chunk bytes and compact RBC chunk headers for repeated fields.
+- [x] Backpressure tuning: raise RBC store caps/backlog soft limits and NPoS timeout defaults; update docs/templates.
+
 4. **LOCALNET-10K-TPS — 7-peer localnet throughput + stall resilience** (Consensus/Performance/Tooling, Line: Shared, Owner: Consensus WG, Priority: High, Status: 🈺 In Progress, target TBD)
 - [ ] Use the new pending-block/commit-inflight metrics to isolate pacemaker backpressure during 100 TPS localnet runs (run151 NPoS: avg slot 5.68s, view changes 11, proposal_gap 1, pending/inflight <=4/1; run152 permissioned + commit_time_ms=300: avg slot 10.69s, view changes 18, pending/inflight <=4/1; run153 NPoS 7-peer 753ms soft limits: height 5, view changes 42, tx_queue depth 4796, pending max 5/inflight 0, missing_qc/stake_quorum timeouts; run154 permissioned 7-peer 753ms: height 5, view changes 9, tx_queue depth 11522, pending/inflight 0, missing_qc/quorum timeouts). Identify the proposal-gap root cause and re-test.
 - [ ] Validate worker-iteration drain-cap impact with a load generator that sustains 50 TPS (current CLI batch loop undershoots per-second pacing) and correlate view-change spikes with proposal gaps vs queue backpressure.
