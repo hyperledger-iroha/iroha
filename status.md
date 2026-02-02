@@ -1,6 +1,7 @@
 # Status
 
 Last update: 2026-02-02
+- Config/P2P: skip duplicate SoraNet PoW/puzzle broadcasts so remote updates can be re-broadcast and reach multi-hop peers; added unit coverage for PoW broadcast match detection. Tests not run (not requested).
 - Sumeragi: block-sync fetch-pending responses now respect `sumeragi.debug.disable_background_worker` and dispatch inline when the worker is disabled; added unit coverage. Time-trigger integration scenario now drives one extra block to cover end-exclusive schedule boundaries.
 - Tests: not run (not requested).
 - Block sync: drop `GetBlocksAfter` requests from peers no longer in the world roster so unregistered peers stop syncing past removal; added runtime coverage for registered vs unregistered requests.
