@@ -265,7 +265,8 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                 gossiper::GossipPlane::Public => T::TxGossip,
                 gossiper::GossipPlane::Restricted => T::TxGossipRestricted,
             },
-            NetworkMessage::PeersGossiper(_) | NetworkMessage::SoranetPowConfig(_) => T::PeerGossip,
+            NetworkMessage::PeersGossiper(_) => T::PeerGossip,
+            NetworkMessage::SoranetPowConfig(_) => T::Control,
             NetworkMessage::PeerTrustGossip(_) => T::TrustGossip,
             NetworkMessage::Health
             | NetworkMessage::TimePing(_)
@@ -514,7 +515,7 @@ mod tests {
         assert_eq!(decoded.puzzle.expect("puzzle decoded"), expected_puzzle);
 
         let topic = NetworkMessage::SoranetPowConfig(json.into_bytes()).topic();
-        assert_eq!(topic, NetworkTopic::PeerGossip);
+        assert_eq!(topic, NetworkTopic::Control);
     }
 
     #[test]
