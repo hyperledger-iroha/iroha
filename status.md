@@ -1,6 +1,7 @@
 # Status
 
 Last update: 2026-02-02
+- Norito: reject invalid header flag combinations (FIELD_BITSET requires PACKED_STRUCT + COMPACT_LEN), enforce single zstd frame (reject trailing compressed bytes), and fix header size comment. Tests not run (user requested no full workspace tests).
 - Norito: packed-seq encoding now pre-reserves payload buffers using length hints, and owned payloads with exact lengths encode directly into writers; added packed-seq hint coverage.
 - Gossip: `GossipTransaction` now stores `Arc<SignedTransaction>` to avoid cloning large tx payloads during multi-peer fanout while keeping cached encoded bytes for retransmit.
 - Config/docs: raised RBC store caps/backlog soft limits and NPoS timeout defaults; templates and sumeragi docs refreshed to match.

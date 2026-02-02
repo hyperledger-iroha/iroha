@@ -373,6 +373,21 @@ const fn supported_header_flags() -> u8 {
 }
 
 #[inline]
+fn validate_header_flags(flags: u8) -> Result<(), Error> {
+    let unsupported_layout = flags & !supported_header_flags();
+    if unsupported_layout != 0 {
+        return Err(Error::UnsupportedFeature("layout flag"));
+    }
+    if (flags & header_flags::FIELD_BITSET) != 0 {
+        let required = header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN;
+        if (flags & required) != required {
+            return Err(Error::UnsupportedFeature("layout flag combination"));
+        }
+    }
+    Ok(())
+}
+
+#[inline]
 fn sanitize_layout_flags(flags: u8) -> u8 {
     flags & supported_header_flags()
 }
@@ -2976,7 +2991,7 @@ pub struct Header {
 impl Header {
     /// Size of the serialized header in bytes.
     ///
-    /// All fields add up to 39 bytes. We include a single padding byte at the
+    /// All fields add up to 40 bytes. We include a single padding byte at the
     /// end so that future extensions can reuse it without shifting the payload
     /// layout.
     pub const SIZE: usize = 4 + 1 + 1 + 16 + 1 + 8 + 8 + 1;
@@ -3072,10 +3087,7 @@ impl Header {
         let mut pad = [0u8; 1];
         r.read_exact(&mut pad)?;
         let flags = pad[0];
-        let unsupported_layout = flags & !supported_header_flags();
-        if unsupported_layout != 0 {
-            return Err(Error::UnsupportedFeature("layout flag"));
-        }
+        validate_header_flags(flags)?;
         Ok(Self {
             magic,
             major,
@@ -5785,6 +5797,18 @@ pub fn to_compressed_bytes<T: NoritoSerialize>(
     Ok(out)
 }
 
+fn validate_zstd_stream(compressed: &[u8]) -> Result<(), Error> {
+    if compressed.is_empty() {
+        return Err(Error::LengthMismatch);
+    }
+    let frame_len =
+        zstd::zstd_safe::find_frame_compressed_size(compressed).map_err(|_| Error::LengthMismatch)?;
+    if frame_len != compressed.len() {
+        return Err(Error::LengthMismatch);
+    }
+    Ok(())
+}
+
 /// Decompress bytes produced by [`to_compressed_bytes`].
 ///
 /// If the `gpu-compression` feature is enabled, decompression runs on the GPU
@@ -5810,6 +5834,7 @@ pub fn from_compressed_bytes<T: for<'de> NoritoDeserialize<'de>>(
             trimmed.to_vec()
         }
         Compression::Zstd => {
+            validate_zstd_stream(compressed)?;
             #[cfg(all(feature = "compression", feature = "gpu-compression"))]
             {
                 gpu_zstd::decode_all(compressed, header.length)?
@@ -6597,12 +6622,39 @@ mod tests {
     }
 
     #[test]
+    fn from_bytes_rejects_invalid_flag_combo() {
+        reset_decode_state();
+        let value: u64 = 0xABCD_EF01_2345_6789;
+        let mut bytes = to_bytes(&value).expect("encode header-framed payload");
+        bytes[Header::SIZE - 1] = header_flags::FIELD_BITSET;
+
+        let result = from_bytes::<u64>(&bytes);
+        assert!(matches!(
+            result,
+            Err(Error::UnsupportedFeature("layout flag combination"))
+        ));
+        reset_decode_state();
+    }
+
+    #[test]
     fn from_compressed_bytes_rejects_trailing_bytes() {
         let value: u64 = 0x1111_2222_3333_4444;
         let mut bytes = to_bytes(&value).expect("encode header-framed payload");
         bytes.push(0);
 
         let result = from_compressed_bytes::<u64>(&bytes);
+        assert!(matches!(result, Err(Error::LengthMismatch)));
+    }
+
+    #[cfg(feature = "compression")]
+    #[test]
+    fn from_compressed_bytes_rejects_trailing_compressed_bytes() {
+        let value = vec![0u8; 64];
+        let mut bytes =
+            to_compressed_bytes(&value, Some(CompressionConfig::default())).expect("encode");
+        bytes.extend_from_slice(&[0xAA, 0xBB]);
+
+        let result = from_compressed_bytes::<Vec<u8>>(&bytes);
         assert!(matches!(result, Err(Error::LengthMismatch)));
     }
 

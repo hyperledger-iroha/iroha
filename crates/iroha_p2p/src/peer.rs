@@ -2157,7 +2157,17 @@ mod run {
                 match panic::catch_unwind(|| DecodeAll::decode_all(&mut decrypted.as_slice())) {
                     Ok(result) => result?,
                     Err(panic) => {
-                        iroha_logger::warn!(?panic, "Norito decode panicked; dropping connection");
+                        let panic_msg = if let Some(msg) = (&*panic).downcast_ref::<&str>() {
+                            (*msg).to_owned()
+                        } else if let Some(msg) = (&*panic).downcast_ref::<String>() {
+                            msg.clone()
+                        } else {
+                            String::from("<non-string panic payload>")
+                        };
+                        iroha_logger::warn!(
+                            panic_msg = %panic_msg,
+                            "Norito decode panicked; dropping connection"
+                        );
                         return Err(Error::Format);
                     }
                 };
