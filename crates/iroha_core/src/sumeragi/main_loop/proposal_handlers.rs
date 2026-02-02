@@ -1935,7 +1935,8 @@ impl Actor {
             .unwrap_or_default()
         };
         if commit_topology.is_empty() {
-            commit_topology = self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
+            commit_topology =
+                self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
         }
         let qc_replay_start = Instant::now();
         if !commit_topology.is_empty() {

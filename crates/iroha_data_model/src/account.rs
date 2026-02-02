@@ -375,9 +375,7 @@ impl norito::json::JsonDeserialize for AccountId {
                 .map(|(hex, domain)| (hex, Some(domain)))
                 .unwrap_or((rest, None));
             let payload = hex::decode(hex_literal).map_err(|err| {
-                norito::json::Error::Message(format!(
-                    "invalid norito AccountId hex payload: {err}"
-                ))
+                norito::json::Error::Message(format!("invalid norito AccountId hex payload: {err}"))
             })?;
             let mut cursor = std::io::Cursor::new(payload);
             let decoded = <AccountId as Decode>::decode(&mut cursor)
@@ -2101,8 +2099,7 @@ mod json_tests {
             let mut seed = vec![0_u8; 32];
             seed[..8].copy_from_slice(&(idx as u64).to_le_bytes());
             let keypair = KeyPair::from_seed(seed, Algorithm::Ed25519);
-            let member =
-                MultisigMember::new(keypair.public_key().clone(), 1).expect("member");
+            let member = MultisigMember::new(keypair.public_key().clone(), 1).expect("member");
             members.push(member);
         }
         let policy = MultisigPolicy::new(1, members).expect("policy");
