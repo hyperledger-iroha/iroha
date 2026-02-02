@@ -31,6 +31,8 @@ pub use poseidon::*;
 /// `counter_conflict` (alias for `counter_violation`), or `allowance_exceeded`
 /// (alias for `allowance_depleted`).
 pub const OFFLINE_REJECTION_REASON_PREFIX: &str = "offline_reason::";
+/// Asset-definition metadata key that enables offline allowances and escrow tracking.
+pub const OFFLINE_ASSET_ENABLED_METADATA_KEY: &str = "offline.enabled";
 
 /// Prefix used for Android marker-key series counter scopes.
 pub const MARKER_COUNTER_PREFIX: &str = "marker::";

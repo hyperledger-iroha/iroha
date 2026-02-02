@@ -8530,6 +8530,12 @@ pub struct Offline {
         default = "DurationMs(std::time::Duration::from_millis(defaults::settlement::offline::MAX_RECEIPT_AGE_MS))"
     )]
     pub max_receipt_age_ms: DurationMs,
+    /// Require offline allowances to be escrow-backed.
+    #[config(default = "false")]
+    pub escrow_required: bool,
+    /// Escrow account bindings keyed by asset definition id.
+    #[config(default = "BTreeMap::new()")]
+    pub escrow_accounts: BTreeMap<String, String>,
     /// Optional list of DER-encoded Android trust anchor files used to supplement the built-in roots.
     #[config(default)]
     pub android_trust_anchor_files: Vec<PathBuf>,
@@ -8546,6 +8552,8 @@ impl Default for Offline {
             max_receipt_age_ms: DurationMs(std::time::Duration::from_millis(
                 defaults::settlement::offline::MAX_RECEIPT_AGE_MS,
             )),
+            escrow_required: false,
+            escrow_accounts: BTreeMap::new(),
             android_trust_anchor_files: Vec::new(),
         }
     }
@@ -8772,6 +8780,8 @@ impl Offline {
             prune_batch_size,
             proof_mode,
             max_receipt_age_ms,
+            escrow_required,
+            escrow_accounts,
             android_trust_anchor_files,
         } = self;
         if hot_retention_blocks == 0 {
@@ -8811,6 +8821,37 @@ impl Offline {
                 }
             }
         }
+        let mut escrow_bindings = BTreeMap::new();
+        for (definition, account) in escrow_accounts {
+            let definition_id = match definition.parse() {
+                Ok(id) => id,
+                Err(err) => {
+                    emitter.emit(
+                        Report::new(ParseError::InvalidSettlementConfig).attach(format!(
+                            "invalid offline escrow asset definition `{definition}`: {err}"
+                        )),
+                    );
+                    continue;
+                }
+            };
+            let account_id = match account.parse() {
+                Ok(id) => id,
+                Err(err) => {
+                    emitter.emit(
+                        Report::new(ParseError::InvalidSettlementConfig)
+                            .attach(format!("invalid offline escrow account `{account}`: {err}")),
+                    );
+                    continue;
+                }
+            };
+            if escrow_bindings.insert(definition_id, account_id).is_some() {
+                emitter.emit(
+                    Report::new(ParseError::InvalidSettlementConfig).attach(format!(
+                        "duplicate offline escrow binding for `{definition}`"
+                    )),
+                );
+            }
+        }
         actual::Offline {
             hot_retention_blocks,
             archive_batch_size,
@@ -8818,6 +8859,8 @@ impl Offline {
             prune_batch_size,
             proof_mode: proof_mode.into_actual(),
             max_receipt_age: max_receipt_age_ms.get(),
+            escrow_required,
+            escrow_accounts: escrow_bindings,
             android_trust_anchors: anchors,
         }
     }

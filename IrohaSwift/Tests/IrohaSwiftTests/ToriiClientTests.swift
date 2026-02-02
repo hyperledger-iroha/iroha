@@ -1377,6 +1377,7 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(query["page"], "2")
             XCTAssertEqual(query["per_page"], "25")
             XCTAssertEqual(query["address_format"], "compressed")
+            XCTAssertEqual(query["account"], "bob@wonderland")
             XCTAssertEqual(query["authority"], "alice@wonderland")
             XCTAssertEqual(query["transaction_hash"], "deadbeef")
             XCTAssertEqual(query["transaction_status"], "Committed")
@@ -1425,6 +1426,7 @@ final class ToriiClientTests: XCTestCase {
         let params = ToriiExplorerInstructionsParams(page: 2,
                                                      perPage: 25,
                                                      addressFormat: .compressed,
+                                                     account: "bob@wonderland",
                                                      authority: "alice@wonderland",
                                                      transactionHash: "deadbeef",
                                                      transactionStatus: "Committed",

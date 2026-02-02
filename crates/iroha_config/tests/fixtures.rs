@@ -2012,6 +2012,8 @@ fn minimal_config_snapshot() {
                     prune_batch_size: 128,
                     proof_mode: Optional,
                     max_receipt_age: 86400s,
+                    escrow_required: false,
+                    escrow_accounts: {},
                     android_trust_anchors: [],
                 },
                 router: Router {

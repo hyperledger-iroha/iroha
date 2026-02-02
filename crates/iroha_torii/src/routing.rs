@@ -12651,6 +12651,39 @@ fn instruction_matches_asset_id(
 }
 
 #[cfg(feature = "app_api")]
+fn instruction_matches_account_id(
+    instr: &iroha_data_model::isi::InstructionBox,
+    expected: &AccountId,
+) -> bool {
+    use iroha_data_model::isi::{TransferAssetBatch, TransferBox};
+
+    let any = instr.as_any();
+    if let Some(transfer) = any.downcast_ref::<TransferBox>() {
+        return match transfer {
+            TransferBox::Domain(inner) => {
+                inner.source() == expected || inner.destination() == expected
+            }
+            TransferBox::AssetDefinition(inner) => {
+                inner.source() == expected || inner.destination() == expected
+            }
+            TransferBox::Asset(inner) => {
+                inner.destination() == expected || inner.source().account() == expected
+            }
+            TransferBox::Nft(inner) => {
+                inner.source() == expected || inner.destination() == expected
+            }
+        };
+    }
+    if let Some(batch) = any.downcast_ref::<TransferAssetBatch>() {
+        return batch
+            .entries()
+            .iter()
+            .any(|entry| entry.from() == expected || entry.to() == expected);
+    }
+    false
+}
+
+#[cfg(feature = "app_api")]
 fn executable_contains_asset_id(
     executable: &iroha_data_model::transaction::Executable,
     expected: &iroha_data_model::asset::AssetId,
@@ -15628,9 +15661,10 @@ mod tx_query_filter_tests {
     #[test]
     fn explorer_transaction_filters_match_asset_id() {
         let (authority, keypair) = account_with_key();
+        let (other_account, _) = account_with_key();
         let def: dm::AssetDefinitionId = "rose#wonderland".parse().unwrap();
         let asset_id = dm::AssetId::new(def.clone(), authority.clone());
-        let other_asset_id = dm::AssetId::new(def, "bob@wonderland".parse().unwrap());
+        let other_asset_id = dm::AssetId::new(def, other_account);
         let mint = dm::Mint::asset_numeric(1_u32, asset_id.clone());
         let tx = make_external_tx_with_instructions(
             &authority,
@@ -15662,14 +15696,51 @@ mod tx_query_filter_tests {
     #[test]
     fn instruction_matches_asset_id_handles_mint_assets() {
         let (authority, _) = account_with_key();
+        let (other_account, _) = account_with_key();
         let def: dm::AssetDefinitionId = "rose#wonderland".parse().unwrap();
         let asset_id = dm::AssetId::new(def.clone(), authority.clone());
-        let other_asset_id = dm::AssetId::new(def, "bob@wonderland".parse().unwrap());
+        let other_asset_id = dm::AssetId::new(def, other_account);
         let mint = dm::Mint::asset_numeric(1_u32, asset_id.clone());
         let instruction: dm::InstructionBox = mint.into();
 
         assert!(instruction_matches_asset_id(&instruction, &asset_id));
         assert!(!instruction_matches_asset_id(&instruction, &other_asset_id));
+    }
+
+    #[test]
+    fn instruction_matches_account_id_matches_transfer_asset_accounts() {
+        let (alice, _) = account_with_key();
+        let (bob, _) = account_with_key();
+        let (carol, _) = account_with_key();
+        let def: dm::AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_id = dm::AssetId::new(def, alice.clone());
+        let transfer = dm::Transfer::asset_numeric(asset_id, 10_u32, bob.clone());
+        let instruction: dm::InstructionBox = transfer.into();
+
+        assert!(instruction_matches_account_id(&instruction, &alice));
+        assert!(instruction_matches_account_id(&instruction, &bob));
+        assert!(!instruction_matches_account_id(&instruction, &carol));
+    }
+
+    #[test]
+    fn instruction_matches_account_id_matches_transfer_batch_accounts() {
+        let (alice, _) = account_with_key();
+        let (bob, _) = account_with_key();
+        let (carol, _) = account_with_key();
+        let (dave, _) = account_with_key();
+        let (eve, _) = account_with_key();
+        let def: dm::AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let entry_a =
+            dm::TransferAssetBatchEntry::new(alice.clone(), bob.clone(), def.clone(), 1_u32);
+        let entry_b = dm::TransferAssetBatchEntry::new(carol.clone(), dave.clone(), def, 2_u32);
+        let batch = dm::TransferAssetBatch::new(vec![entry_a, entry_b]);
+        let instruction: dm::InstructionBox = batch.into();
+
+        assert!(instruction_matches_account_id(&instruction, &alice));
+        assert!(instruction_matches_account_id(&instruction, &bob));
+        assert!(instruction_matches_account_id(&instruction, &carol));
+        assert!(instruction_matches_account_id(&instruction, &dave));
+        assert!(!instruction_matches_account_id(&instruction, &eve));
     }
 
     #[test]
@@ -20276,6 +20347,7 @@ fn populate_explorer_queue(
         }
         ExplorerStreamKind::Instructions => {
             let filters = ExplorerInstructionFilters {
+                account: None,
                 authority: None,
                 transaction_hash: None,
                 status: None,
@@ -30485,6 +30557,7 @@ impl ExplorerTransactionFilters {
 
 #[cfg(feature = "app_api")]
 struct ExplorerInstructionFilters {
+    account: Option<AccountId>,
     authority: Option<AccountId>,
     transaction_hash: Option<HashOf<TransactionEntrypoint>>,
     status: Option<ExplorerTransactionStatusFilter>,
@@ -30680,6 +30753,7 @@ pub async fn handle_v1_explorer_transactions(
 #[cfg(feature = "app_api")]
 #[derive(Debug, Clone)]
 pub struct ExplorerInstructionQuery {
+    pub account: Option<AccountId>,
     pub authority: Option<AccountId>,
     pub transaction_hash: Option<HashOf<TransactionEntrypoint>>,
     pub status: Option<ExplorerTransactionStatusFilter>,
@@ -30700,6 +30774,7 @@ pub async fn handle_v1_explorer_instructions(
     let address_format = pagination.address_format_pref()?;
     record_address_format_selection(&telemetry, ENDPOINT_EXPLORER_INSTRUCTIONS, address_format);
     let ExplorerInstructionQuery {
+        account,
         authority,
         transaction_hash,
         status,
@@ -30722,6 +30797,7 @@ pub async fn handle_v1_explorer_instructions(
         }
     }
     let filters = ExplorerInstructionFilters {
+        account,
         authority,
         transaction_hash,
         status,
@@ -30860,6 +30936,11 @@ fn collect_instruction_history(
                 let kind = crate::explorer::instruction_kind(instruction);
                 if !filters.matches_instruction(kind) {
                     continue;
+                }
+                if let Some(expected) = filters.account.as_ref() {
+                    if !instruction_matches_account_id(instruction, expected) {
+                        continue;
+                    }
                 }
                 if let Some(expected) = filters.asset_id.as_ref() {
                     if !instruction_matches_asset_id(instruction, expected) {

@@ -764,6 +764,8 @@ public struct ToriiExplorerInstructionsParams: Sendable, Equatable {
     public var page: UInt64?
     public var perPage: UInt64?
     public var addressFormat: AccountAddressFormat?
+    /// Filter transfer instructions by participant account (source or destination).
+    public var account: String?
     public var authority: String?
     public var transactionHash: String?
     public var transactionStatus: String?
@@ -774,6 +776,7 @@ public struct ToriiExplorerInstructionsParams: Sendable, Equatable {
     public init(page: UInt64? = nil,
                 perPage: UInt64? = nil,
                 addressFormat: AccountAddressFormat? = nil,
+                account: String? = nil,
                 authority: String? = nil,
                 transactionHash: String? = nil,
                 transactionStatus: String? = nil,
@@ -783,6 +786,7 @@ public struct ToriiExplorerInstructionsParams: Sendable, Equatable {
         self.page = page
         self.perPage = perPage
         self.addressFormat = addressFormat
+        self.account = account
         self.authority = authority
         self.transactionHash = transactionHash
         self.transactionStatus = transactionStatus
@@ -809,6 +813,10 @@ public struct ToriiExplorerInstructionsParams: Sendable, Equatable {
             let value = try ToriiClient.explorerAddressFormatQueryValue(addressFormat,
                                                                         context: "explorer instructions")
             items.append(URLQueryItem(name: "address_format", value: value))
+        }
+        if let account = account?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !account.isEmpty {
+            items.append(URLQueryItem(name: "account", value: account))
         }
         if let authority = authority?.trimmingCharacters(in: .whitespacesAndNewlines),
            !authority.isEmpty {

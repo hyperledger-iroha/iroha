@@ -4071,6 +4071,8 @@ struct ExplorerInstructionsQuery {
     #[norito(flatten)]
     pagination: explorer::ExplorerPaginationQuery,
     #[norito(default)]
+    account: Option<String>,
+    #[norito(default)]
     authority: Option<String>,
     #[norito(default)]
     transaction_hash: Option<String>,
@@ -4096,6 +4098,8 @@ const CONTEXT_EXPLORER_NFTS_OWNED_BY: &str = "/v1/explorer/nfts?owned_by";
 const CONTEXT_EXPLORER_TRANSACTIONS_AUTHORITY: &str = "/v1/explorer/transactions?authority";
 #[cfg(feature = "app_api")]
 const CONTEXT_EXPLORER_INSTRUCTIONS_AUTHORITY: &str = "/v1/explorer/instructions?authority";
+#[cfg(feature = "app_api")]
+const CONTEXT_EXPLORER_INSTRUCTIONS_ACCOUNT: &str = "/v1/explorer/instructions?account";
 #[cfg(feature = "app_api")]
 const CONTEXT_EXPLORER_ACCOUNT_DETAIL: &str = "/v1/explorer/accounts/{account_id}";
 #[cfg(feature = "app_api")]
@@ -4378,6 +4382,7 @@ async fn handler_explorer_instructions_list(
 ) -> Result<AxResponse, Error> {
     let ExplorerInstructionsQuery {
         pagination,
+        account,
         authority,
         transaction_hash,
         transaction_status,
@@ -4395,6 +4400,14 @@ async fn handler_explorer_instructions_list(
             &app,
             &raw,
             CONTEXT_EXPLORER_INSTRUCTIONS_AUTHORITY,
+        )?),
+        _ => None,
+    };
+    let account = match account {
+        Some(raw) if !raw.trim().is_empty() => Some(parse_account_id_for_endpoint(
+            &app,
+            &raw,
+            CONTEXT_EXPLORER_INSTRUCTIONS_ACCOUNT,
         )?),
         _ => None,
     };
@@ -4429,6 +4442,7 @@ async fn handler_explorer_instructions_list(
         app.telemetry.clone(),
         pagination,
         crate::routing::ExplorerInstructionQuery {
+            account,
             authority,
             transaction_hash,
             status,
