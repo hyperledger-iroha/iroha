@@ -53,11 +53,61 @@ const DEFAULT_MAX_ARCHIVE_LEN: u64 = 64 * 1024 * 1024; // 64 MiB
 static MAX_ARCHIVE_LEN: AtomicU64 = AtomicU64::new(DEFAULT_MAX_ARCHIVE_LEN);
 
 fn serialize_owned<W: Write, T: NoritoSerialize>(mut writer: W, value: &T) -> Result<(), Error> {
+    let exact_len = {
+        let _guard = DecodeFlagsGuard::enter(default_encode_flags());
+        value.encoded_len_exact()
+    };
+    if let Some(exact_len) = exact_len {
+        write_len(&mut writer, exact_len as u64)?;
+        let written = crate::codec::encode_adaptive_into(value, &mut writer)?;
+        debug_assert_eq!(
+            written, exact_len,
+            "encoded_len_exact mismatch for owned payload"
+        );
+        return Ok(());
+    }
     let payload = encode_adaptive(value);
     let len = payload.len() as u64;
     write_len(&mut writer, len)?;
     writer.write_all(&payload)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod serialize_owned_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static EXACT_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    #[derive(Clone, Copy)]
+    struct ExactLen(u8);
+
+    impl NoritoSerialize for ExactLen {
+        fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
+            writer.write_all(&[self.0])?;
+            Ok(())
+        }
+
+        fn encoded_len_exact(&self) -> Option<usize> {
+            EXACT_CALLS.fetch_add(1, Ordering::Relaxed);
+            Some(1)
+        }
+    }
+
+    #[test]
+    fn serialize_owned_uses_encoded_len_exact_when_available() {
+        EXACT_CALLS.store(0, Ordering::Relaxed);
+        reset_decode_state();
+        let value = Box::new(ExactLen(0xAB));
+        let mut buf = Vec::new();
+        value.serialize(&mut buf).expect("serialize owned payload");
+        let (payload, used) = parse_owned_payload(&buf).expect("parse owned payload");
+        assert_eq!(used, buf.len());
+        assert_eq!(payload, &[0xAB]);
+        assert_eq!(EXACT_CALLS.load(Ordering::Relaxed), 1);
+        reset_decode_state();
+    }
 }
 
 fn owned_bytes_from_ctx<A>(archived: &Archived<A>) -> Result<&[u8], Error> {

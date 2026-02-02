@@ -15,6 +15,7 @@ use std::process::{Command, Stdio};
 use std::{ffi::OsStr, os::windows::ffi::OsStrExt, ptr};
 use std::{
     ffi::c_void,
+    fmt,
     io::{self, Read},
     mem,
     sync::OnceLock,
@@ -61,6 +62,78 @@ type CompressFn = unsafe extern "C" fn(
 ) -> i32;
 type DecompressFn =
     unsafe extern "C" fn(src: *const u8, src_len: usize, dst: *mut u8, dst_len: *mut usize) -> i32;
+
+#[derive(Debug)]
+enum SelfTestFailure {
+    GpuCompress { rc: i32, len: usize, cap: usize },
+    CpuDecodeGpu(io::Error),
+    CpuDecodeMismatch,
+    CpuEncode(io::Error),
+    GpuDecodeCpu { rc: i32, len: usize, cap: usize },
+    GpuDecodeMismatch,
+    GpuRoundtripCompress { rc: i32, len: usize, cap: usize },
+    GpuRoundtripDecompress { rc: i32, len: usize, cap: usize },
+    GpuRoundtripMismatch,
+}
+
+impl SelfTestFailure {
+    fn rc_label(rc: i32) -> &'static str {
+        match rc {
+            0 => "ok",
+            1 => "invalid",
+            2 => "no_space",
+            3 => "gpu_unavailable",
+            4 => "zstd_error",
+            _ => "unknown",
+        }
+    }
+}
+
+impl fmt::Display for SelfTestFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::GpuCompress { rc, len, cap } => write!(
+                f,
+                "gpu_compress rc={} ({}) output_len={} cap={}",
+                rc,
+                Self::rc_label(*rc),
+                len,
+                cap
+            ),
+            Self::CpuDecodeGpu(err) => {
+                write!(f, "cpu_decode_gpu_output error={}", err)
+            }
+            Self::CpuDecodeMismatch => write!(f, "cpu_decode_gpu_output mismatch"),
+            Self::CpuEncode(err) => write!(f, "cpu_encode_sample error={}", err),
+            Self::GpuDecodeCpu { rc, len, cap } => write!(
+                f,
+                "gpu_decode_cpu_output rc={} ({}) output_len={} cap={}",
+                rc,
+                Self::rc_label(*rc),
+                len,
+                cap
+            ),
+            Self::GpuDecodeMismatch => write!(f, "gpu_decode_cpu_output mismatch"),
+            Self::GpuRoundtripCompress { rc, len, cap } => write!(
+                f,
+                "gpu_roundtrip_compress rc={} ({}) output_len={} cap={}",
+                rc,
+                Self::rc_label(*rc),
+                len,
+                cap
+            ),
+            Self::GpuRoundtripDecompress { rc, len, cap } => write!(
+                f,
+                "gpu_roundtrip_decompress rc={} ({}) output_len={} cap={}",
+                rc,
+                Self::rc_label(*rc),
+                len,
+                cap
+            ),
+            Self::GpuRoundtripMismatch => write!(f, "gpu_roundtrip output mismatch"),
+        }
+    }
+}
 
 enum Backend {
     Cpu,
@@ -115,7 +188,7 @@ fn cuda_available() -> bool {
         .unwrap_or(false)
 }
 
-fn gpu_self_test(compress: CompressFn, decompress: DecompressFn) -> bool {
+fn gpu_self_test(compress: CompressFn, decompress: DecompressFn) -> Result<(), SelfTestFailure> {
     const SAMPLE: &[u8] = b"norito gpu roundtrip parity check v1";
     // GPU encode the sample payload.
     let mut gpu_encoded = vec![0u8; SAMPLE.len().saturating_mul(4).saturating_add(512)];
@@ -130,22 +203,22 @@ fn gpu_self_test(compress: CompressFn, decompress: DecompressFn) -> bool {
         )
     };
     if rc != 0 || gpu_len == 0 || gpu_len > gpu_encoded.len() {
-        return false;
+        return Err(SelfTestFailure::GpuCompress {
+            rc,
+            len: gpu_len,
+            cap: gpu_encoded.len(),
+        });
     }
     gpu_encoded.truncate(gpu_len);
     // Ensure CPU zstd can decode the GPU output.
-    let decoded_cpu = match zstd::decode_all(std::io::Cursor::new(&gpu_encoded)) {
-        Ok(bytes) => bytes,
-        Err(_) => return false,
-    };
+    let decoded_cpu = zstd::decode_all(std::io::Cursor::new(&gpu_encoded))
+        .map_err(SelfTestFailure::CpuDecodeGpu)?;
     if decoded_cpu != SAMPLE {
-        return false;
+        return Err(SelfTestFailure::CpuDecodeMismatch);
     }
     // Ensure the GPU decoder can roundtrip CPU-compressed bytes.
-    let cpu_encoded = match zstd::encode_all(std::io::Cursor::new(SAMPLE), 1) {
-        Ok(bytes) => bytes,
-        Err(_) => return false,
-    };
+    let cpu_encoded =
+        zstd::encode_all(std::io::Cursor::new(SAMPLE), 1).map_err(SelfTestFailure::CpuEncode)?;
     let mut gpu_decoded = vec![0u8; SAMPLE.len().saturating_mul(2).saturating_add(256)];
     let mut gpu_decoded_len = gpu_decoded.len();
     let rc = unsafe {
@@ -157,11 +230,15 @@ fn gpu_self_test(compress: CompressFn, decompress: DecompressFn) -> bool {
         )
     };
     if rc != 0 || gpu_decoded_len == 0 || gpu_decoded_len > gpu_decoded.len() {
-        return false;
+        return Err(SelfTestFailure::GpuDecodeCpu {
+            rc,
+            len: gpu_decoded_len,
+            cap: gpu_decoded.len(),
+        });
     }
     gpu_decoded.truncate(gpu_decoded_len);
     if gpu_decoded != SAMPLE {
-        return false;
+        return Err(SelfTestFailure::GpuDecodeMismatch);
     }
     // Full GPU roundtrip for good measure.
     let mut gpu_roundtrip = vec![0u8; SAMPLE.len().saturating_mul(4).saturating_add(512)];
@@ -176,7 +253,11 @@ fn gpu_self_test(compress: CompressFn, decompress: DecompressFn) -> bool {
         )
     };
     if rc != 0 || gpu_roundtrip_len == 0 || gpu_roundtrip_len > gpu_roundtrip.len() {
-        return false;
+        return Err(SelfTestFailure::GpuRoundtripCompress {
+            rc,
+            len: gpu_roundtrip_len,
+            cap: gpu_roundtrip.len(),
+        });
     }
     gpu_roundtrip.truncate(gpu_roundtrip_len);
     let mut gpu_roundtrip_out = vec![0u8; SAMPLE.len().saturating_mul(2).saturating_add(256)];
@@ -190,10 +271,17 @@ fn gpu_self_test(compress: CompressFn, decompress: DecompressFn) -> bool {
         )
     };
     if rc != 0 || gpu_roundtrip_out_len == 0 || gpu_roundtrip_out_len > gpu_roundtrip_out.len() {
-        return false;
+        return Err(SelfTestFailure::GpuRoundtripDecompress {
+            rc,
+            len: gpu_roundtrip_out_len,
+            cap: gpu_roundtrip_out.len(),
+        });
     }
     gpu_roundtrip_out.truncate(gpu_roundtrip_out_len);
-    gpu_roundtrip_out == SAMPLE
+    if gpu_roundtrip_out != SAMPLE {
+        return Err(SelfTestFailure::GpuRoundtripMismatch);
+    }
+    Ok(())
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -223,10 +311,11 @@ unsafe fn init_backend() -> Option<Backend> {
     }
     let compress_fn: CompressFn = unsafe { mem::transmute(compress) };
     let decompress_fn: DecompressFn = unsafe { mem::transmute(decompress) };
-    if !gpu_self_test(compress_fn, decompress_fn) {
+    if let Err(err) = gpu_self_test(compress_fn, decompress_fn) {
         let _ = unsafe { dlclose(lib) };
         eprintln!(
-            "[norito::gpu_zstd] Metal backend failed self-test; falling back to CPU implementation"
+            "[norito::gpu_zstd] Metal backend failed self-test ({}); falling back to CPU implementation",
+            err
         );
         return None;
     }
@@ -304,10 +393,11 @@ unsafe fn init_backend() -> Option<Backend> {
         }
         let compress_fn: CompressFn = unsafe { mem::transmute(compress) };
         let decompress_fn: DecompressFn = unsafe { mem::transmute(decompress) };
-        if !gpu_self_test(compress_fn, decompress_fn) {
+        if let Err(err) = gpu_self_test(compress_fn, decompress_fn) {
             let _ = unsafe { dlclose(lib) };
             eprintln!(
-                "[norito::gpu_zstd] CUDA backend failed self-test; falling back to CPU implementation"
+                "[norito::gpu_zstd] CUDA backend failed self-test ({}); falling back to CPU implementation",
+                err
             );
             return None;
         }
@@ -347,9 +437,12 @@ unsafe fn init_backend() -> Option<Backend> {
         }
         let compress_fn: CompressFn = mem::transmute(compress);
         let decompress_fn: DecompressFn = mem::transmute(decompress);
-        if !gpu_self_test(compress_fn, decompress_fn) {
+        if let Err(err) = gpu_self_test(compress_fn, decompress_fn) {
             let _ = FreeLibrary(lib);
-            report_gpu_load_failure("CUDA backend failed self-test; using CPU fallback instead");
+            report_gpu_load_failure(format!(
+                "CUDA backend failed self-test ({})",
+                err
+            ));
             return None;
         }
         return Some(Backend::Cuda {
@@ -653,7 +746,7 @@ mod self_test {
 
     #[test]
     fn gpu_self_test_passes_for_cpu_stubs() {
-        assert!(gpu_self_test(compress_stub, decompress_stub));
+        assert!(gpu_self_test(compress_stub, decompress_stub).is_ok());
     }
 
     unsafe extern "C" fn compress_corrupt(
@@ -677,6 +770,19 @@ mod self_test {
 
     #[test]
     fn gpu_self_test_detects_corruption() {
-        assert!(!gpu_self_test(compress_corrupt, decompress_stub));
+        let err = gpu_self_test(compress_corrupt, decompress_stub)
+            .expect_err("corrupted payload should fail self-test");
+        assert!(matches!(err, SelfTestFailure::CpuDecodeGpu(_)));
+    }
+
+    #[test]
+    fn self_test_error_reports_rc() {
+        let err = SelfTestFailure::GpuCompress {
+            rc: 3,
+            len: 0,
+            cap: 16,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("rc=3"));
     }
 }
