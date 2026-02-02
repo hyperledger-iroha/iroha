@@ -903,15 +903,15 @@ async fn account_transactions_get_supports_address_format() -> Result<()> {
     tokio::task::spawn_blocking({
         let client = client.clone();
         move || {
-            client.submit(Register::asset_definition(AssetDefinition::numeric(
-                "addrfmtget#wonderland"
-                    .parse()
-                    .expect("asset definition id"),
-            )))
+            let key: Name = "addrfmtget".parse().expect("metadata key");
+            client.submit_blocking(SetKeyValue::account(
+                ALICE_ID.clone(),
+                key,
+                norito::json!("addrfmtget"),
+            ))
         }
     })
     .await??;
-    network.ensure_blocks(2).await?;
 
     let http = http_client();
     let account_literal = ALICE_ID.to_string();
@@ -944,18 +944,32 @@ async fn account_transactions_get_supports_address_format() -> Result<()> {
         url
     };
 
-    let resp = http
-        .get(default_url.clone())
-        .header("Accept", "application/json")
-        .send()
-        .await?;
-    assert!(
-        resp.status().is_success(),
-        "expected success fetching account transactions with IH58 default, got {}",
-        resp.status()
-    );
-    let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
-    let authorities = extract_account_transaction_authorities(&parsed);
+    let authorities = {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let resp = http
+                .get(default_url.clone())
+                .header("Accept", "application/json")
+                .send()
+                .await?;
+            assert!(
+                resp.status().is_success(),
+                "expected success fetching account transactions with IH58 default, got {}",
+                resp.status()
+            );
+            let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
+            let authorities = extract_account_transaction_authorities(&parsed);
+            if !authorities.is_empty() {
+                break authorities;
+            }
+            if Instant::now() >= deadline {
+                return Err(eyre!(
+                    "timed out waiting for IH58 account transactions to appear"
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    };
     assert!(
         !authorities.is_empty(),
         "IH58 default should return at least one authority literal (submitted tx)"
@@ -1013,15 +1027,15 @@ async fn account_transactions_query_supports_address_format() -> Result<()> {
     tokio::task::spawn_blocking({
         let client = client.clone();
         move || {
-            client.submit(Register::asset_definition(AssetDefinition::numeric(
-                "addrfmtquery#wonderland"
-                    .parse()
-                    .expect("asset definition id"),
-            )))
+            let key: Name = "addrfmtquery".parse().expect("metadata key");
+            client.submit_blocking(SetKeyValue::account(
+                ALICE_ID.clone(),
+                key,
+                norito::json!("addrfmtquery"),
+            ))
         }
     })
     .await??;
-    network.ensure_blocks(2).await?;
 
     let http = http_client();
     let account_literal = ALICE_ID.to_string();
@@ -1037,20 +1051,34 @@ async fn account_transactions_query_supports_address_format() -> Result<()> {
     );
 
     let default_body = r#"{"filter":null,"sort":[],"pagination":{"offset":0,"limit":8},"fetch_size":null,"select":null,"address_format":null}"#;
-    let resp = http
-        .post(url.clone())
-        .header("Content-Type", "application/json")
-        .header("Accept", "application/json")
-        .body(default_body)
-        .send()
-        .await?;
-    assert!(
-        resp.status().is_success(),
-        "expected success from account transactions query using IH58 default, got {}",
-        resp.status()
-    );
-    let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
-    let authorities = extract_account_transaction_authorities(&parsed);
+    let authorities = {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let resp = http
+                .post(url.clone())
+                .header("Content-Type", "application/json")
+                .header("Accept", "application/json")
+                .body(default_body)
+                .send()
+                .await?;
+            assert!(
+                resp.status().is_success(),
+                "expected success from account transactions query using IH58 default, got {}",
+                resp.status()
+            );
+            let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
+            let authorities = extract_account_transaction_authorities(&parsed);
+            if !authorities.is_empty() {
+                break authorities;
+            }
+            if Instant::now() >= deadline {
+                return Err(eyre!(
+                    "timed out waiting for IH58 account transactions query to appear"
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    };
     assert!(
         !authorities.is_empty(),
         "IH58 default query should return at least one authority literal (submitted tx)"
