@@ -12,7 +12,10 @@ use super::super::isi::prelude::*;
 /// - update metadata
 /// - transfer, etc.
 pub mod isi {
-    use std::{collections::{BTreeSet, btree_map::Entry}, str::FromStr};
+    use std::{
+        collections::{BTreeSet, btree_map::Entry},
+        str::FromStr,
+    };
 
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
@@ -21,10 +24,10 @@ pub mod isi {
             AccountController,
             curve::{CurveId, CurveRegistryError},
         },
+        isi::error::{InstructionExecutionError, RepetitionError},
         metadata::Metadata,
         name::Name,
         offline::OFFLINE_ASSET_ENABLED_METADATA_KEY,
-        isi::error::{InstructionExecutionError, RepetitionError},
     };
     use iroha_logger::prelude::*;
 
@@ -39,10 +42,8 @@ pub mod isi {
     ) -> Result<bool, InstructionExecutionError> {
         let key = Name::from_str(OFFLINE_ASSET_ENABLED_METADATA_KEY).map_err(|err| {
             InstructionExecutionError::InvariantViolation(
-                format!(
-                    "invalid metadata key `{OFFLINE_ASSET_ENABLED_METADATA_KEY}`: {err}"
-                )
-                .into(),
+                format!("invalid metadata key `{OFFLINE_ASSET_ENABLED_METADATA_KEY}`: {err}")
+                    .into(),
             )
         })?;
         let Some(value) = metadata.get(&key) else {
@@ -80,8 +81,10 @@ pub mod isi {
         chain_id: &ChainId,
         definition_id: &AssetDefinitionId,
     ) -> AccountId {
-        let seed_material =
-            format!("{OFFLINE_ESCROW_SEED_LABEL}|{}|{definition_id}", chain_id.as_str());
+        let seed_material = format!(
+            "{OFFLINE_ESCROW_SEED_LABEL}|{}|{definition_id}",
+            chain_id.as_str()
+        );
         let seed: [u8; Hash::LENGTH] = Hash::new(seed_material).into();
         let keypair = KeyPair::from_seed(seed.to_vec(), Algorithm::Ed25519);
         AccountId::new(definition_id.domain().clone(), keypair.public_key().clone())
@@ -854,10 +857,8 @@ mod tests {
     use iroha_data_model::{
         IntoKeyValue,
         account::{NewAccount, OpaqueAccountId, rekey::AccountLabel},
-        asset::{
-            Asset, AssetDefinition, AssetDefinitionId, AssetId, Mintable, NewAssetDefinition,
-        },
         asset::definition::AssetConfidentialPolicy,
+        asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId, Mintable, NewAssetDefinition},
         block::BlockHeader,
         events::data::space_directory::{
             SpaceDirectoryEvent, SpaceDirectoryManifestActivated, SpaceDirectoryManifestRevoked,
@@ -869,7 +870,10 @@ mod tests {
         offline::OFFLINE_ASSET_ENABLED_METADATA_KEY,
         prelude::Domain,
     };
-    use iroha_primitives::{json::Json, numeric::{Numeric, NumericSpec}};
+    use iroha_primitives::{
+        json::Json,
+        numeric::{Numeric, NumericSpec},
+    };
     use iroha_test_samples::ALICE_ID;
     use nonzero_ext::nonzero;
 
