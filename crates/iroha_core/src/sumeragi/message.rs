@@ -142,10 +142,10 @@ impl BlockMessageWire {
     }
 
     /// Wrap an `Arc`-backed message with cached encoded bytes.
-    pub fn with_encoded(message: Arc<BlockMessage>, encoded: Arc<Vec<u8>>) -> Self {
+    pub fn with_encoded(message: Arc<BlockMessage>, _encoded: Arc<Vec<u8>>) -> Self {
         Self {
             message,
-            encoded: Some(encoded),
+            encoded: None,
         }
     }
 

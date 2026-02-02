@@ -1316,10 +1316,10 @@ impl GossipTransaction {
     }
 
     /// Wrap an already-signed transaction with cached encoded bytes.
-    pub fn with_encoded(signed: SignedTransaction, _encoded: Arc<Vec<u8>>) -> Self {
+    pub fn with_encoded(signed: SignedTransaction, encoded: Arc<Vec<u8>>) -> Self {
         Self {
             signed,
-            encoded: None,
+            encoded: Some(encoded),
         }
     }
 
