@@ -1,9 +1,14 @@
 use core::marker::PhantomData;
-use std::{collections::BTreeSet, vec::Vec};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::{Arc, OnceLock},
+    vec::Vec,
+};
 
 use blstrs::{G1Affine, G1Projective, G2Affine, G2Prepared, G2Projective};
 use group::{Curve, Group as _, prime::PrimeCurveAffine};
 use pairing::{MillerLoopResult as _, MultiMillerLoop};
+use parking_lot::Mutex;
 #[cfg(feature = "rand")]
 use rand::rngs::OsRng;
 use w3f_bls::SerializableToBytes as _;
@@ -124,7 +129,7 @@ impl<C: BlsConfiguration> BlsImpl<C> {
         if C::NORMAL {
             let sig = to_g2(signature)
                 .ok_or_else(|| ParseError("invalid BLS signature encoding".to_string()))?;
-            let pk = to_g1(&pk.bytes)
+            let pk = to_g1_public_key(&pk.bytes)
                 .ok_or_else(|| ParseError("invalid BLS public key encoding".to_string()))?;
             let h = hash_msg_to_g2(message);
             let terms: [(&G1Affine, &G2Prepared); 2] = [
@@ -140,12 +145,12 @@ impl<C: BlsConfiguration> BlsImpl<C> {
         } else {
             let sig = to_g1(signature)
                 .ok_or_else(|| ParseError("invalid BLS signature encoding".to_string()))?;
-            let pk = to_g2(&pk.bytes)
+            let pk = to_g2_prepared(&pk.bytes)
                 .ok_or_else(|| ParseError("invalid BLS public key encoding".to_string()))?;
             let h = hash_msg_to_g1(message);
             let terms: [(&G1Affine, &G2Prepared); 2] = [
-                (&sig, &G2Prepared::from(G2Affine::generator())),
-                (&(-G1Projective::from(h)).to_affine(), &G2Prepared::from(pk)),
+                (&sig, g2_prepared_generator().as_ref()),
+                (&(-G1Projective::from(h)).to_affine(), pk.as_ref()),
             ];
             let gt = blstrs::Bls12::multi_miller_loop(&terms).final_exponentiation();
             if gt.is_identity().into() {
@@ -175,7 +180,7 @@ impl<C: BlsConfiguration> BlsImpl<C> {
             }
             let mut agg_pk: Option<G1Projective> = None;
             for pk in public_keys {
-                let pk = to_g1(pk).ok_or(Error::BadSignature)?;
+                let pk = to_g1_public_key(pk).ok_or(Error::BadSignature)?;
                 if !seen_pks.insert(pk.to_compressed().to_vec()) {
                     return Err(Error::BadSignature);
                 }
@@ -213,7 +218,7 @@ impl<C: BlsConfiguration> BlsImpl<C> {
             }
             let mut agg_pk: Option<G2Projective> = None;
             for pk in public_keys {
-                let pk = to_g2(pk).ok_or(Error::BadSignature)?;
+                let pk = to_g2_public_key(pk).ok_or(Error::BadSignature)?;
                 if !seen_pks.insert(pk.to_compressed().to_vec()) {
                     return Err(Error::BadSignature);
                 }
@@ -231,9 +236,10 @@ impl<C: BlsConfiguration> BlsImpl<C> {
             let sig = sig.to_affine();
             let pk = pk.to_affine();
             let h = hash_msg_to_g1(message);
+            let prepared_pk = G2Prepared::from(pk);
             let terms: [(&G1Affine, &G2Prepared); 2] = [
-                (&sig, &G2Prepared::from(G2Affine::generator())),
-                (&(-G1Projective::from(h)).to_affine(), &G2Prepared::from(pk)),
+                (&sig, g2_prepared_generator().as_ref()),
+                (&(-G1Projective::from(h)).to_affine(), &prepared_pk),
             ];
             let gt = blstrs::Bls12::multi_miller_loop(&terms).final_exponentiation();
             if gt.is_identity().into() {
@@ -288,7 +294,7 @@ impl<C: BlsConfiguration> BlsImpl<C> {
             let sig = to_g2(aggregated_signature).ok_or(Error::BadSignature)?;
             let mut agg_pk = G1Projective::identity();
             for pk in public_keys {
-                let pk = to_g1(pk).ok_or(Error::BadSignature)?;
+                let pk = to_g1_public_key(pk).ok_or(Error::BadSignature)?;
                 if !seen_pks.insert(pk.to_compressed().to_vec()) {
                     return Err(Error::BadSignature);
                 }
@@ -310,7 +316,7 @@ impl<C: BlsConfiguration> BlsImpl<C> {
             let sig = to_g1(aggregated_signature).ok_or(Error::BadSignature)?;
             let mut agg_pk = G2Projective::identity();
             for pk in public_keys {
-                let pk = to_g2(pk).ok_or(Error::BadSignature)?;
+                let pk = to_g2_public_key(pk).ok_or(Error::BadSignature)?;
                 if !seen_pks.insert(pk.to_compressed().to_vec()) {
                     return Err(Error::BadSignature);
                 }
@@ -318,9 +324,10 @@ impl<C: BlsConfiguration> BlsImpl<C> {
             }
             let pk = agg_pk.to_affine();
             let h = hash_msg_to_g1(message);
+            let prepared_pk = G2Prepared::from(pk);
             let terms: [(&G1Affine, &G2Prepared); 2] = [
-                (&sig, &G2Prepared::from(G2Affine::generator())),
-                (&(-G1Projective::from(h)).to_affine(), &G2Prepared::from(pk)),
+                (&sig, g2_prepared_generator().as_ref()),
+                (&(-G1Projective::from(h)).to_affine(), &prepared_pk),
             ];
             let gt = blstrs::Bls12::multi_miller_loop(&terms).final_exponentiation();
             if gt.is_identity().into() {
@@ -359,7 +366,7 @@ impl<C: BlsConfiguration> BlsImpl<C> {
                 .zip(public_keys.iter())
             {
                 let sig = to_g2(s_bytes).ok_or(Error::BadSignature)?;
-                let pk = to_g1(pk_bytes).ok_or(Error::BadSignature)?;
+                let pk = to_g1_public_key(pk_bytes).ok_or(Error::BadSignature)?;
                 let h = hash_msg_to_g2(m);
                 pairs.push((G1Affine::generator(), G2Prepared::from(sig)));
                 pairs.push(((-G1Projective::from(pk)).to_affine(), G2Prepared::from(h)));
@@ -372,19 +379,22 @@ impl<C: BlsConfiguration> BlsImpl<C> {
                 Err(Error::BadSignature)
             }
         } else {
-            let mut pairs: Vec<(G1Affine, G2Prepared)> = Vec::with_capacity(messages.len() * 2);
+            let generator = g2_prepared_generator();
+            let mut pairs: Vec<(G1Affine, Arc<G2Prepared>)> =
+                Vec::with_capacity(messages.len() * 2);
             for ((m, s_bytes), pk_bytes) in messages
                 .iter()
                 .zip(signatures.iter())
                 .zip(public_keys.iter())
             {
                 let sig = to_g1(s_bytes).ok_or(Error::BadSignature)?;
-                let pk = to_g2(pk_bytes).ok_or(Error::BadSignature)?;
+                let pk = to_g2_prepared(pk_bytes).ok_or(Error::BadSignature)?;
                 let h = hash_msg_to_g1(m);
-                pairs.push((sig, G2Prepared::from(G2Affine::generator())));
-                pairs.push(((-G1Projective::from(h)).to_affine(), G2Prepared::from(pk)));
+                pairs.push((sig, Arc::clone(generator)));
+                pairs.push(((-G1Projective::from(h)).to_affine(), pk));
             }
-            let terms: Vec<(&G1Affine, &G2Prepared)> = pairs.iter().map(|(p, q)| (p, q)).collect();
+            let terms: Vec<(&G1Affine, &G2Prepared)> =
+                pairs.iter().map(|(p, q)| (p, q.as_ref())).collect();
             let gt = blstrs::Bls12::multi_miller_loop(&terms).final_exponentiation();
             if gt.is_identity().into() {
                 Ok(())
@@ -397,9 +407,11 @@ impl<C: BlsConfiguration> BlsImpl<C> {
     pub fn parse_public_key(payload: &[u8]) -> Result<PublicKey<C>, ParseError> {
         // Just validate compression length and decompress once
         if C::NORMAL {
-            to_g1(payload).ok_or_else(|| ParseError("invalid G1 public key".to_string()))?;
+            to_g1_public_key(payload)
+                .ok_or_else(|| ParseError("invalid G1 public key".to_string()))?;
         } else {
-            to_g2(payload).ok_or_else(|| ParseError("invalid G2 public key".to_string()))?;
+            to_g2_public_key(payload)
+                .ok_or_else(|| ParseError("invalid G2 public key".to_string()))?;
         }
         Ok(PublicKey {
             bytes: payload.to_vec(),
@@ -426,6 +438,68 @@ impl<C: BlsConfiguration> BlsImpl<C> {
         arr.copy_from_slice(payload);
         Ok(SecretKey::from_bytes(arr))
     }
+}
+
+const PUBKEY_CACHE_MAX: usize = 4096;
+
+fn g1_pubkey_cache() -> &'static Mutex<BTreeMap<Vec<u8>, G1Affine>> {
+    static CACHE: OnceLock<Mutex<BTreeMap<Vec<u8>, G1Affine>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+fn g2_pubkey_cache() -> &'static Mutex<BTreeMap<Vec<u8>, G2Affine>> {
+    static CACHE: OnceLock<Mutex<BTreeMap<Vec<u8>, G2Affine>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+fn g2_prepared_cache() -> &'static Mutex<BTreeMap<Vec<u8>, Arc<G2Prepared>>> {
+    static CACHE: OnceLock<Mutex<BTreeMap<Vec<u8>, Arc<G2Prepared>>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+fn g2_prepared_generator() -> &'static Arc<G2Prepared> {
+    static GENERATOR: OnceLock<Arc<G2Prepared>> = OnceLock::new();
+    GENERATOR.get_or_init(|| Arc::new(G2Prepared::from(G2Affine::generator())))
+}
+
+fn to_g1_public_key(bytes: &[u8]) -> Option<G1Affine> {
+    if let Some(point) = g1_pubkey_cache().lock().get(bytes).cloned() {
+        return Some(point);
+    }
+    let point = to_g1(bytes)?;
+    let mut cache = g1_pubkey_cache().lock();
+    if cache.len() >= PUBKEY_CACHE_MAX {
+        cache.clear();
+    }
+    cache.insert(bytes.to_vec(), point);
+    Some(point)
+}
+
+fn to_g2_public_key(bytes: &[u8]) -> Option<G2Affine> {
+    if let Some(point) = g2_pubkey_cache().lock().get(bytes).cloned() {
+        return Some(point);
+    }
+    let point = to_g2(bytes)?;
+    let mut cache = g2_pubkey_cache().lock();
+    if cache.len() >= PUBKEY_CACHE_MAX {
+        cache.clear();
+    }
+    cache.insert(bytes.to_vec(), point);
+    Some(point)
+}
+
+fn to_g2_prepared(bytes: &[u8]) -> Option<Arc<G2Prepared>> {
+    if let Some(point) = g2_prepared_cache().lock().get(bytes).cloned() {
+        return Some(point);
+    }
+    let point = to_g2_public_key(bytes)?;
+    let prepared = Arc::new(G2Prepared::from(point));
+    let mut cache = g2_prepared_cache().lock();
+    if cache.len() >= PUBKEY_CACHE_MAX {
+        cache.clear();
+    }
+    cache.insert(bytes.to_vec(), Arc::clone(&prepared));
+    Some(prepared)
 }
 
 fn to_g1(bytes: &[u8]) -> Option<G1Affine> {
@@ -552,6 +626,7 @@ pub(super) fn detect_variant_small(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
     // Simple self-test to ensure keypair/sign/verify cycle works for both orientations
     #[derive(Debug, Clone, Copy)]
     struct CNormal;
@@ -578,5 +653,39 @@ mod tests {
         let (pk, sk) = BlsImpl::<CSmall>::keypair(KeyGenOption::UseSeed(vec![9; 16]));
         let sig = BlsImpl::<CSmall>::sign(b"xyz", &sk);
         assert!(BlsImpl::<CSmall>::verify(b"xyz", &sig, &pk).is_ok());
+    }
+
+    #[test]
+    fn public_key_cache_roundtrip_normal() {
+        let (pk, _sk) = BlsImpl::<CNormal>::keypair(KeyGenOption::UseSeed(vec![1; 8]));
+        let bytes = pk.to_bytes();
+        let parsed = to_g1_public_key(&bytes).expect("valid public key");
+        let cached = to_g1_public_key(&bytes).expect("cached public key");
+        assert_eq!(parsed.to_compressed(), cached.to_compressed());
+    }
+
+    #[test]
+    fn public_key_cache_roundtrip_small() {
+        let (pk, _sk) = BlsImpl::<CSmall>::keypair(KeyGenOption::UseSeed(vec![2; 8]));
+        let bytes = pk.to_bytes();
+        let parsed = to_g2_public_key(&bytes).expect("valid public key");
+        let cached = to_g2_public_key(&bytes).expect("cached public key");
+        assert_eq!(parsed.to_compressed(), cached.to_compressed());
+    }
+
+    #[test]
+    fn prepared_generator_is_cached() {
+        let first = g2_prepared_generator();
+        let second = g2_prepared_generator();
+        assert!(Arc::ptr_eq(first, second));
+    }
+
+    #[test]
+    fn prepared_public_key_cache_roundtrip_small() {
+        let (pk, _sk) = BlsImpl::<CSmall>::keypair(KeyGenOption::UseSeed(vec![3; 8]));
+        let bytes = pk.to_bytes();
+        let prepared = to_g2_prepared(&bytes).expect("valid prepared key");
+        let cached = to_g2_prepared(&bytes).expect("cached prepared key");
+        assert!(Arc::ptr_eq(&prepared, &cached));
     }
 }

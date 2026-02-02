@@ -830,7 +830,7 @@ impl ConsensusIngressLimiter {
         use iroha_core::sumeragi::message::BlockMessage;
 
         match msg {
-            iroha_core::NetworkMessage::SumeragiBlock(block) => match block.as_ref() {
+            iroha_core::NetworkMessage::SumeragiBlock(block) => match block.as_ref().as_ref() {
                 BlockMessage::QcVote(_)
                 | BlockMessage::Qc(_)
                 | BlockMessage::VrfCommit(_)
@@ -842,7 +842,9 @@ impl ConsensusIngressLimiter {
                 BlockMessage::RbcInit(_)
                 | BlockMessage::RbcReady(_)
                 | BlockMessage::RbcDeliver(_) => IngressPolicy::critical_with_rbc_sessions(),
-                BlockMessage::RbcChunk(_) => IngressPolicy::bulk(),
+                BlockMessage::RbcChunk(_) | BlockMessage::RbcChunkCompact(_) => {
+                    IngressPolicy::bulk()
+                }
                 BlockMessage::ConsensusParams(_) => IngressPolicy::limited(),
                 BlockMessage::BlockSyncUpdate(_) | BlockMessage::ExecWitness(_) => {
                     IngressPolicy::bulk()
@@ -1049,9 +1051,14 @@ impl ConsensusIngressLimiter {
         let iroha_core::NetworkMessage::SumeragiBlock(block) = msg else {
             return None;
         };
-        match block.as_ref() {
+        match block.as_ref().as_ref() {
             RbcInit(init) => Some((init.block_hash, init.height, init.view)),
             RbcChunk(chunk) => Some((chunk.block_hash, chunk.height, chunk.view)),
+            RbcChunkCompact(chunk) => Some((
+                chunk.block_hash,
+                u64::from(chunk.height),
+                u64::from(chunk.view),
+            )),
             RbcReady(ready) => Some((ready.block_hash, ready.height, ready.view)),
             RbcDeliver(deliver) => Some((deliver.block_hash, deliver.height, deliver.view)),
             _ => None,
@@ -1627,7 +1634,7 @@ impl NetworkRelayShared {
                         .inc();
                 }
                 let (kind, height, view) = match &msg {
-                    SumeragiBlock(data) => Self::block_message_meta(data.as_ref()),
+                    SumeragiBlock(data) => Self::block_message_meta(data.as_ref().as_ref()),
                     SumeragiControlFlow(data) => Self::control_flow_meta(data.as_ref()),
                     BlockSync(data) => {
                         let label = match data.as_ref() {
@@ -1676,7 +1683,7 @@ impl NetworkRelayShared {
 
         match msg {
             SumeragiBlock(data) => {
-                let (kind, height, view) = Self::block_message_meta(data.as_ref());
+                let (kind, height, view) = Self::block_message_meta(data.as_ref().as_ref());
                 iroha_logger::debug!(
                     %peer,
                     ?height,
@@ -1687,7 +1694,7 @@ impl NetworkRelayShared {
                 );
                 let sender = peer.id().clone();
                 let sumeragi = self.sumeragi.clone();
-                let msg = *data;
+                let msg = (*data).into_message();
                 if sumeragi_block_message_requires_blocking(&msg) {
                     let handle = tokio::task::spawn_blocking(move || {
                         sumeragi.incoming_block_message_from(sender, msg);
@@ -1894,6 +1901,11 @@ impl NetworkRelayShared {
             ExecWitness(witness) => ("ExecWitness", Some(witness.height), Some(witness.view)),
             RbcInit(init) => ("RbcInit", Some(init.height), Some(init.view)),
             RbcChunk(chunk) => ("RbcChunk", Some(chunk.height), Some(chunk.view)),
+            RbcChunkCompact(chunk) => (
+                "RbcChunk",
+                Some(u64::from(chunk.height)),
+                Some(u64::from(chunk.view)),
+            ),
             RbcReady(ready) => ("RbcReady", Some(ready.height), Some(ready.view)),
             RbcDeliver(deliver) => ("RbcDeliver", Some(deliver.height), Some(deliver.view)),
             FetchPendingBlock(_request) => ("FetchPendingBlock", None, None),
@@ -2018,7 +2030,9 @@ mod network_relay_tests {
                 ConsensusBlockHeader, Evidence, EvidenceKind, EvidencePayload, ExecWitness,
                 ExecWitnessMsg, Phase, Proposal, QcHeaderRef, RbcInit,
             },
-            message::{BlockMessage, BlockSyncUpdate, ConsensusParamsAdvert, ControlFlow},
+            message::{
+                BlockMessage, BlockMessageWire, BlockSyncUpdate, ConsensusParamsAdvert, ControlFlow,
+            },
         },
         tx::AcceptedTransaction,
     };
@@ -2120,13 +2134,17 @@ mod network_relay_tests {
         std::num::NonZeroU32::new(value).expect("non-zero")
     }
 
+    fn sumeragi_msg(msg: BlockMessage) -> iroha_core::NetworkMessage {
+        iroha_core::NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(msg)))
+    }
+
     fn consensus_params_msg() -> iroha_core::NetworkMessage {
         let advert = ConsensusParamsAdvert {
             collectors_k: 1,
             redundant_send_r: 1,
             membership: None,
         };
-        iroha_core::NetworkMessage::SumeragiBlock(Box::new(BlockMessage::ConsensusParams(advert)))
+        sumeragi_msg(BlockMessage::ConsensusParams(advert))
     }
 
     fn signed_block_for_test() -> SignedBlock {
@@ -2143,7 +2161,7 @@ mod network_relay_tests {
         let created = BlockMessage::BlockCreated(
             iroha_core::sumeragi::message::BlockCreated::from(&signed),
         );
-        iroha_core::NetworkMessage::SumeragiBlock(Box::new(created))
+        sumeragi_msg(created)
     }
 
     fn proposal_hint_msg() -> iroha_core::NetworkMessage {
@@ -2163,7 +2181,7 @@ mod network_relay_tests {
                 phase: Phase::Commit,
             },
         };
-        iroha_core::NetworkMessage::SumeragiBlock(Box::new(BlockMessage::ProposalHint(hint)))
+        sumeragi_msg(BlockMessage::ProposalHint(hint))
     }
 
     fn sample_proposal() -> Proposal {
@@ -2192,7 +2210,7 @@ mod network_relay_tests {
 
     fn proposal_msg() -> iroha_core::NetworkMessage {
         let proposal = sample_proposal();
-        iroha_core::NetworkMessage::SumeragiBlock(Box::new(BlockMessage::Proposal(proposal)))
+        sumeragi_msg(BlockMessage::Proposal(proposal))
     }
 
     fn exec_witness_msg() -> iroha_core::NetworkMessage {
@@ -2205,7 +2223,7 @@ mod network_relay_tests {
             epoch: 0,
             witness: ExecWitness::default(),
         };
-        iroha_core::NetworkMessage::SumeragiBlock(Box::new(BlockMessage::ExecWitness(msg)))
+        sumeragi_msg(BlockMessage::ExecWitness(msg))
     }
 
     fn control_flow_msg() -> iroha_core::NetworkMessage {
@@ -2222,7 +2240,7 @@ mod network_relay_tests {
     fn block_sync_update_msg() -> iroha_core::NetworkMessage {
         let signed = signed_block_for_test();
         let update = BlockSyncUpdate::from(&signed);
-        iroha_core::NetworkMessage::SumeragiBlock(Box::new(BlockMessage::BlockSyncUpdate(update)))
+        sumeragi_msg(BlockMessage::BlockSyncUpdate(update))
     }
 
     fn block_sync_msg(peer: &Peer) -> iroha_core::NetworkMessage {
@@ -2251,7 +2269,7 @@ mod network_relay_tests {
             parent_state_root: Hash::prehashed([0; 32]),
             post_state_root: Hash::prehashed([0; 32]),
         };
-        iroha_core::NetworkMessage::SumeragiBlock(Box::new(BlockMessage::QcVote(vote)))
+        sumeragi_msg(BlockMessage::QcVote(vote))
     }
 
     fn qc_msg() -> iroha_core::NetworkMessage {
@@ -2277,7 +2295,7 @@ mod network_relay_tests {
                 bls_aggregate_signature: vec![0xAA],
             },
         };
-        iroha_core::NetworkMessage::SumeragiBlock(Box::new(BlockMessage::Qc(qc)))
+        sumeragi_msg(BlockMessage::Qc(qc))
     }
 
     fn vrf_commit_msg() -> iroha_core::NetworkMessage {
@@ -2286,7 +2304,7 @@ mod network_relay_tests {
             commitment: [0x13; 32],
             signer: 0,
         };
-        iroha_core::NetworkMessage::SumeragiBlock(Box::new(BlockMessage::VrfCommit(commit)))
+        sumeragi_msg(BlockMessage::VrfCommit(commit))
     }
 
     fn vrf_reveal_msg() -> iroha_core::NetworkMessage {
@@ -2295,7 +2313,7 @@ mod network_relay_tests {
             reveal: [0x14; 32],
             signer: 0,
         };
-        iroha_core::NetworkMessage::SumeragiBlock(Box::new(BlockMessage::VrfReveal(reveal)))
+        sumeragi_msg(BlockMessage::VrfReveal(reveal))
     }
 
     fn rbc_init_msg(tag: u8, height: u64, view: u64) -> iroha_core::NetworkMessage {
@@ -2326,7 +2344,7 @@ mod network_relay_tests {
             block_header,
             leader_signature,
         };
-        iroha_core::NetworkMessage::SumeragiBlock(Box::new(BlockMessage::RbcInit(init)))
+        sumeragi_msg(BlockMessage::RbcInit(init))
     }
 
     fn rbc_ready_msg(tag: u8, height: u64, view: u64) -> iroha_core::NetworkMessage {
@@ -2341,7 +2359,7 @@ mod network_relay_tests {
             sender: 0,
             signature: vec![0x23],
         };
-        iroha_core::NetworkMessage::SumeragiBlock(Box::new(BlockMessage::RbcReady(ready)))
+        sumeragi_msg(BlockMessage::RbcReady(ready))
     }
 
     fn rbc_deliver_msg(tag: u8, height: u64, view: u64) -> iroha_core::NetworkMessage {
@@ -2357,7 +2375,7 @@ mod network_relay_tests {
             signature: vec![0x33],
             ready_signatures: Vec::new(),
         };
-        iroha_core::NetworkMessage::SumeragiBlock(Box::new(BlockMessage::RbcDeliver(deliver)))
+        sumeragi_msg(BlockMessage::RbcDeliver(deliver))
     }
 
     fn rbc_chunk_msg(tag: u8, height: u64, view: u64) -> iroha_core::NetworkMessage {
@@ -2370,7 +2388,7 @@ mod network_relay_tests {
             idx: 0,
             bytes: vec![0xCD; 4],
         };
-        iroha_core::NetworkMessage::SumeragiBlock(Box::new(BlockMessage::RbcChunk(chunk)))
+        sumeragi_msg(BlockMessage::RbcChunk(chunk))
     }
 
     #[test]
@@ -6938,7 +6956,7 @@ async fn run_node(config: Config, genesis: Option<GenesisBlock>) -> ReportResult
     let default_hook = std::panic::take_hook();
     let signal_clone = shutdown_on_panic.clone();
     std::panic::set_hook(Box::new(move |info| {
-        if panic_hook::is_suppressed() {
+        if panic_hook::is_suppressed() || norito::decode_panic_suppressed() {
             iroha_logger::warn!(
                 "Panic occurred with shutdown suppression active; skipping shutdown signal"
             );

@@ -1222,22 +1222,35 @@ impl Actor {
 
             let topology_peers = topology.as_ref();
             let local_peer_id = self.common_config.peer.id().clone();
+            let proposal_msg = Arc::new(BlockMessage::Proposal(proposal));
+            let proposal_encoded =
+                Arc::new(BlockMessageWire::encode_message(proposal_msg.as_ref()));
             for peer in topology_peers {
                 if peer == &local_peer_id {
                     continue;
                 }
                 self.schedule_background(BackgroundRequest::Post {
                     peer: peer.clone(),
-                    msg: BlockMessage::Proposal(proposal),
+                    msg: BlockMessageWire::with_encoded(
+                        Arc::clone(&proposal_msg),
+                        Arc::clone(&proposal_encoded),
+                    ),
                 });
             }
+            let block_created_wire = Arc::new(block_created_msg.clone());
+            let block_created_encoded = Arc::new(BlockMessageWire::encode_message(
+                block_created_wire.as_ref(),
+            ));
             for peer in topology_peers {
                 if peer == &local_peer_id {
                     continue;
                 }
                 self.schedule_background(BackgroundRequest::Post {
                     peer: peer.clone(),
-                    msg: block_created_msg.clone(),
+                    msg: BlockMessageWire::with_encoded(
+                        Arc::clone(&block_created_wire),
+                        Arc::clone(&block_created_encoded),
+                    ),
                 });
             }
 
@@ -1636,28 +1649,36 @@ impl Actor {
         }
 
         let local_peer_id = self.common_config.peer.id().clone();
-        let proposal_msg = BlockMessage::Proposal(proposal);
+        let proposal_msg = Arc::new(BlockMessage::Proposal(proposal));
+        let proposal_encoded = Arc::new(BlockMessageWire::encode_message(proposal_msg.as_ref()));
         for peer in topology.iter() {
             if peer == &local_peer_id {
                 continue;
             }
             self.schedule_background(BackgroundRequest::Post {
                 peer: peer.clone(),
-                msg: proposal_msg.clone(),
+                msg: BlockMessageWire::with_encoded(
+                    Arc::clone(&proposal_msg),
+                    Arc::clone(&proposal_encoded),
+                ),
             });
         }
 
         let block_created = super::message::BlockCreated {
             block: pending_block,
         };
-        let block_msg = BlockMessage::BlockCreated(block_created);
+        let block_msg = Arc::new(BlockMessage::BlockCreated(block_created));
+        let block_encoded = Arc::new(BlockMessageWire::encode_message(block_msg.as_ref()));
         for peer in topology.iter() {
             if peer == &local_peer_id {
                 continue;
             }
             self.schedule_background(BackgroundRequest::Post {
                 peer: peer.clone(),
-                msg: block_msg.clone(),
+                msg: BlockMessageWire::with_encoded(
+                    Arc::clone(&block_msg),
+                    Arc::clone(&block_encoded),
+                ),
             });
         }
 

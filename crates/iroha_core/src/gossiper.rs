@@ -2,6 +2,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    io::Write,
     num::{NonZeroU32, NonZeroUsize},
     sync::Arc,
     time::{Duration, Instant},
@@ -20,7 +21,10 @@ use iroha_data_model::{
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_p2p::{Broadcast, Post, Priority};
-use norito::codec::{Decode, Encode};
+use norito::{
+    codec::{Decode, Encode},
+    core::{Archived, Error as NoritoError, NoritoDeserialize, NoritoSerialize},
+};
 use tokio::sync::mpsc;
 
 use crate::{
@@ -495,7 +499,7 @@ impl TransactionGossiper {
         }
 
         let sent_hashes: Vec<HashOf<SignedTransaction>> =
-            message.txs.iter().map(SignedTransaction::hash).collect();
+            message.txs.iter().map(|tx| tx.as_signed().hash()).collect();
         let batch_txs = message.txs.len();
         let frame_bytes = encoded_len;
 
@@ -643,7 +647,7 @@ impl TransactionGossiper {
         let batch_txs = message.txs.len();
         let frame_bytes = encoded_len;
         let sent_hashes: Vec<HashOf<SignedTransaction>> =
-            message.txs.iter().map(SignedTransaction::hash).collect();
+            message.txs.iter().map(|tx| tx.as_signed().hash()).collect();
 
         let seed = Self::seed_for_plane(gossip_seed, dataspace_id, GOSSIP_SEED_RESTRICTED_DOMAIN);
         let plan = self.restricted_target_plan(commit_topology, batch_txs, seed);
@@ -1093,7 +1097,7 @@ impl TransactionGossiper {
 
             let crypto_cfg = self.state.crypto();
             match AcceptedTransaction::accept(
-                tx,
+                tx.into_signed(),
                 &self.chain_id,
                 max_clock_drift,
                 tx_limits,
@@ -1275,7 +1279,7 @@ pub(crate) fn dataspace_label(dataspace: DataSpaceId) -> String {
 #[derive(Decode, Encode, Debug, Clone)]
 pub struct TransactionGossip {
     /// Batch of transactions.
-    pub txs: Vec<SignedTransaction>,
+    pub txs: Vec<GossipTransaction>,
     /// Routing metadata aligned with `txs`.
     pub routes: Vec<GossipRoute>,
     /// Visibility plane this batch targets.
@@ -1288,10 +1292,104 @@ impl TransactionGossip {
         Self {
             // Converting into non-accepted transaction because it's not possible
             // to guarantee that the sending peer checked transaction limits
-            txs: txs.into_iter().map(Into::into).collect(),
+            txs: txs.into_iter().map(GossipTransaction::new).collect(),
             routes: Vec::new(),
             plane: GossipPlane::Public,
         }
+    }
+}
+
+/// Gossip payload wrapper that can reuse pre-serialized transaction bytes.
+#[derive(Debug, Clone)]
+pub struct GossipTransaction {
+    signed: SignedTransaction,
+    encoded: Option<Arc<Vec<u8>>>,
+}
+
+impl GossipTransaction {
+    /// Wrap an accepted transaction, dropping acceptance metadata for gossip.
+    pub fn new(tx: AcceptedTransaction<'static>) -> Self {
+        Self {
+            signed: tx.into(),
+            encoded: None,
+        }
+    }
+
+    /// Wrap an already-signed transaction with cached encoded bytes.
+    pub fn with_encoded(signed: SignedTransaction, encoded: Arc<Vec<u8>>) -> Self {
+        Self {
+            signed,
+            encoded: Some(encoded),
+        }
+    }
+
+    /// Borrow the signed transaction payload.
+    pub fn as_signed(&self) -> &SignedTransaction {
+        &self.signed
+    }
+
+    /// Consume the wrapper and return the signed transaction.
+    pub fn into_signed(self) -> SignedTransaction {
+        self.signed
+    }
+}
+
+impl From<SignedTransaction> for GossipTransaction {
+    fn from(signed: SignedTransaction) -> Self {
+        Self {
+            signed,
+            encoded: None,
+        }
+    }
+}
+
+impl NoritoSerialize for GossipTransaction {
+    fn schema_hash() -> [u8; 16] {
+        <SignedTransaction as NoritoSerialize>::schema_hash()
+    }
+
+    fn serialize<W: Write>(&self, mut writer: W) -> Result<(), NoritoError> {
+        if let Some(encoded) = self.encoded.as_ref() {
+            writer.write_all(encoded)?;
+            return Ok(());
+        }
+        self.signed.serialize(writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        self.encoded
+            .as_ref()
+            .map(|bytes| bytes.len())
+            .or_else(|| self.signed.encoded_len_hint())
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        self.encoded
+            .as_ref()
+            .map(|bytes| bytes.len())
+            .or_else(|| self.signed.encoded_len_exact())
+    }
+}
+
+impl<'a> NoritoDeserialize<'a> for GossipTransaction {
+    fn schema_hash() -> [u8; 16] {
+        <SignedTransaction as NoritoSerialize>::schema_hash()
+    }
+
+    fn deserialize(archived: &'a Archived<Self>) -> Self {
+        let signed = SignedTransaction::deserialize(archived.cast());
+        Self {
+            signed,
+            encoded: None,
+        }
+    }
+
+    fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, NoritoError> {
+        let signed = SignedTransaction::try_deserialize(archived.cast())?;
+        Ok(Self {
+            signed,
+            encoded: None,
+        })
     }
 }
 
@@ -1333,7 +1431,7 @@ fn partition_gossip_batch(
         plane,
     };
     let mut requeue = Vec::new();
-    let mut encoded_len = norito::codec::Encode::encode(&message).len();
+    let mut encoded_len = message.encoded_len();
 
     if frame_cap_bytes == 0 {
         requeue.extend(txs.into_iter().map(|entry| entry.tx.as_ref().hash()));
@@ -1352,18 +1450,21 @@ fn partition_gossip_batch(
             continue;
         }
 
-        let signed_clone = SignedTransaction::from(entry.tx.clone());
-        message.txs.push(signed_clone);
+        let routing = entry.routing;
+        message.txs.push(GossipTransaction::with_encoded(
+            SignedTransaction::from(entry.tx),
+            entry.payload,
+        ));
         message.routes.push(GossipRoute {
-            lane_id: entry.routing.lane_id,
-            dataspace_id: entry.routing.dataspace_id,
+            lane_id: routing.lane_id,
+            dataspace_id: routing.dataspace_id,
         });
-        encoded_len = norito::codec::Encode::encode(&message).len();
+        encoded_len = message.encoded_len();
         if encoded_len > frame_cap_bytes {
             message.txs.pop();
             message.routes.pop();
             requeue.push(hash);
-            encoded_len = norito::codec::Encode::encode(&message).len();
+            encoded_len = message.encoded_len();
         }
     }
 
@@ -1407,6 +1508,7 @@ mod tests {
     use iroha_test_samples::{
         ALICE_ID, ALICE_KEYPAIR, BOB_KEYPAIR, CARPENTER_KEYPAIR, PEER_KEYPAIR,
     };
+    use norito::codec::Decode;
     use tempfile::tempdir;
 
     use super::*;
@@ -1425,6 +1527,10 @@ mod tests {
             .sign(ALICE_KEYPAIR.private_key());
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(signed.clone()));
         (signed, accepted)
+    }
+
+    fn payload_for(tx: &SignedTransaction) -> Arc<Vec<u8>> {
+        Arc::new(norito::codec::Encode::encode(tx))
     }
 
     fn test_network_config(addr: iroha_primitives::addr::SocketAddr) -> NetworkConfig {
@@ -1710,13 +1816,13 @@ mod tests {
             dataspace_id: DataSpaceId::new(7),
         };
         let small_len = norito::codec::Encode::encode(&TransactionGossip {
-            txs: vec![small_signed.clone()],
+            txs: vec![small_signed.clone().into()],
             routes: vec![small_route],
             plane: GossipPlane::Public,
         })
         .len();
         let both_len = norito::codec::Encode::encode(&TransactionGossip {
-            txs: vec![small_signed.clone(), large_signed.clone()],
+            txs: vec![small_signed.clone().into(), large_signed.clone().into()],
             routes: vec![small_route, large_route],
             plane: GossipPlane::Public,
         })
@@ -1732,20 +1838,56 @@ mod tests {
                 GossipBatchEntry {
                     tx: small_accepted,
                     routing: RoutingDecision::default(),
+                    payload: payload_for(&small_signed),
                 },
                 GossipBatchEntry {
                     tx: large_accepted,
                     routing: RoutingDecision::default(),
+                    payload: payload_for(&large_signed),
                 },
             ],
         );
 
-        assert_eq!(partitioned.message.txs, vec![small_signed]);
+        let partitioned_hashes: Vec<_> = partitioned
+            .message
+            .txs
+            .iter()
+            .map(|tx| tx.as_signed().hash())
+            .collect();
+        assert_eq!(partitioned_hashes, vec![small_signed.hash()]);
         assert_eq!(
             partitioned.encoded_len,
             norito::codec::Encode::encode(&partitioned.message).len()
         );
         assert_eq!(partitioned.requeue, vec![large_signed.hash()]);
+    }
+
+    #[test]
+    fn gossip_roundtrip_preserves_cached_payload() {
+        let (signed, _accepted) = build_transaction("cached");
+        let payload = payload_for(&signed);
+        let message = TransactionGossip {
+            txs: vec![GossipTransaction::with_encoded(
+                signed.clone(),
+                Arc::clone(&payload),
+            )],
+            routes: vec![GossipRoute {
+                lane_id: LaneId::SINGLE,
+                dataspace_id: DataSpaceId::GLOBAL,
+            }],
+            plane: GossipPlane::Public,
+        };
+
+        let encoded = message.encode();
+        let decoded: TransactionGossip =
+            Decode::decode(&mut encoded.as_slice()).expect("decode gossip");
+
+        assert_eq!(decoded.txs.len(), 1);
+        assert_eq!(decoded.routes.len(), 1);
+        assert_eq!(decoded.txs[0].as_signed().hash(), signed.hash());
+        assert_eq!(decoded.routes[0].lane_id, LaneId::SINGLE);
+        assert_eq!(decoded.routes[0].dataspace_id, DataSpaceId::GLOBAL);
+        assert_eq!(decoded.plane, GossipPlane::Public);
     }
 
     #[test]
@@ -1759,6 +1901,7 @@ mod tests {
             vec![GossipBatchEntry {
                 tx: accepted,
                 routing: RoutingDecision::default(),
+                payload: payload_for(&signed),
             }],
         );
         assert!(partitioned.message.txs.is_empty());
@@ -1772,7 +1915,7 @@ mod tests {
         let (tx_b_signed, tx_b_accepted) = build_transaction("b");
 
         let cap = norito::codec::Encode::encode(&TransactionGossip {
-            txs: vec![tx_a_signed.clone(), tx_b_signed.clone()],
+            txs: vec![tx_a_signed.clone().into(), tx_b_signed.clone().into()],
             routes: vec![
                 GossipRoute {
                     lane_id: LaneId::SINGLE,
@@ -1796,14 +1939,22 @@ mod tests {
                 GossipBatchEntry {
                     tx: tx_a_accepted,
                     routing: RoutingDecision::default(),
+                    payload: payload_for(&tx_a_signed),
                 },
                 GossipBatchEntry {
                     tx: tx_b_accepted,
                     routing: RoutingDecision::default(),
+                    payload: payload_for(&tx_b_signed),
                 },
             ],
         );
-        assert_eq!(partitioned.message.txs, vec![tx_a_signed]);
+        let hashes: Vec<_> = partitioned
+            .message
+            .txs
+            .iter()
+            .map(|tx| tx.as_signed().hash())
+            .collect();
+        assert_eq!(hashes, vec![tx_a_signed.hash()]);
         assert_eq!(partitioned.requeue, vec![tx_b_signed.hash()]);
     }
 
@@ -2272,7 +2423,7 @@ mod tests {
             dataspace_id: DataSpaceId::GLOBAL,
         };
         gossiper.handle_transaction_gossip(TransactionGossip {
-            txs: vec![invalid_signed, valid_signed],
+            txs: vec![invalid_signed.into(), valid_signed.into()],
             routes: vec![invalid_route, valid_route],
             plane: GossipPlane::Public,
         });
@@ -2364,7 +2515,7 @@ mod tests {
             dataspace_id: DataSpaceId::GLOBAL,
         };
         gossiper.handle_transaction_gossip(TransactionGossip {
-            txs: vec![signed],
+            txs: vec![signed.into()],
             routes: vec![route],
             plane: GossipPlane::Public,
         });
@@ -2496,7 +2647,7 @@ mod tests {
             dataspace_id: restricted_dataspace,
         };
         gossiper.handle_transaction_gossip(TransactionGossip {
-            txs: vec![signed],
+            txs: vec![signed.into()],
             routes: vec![route],
             plane: GossipPlane::Restricted,
         });

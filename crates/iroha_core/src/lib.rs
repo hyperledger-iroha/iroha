@@ -179,7 +179,7 @@ use tokio::sync::broadcast;
 use crate::{
     block_sync::message::Message as BlockSyncMessage,
     peers_gossiper::{PeerTrustGossip, PeersGossip},
-    sumeragi::message::{BlockMessage, ControlFlow},
+    sumeragi::message::{BlockMessage, BlockMessageWire, ControlFlow},
 };
 
 /// The interval at which sumeragi checks if there are tx in the `queue`.
@@ -198,7 +198,7 @@ pub type EventsSender = broadcast::Sender<EventBox>;
 #[derive(Clone, Debug, Decode, Encode)]
 pub enum NetworkMessage {
     /// Blockchain consensus data message.
-    SumeragiBlock(Box<BlockMessage>),
+    SumeragiBlock(Box<BlockMessageWire>),
     /// Consensus control-flow frames: `NEW_VIEW`, evidence, and view-change proofs.
     SumeragiControlFlow(Box<ControlFlow>),
     /// Lane settlement relay envelope (NX-4).
@@ -238,7 +238,7 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
     fn topic(&self) -> iroha_p2p::network::message::Topic {
         use iroha_p2p::network::message::Topic as T;
         match self {
-            NetworkMessage::SumeragiBlock(msg) => match msg.as_ref() {
+            NetworkMessage::SumeragiBlock(msg) => match msg.as_ref().as_ref() {
                 BlockMessage::BlockCreated(_)
                 | BlockMessage::FetchPendingBlock(_)
                 | BlockMessage::RbcInit(_)
@@ -252,7 +252,7 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                 | BlockMessage::VrfCommit(_)
                 | BlockMessage::VrfReveal(_) => T::Consensus,
                 BlockMessage::BlockSyncUpdate(_) | BlockMessage::Proposal(_) => T::ConsensusPayload,
-                BlockMessage::RbcChunk(_) => T::ConsensusChunk,
+                BlockMessage::RbcChunk(_) | BlockMessage::RbcChunkCompact(_) => T::ConsensusChunk,
             },
             NetworkMessage::SumeragiControlFlow(_)
             | NetworkMessage::LaneRelay(_)
@@ -439,24 +439,29 @@ pub mod prelude {
 
 #[cfg(test)]
 mod tests {
-    use std::{cmp::Ordering, collections::BTreeSet, num::NonZeroU64};
+    use std::{cmp::Ordering, collections::BTreeSet, num::NonZeroU64, sync::Arc, time::Duration};
 
     use iroha_crypto::{Hash, KeyPair, SignatureOf};
     use iroha_data_model::block::{BlockHeader, BlockSignature, builder::BlockBuilder};
+    use iroha_data_model::nexus::{DataSpaceId, LaneId};
     use iroha_data_model::peer::PeerId;
     use iroha_data_model::role::RoleId;
+    use iroha_data_model::transaction::TransactionBuilder;
+    use iroha_data_model::{ChainId, Level, isi::Log};
     use iroha_p2p::{ClassifyTopic, network::message::Topic as NetworkTopic};
     use iroha_test_samples::gen_account_in;
+    use norito::codec::{Decode, Encode};
     use norito::json;
 
     use crate::{
         NetworkMessage, PeerTrustGossip, SoranetPowConfigBroadcast, SoranetPuzzleConfigBroadcast,
+        gossiper::{GossipPlane, GossipRoute, GossipTransaction, TransactionGossip},
         role::RoleIdWithOwner,
         sumeragi::{
             consensus::{RbcChunk, RbcDeliver, RbcInit, RbcReady},
             message::{
-                BlockCreated, BlockMessage, BlockSyncUpdate, ConsensusParamsAdvert,
-                FetchPendingBlock,
+                BlockCreated, BlockMessage, BlockMessageWire, BlockSyncUpdate,
+                ConsensusParamsAdvert, FetchPendingBlock,
             },
         },
     };
@@ -524,7 +529,9 @@ mod tests {
             redundant_send_r: 1,
             membership: None,
         };
-        let msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessage::ConsensusParams(params)));
+        let msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
+            BlockMessage::ConsensusParams(params),
+        )));
         assert_eq!(msg.topic(), NetworkTopic::Consensus);
 
         let header = BlockHeader::new(
@@ -537,10 +544,11 @@ mod tests {
         );
         let block_hash = header.hash();
         let block = BlockBuilder::new(header.clone()).build(BTreeSet::new());
-        let created =
-            NetworkMessage::SumeragiBlock(Box::new(BlockMessage::BlockCreated(BlockCreated {
+        let created = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
+            BlockMessage::BlockCreated(BlockCreated {
                 block: block.clone(),
-            })));
+            }),
+        )));
         assert_eq!(created.topic(), NetworkTopic::Consensus);
 
         let fetch = FetchPendingBlock {
@@ -550,8 +558,9 @@ mod tests {
             view: 0,
             priority: None,
         };
-        let fetch_msg =
-            NetworkMessage::SumeragiBlock(Box::new(BlockMessage::FetchPendingBlock(fetch)));
+        let fetch_msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
+            BlockMessage::FetchPendingBlock(fetch),
+        )));
         assert_eq!(fetch_msg.topic(), NetworkTopic::Consensus);
 
         let roster_hash = Hash::prehashed([1; 32]);
@@ -576,7 +585,9 @@ mod tests {
             block_header: header.clone(),
             leader_signature,
         };
-        let init_msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessage::RbcInit(init)));
+        let init_msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
+            BlockMessage::RbcInit(init),
+        )));
         assert_eq!(init_msg.topic(), NetworkTopic::Consensus);
 
         let chunk = RbcChunk {
@@ -587,11 +598,15 @@ mod tests {
             idx: 0,
             bytes: vec![1, 2, 3],
         };
-        let payload = NetworkMessage::SumeragiBlock(Box::new(BlockMessage::RbcChunk(chunk)));
+        let payload = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
+            BlockMessage::RbcChunk(chunk),
+        )));
         assert_eq!(payload.topic(), NetworkTopic::ConsensusChunk);
 
         let sync = BlockSyncUpdate::from(&block);
-        let sync_msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessage::BlockSyncUpdate(sync)));
+        let sync_msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
+            BlockMessage::BlockSyncUpdate(sync),
+        )));
         assert_eq!(sync_msg.topic(), NetworkTopic::ConsensusPayload);
 
         let ready = RbcReady {
@@ -604,7 +619,9 @@ mod tests {
             sender: 0,
             signature: vec![7],
         };
-        let ready_msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessage::RbcReady(ready)));
+        let ready_msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
+            BlockMessage::RbcReady(ready),
+        )));
         assert_eq!(ready_msg.topic(), NetworkTopic::Consensus);
 
         let deliver = RbcDeliver {
@@ -618,9 +635,80 @@ mod tests {
             signature: vec![9],
             ready_signatures: Vec::new(),
         };
-        let deliver_msg =
-            NetworkMessage::SumeragiBlock(Box::new(BlockMessage::RbcDeliver(deliver)));
+        let deliver_msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
+            BlockMessage::RbcDeliver(deliver),
+        )));
         assert_eq!(deliver_msg.topic(), NetworkTopic::Consensus);
+    }
+
+    #[test]
+    fn network_message_roundtrip_cached_block_message() {
+        let params = ConsensusParamsAdvert {
+            collectors_k: 1,
+            redundant_send_r: 1,
+            membership: None,
+        };
+        let msg = BlockMessage::ConsensusParams(params);
+        let encoded = BlockMessageWire::encode_message(&msg);
+        let wire = BlockMessageWire::with_encoded(Arc::new(msg), Arc::new(encoded));
+        let network = NetworkMessage::SumeragiBlock(Box::new(wire));
+
+        let bytes = network.encode();
+        let decoded: NetworkMessage =
+            Decode::decode(&mut bytes.as_slice()).expect("decode network");
+
+        match decoded {
+            NetworkMessage::SumeragiBlock(wire) => match wire.as_ref().as_ref() {
+                BlockMessage::ConsensusParams(advert) => {
+                    assert_eq!(advert.collectors_k, 1);
+                    assert_eq!(advert.redundant_send_r, 1);
+                    assert!(advert.membership.is_none());
+                }
+                other => panic!("expected consensus params, got {other:?}"),
+            },
+            other => panic!("expected sumeragi block message, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn network_message_roundtrip_cached_transaction_gossip() {
+        let (account, keypair) = gen_account_in("wonderland");
+        let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
+            .parse()
+            .expect("valid chain id");
+        let mut builder = TransactionBuilder::new(chain_id, account);
+        builder.set_creation_time(Duration::from_millis(0));
+        let signed = builder
+            .with_instructions([Log::new(Level::INFO, "ping".to_owned())])
+            .sign(keypair.private_key());
+        let payload = Arc::new(signed.encode());
+        let gossip = TransactionGossip {
+            txs: vec![GossipTransaction::with_encoded(
+                signed.clone(),
+                Arc::clone(&payload),
+            )],
+            routes: vec![GossipRoute {
+                lane_id: LaneId::SINGLE,
+                dataspace_id: DataSpaceId::GLOBAL,
+            }],
+            plane: GossipPlane::Public,
+        };
+        let msg = NetworkMessage::TransactionGossiper(Box::new(gossip));
+
+        let bytes = msg.encode();
+        let decoded: NetworkMessage =
+            Decode::decode(&mut bytes.as_slice()).expect("decode gossip network");
+
+        match decoded {
+            NetworkMessage::TransactionGossiper(gossip) => {
+                assert_eq!(gossip.txs.len(), 1);
+                assert_eq!(gossip.txs[0].as_signed().hash(), signed.hash());
+                assert_eq!(gossip.routes.len(), 1);
+                assert_eq!(gossip.routes[0].lane_id, LaneId::SINGLE);
+                assert_eq!(gossip.routes[0].dataspace_id, DataSpaceId::GLOBAL);
+            }
+            other => panic!("expected transaction gossip, got {other:?}"),
+        }
     }
 
     #[test]

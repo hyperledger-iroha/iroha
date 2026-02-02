@@ -1,6 +1,10 @@
 //! VRF message handlers and local emission state.
 
+use std::sync::Arc;
+
 use iroha_logger::prelude::*;
+
+use crate::sumeragi::message::BlockMessageWire;
 
 use super::*;
 
@@ -220,13 +224,18 @@ impl Actor {
                 VrfNoteResult::Accepted | VrfNoteResult::AcceptedLate => {
                     let topology_peers = self.effective_commit_topology();
                     let local_peer_id = self.common_config.peer.id().clone();
+                    let msg = Arc::new(BlockMessage::VrfCommit(commit_msg));
+                    let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
                     for peer in &topology_peers {
                         if peer == &local_peer_id {
                             continue;
                         }
                         self.schedule_background(BackgroundRequest::Post {
                             peer: peer.clone(),
-                            msg: BlockMessage::VrfCommit(commit_msg),
+                            msg: BlockMessageWire::with_encoded(
+                                Arc::clone(&msg),
+                                Arc::clone(&encoded),
+                            ),
                         });
                     }
                 }
@@ -311,13 +320,18 @@ impl Actor {
                     }
                     let topology_peers = self.effective_commit_topology();
                     let local_peer_id = self.common_config.peer.id().clone();
+                    let msg = Arc::new(BlockMessage::VrfReveal(reveal_msg));
+                    let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
                     for peer in &topology_peers {
                         if peer == &local_peer_id {
                             continue;
                         }
                         self.schedule_background(BackgroundRequest::Post {
                             peer: peer.clone(),
-                            msg: BlockMessage::VrfReveal(reveal_msg),
+                            msg: BlockMessageWire::with_encoded(
+                                Arc::clone(&msg),
+                                Arc::clone(&encoded),
+                            ),
                         });
                     }
                 }

@@ -1330,16 +1330,18 @@ fn write_fixed_offsets<W: Write>(writer: &mut W, lengths: &[usize]) -> Result<()
     Ok(())
 }
 
-fn encode_seq_payloads<W, I, F>(
+fn encode_seq_payloads<W, I, F, H>(
     out: &mut W,
     len: usize,
     iter: I,
     mut encode_elem: F,
+    mut hint_elem: H,
 ) -> Result<(), Error>
 where
     W: Write,
     I: IntoIterator,
     F: FnMut(I::Item, &mut Vec<u8>) -> Result<(), Error>,
+    H: FnMut(&I::Item) -> Option<usize>,
 {
     let writer = out;
     write_seq_len(
@@ -1351,6 +1353,11 @@ where
         let mut buf = Vec::new();
         for item in iter {
             buf.clear();
+            if let Some(hint) = hint_elem(&item) {
+                if buf.capacity() < hint {
+                    buf.reserve_exact(hint - buf.capacity());
+                }
+            }
             encode_elem(item, &mut buf)?;
             write_len(
                 writer,
@@ -1372,8 +1379,17 @@ where
     let mut buf = Vec::new();
     for item in iter {
         buf.clear();
+        if let Some(hint) = hint_elem(&item) {
+            if buf.capacity() < hint {
+                buf.reserve_exact(hint - buf.capacity());
+            }
+        }
         encode_elem(item, &mut buf)?;
         lengths.push(buf.len());
+        let needed = data.len().saturating_add(buf.len());
+        if data.capacity() < needed {
+            data.reserve_exact(needed - data.capacity());
+        }
         data.extend_from_slice(&buf);
     }
 
@@ -2321,9 +2337,13 @@ where
     T: NoritoSerialize + Ord,
 {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
-        encode_seq_payloads(&mut writer, self.len(), self.iter(), |item, buf| {
-            item.serialize(buf)
-        })
+        encode_seq_payloads(
+            &mut writer,
+            self.len(),
+            self.iter(),
+            |item, buf| item.serialize(buf),
+            |item| item.encoded_len_exact().or_else(|| item.encoded_len_hint()),
+        )
     }
 }
 
@@ -2358,9 +2378,13 @@ where
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
         let mut items: Vec<_> = self.iter().collect();
         items.sort();
-        encode_seq_payloads(&mut writer, items.len(), items, |item, buf| {
-            item.serialize(buf)
-        })
+        encode_seq_payloads(
+            &mut writer,
+            items.len(),
+            items,
+            |item, buf| item.serialize(buf),
+            |item| item.encoded_len_exact().or_else(|| item.encoded_len_hint()),
+        )
     }
 }
 
@@ -4784,9 +4808,13 @@ pub mod stream {
 
 impl<T: NoritoSerialize> NoritoSerialize for VecDeque<T> {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
-        encode_seq_payloads(&mut writer, self.len(), self.iter(), |item, buf| {
-            item.serialize(buf)
-        })
+        encode_seq_payloads(
+            &mut writer,
+            self.len(),
+            self.iter(),
+            |item, buf| item.serialize(buf),
+            |item| item.encoded_len_exact().or_else(|| item.encoded_len_hint()),
+        )
     }
 
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -4820,9 +4848,13 @@ where
 
 impl<T: NoritoSerialize> NoritoSerialize for LinkedList<T> {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
-        encode_seq_payloads(&mut writer, self.len(), self.iter(), |item, buf| {
-            item.serialize(buf)
-        })
+        encode_seq_payloads(
+            &mut writer,
+            self.len(),
+            self.iter(),
+            |item, buf| item.serialize(buf),
+            |item| item.encoded_len_exact().or_else(|| item.encoded_len_hint()),
+        )
     }
 
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -4865,9 +4897,13 @@ where
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
         let mut items: Vec<_> = self.iter().collect();
         items.sort();
-        encode_seq_payloads(&mut writer, items.len(), items, |item, buf| {
-            item.serialize(buf)
-        })
+        encode_seq_payloads(
+            &mut writer,
+            items.len(),
+            items,
+            |item, buf| item.serialize(buf),
+            |item| item.encoded_len_exact().or_else(|| item.encoded_len_hint()),
+        )
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         let mut items: Vec<_> = self.iter().collect();
@@ -4947,9 +4983,13 @@ where
 
 impl<T: NoritoSerialize> NoritoSerialize for Vec<T> {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
-        encode_seq_payloads(&mut writer, self.len(), self.iter(), |item, buf| {
-            item.serialize(buf)
-        })
+        encode_seq_payloads(
+            &mut writer,
+            self.len(),
+            self.iter(),
+            |item, buf| item.serialize(buf),
+            |item| item.encoded_len_exact().or_else(|| item.encoded_len_hint()),
+        )
     }
 }
 

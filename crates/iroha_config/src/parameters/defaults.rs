@@ -2200,7 +2200,7 @@ pub mod norito {
     /// and other adversarial inputs that advertise extreme lengths. The default
     /// aligns with the RBC store cap to avoid rejecting persisted consensus
     /// payloads.
-    pub const MAX_ARCHIVE_LEN: u64 = super::sumeragi::RBC_STORE_MAX_BYTES as u64; // 512 MiB
+    pub const MAX_ARCHIVE_LEN: u64 = super::sumeragi::RBC_STORE_MAX_BYTES as u64; // 1 GiB
     /// Small-N threshold for AoS vs NCB adaptive selection in Norito columnar helpers.
     /// Inputs with `n <= AOS_NCB_SMALL_N` are encoded with a two-pass probe (AoS vs NCB, pick smaller).
     pub const AOS_NCB_SMALL_N: usize = 64;
@@ -2337,7 +2337,7 @@ pub mod sumeragi {
     /// Default capacity for the block payload channel.
     pub const MSG_CHANNEL_CAP_BLOCK_PAYLOAD: usize = 128;
     /// Default capacity for the RBC chunk channel.
-    pub const MSG_CHANNEL_CAP_RBC_CHUNKS: usize = 1_024;
+    pub const MSG_CHANNEL_CAP_RBC_CHUNKS: usize = 2_048;
     /// Default capacity for the fast-path block message channel (BlockCreated, FetchPendingBlock, RBC INIT, params).
     pub const MSG_CHANNEL_CAP_BLOCKS: usize = 256;
     /// Default capacity for Sumeragi control/background/lane channels.
@@ -2371,7 +2371,7 @@ pub mod sumeragi {
     /// Default: data availability (RBC + availability QC gating) disabled.
     pub const DA_ENABLED: bool = true;
     /// Multiplier for DA commit-quorum timeout (applied to block_time + 4 * commit_time).
-    pub const DA_QUORUM_TIMEOUT_MULTIPLIER: u32 = 3;
+    pub const DA_QUORUM_TIMEOUT_MULTIPLIER: u32 = 4;
     /// Multiplier for availability timeout in DA mode.
     pub const DA_AVAILABILITY_TIMEOUT_MULTIPLIER: u32 = 2;
     /// Floor (ms) for availability timeouts to avoid churn on tiny pipelines.
@@ -2406,11 +2406,11 @@ pub mod sumeragi {
     /// Maximum RBC payload chunks broadcast per tick to avoid bursty floods.
     pub const RBC_PAYLOAD_CHUNKS_PER_TICK: usize = 64;
     /// Default maximum number of persisted RBC session summaries kept on disk.
-    pub const RBC_STORE_MAX_SESSIONS: usize = 1024;
+    pub const RBC_STORE_MAX_SESSIONS: usize = 2048;
     /// Default soft quota for persisted RBC sessions. Back-pressure engages beyond this.
     pub const RBC_STORE_SOFT_SESSIONS: usize = (RBC_STORE_MAX_SESSIONS * 3) / 4;
     /// Default maximum total bytes of persisted RBC session payloads on disk.
-    pub const RBC_STORE_MAX_BYTES: usize = 512 * 1024 * 1024; // 512 MiB
+    pub const RBC_STORE_MAX_BYTES: usize = 1024 * 1024 * 1024; // 1 GiB
     /// Default soft quota for persisted RBC payload bytes. Compaction triggers beyond this.
     pub const RBC_STORE_SOFT_BYTES: usize = (RBC_STORE_MAX_BYTES * 3) / 4;
     /// Default disk-backed RBC chunk retention TTL (milliseconds).
@@ -2420,7 +2420,7 @@ pub mod sumeragi {
     /// Default maximum number of RBC chunks stashed before INIT per session.
     pub const RBC_PENDING_MAX_CHUNKS: usize = 128;
     /// Default maximum pending RBC chunk bytes per session before INIT.
-    pub const RBC_PENDING_MAX_BYTES: usize = 8 * 1024 * 1024; // 8 MiB
+    pub const RBC_PENDING_MAX_BYTES: usize = 16 * 1024 * 1024; // 16 MiB
     /// Default maximum pending RBC sessions stashed before INIT.
     pub const RBC_PENDING_SESSION_LIMIT: usize = 256;
     /// Default TTL (milliseconds) for pending RBC stashes awaiting INIT.
@@ -2501,10 +2501,10 @@ pub mod sumeragi {
     pub const PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT: usize = 1;
     /// Soft limit for unresolved RBC backlog sessions before pacemaker backpressure defers proposals.
     /// 0 keeps strict gating (any backlog session defers).
-    pub const PACEMAKER_RBC_BACKLOG_SESSION_SOFT_LIMIT: usize = 2;
+    pub const PACEMAKER_RBC_BACKLOG_SESSION_SOFT_LIMIT: usize = 4;
     /// Soft limit for missing RBC chunks before pacemaker backpressure defers proposals.
     /// 0 keeps strict gating (any missing chunks defers).
-    pub const PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT: usize = 16;
+    pub const PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT: usize = 64;
     /// Permissioned default block time (ms); keep aligned with on-chain defaults.
     pub const BLOCK_TIME_MS: u64 = 100;
     /// Base pacing factor for adaptive timing (basis points, 10_000 = 1.0x).

@@ -1270,7 +1270,8 @@ impl Actor {
             );
             return;
         }
-        let msg = BlockMessage::Qc(qc);
+        let msg = Arc::new(BlockMessage::Qc(qc));
+        let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
         let topology_peers = topology.as_ref();
         let local_peer_id = self.common_config.peer.id().clone();
         for peer in topology_peers {
@@ -1279,7 +1280,7 @@ impl Actor {
             }
             self.schedule_background(BackgroundRequest::Post {
                 peer: peer.clone(),
-                msg: msg.clone(),
+                msg: BlockMessageWire::with_encoded(Arc::clone(&msg), Arc::clone(&encoded)),
             });
         }
     }
@@ -2204,6 +2205,7 @@ impl Actor {
         qc: crate::sumeragi::consensus::Qc,
         aggregate_ok: Option<bool>,
     ) -> Result<()> {
+        let mut aggregate_ok = aggregate_ok;
         // Prepare certificates are view-scoped; commit/new-view certificates can safely arrive
         // after a local view change and still unlock progress, so don't drop them as stale.
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::Prepare)
@@ -2309,6 +2311,15 @@ impl Actor {
             return Ok(());
         }
         let topology = super::network_topology::Topology::new(commit_topology.clone());
+        if aggregate_ok.is_none()
+            && self
+                .subsystems
+                .qc_verify
+                .verified_cache
+                .contains(&super::QcVerifyCacheKey::from_qc(&qc))
+        {
+            aggregate_ok = Some(true);
+        }
         if aggregate_ok.is_none() && !self.subsystems.qc_verify.work_txs.is_empty() {
             if let Some(inputs) = super::qc_aggregate_inputs(
                 &qc,
@@ -2434,7 +2445,15 @@ impl Actor {
             (stake_snapshot, validation, evidence)
         };
         let validation = match validation {
-            Ok(outcome) => outcome,
+            Ok(outcome) => {
+                if aggregate_ok != Some(false) {
+                    self.subsystems
+                        .qc_verify
+                        .verified_cache
+                        .insert(super::QcVerifyCacheKey::from_qc(&qc));
+                }
+                outcome
+            }
             Err(err) => {
                 if let Some(outcome) = self.recover_qc_from_aggregate(
                     &qc,

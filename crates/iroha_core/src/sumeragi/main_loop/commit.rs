@@ -2577,25 +2577,28 @@ impl Actor {
             timings.gate += gate_cost;
 
             if let Some(msg) = replay_msg.take() {
+                let msg = Arc::new(msg);
+                let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
                 for peer in &commit_topology {
                     if peer == &local_peer_id {
                         continue;
                     }
                     self.schedule_background(BackgroundRequest::Post {
                         peer: peer.clone(),
-                        msg: msg.clone(),
+                        msg: BlockMessageWire::with_encoded(Arc::clone(&msg), Arc::clone(&encoded)),
                     });
                 }
             }
             if let Some(init) = replay_rbc_init.take() {
-                let msg = BlockMessage::RbcInit(init);
+                let msg = Arc::new(BlockMessage::RbcInit(init));
+                let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
                 for peer in &commit_topology {
                     if peer == &local_peer_id {
                         continue;
                     }
                     self.schedule_background(BackgroundRequest::Post {
                         peer: peer.clone(),
-                        msg: msg.clone(),
+                        msg: BlockMessageWire::with_encoded(Arc::clone(&msg), Arc::clone(&encoded)),
                     });
                 }
             }
@@ -3135,7 +3138,8 @@ impl Actor {
         };
         self.handle_vote(vote.clone());
 
-        let vote_msg = BlockMessage::QcVote(vote);
+        let vote_msg = Arc::new(BlockMessage::QcVote(vote));
+        let vote_encoded = Arc::new(BlockMessageWire::encode_message(vote_msg.as_ref()));
         self.ensure_collector_plan(&signature_topology, height, view);
         while let Some(peer) = self.next_redundant_collector() {
             self.note_collector_contact(peer.clone(), true);
@@ -3208,7 +3212,10 @@ impl Actor {
         for peer in collector_targets {
             self.schedule_background(BackgroundRequest::Post {
                 peer,
-                msg: vote_msg.clone(),
+                msg: BlockMessageWire::with_encoded(
+                    Arc::clone(&vote_msg),
+                    Arc::clone(&vote_encoded),
+                ),
             });
         }
         true
@@ -3312,7 +3319,8 @@ impl Actor {
         };
         self.handle_vote(vote.clone());
 
-        let vote_msg = BlockMessage::QcVote(vote);
+        let vote_msg = Arc::new(BlockMessage::QcVote(vote));
+        let vote_encoded = Arc::new(BlockMessageWire::encode_message(vote_msg.as_ref()));
         let local_peer_id = self.common_config.peer.id().clone();
         let leader = signature_topology.leader().clone();
         let (collectors_k, _) = self.collector_plan_params_for_mode(consensus_mode);
@@ -3367,7 +3375,10 @@ impl Actor {
         for peer in targets {
             self.schedule_background(BackgroundRequest::Post {
                 peer,
-                msg: vote_msg.clone(),
+                msg: BlockMessageWire::with_encoded(
+                    Arc::clone(&vote_msg),
+                    Arc::clone(&vote_encoded),
+                ),
             });
         }
         true
@@ -3670,10 +3681,12 @@ impl Actor {
                 | crate::sumeragi::consensus::Phase::Commit
                 | crate::sumeragi::consensus::Phase::NewView => BlockMessage::QcVote(vote),
             };
+            let msg = Arc::new(msg);
+            let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
             for peer in &collector_targets {
                 self.schedule_background(BackgroundRequest::Post {
                     peer: peer.clone(),
-                    msg: msg.clone(),
+                    msg: BlockMessageWire::with_encoded(Arc::clone(&msg), Arc::clone(&encoded)),
                 });
             }
             rebroadcasted = rebroadcasted.saturating_add(1);
@@ -3785,10 +3798,12 @@ impl Actor {
             );
         }
 
+        let msg = Arc::new(BlockMessage::ExecWitness(witness_msg));
+        let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
         for peer in collector_targets {
             self.schedule_background(BackgroundRequest::Post {
                 peer,
-                msg: BlockMessage::ExecWitness(witness_msg.clone()),
+                msg: BlockMessageWire::with_encoded(Arc::clone(&msg), Arc::clone(&encoded)),
             });
         }
     }
@@ -3995,10 +4010,12 @@ impl Actor {
             );
             return;
         }
+        let msg = Arc::new(BlockMessage::BlockSyncUpdate(update));
+        let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
         for peer in targets {
             self.schedule_background(BackgroundRequest::Post {
                 peer,
-                msg: BlockMessage::BlockSyncUpdate(update.clone()),
+                msg: BlockMessageWire::with_encoded(Arc::clone(&msg), Arc::clone(&encoded)),
             });
         }
     }
@@ -4034,10 +4051,12 @@ impl Actor {
             );
             return;
         }
+        let msg = Arc::new(BlockMessage::BlockCreated(created));
+        let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
         for peer in targets {
             self.schedule_background(BackgroundRequest::Post {
                 peer,
-                msg: BlockMessage::BlockCreated(created.clone()),
+                msg: BlockMessageWire::with_encoded(Arc::clone(&msg), Arc::clone(&encoded)),
             });
         }
     }
@@ -4126,10 +4145,12 @@ impl Actor {
     #[allow(dead_code)]
     #[allow(clippy::needless_pass_by_value)]
     fn broadcast_block_created(&mut self, created: super::message::BlockCreated, peers: &[PeerId]) {
+        let msg = Arc::new(BlockMessage::BlockCreated(created));
+        let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
         for peer in peers {
             self.schedule_background(BackgroundRequest::Post {
                 peer: peer.clone(),
-                msg: BlockMessage::BlockCreated(created.clone()),
+                msg: BlockMessageWire::with_encoded(Arc::clone(&msg), Arc::clone(&encoded)),
             });
         }
     }
