@@ -859,29 +859,11 @@ fn derive_struct_serialize(
                     })
                 } else {
                     Some(quote! {
-                        if let Some(__e) = norito::core::NoritoSerialize::encoded_len_exact(&self.#name) {
-                            #[cfg(feature = "compact-len")]
-                            {
-                                norito::core::write_len(&mut writer, __e as u64)?;
-                            }
-                            #[cfg(not(feature = "compact-len"))]
-                            {
-                                writer.write_u64::<norito::core::LittleEndian>(__e as u64)?;
-                            }
-                            norito::core::NoritoSerialize::serialize(&self.#name, &mut writer)?;
-                        } else {
-                            __norito_tmp.clear();
-                            norito::core::NoritoSerialize::serialize(&self.#name, &mut __norito_tmp)?;
-                            #[cfg(feature = "compact-len")]
-                            {
-                                norito::core::write_len(&mut writer, __norito_tmp.len() as u64)?;
-                            }
-                            #[cfg(not(feature = "compact-len"))]
-                            {
-                                writer.write_u64::<norito::core::LittleEndian>(__norito_tmp.len() as u64)?;
-                            }
-                            writer.write_all(__norito_tmp.as_slice())?;
-                        }
+                        norito::core::write_len_prefixed(
+                            &mut writer,
+                            &self.#name,
+                            &mut __norito_tmp,
+                        )?;
                     })
                 }
             })
@@ -910,29 +892,11 @@ fn derive_struct_serialize(
                     })
                 } else {
                     Some(quote! {
-                        if let Some(__e) = norito::core::NoritoSerialize::encoded_len_exact(&self.#idx) {
-                            #[cfg(feature = "compact-len")]
-                            {
-                                norito::core::write_len(&mut writer, __e as u64)?;
-                            }
-                            #[cfg(not(feature = "compact-len"))]
-                            {
-                                writer.write_u64::<norito::core::LittleEndian>(__e as u64)?;
-                            }
-                            norito::core::NoritoSerialize::serialize(&self.#idx, &mut writer)?;
-                        } else {
-                            __norito_tmp.clear();
-                            norito::core::NoritoSerialize::serialize(&self.#idx, &mut __norito_tmp)?;
-                            #[cfg(feature = "compact-len")]
-                            {
-                                norito::core::write_len(&mut writer, __norito_tmp.len() as u64)?;
-                            }
-                            #[cfg(not(feature = "compact-len"))]
-                            {
-                                writer.write_u64::<norito::core::LittleEndian>(__norito_tmp.len() as u64)?;
-                            }
-                            writer.write_all(__norito_tmp.as_slice())?;
-                        }
+                        norito::core::write_len_prefixed(
+                            &mut writer,
+                            &self.#idx,
+                            &mut __norito_tmp,
+                        )?;
                     })
                 }
             })
@@ -2908,165 +2872,64 @@ fn derive_enum_serialize(
                                 quote! {
                                     if __norito_packed {
                                         norito::core::NoritoSerialize::serialize(#b, &mut writer)?;
-                                    } else if let Some(__e) = norito::core::NoritoSerialize::encoded_len_exact(#b) {
-                                        #[cfg(feature = "compact-len")]
-                                        { norito::core::write_len(&mut writer, __e as u64)?; }
-                                        #[cfg(not(feature = "compact-len"))]
-                                        { writer.write_u64::<norito::core::LittleEndian>(__e as u64)?; }
-                                        norito::core::NoritoSerialize::serialize(#b, &mut writer)?;
                                     } else {
-                                    let tmp = &mut __norito_tmp;
-                                    tmp.clear();
-                                    norito::core::NoritoSerialize::serialize(#b, &mut *tmp)?;
-                                    #[cfg(debug_assertions)]
-                                    if norito::debug_trace_enabled() {
-                                        let buf = tmp.as_slice();
-                                        let preview_len = core::cmp::min(buf.len(), 16);
-                                        eprintln!(
-                                            "encode enum {}::{} payload preview {:?}",
-                                            stringify!(#ident),
-                                            stringify!(#v_ident),
-                                            &buf[..preview_len]
-                                        );
+                                        norito::core::write_len_prefixed(
+                                            &mut writer,
+                                            #b,
+                                            &mut __norito_tmp,
+                                        )?;
                                     }
-                                    #[cfg(feature = "compact-len")]
-                                    { norito::core::write_len(&mut writer, tmp.len() as u64)?; }
-                                    #[cfg(not(feature = "compact-len"))]
-                                    { writer.write_u64::<norito::core::LittleEndian>(tmp.len() as u64)?; }
-                                    writer.write_all(tmp.as_slice())?;
-                                }
                                 }
                             }
                         } else {
                             quote! {
                                 // Non self-delimiting, non-fixed types keep outer length framing even in packed builds
-                                if let Some(__e) = norito::core::NoritoSerialize::encoded_len_exact(#b) {
-                                    #[cfg(debug_assertions)]
-                                    if norito::debug_trace_enabled() {
-                                        let mut __dbg_buf: norito::core::DeriveSmallBuf = norito::core::DeriveSmallBuf::new();
-                                        norito::core::NoritoSerialize::serialize(#b, &mut __dbg_buf)?;
-                                        let dbg_slice = __dbg_buf.as_slice();
-                                        let preview_len = core::cmp::min(dbg_slice.len(), 16);
-                                        eprintln!(
-                                            "encode enum {}::{} exact payload preview {:?}",
-                                            stringify!(#ident),
-                                            stringify!(#v_ident),
-                                            &dbg_slice[..preview_len]
-                                        );
-                                    }
-                                    #[cfg(debug_assertions)]
-                                    if norito::debug_trace_enabled() {
-                                        eprintln!(
-                                            "encode enum {}::{} exact_len={}",
-                                            stringify!(#ident),
-                                            stringify!(#v_ident),
-                                            __e
-                                        );
-                                    }
-                                    #[cfg(feature = "compact-len")]
-                                    { norito::core::write_len(&mut writer, __e as u64)?; }
-                                    #[cfg(not(feature = "compact-len"))]
-                                    { writer.write_u64::<norito::core::LittleEndian>(__e as u64)?; }
-                                    norito::core::NoritoSerialize::serialize(#b, &mut writer)?;
-                                } else {
-                                    let tmp = &mut __norito_tmp;
-                                    tmp.clear();
-                                    norito::core::NoritoSerialize::serialize(#b, &mut *tmp)?;
-                                    #[cfg(debug_assertions)]
-                                    if norito::debug_trace_enabled() {
-                                        eprintln!(
-                                            "encode enum {}::{} staged_len={}",
-                                            stringify!(#ident),
-                                            stringify!(#v_ident),
-                                            tmp.len()
-                                        );
-                                    }
-                                    #[cfg(feature = "compact-len")]
-                                    { norito::core::write_len(&mut writer, tmp.len() as u64)?; }
-                                    #[cfg(not(feature = "compact-len"))]
-                                    { writer.write_u64::<norito::core::LittleEndian>(tmp.len() as u64)?; }
-                                    writer.write_all(tmp.as_slice())?;
-                                }
+                                norito::core::write_len_prefixed(
+                                    &mut writer,
+                                    #b,
+                                    &mut __norito_tmp,
+                                )?;
                             }
                         };
                         Some(ser)
                     });
 
                 // Serialization calls without per-field outer length for needs-size fields
-                let _serialize_calls_nohdr = fields
-                    .unnamed
-                    .iter()
-                    .zip(bindings.iter())
-                    .filter_map(|(f, b)| {
-                        let attrs = FieldAttr::parse(&f.attrs);
-                        if attrs.skip { return None; }
-                        let is_sd = is_self_delimiting(&f.ty);
-                        let is_fixed = is_fixed_size(&f.ty).is_some();
-                        let ser = if is_sd || is_fixed {
-                            quote! {
-                                if __norito_packed {
-                                    norito::core::NoritoSerialize::serialize(#b, &mut writer)?;
-                                } else {
-                                    if let Some(__e) = norito::core::NoritoSerialize::encoded_len_exact(#b) {
-                                        #[cfg(feature = "compact-len")]
-                                        { norito::core::write_len(&mut writer, __e as u64)?; }
-                                        #[cfg(not(feature = "compact-len"))]
-                                        { writer.write_u64::<norito::core::LittleEndian>(__e as u64)?; }
+                let _serialize_calls_nohdr =
+                    fields
+                        .unnamed
+                        .iter()
+                        .zip(bindings.iter())
+                        .filter_map(|(f, b)| {
+                            let attrs = FieldAttr::parse(&f.attrs);
+                            if attrs.skip {
+                                return None;
+                            }
+                            let is_sd = is_self_delimiting(&f.ty);
+                            let is_fixed = is_fixed_size(&f.ty).is_some();
+                            let ser = if is_sd || is_fixed {
+                                quote! {
+                                    if __norito_packed {
                                         norito::core::NoritoSerialize::serialize(#b, &mut writer)?;
                                     } else {
-                                        let tmp = &mut __norito_tmp;
-                                        tmp.clear();
-                                        norito::core::NoritoSerialize::serialize(#b, &mut *tmp)?;
-                                        #[cfg(feature = "compact-len")]
-                                        { norito::core::write_len(&mut writer, tmp.len() as u64)?; }
-                                        #[cfg(not(feature = "compact-len"))]
-                                        { writer.write_u64::<norito::core::LittleEndian>(tmp.len() as u64)?; }
-                                        writer.write_all(tmp.as_slice())?;
+                                        norito::core::write_len_prefixed(
+                                            &mut writer,
+                                            #b,
+                                            &mut __norito_tmp,
+                                        )?;
                                     }
                                 }
-                            }
-                        } else {
-                            quote! {
-                                if let Some(__e) = norito::core::NoritoSerialize::encoded_len_exact(#b) {
-                                    #[cfg(debug_assertions)]
-                                    if norito::debug_trace_enabled() {
-                                        eprintln!(
-                                            "encode enum {}::{} field{} exact_len={}",
-                                            stringify!(#ident),
-                                            stringify!(#v_ident),
-                                            #idx,
-                                            __e
-                                        );
-                                    }
-                                    #[cfg(feature = "compact-len")]
-                                    { norito::core::write_len(&mut writer, __e as u64)?; }
-                                    #[cfg(not(feature = "compact-len"))]
-                                    { writer.write_u64::<norito::core::LittleEndian>(__e as u64)?; }
-                                    norito::core::NoritoSerialize::serialize(#b, &mut writer)?;
-                                } else {
-                                    let tmp = &mut __norito_tmp;
-                                    tmp.clear();
-                                    norito::core::NoritoSerialize::serialize(#b, &mut *tmp)?;
-                                    #[cfg(debug_assertions)]
-                                    if norito::debug_trace_enabled() {
-                                        eprintln!(
-                                            "encode enum {}::{} field{} staged_len={}",
-                                            stringify!(#ident),
-                                            stringify!(#v_ident),
-                                            #idx,
-                                            tmp.len()
-                                        );
-                                    }
-                                    #[cfg(feature = "compact-len")]
-                                    { norito::core::write_len(&mut writer, tmp.len() as u64)?; }
-                                    #[cfg(not(feature = "compact-len"))]
-                                    { writer.write_u64::<norito::core::LittleEndian>(tmp.len() as u64)?; }
-                                    writer.write_all(tmp.as_slice())?;
+                            } else {
+                                quote! {
+                                    norito::core::write_len_prefixed(
+                                        &mut writer,
+                                        #b,
+                                        &mut __norito_tmp,
+                                    )?;
                                 }
-                            }
-                        };
-                        Some(ser)
-                    });
+                            };
+                            Some(ser)
+                        });
                 arms.push(quote! {
                     Self::#v_ident(#(#bindings),*) => {
                         let __norito_packed = norito::core::use_packed_struct();
@@ -3151,22 +3014,11 @@ fn derive_enum_serialize(
                                 if __norito_packed {
                                     norito::core::NoritoSerialize::serialize(#name, &mut writer)?;
                                 } else {
-                                    if let Some(__e) = norito::core::NoritoSerialize::encoded_len_exact(#name) {
-                                        #[cfg(feature = "compact-len")]
-                                        { norito::core::write_len(&mut writer, __e as u64)?; }
-                                        #[cfg(not(feature = "compact-len"))]
-                                        { writer.write_u64::<norito::core::LittleEndian>(__e as u64)?; }
-                                        norito::core::NoritoSerialize::serialize(#name, &mut writer)?;
-                                    } else {
-                                        let tmp = &mut __norito_tmp;
-                                        tmp.clear();
-                                        norito::core::NoritoSerialize::serialize(#name, &mut *tmp)?;
-                                        #[cfg(feature = "compact-len")]
-                                        { norito::core::write_len(&mut writer, tmp.len() as u64)?; }
-                                        #[cfg(not(feature = "compact-len"))]
-                                        { writer.write_u64::<norito::core::LittleEndian>(tmp.len() as u64)?; }
-                                        writer.write_all(tmp.as_slice())?;
-                                    }
+                                    norito::core::write_len_prefixed(
+                                        &mut writer,
+                                        #name,
+                                        &mut __norito_tmp,
+                                    )?;
                                 }
                             }
                         }
@@ -3174,22 +3026,11 @@ fn derive_enum_serialize(
                         // Non self-delimiting, non-fixed: always write an outer length header
                         // for named enum fields (both in packed and non-packed modes).
                         quote! {
-                            if let Some(__e) = norito::core::NoritoSerialize::encoded_len_exact(#name) {
-                                #[cfg(feature = "compact-len")]
-                                { norito::core::write_len(&mut writer, __e as u64)?; }
-                                #[cfg(not(feature = "compact-len"))]
-                                { writer.write_u64::<norito::core::LittleEndian>(__e as u64)?; }
-                                norito::core::NoritoSerialize::serialize(#name, &mut writer)?;
-                            } else {
-                                let tmp = &mut __norito_tmp;
-                                tmp.clear();
-                                norito::core::NoritoSerialize::serialize(#name, &mut *tmp)?;
-                                #[cfg(feature = "compact-len")]
-                                { norito::core::write_len(&mut writer, tmp.len() as u64)?; }
-                                #[cfg(not(feature = "compact-len"))]
-                                { writer.write_u64::<norito::core::LittleEndian>(tmp.len() as u64)?; }
-                                writer.write_all(tmp.as_slice())?;
-                            }
+                            norito::core::write_len_prefixed(
+                                &mut writer,
+                                #name,
+                                &mut __norito_tmp,
+                            )?;
                         }
                     };
                     Some(ser)

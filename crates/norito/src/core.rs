@@ -32,7 +32,7 @@ pub use norito_derive::{NoritoDeserialize, NoritoSerialize};
 
 #[cfg(feature = "schema-structural")]
 use crate::json;
-use crate::{ArchiveSlice, codec::encode_adaptive, guarded_try_deserialize};
+use crate::{ArchiveSlice, guarded_try_deserialize};
 
 pub mod heuristics;
 pub mod hw;
@@ -53,20 +53,18 @@ const DEFAULT_MAX_ARCHIVE_LEN: u64 = 64 * 1024 * 1024; // 64 MiB
 static MAX_ARCHIVE_LEN: AtomicU64 = AtomicU64::new(DEFAULT_MAX_ARCHIVE_LEN);
 
 fn serialize_owned<W: Write, T: NoritoSerialize>(mut writer: W, value: &T) -> Result<(), Error> {
-    let exact_len = {
-        let _guard = DecodeFlagsGuard::enter(default_encode_flags());
-        value.encoded_len_exact()
+    let _flags_guard = if decode_flags_active() {
+        None
+    } else {
+        Some(DecodeFlagsGuard::enter(default_encode_flags()))
     };
-    if let Some(exact_len) = exact_len {
-        write_len(&mut writer, exact_len as u64)?;
-        let written = crate::codec::encode_adaptive_into(value, &mut writer)?;
-        debug_assert_eq!(
-            written, exact_len,
-            "encoded_len_exact mismatch for owned payload"
-        );
-        return Ok(());
+    let exact_len = value.encoded_len_exact();
+    let hint_len = exact_len.or_else(|| value.encoded_len_hint());
+    let mut payload = Vec::new();
+    if let Some(hint) = hint_len {
+        payload.reserve_exact(hint);
     }
-    let payload = encode_adaptive(value);
+    value.serialize(&mut payload)?;
     let len = payload.len() as u64;
     write_len(&mut writer, len)?;
     writer.write_all(&payload)?;
@@ -106,6 +104,32 @@ mod serialize_owned_tests {
         assert_eq!(used, buf.len());
         assert_eq!(payload, &[0xAB]);
         assert_eq!(EXACT_CALLS.load(Ordering::Relaxed), 1);
+        reset_decode_state();
+    }
+
+    #[derive(Clone, Copy)]
+    struct BadExactLen;
+
+    impl NoritoSerialize for BadExactLen {
+        fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
+            writer.write_all(&[0xAA, 0xBB])?;
+            Ok(())
+        }
+
+        fn encoded_len_exact(&self) -> Option<usize> {
+            Some(1)
+        }
+    }
+
+    #[test]
+    fn serialize_owned_recomputes_length_when_exact_is_wrong() {
+        reset_decode_state();
+        let value = Box::new(BadExactLen);
+        let mut buf = Vec::new();
+        value.serialize(&mut buf).expect("serialize owned payload");
+        let (payload, used) = parse_owned_payload(&buf).expect("parse owned payload");
+        assert_eq!(used, buf.len());
+        assert_eq!(payload, &[0xAA, 0xBB]);
         reset_decode_state();
     }
 }
@@ -1368,6 +1392,23 @@ pub fn write_len_to_vec(out: &mut Vec<u8>, value: u64) {
     } else {
         out.extend_from_slice(&value.to_le_bytes());
     }
+}
+
+/// Serialize a value into `buf`, then write its length prefix and bytes.
+///
+/// This keeps length prefixes consistent with the actual serialized payload,
+/// even if `encoded_len_exact` is incorrect.
+pub fn write_len_prefixed<W: Write, T: NoritoSerialize, const N: usize>(
+    writer: &mut W,
+    value: &T,
+    buf: &mut SmallBuf<N>,
+) -> Result<(), Error> {
+    buf.clear();
+    value.serialize(&mut *buf)?;
+    let len = u64::try_from(buf.len()).map_err(|_| Error::LengthMismatch)?;
+    write_len(writer, len)?;
+    writer.write_all(buf.as_slice())?;
+    Ok(())
 }
 
 /// Write a compact varint length prefix regardless of layout flags.
@@ -4330,30 +4371,15 @@ where
 
 impl<T: NoritoSerialize, E: NoritoSerialize> NoritoSerialize for Result<T, E> {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
+        let mut tmp: DeriveSmallBuf = DeriveSmallBuf::new();
         match self {
             Ok(value) => {
                 writer.write_u8(0)?;
-                if let Some(e) = value.encoded_len_exact() {
-                    write_len(&mut writer, e as u64)?;
-                    value.serialize(&mut writer)?;
-                } else {
-                    let mut buf = Vec::new();
-                    value.serialize(&mut buf)?;
-                    write_len(&mut writer, buf.len() as u64)?;
-                    writer.write_all(&buf)?;
-                }
+                write_len_prefixed(&mut writer, value, &mut tmp)?;
             }
             Err(err) => {
                 writer.write_u8(1)?;
-                if let Some(e) = err.encoded_len_exact() {
-                    write_len(&mut writer, e as u64)?;
-                    err.serialize(&mut writer)?;
-                } else {
-                    let mut buf = Vec::new();
-                    err.serialize(&mut buf)?;
-                    write_len(&mut writer, buf.len() as u64)?;
-                    writer.write_all(&buf)?;
-                }
+                write_len_prefixed(&mut writer, err, &mut tmp)?;
             }
         }
         Ok(())
@@ -6264,15 +6290,10 @@ fn recompute_canonical_len<T>(value: &T) -> Result<usize, Error>
 where
     T: crate::NoritoSerialize,
 {
-    if let Some(exact) = value.encoded_len_exact() {
-        return Ok(exact);
-    }
-    if let Some(hint) = value.encoded_len_hint() {
-        let mut tmp = Vec::with_capacity(hint);
-        value.serialize(&mut tmp)?;
-        return Ok(tmp.len());
-    }
-    let mut tmp = Vec::new();
+    let reserve = value
+        .encoded_len_exact()
+        .or_else(|| value.encoded_len_hint());
+    let mut tmp = Vec::with_capacity(reserve.unwrap_or(0));
     value.serialize(&mut tmp)?;
     Ok(tmp.len())
 }
@@ -6282,7 +6303,10 @@ mod tests {
     use crc64fast::Digest;
 
     use super::*;
-    use crate::{NoritoDeserialize, NoritoSerialize, codec, codec::encode_with_header_flags};
+    use crate::{
+        NoritoDeserialize, NoritoSerialize, codec, codec::encode_adaptive,
+        codec::encode_with_header_flags,
+    };
 
     #[test]
     fn crc64_matches_digest() {
@@ -6344,6 +6368,96 @@ mod tests {
             decode_field_canonical::<Vec<Vec<u64>>>(misaligned).expect("decode misaligned field");
         assert_eq!(decoded, value);
         assert_eq!(used, encoded.len());
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    struct BadExactLen(u32);
+
+    impl crate::NoritoSerialize for BadExactLen {
+        fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), Error> {
+            crate::NoritoSerialize::serialize(&self.0, writer)
+        }
+
+        fn encoded_len_exact(&self) -> Option<usize> {
+            Some(1)
+        }
+    }
+
+    impl<'de> crate::NoritoDeserialize<'de> for BadExactLen {
+        fn deserialize(archived: &'de Archived<Self>) -> Self {
+            Self::try_deserialize(archived).expect("BadExactLen decode must succeed")
+        }
+
+        fn try_deserialize(archived: &'de Archived<Self>) -> Result<Self, Error> {
+            let ptr = core::ptr::from_ref(archived).cast::<u8>();
+            let payload = payload_slice_from_ptr(ptr)?;
+            let (value, _) = decode_field_canonical::<u32>(payload)?;
+            Ok(BadExactLen(value))
+        }
+    }
+
+    impl<'a> DecodeFromSlice<'a> for BadExactLen {
+        fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
+            let (value, used) = decode_field_canonical::<u32>(bytes)?;
+            Ok((BadExactLen(value), used))
+        }
+    }
+
+    #[test]
+    fn decode_field_canonical_ignores_bad_encoded_len_exact() {
+        let value = BadExactLen(0xAABBCCDD);
+        let encoded = encode_adaptive(&value);
+        let (decoded, used) =
+            decode_field_canonical::<BadExactLen>(&encoded).expect("decode bad exact len");
+        assert_eq!(decoded, value);
+        assert_eq!(used, encoded.len());
+    }
+
+    #[test]
+    fn write_len_prefixed_uses_actual_length() {
+        let value = BadExactLen(0xDEADBEEF);
+        let mut out = Vec::new();
+        let mut tmp: DeriveSmallBuf = DeriveSmallBuf::new();
+        write_len_prefixed(&mut out, &value, &mut tmp).expect("write len prefixed");
+        let (len, hdr) = read_len_from_slice(&out).expect("read len");
+        assert_eq!(len, out.len() - hdr);
+    }
+
+    #[derive(Clone, Debug, PartialEq, crate::Encode, crate::Decode)]
+    struct BadExactWrapper {
+        inner: BadExactLen,
+    }
+
+    #[derive(Clone, Debug, PartialEq, crate::Encode, crate::Decode)]
+    enum BadExactEnum {
+        One(BadExactLen),
+    }
+
+    #[test]
+    fn derived_struct_uses_actual_length_prefix() {
+        let value = BadExactWrapper {
+            inner: BadExactLen(0xAABBCCDD),
+        };
+        let bytes = encode_adaptive(&value);
+        let decoded: BadExactWrapper = codec::decode_adaptive(&bytes).expect("decode wrapper");
+        assert_eq!(decoded, value);
+    }
+
+    #[test]
+    fn derived_enum_uses_actual_length_prefix() {
+        let value = BadExactEnum::One(BadExactLen(0x11223344));
+        let bytes = encode_adaptive(&value);
+        let decoded: BadExactEnum = codec::decode_adaptive(&bytes).expect("decode enum");
+        assert_eq!(decoded, value);
+    }
+
+    #[test]
+    fn result_uses_actual_length_prefix() {
+        let value: Result<BadExactLen, BadExactLen> = Ok(BadExactLen(0x01020304));
+        let bytes = encode_adaptive(&value);
+        let decoded: Result<BadExactLen, BadExactLen> =
+            codec::decode_adaptive(&bytes).expect("decode result");
+        assert_eq!(decoded, value);
     }
 
     #[derive(Clone, Copy)]
