@@ -51891,6 +51891,32 @@ async fn background_posts_dispatch_inline_when_worker_disabled() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn fetch_pending_block_response_dispatches_inline_when_worker_disabled() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.debug.disable_background_worker = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+
+    let _ = harness.background_rx.try_iter().collect::<Vec<_>>();
+
+    let peer = PeerId::from(KeyPair::random().public_key().clone());
+    let msg = BlockMessage::ConsensusParams(super::message::ConsensusParamsAdvert {
+        collectors_k: 1,
+        redundant_send_r: 1,
+        membership: None,
+    });
+
+    harness.actor.enqueue_fetch_pending_block_response(peer, msg);
+
+    let queued = harness.background_rx.try_iter().next();
+    assert!(
+        queued.is_none(),
+        "fetch-pending-block responses should dispatch inline when the worker is disabled"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn proposal_broadcast_bypasses_background_queue() {
     let mut harness = test_actor_harness(4).await;
 
