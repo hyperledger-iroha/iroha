@@ -676,9 +676,9 @@ fn decode_scalar_bytes(bytes: &[u8]) -> BridgeResult<Scalar> {
         return Err(BridgeError::OfflineBlinding);
     }
     let mut array: [u8; 32] = bytes.try_into().map_err(|_| BridgeError::OfflineBlinding)?;
-    let scalar = Scalar::from_canonical_bytes(array);
+    let scalar = Scalar::from_bytes_mod_order(array);
     array.zeroize();
-    Option::from(scalar).ok_or(BridgeError::OfflineBlinding)
+    Ok(scalar)
 }
 
 fn numeric_to_scalar(value: &Numeric) -> BridgeResult<Scalar> {

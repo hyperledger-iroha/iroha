@@ -914,10 +914,19 @@ impl NoritoSerialize for PeersGossip {
 
 impl<'a> NoritoDeserialize<'a> for PeersGossip {
     fn deserialize(archived: &'a ncore::Archived<Self>) -> Self {
-        let peers: Vec<Peer> = NoritoDeserialize::deserialize(archived.cast());
-        Self {
-            peers: UniqueVec::from_iter(peers),
+        Self::try_deserialize(archived).expect("PeersGossip decode")
+    }
+
+    fn try_deserialize(archived: &'a ncore::Archived<Self>) -> Result<Self, ncore::Error> {
+        let ptr = core::ptr::from_ref(archived).cast::<u8>();
+        let bytes = ncore::payload_slice_from_ptr(ptr)?;
+        let (peers, consumed) = ncore::decode_field_canonical::<Vec<Peer>>(bytes)?;
+        if consumed != bytes.len() {
+            return Err(ncore::Error::LengthMismatch);
         }
+        Ok(Self {
+            peers: UniqueVec::from_iter(peers),
+        })
     }
 }
 
