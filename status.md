@@ -12,6 +12,7 @@ Last update: 2026-02-02
 - P2P/gossip: message sender now reserves encode buffers using Norito length hints and reuses outbound frames; gossip batching now uses `encoded_len` to avoid encode-for-size, moves accepted txs without cloning, and reuses cached payload bytes for retransmit.
 - Tests: `cargo test -p integration_tests --test config -- --nocapture` (ok). Full workspace tests not run (user requested no full workspace tests).
 - 7-peer 100 TPS profiling: permissioned sustained ~100 tps submitted (~83.5 tps committed) with pprof hot spots in Norito encode/decode + RawVec growth + BLS verify; NPoS run showed queue growth/backpressure (peer lag) and lower admit rate. Artifacts: `/tmp/iroha-prof-perm/` + `/tmp/iroha-prof-npos/`; optimization tasks implemented, re-profile pending.
+- Config/P2P: seed SoraNet PoW/puzzle updates to newly online peers, cache broadcast payloads, and treat PoW config frames as control-plane traffic; added unit coverage for payload encoding. Tests not run (not requested).
 - Config/P2P: skip duplicate SoraNet PoW/puzzle broadcasts so remote updates can be re-broadcast and reach multi-hop peers; added unit coverage for PoW broadcast match detection. Tests not run (not requested).
 - Sumeragi: block-sync fetch-pending responses now respect `sumeragi.debug.disable_background_worker` and dispatch inline when the worker is disabled; added unit coverage. Time-trigger integration scenario now drives one extra block to cover end-exclusive schedule boundaries.
 - Tests: not run (not requested).
