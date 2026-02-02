@@ -2406,11 +2406,11 @@ pub mod sumeragi {
     /// Maximum RBC payload chunks broadcast per tick to avoid bursty floods.
     pub const RBC_PAYLOAD_CHUNKS_PER_TICK: usize = 64;
     /// Default maximum number of persisted RBC session summaries kept on disk.
-    pub const RBC_STORE_MAX_SESSIONS: usize = 2048;
+    pub const RBC_STORE_MAX_SESSIONS: usize = 4096;
     /// Default soft quota for persisted RBC sessions. Back-pressure engages beyond this.
     pub const RBC_STORE_SOFT_SESSIONS: usize = (RBC_STORE_MAX_SESSIONS * 3) / 4;
     /// Default maximum total bytes of persisted RBC session payloads on disk.
-    pub const RBC_STORE_MAX_BYTES: usize = 1024 * 1024 * 1024; // 1 GiB
+    pub const RBC_STORE_MAX_BYTES: usize = 2 * 1024 * 1024 * 1024; // 2 GiB
     /// Default soft quota for persisted RBC payload bytes. Compaction triggers beyond this.
     pub const RBC_STORE_SOFT_BYTES: usize = (RBC_STORE_MAX_BYTES * 3) / 4;
     /// Default disk-backed RBC chunk retention TTL (milliseconds).
@@ -2501,10 +2501,10 @@ pub mod sumeragi {
     pub const PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT: usize = 1;
     /// Soft limit for unresolved RBC backlog sessions before pacemaker backpressure defers proposals.
     /// 0 keeps strict gating (any backlog session defers).
-    pub const PACEMAKER_RBC_BACKLOG_SESSION_SOFT_LIMIT: usize = 4;
+    pub const PACEMAKER_RBC_BACKLOG_SESSION_SOFT_LIMIT: usize = 8;
     /// Soft limit for missing RBC chunks before pacemaker backpressure defers proposals.
     /// 0 keeps strict gating (any missing chunks defers).
-    pub const PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT: usize = 64;
+    pub const PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT: usize = 256;
     /// Permissioned default block time (ms); keep aligned with on-chain defaults.
     pub const BLOCK_TIME_MS: u64 = 100;
     /// Base pacing factor for adaptive timing (basis points, 10_000 = 1.0x).
@@ -2548,9 +2548,9 @@ pub mod sumeragi {
         /// Timeout for witness availability QC aggregation (ms).
         pub const TIMEOUT_WITNESS_MS: u64 = 150;
         /// Timeout for final commit confirmation (ms).
-        pub const TIMEOUT_COMMIT_MS: u64 = 750;
+        pub const TIMEOUT_COMMIT_MS: u64 = 850;
         /// Timeout for data-availability quorum formation (ms).
-        pub const TIMEOUT_DA_MS: u64 = 650;
+        pub const TIMEOUT_DA_MS: u64 = 750;
         /// Timeout before gossip fanout to non-designated aggregators (ms).
         pub const TIMEOUT_AGG_MS: u64 = 120;
         /// Default number of aggregators (K) used in NPoS mode.

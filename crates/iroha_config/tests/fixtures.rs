@@ -1013,8 +1013,8 @@ fn minimal_config_snapshot() {
                     pending_stall_grace: 250ms,
                     da_fast_reschedule: false,
                     active_pending_soft_limit: 1,
-                    rbc_backlog_session_soft_limit: 4,
-                    rbc_backlog_chunk_soft_limit: 64,
+                    rbc_backlog_session_soft_limit: 8,
+                    rbc_backlog_chunk_soft_limit: 256,
                 },
                 pacing_governor: SumeragiPacingGovernor {
                     window_blocks: 20,
@@ -1064,12 +1064,12 @@ fn minimal_config_snapshot() {
                     session_ttl: 120s,
                     rebroadcast_sessions_per_tick: 8,
                     payload_chunks_per_tick: 64,
-                    store_max_sessions: 2048,
-                    store_soft_sessions: 1536,
-                    store_max_bytes: 1073741824,
-                    store_soft_bytes: 805306368,
+                    store_max_sessions: 4096,
+                    store_soft_sessions: 3072,
+                    store_max_bytes: 2147483648,
+                    store_soft_bytes: 1610612736,
                     disk_store_ttl: 120s,
-                    disk_store_max_bytes: 1073741824,
+                    disk_store_max_bytes: 2147483648,
                 },
                 finality: SumeragiFinality {
                     proof_policy: Off,
@@ -3368,8 +3368,8 @@ fn sumeragi_timeout_defaults_target_one_second() {
     assert_eq!(npos::TIMEOUT_PROPOSE_MS, 350);
     assert_eq!(npos::TIMEOUT_PREVOTE_MS, 450);
     assert_eq!(npos::TIMEOUT_PRECOMMIT_MS, 550);
-    assert_eq!(npos::TIMEOUT_COMMIT_MS, 750);
-    assert_eq!(npos::TIMEOUT_DA_MS, 650);
+    assert_eq!(npos::TIMEOUT_COMMIT_MS, 850);
+    assert_eq!(npos::TIMEOUT_DA_MS, 750);
 }
 // type alias used through fixtures for newer error-stack API
 type Result<T, E> = core::result::Result<T, Report<E>>;

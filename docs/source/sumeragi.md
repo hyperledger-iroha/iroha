@@ -263,7 +263,7 @@ K / r Parameters
 - Determinism: primary/next collector order is a pure function of the canonical roster, PRF seed, and `(height, view)`; when the PRF seed is unavailable the fallback is the wraparound slice starting at `proxy_tail_index()` (skipping the leader) until at least commit quorum size, with no per-node randomness.
 
 NPoS Tunables (`sumeragi.npos.*` + `sumeragi.advanced.npos.timeouts.*`)
-- `advanced.npos.timeouts.{propose_ms, prevote_ms, precommit_ms, exec_ms, witness_ms, commit_ms, da_ms, aggregator_ms}` (optional): each value must be > 0 when set. Unset fields derive from the on‑chain effective block time (`SumeragiParameters.block_time_ms` scaled by `pacing_factor_bps`) using the 1s ratios `350/450/550/150/150/750/650/120`. The pacemaker currently consumes propose/collect_da/collect_prevote/collect_precommit/commit; `exec_ms`/`witness_ms` are reserved for future witness pacing and `collect_aggregator` remains observability-only.
+- `advanced.npos.timeouts.{propose_ms, prevote_ms, precommit_ms, exec_ms, witness_ms, commit_ms, da_ms, aggregator_ms}` (optional): each value must be > 0 when set. Unset fields derive from the on‑chain effective block time (`SumeragiParameters.block_time_ms` scaled by `pacing_factor_bps`) using the 1s ratios `350/450/550/150/150/850/750/120`. The pacemaker currently consumes propose/collect_da/collect_prevote/collect_precommit/commit; `exec_ms`/`witness_ms` are reserved for future witness pacing and `collect_aggregator` remains observability-only.
 - Collector fan-out is configured under `sumeragi.collectors.{k,redundant_send_r}` (shared with permissioned). Both must be > 0; invalid values are rejected during config parsing.
 - `vrf.{commit_window_blocks, reveal_window_blocks}` (optional): length of the commit and reveal windows inside an epoch; both must be > 0 when set. Unset values derive from `epoch_length_blocks` using the 3600-block ratios `100/40`. `vrf.commit_deadline_offset_blocks` defaults to `commit_window_blocks` and `vrf.reveal_deadline_offset_blocks` defaults to `commit_window_blocks + reveal_window_blocks` when omitted.
 - `election.{min_self_bond, max_nominator_concentration_pct, seat_band_pct, max_entity_correlation_pct}` with defaults `1000`, `25`, `5`, and `25`. Percentages are clamped to the 0–100 range, and `min_self_bond` must be > 0.
@@ -355,8 +355,8 @@ validation_pending_cap = 8192        # deferred vote-validation backlog cap
 [sumeragi.advanced.pacemaker]
 pending_stall_grace_ms = 250       # grace before pending progress counts as stalled
 active_pending_soft_limit = 1      # allow proposals with <= N blocking pending blocks (0 = strict)
-rbc_backlog_session_soft_limit = 2 # allow proposals with <= N backlog sessions (0 = strict)
-rbc_backlog_chunk_soft_limit = 16  # allow proposals with <= N missing chunks (0 = strict)
+rbc_backlog_session_soft_limit = 8 # allow proposals with <= N backlog sessions (0 = strict)
+rbc_backlog_chunk_soft_limit = 256  # allow proposals with <= N missing chunks (0 = strict)
 
 [sumeragi.da]
 enabled = true                  # enable DA + RBC; availability evidence tracked (commit does not wait)

@@ -137,8 +137,8 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 [sumeragi.advanced.pacemaker]
 # pending_stall_grace_ms = 250       # grace before pending progress counts as stalled
 # active_pending_soft_limit = 1      # allow proposals with <= N blocking pending blocks (0 = strict)
-# rbc_backlog_session_soft_limit = 2 # allow proposals with <= N backlog sessions (0 = strict)
-# rbc_backlog_chunk_soft_limit = 16  # allow proposals with <= N missing chunks (0 = strict)
+# rbc_backlog_session_soft_limit = 8 # allow proposals with <= N backlog sessions (0 = strict)
+# rbc_backlog_chunk_soft_limit = 256  # allow proposals with <= N missing chunks (0 = strict)
 # backoff_multiplier = 1             # view-timeout backoff multiplier
 # rtt_floor_multiplier = 2           # RTT floor multiplier for pacemaker backoff
 # max_backoff_ms = 10000             # max pacemaker backoff window
@@ -194,8 +194,8 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 # precommit_ms = 550
 # exec_ms = 150
 # witness_ms = 150
-# commit_ms = 750
-# da_ms = 650
+# commit_ms = 850
+# da_ms = 750
 # aggregator_ms = 120
 
 #[sumeragi.npos.vrf]

@@ -1181,7 +1181,7 @@ fn allow_reentrant_build(running_under_cargo: bool) -> bool {
     if !running_under_cargo {
         return true;
     }
-    bool_env_override("IROHA_TEST_ALLOW_REENTRANT_BUILD").unwrap_or(true)
+    bool_env_override("IROHA_TEST_ALLOW_REENTRANT_BUILD").unwrap_or(false)
 }
 
 impl Program {
@@ -1286,6 +1286,9 @@ impl Program {
         push_candidate(default_target.join(format!("debug/{bin}")));
         push_candidate(default_target.join(format!("release/{bin}")));
 
+        let prebuild_candidate =
+            try_candidates(candidates.iter().map(|p| Cow::Borrowed(p.as_path())));
+
         // 4) Decide whether to (re)build.
         //    We default to building to avoid using stale binaries across source changes.
         //    Set IROHA_TEST_SKIP_BUILD=1 to skip attempting a build.
@@ -1296,6 +1299,26 @@ impl Program {
                 .unwrap_or(false)
         });
         let running_under_cargo = std::env::var_os("CARGO").is_some();
+        let allow_reentrant = allow_reentrant_build(running_under_cargo);
+        if running_under_cargo && !skip_build && !allow_reentrant {
+            if let Some(found) = prebuild_candidate.clone() {
+                warn!(
+                    %name,
+                    %pkg,
+                    ?found,
+                    "reentrant build disabled under Cargo; using existing binary"
+                );
+                match self {
+                    Program::Irohad => {
+                        let _ = IROHAD_BIN.set(found.clone());
+                    }
+                    Program::Iroha => {
+                        let _ = IROHA_BIN.set(found.clone());
+                    }
+                }
+                return Ok(found);
+            }
+        }
         if !skip_build {
             ensure_binary_fresh(
                 &repo,
@@ -1304,7 +1327,7 @@ impl Program {
                 &target_dir,
                 &profile,
                 &primary_binary,
-                allow_reentrant_build(running_under_cargo),
+                allow_reentrant,
                 &build_args,
             )?;
         }
@@ -7816,20 +7839,20 @@ exit 0
     }
 
     #[test]
-    fn reentrant_builds_allowed_under_cargo_by_default() {
+    fn reentrant_builds_disabled_under_cargo_by_default() {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
         let _override_guard = EnvVarGuard::cleared("IROHA_TEST_ALLOW_REENTRANT_BUILD");
 
-        assert!(allow_reentrant_build(true));
+        assert!(!allow_reentrant_build(true));
     }
 
     #[test]
-    fn reentrant_builds_can_be_disabled_via_env() {
+    fn reentrant_builds_can_be_enabled_via_env() {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
         let _override_guard = EnvVarGuard::cleared("IROHA_TEST_ALLOW_REENTRANT_BUILD");
-        set_env_var("IROHA_TEST_ALLOW_REENTRANT_BUILD", "false");
+        set_env_var("IROHA_TEST_ALLOW_REENTRANT_BUILD", "true");
 
-        assert!(!allow_reentrant_build(true));
+        assert!(allow_reentrant_build(true));
     }
 
     #[test]

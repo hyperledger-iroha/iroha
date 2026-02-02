@@ -903,7 +903,7 @@ async fn account_transactions_get_supports_address_format() -> Result<()> {
     tokio::task::spawn_blocking({
         let client = client.clone();
         move || {
-            client.submit_blocking(Register::asset_definition(AssetDefinition::numeric(
+            client.submit(Register::asset_definition(AssetDefinition::numeric(
                 "addrfmtget#wonderland"
                     .parse()
                     .expect("asset definition id"),
@@ -1013,7 +1013,7 @@ async fn account_transactions_query_supports_address_format() -> Result<()> {
     tokio::task::spawn_blocking({
         let client = client.clone();
         move || {
-            client.submit_blocking(Register::asset_definition(AssetDefinition::numeric(
+            client.submit(Register::asset_definition(AssetDefinition::numeric(
                 "addrfmtquery#wonderland"
                     .parse()
                     .expect("asset definition id"),
