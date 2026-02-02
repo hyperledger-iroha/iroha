@@ -25,7 +25,7 @@ public final class OfflineQrStreamVisionScanner {
             return []
         }
         return results.compactMap { observation in
-            if #available(iOS 16.0, macOS 14.0, *) {
+            if #available(iOS 17.0, macOS 14.0, *) {
                 if let data = observation.payloadData {
                     return data
                 }

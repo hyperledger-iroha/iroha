@@ -84,7 +84,8 @@ public enum OfflineBalanceProofBuilder {
             return result
         } catch let bridgeError as NoritoNativeBridge.OfflineCommitmentBridgeError {
             switch bridgeError {
-            case .callFailed:
+            case .callFailed(let status):
+                NSLog("[OfflineBalanceProof] offlineCommitmentUpdate callFailed status=%d, delta=%@, commitLen=%d, blindLen=%d, resBlindLen=%d", status, claimedDelta, initialCommitment.count, initialBlinding.count, resultingBlinding.count)
                 throw OfflineBalanceProofError.bridgeUnavailable
             }
         }
@@ -122,7 +123,8 @@ public enum OfflineBalanceProofBuilder {
             return proof
         } catch let bridgeError as NoritoNativeBridge.OfflineBalanceProofBridgeError {
             switch bridgeError {
-            case .callFailed:
+            case .callFailed(let status):
+                NSLog("[OfflineBalanceProof] offlineBalanceProof callFailed status=%d, chainId=%@, delta=%@, value=%@", status, chainId, claimedDelta, resultingValue)
                 throw OfflineBalanceProofError.bridgeUnavailable
             }
         }

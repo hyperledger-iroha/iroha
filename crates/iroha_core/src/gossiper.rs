@@ -1381,7 +1381,12 @@ impl<'a> NoritoDeserialize<'a> for GossipTransaction {
     }
 
     fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, NoritoError> {
-        let signed = SignedTransaction::try_deserialize(archived.cast())?;
+        let ptr = core::ptr::from_ref(archived).cast::<u8>();
+        let bytes = norito::core::payload_slice_from_ptr(ptr)?;
+        let (signed, consumed) = norito::core::decode_field_canonical::<SignedTransaction>(bytes)?;
+        if consumed != bytes.len() {
+            return Err(NoritoError::LengthMismatch);
+        }
         Ok(Self {
             signed: Arc::new(signed),
             encoded: None,

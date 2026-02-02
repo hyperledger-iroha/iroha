@@ -5550,7 +5550,7 @@
     },
     "/v1/explorer/instructions": {
       "get": {
-        "description": "List instructions for explorer usage (supports pagination and optional authority/transaction/block/kind/asset_id filtering).",
+        "description": "List instructions for explorer usage (supports pagination and optional account/authority/transaction/block/kind/asset_id filtering).",
         "parameters": [
           {
             "description": "Optional page number (default 1).",
@@ -5589,6 +5589,15 @@
             "description": "Filter instructions by authority account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
             "in": "query",
             "name": "authority",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter transfer instructions by participant account (source or destination; accepts IH58 (preferred)/sora (second-best)/public-key literals).",
+            "in": "query",
+            "name": "account",
             "required": false,
             "schema": {
               "type": "string"

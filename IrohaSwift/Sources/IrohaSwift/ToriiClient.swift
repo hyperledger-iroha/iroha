@@ -241,7 +241,7 @@ public struct ToriiExplorerInstructionItem: Decodable, Sendable, Equatable {
         case authority
         case createdAt = "created_at"
         case kind
-        case box = "box"
+        case box = "r#box"
         case transactionHash = "transaction_hash"
         case transactionStatus = "transaction_status"
         case block
