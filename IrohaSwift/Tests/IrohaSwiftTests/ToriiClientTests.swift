@@ -1457,7 +1457,7 @@ final class ToriiClientTests: XCTestCase {
             "authority":"alice@wonderland",
             "created_at":"2025-01-01T00:00:00Z",
             "kind":"Transfer",
-            "box":{
+            "r#box":{
                 "scale":"0x00",
                 "json":{
                     "kind":"Transfer",

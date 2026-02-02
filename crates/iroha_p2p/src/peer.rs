@@ -3,7 +3,6 @@
 use std::{
     collections::VecDeque,
     net::SocketAddr,
-    panic,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -33,7 +32,7 @@ use iroha_crypto::soranet::{
     puzzle::{self, ChallengeBinding as PuzzleBinding, Parameters as PuzzleParameters},
 };
 use message::*;
-use norito::codec::{Decode, DecodeAll, Encode};
+use norito::{codec::{Decode, DecodeAll, Encode}, core as ncore};
 use rand::{CryptoRng, RngCore, SeedableRng, rngs::StdRng};
 #[cfg(feature = "noise_handshake")]
 use snow::{Builder, params::NoiseParams};
@@ -2153,24 +2152,13 @@ mod run {
             let data = &buf[..size];
             let decrypted = self.cryptographer.decrypt(data)?;
             let encoded_len = decrypted.len();
-            let decoded =
-                match panic::catch_unwind(|| DecodeAll::decode_all(&mut decrypted.as_slice())) {
-                    Ok(result) => result?,
-                    Err(panic) => {
-                        let panic_msg = if let Some(msg) = (&*panic).downcast_ref::<&str>() {
-                            (*msg).to_owned()
-                        } else if let Some(msg) = (&*panic).downcast_ref::<String>() {
-                            msg.clone()
-                        } else {
-                            String::from("<non-string panic payload>")
-                        };
-                        iroha_logger::warn!(
-                            panic_msg = %panic_msg,
-                            "Norito decode panicked; dropping connection"
-                        );
-                        return Err(Error::Format);
-                    }
-                };
+            let decoded = match ncore::decode_from_bytes::<T>(&decrypted) {
+                Ok(value) => value,
+                Err(err) => {
+                    iroha_logger::warn!(error = ?err, "Failed to decode peer message");
+                    return Err(Error::Format);
+                }
+            };
 
             self.buffer.advance(size + Self::U32_SIZE);
 
@@ -2223,14 +2211,7 @@ mod run {
         /// # Errors
         /// - If encryption fail.
         fn prepare_message<T: Pload>(&mut self, msg: &T, priority: Priority) -> Result<(), Error> {
-            // Start with fresh buffer
-            self.buffer.clear();
-            if let Some(hint) = msg.encoded_len_exact().or_else(|| msg.encoded_len_hint()) {
-                if self.buffer.capacity() < hint {
-                    self.buffer.reserve_exact(hint - self.buffer.capacity());
-                }
-            }
-            msg.encode_to(&mut self.buffer);
+            self.buffer = ncore::to_bytes(msg)?;
             let encrypted = self.cryptographer.encrypt(&self.buffer)?;
 
             let size = encrypted.len();
@@ -2304,7 +2285,10 @@ mod run {
     }
 
     pub fn data_message_wire_len<T: Encode>(payload: T) -> usize {
-        Message::Data(payload).encoded_len()
+        let message = Message::Data(payload);
+        ncore::to_bytes(&message)
+            .map(|bytes| bytes.len())
+            .unwrap_or(usize::MAX)
     }
 
     #[cfg(test)]
