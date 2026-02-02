@@ -17,6 +17,10 @@ impl Actor {
             return;
         }
         let request = BackgroundRequest::Post { peer, msg };
+        if self.config.debug.disable_background_worker {
+            self.dispatch_background_inline(request);
+            return;
+        }
         let dispatched = {
             #[cfg(feature = "telemetry")]
             {

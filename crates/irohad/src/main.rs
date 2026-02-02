@@ -1927,6 +1927,27 @@ impl NetworkRelayShared {
         }
     }
 
+    fn pow_summary_matches_broadcast(
+        current: &iroha_config::client_api::SoranetHandshakePowSummary,
+        update: &iroha_core::SoranetPowConfigBroadcast,
+    ) -> bool {
+        let puzzle_matches = match (current.puzzle, update.puzzle) {
+            (None, None) => true,
+            (Some(current), Some(update)) => {
+                current.memory_kib == update.memory_kib
+                    && current.time_cost == update.time_cost
+                    && current.lanes == update.lanes
+            }
+            _ => false,
+        };
+        current.required == update.required
+            && current.difficulty == update.difficulty
+            && current.max_future_skew_secs == update.max_future_skew_secs
+            && current.min_ticket_ttl_secs == update.min_ticket_ttl_secs
+            && current.ticket_ttl_secs == update.ticket_ttl_secs
+            && puzzle_matches
+    }
+
     async fn apply_remote_pow_update(&self, bytes: &[u8]) {
         iroha_logger::debug!(payload_len = bytes.len(), "Received PoW update payload");
         let Ok(update) = norito::json::from_slice::<iroha_core::SoranetPowConfigBroadcast>(bytes)
@@ -1934,30 +1955,42 @@ impl NetworkRelayShared {
             iroha_logger::warn!("Failed to decode SoraNet PoW config broadcast; ignoring");
             return;
         };
-        // Avoid rebroadcasting the change we are about to apply.
-        self.suppress_pow_broadcast.store(true, Ordering::SeqCst);
-        let logger = match self.kiso.get_dto().await {
-            Ok(dto) => dto.logger,
+        let mut logger = iroha_config::client_api::Logger {
+            level: iroha_logger::Level::INFO,
+            filter: None,
+        };
+        match self.kiso.get_dto().await {
+            Ok(dto) => {
+                if Self::pow_summary_matches_broadcast(&dto.network.soranet_handshake.pow, &update)
+                {
+                    iroha_logger::debug!(
+                        "PoW update matches current configuration; skipping rebroadcast"
+                    );
+                    return;
+                }
+                logger = dto.logger;
+            }
             Err(err) => {
                 iroha_logger::warn!(
                     ?err,
                     "Falling back to INFO logger while applying remote PoW update"
                 );
-                iroha_config::client_api::Logger {
-                    level: iroha_logger::Level::INFO,
-                    filter: None,
-                }
             }
         };
-        let puzzle =
-            update
-                .puzzle
-                .map(|p| iroha_config::client_api::SoranetHandshakePuzzleUpdate {
-                    enabled: Some(true),
-                    memory_kib: Some(p.memory_kib),
-                    time_cost: Some(p.time_cost),
-                    lanes: Some(p.lanes),
-                });
+        let puzzle = match update.puzzle {
+            Some(p) => Some(iroha_config::client_api::SoranetHandshakePuzzleUpdate {
+                enabled: Some(true),
+                memory_kib: Some(p.memory_kib),
+                time_cost: Some(p.time_cost),
+                lanes: Some(p.lanes),
+            }),
+            None => Some(iroha_config::client_api::SoranetHandshakePuzzleUpdate {
+                enabled: Some(false),
+                memory_kib: None,
+                time_cost: None,
+                lanes: None,
+            }),
+        };
         if let Err(err) = self
             .kiso
             .update_with_dto(iroha_config::client_api::ConfigUpdateDTO {
@@ -2022,6 +2055,7 @@ fn sumeragi_block_message_requires_blocking(
 mod network_relay_tests {
     use std::{borrow::Cow, collections::BTreeSet, time::Duration};
 
+    use iroha_config::client_api::{SoranetHandshakePowSummary, SoranetHandshakePuzzleSummary};
     use iroha_core::{
         block::BlockBuilder,
         block_sync::message::{GetBlocksAfter, Message as BlockSyncMessage, ShareBlocks},
@@ -2035,6 +2069,7 @@ mod network_relay_tests {
             },
         },
         tx::AcceptedTransaction,
+        SoranetPowConfigBroadcast, SoranetPuzzleConfigBroadcast,
     };
     use iroha_crypto::{Hash, HashOf, KeyPair, SignatureOf};
     use iroha_data_model::{
@@ -2120,6 +2155,68 @@ mod network_relay_tests {
         };
         let params = BlockMessage::ConsensusParams(advert);
         assert!(!sumeragi_block_message_requires_blocking(&params));
+    }
+
+    #[test]
+    fn pow_broadcast_match_detects_exact_match() {
+        let summary = SoranetHandshakePowSummary {
+            required: true,
+            difficulty: 7,
+            max_future_skew_secs: 900,
+            min_ticket_ttl_secs: 120,
+            ticket_ttl_secs: 240,
+            puzzle: Some(SoranetHandshakePuzzleSummary {
+                memory_kib: 131_072,
+                time_cost: 3,
+                lanes: 2,
+            }),
+            signed_ticket_public_key_hex: None,
+        };
+        let broadcast = SoranetPowConfigBroadcast {
+            required: true,
+            difficulty: 7,
+            max_future_skew_secs: 900,
+            min_ticket_ttl_secs: 120,
+            ticket_ttl_secs: 240,
+            puzzle: Some(SoranetPuzzleConfigBroadcast {
+                memory_kib: 131_072,
+                time_cost: 3,
+                lanes: 2,
+            }),
+        };
+
+        assert!(NetworkRelayShared::pow_summary_matches_broadcast(
+            &summary, &broadcast
+        ));
+    }
+
+    #[test]
+    fn pow_broadcast_match_rejects_puzzle_mismatch() {
+        let summary = SoranetHandshakePowSummary {
+            required: true,
+            difficulty: 7,
+            max_future_skew_secs: 900,
+            min_ticket_ttl_secs: 120,
+            ticket_ttl_secs: 240,
+            puzzle: Some(SoranetHandshakePuzzleSummary {
+                memory_kib: 131_072,
+                time_cost: 3,
+                lanes: 2,
+            }),
+            signed_ticket_public_key_hex: None,
+        };
+        let broadcast = SoranetPowConfigBroadcast {
+            required: true,
+            difficulty: 7,
+            max_future_skew_secs: 900,
+            min_ticket_ttl_secs: 120,
+            ticket_ttl_secs: 240,
+            puzzle: None,
+        };
+
+        assert!(!NetworkRelayShared::pow_summary_matches_broadcast(
+            &summary, &broadcast
+        ));
     }
 
     fn sample_peer() -> Peer {

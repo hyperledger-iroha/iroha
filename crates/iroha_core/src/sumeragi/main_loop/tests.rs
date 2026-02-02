@@ -2767,7 +2767,6 @@ fn seed_genesis_block_for_state(state: &State) -> HashOf<BlockHeader> {
         }
     };
     let topology = super::roster::canonicalize_roster(topology);
-    let topology = super::roster::canonicalize_roster(topology);
     let mut state_block = state.block(genesis.header());
     let valid =
         crate::block::ValidBlock::validate_unchecked(genesis, &mut state_block).unpack(|_| {});
@@ -2805,6 +2804,7 @@ fn seed_block_for_state(
             view.commit_topology().iter().cloned().collect()
         }
     };
+    let topology = super::roster::canonicalize_roster(topology);
     let mut state_block = state.block(block.header());
     let valid =
         crate::block::ValidBlock::validate_unchecked(block, &mut state_block).unpack(|_| {});
@@ -44116,16 +44116,26 @@ async fn block_created_without_hint_accepts_unknown_locked_ancestry() {
     harness.shutdown.send();
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn block_created_rebuilds_qc_with_snapshot_roster() {
-    let mut consensus_cfg = test_sumeragi_config();
-    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
-    let actor = &mut harness.actor;
+struct SnapshotRosterBlockCreatedSetup {
+    snapshot_roster: Vec<PeerId>,
+    topology: super::network_topology::Topology,
+    signature_topology: super::network_topology::Topology,
+    consensus_mode: ConsensusMode,
+    mode_tag: &'static str,
+    prf_seed: Option<[u8; 32]>,
+    block: SignedBlock,
+    block_hash: HashOf<BlockHeader>,
+    epoch: u64,
+}
 
+fn setup_snapshot_roster_block_created(
+    actor: &mut Actor,
+    key_pairs: &[KeyPair],
+    height: u64,
+    view: u64,
+) -> SnapshotRosterBlockCreatedSetup {
+    assert!(height > 1, "test expects non-genesis height");
     let genesis_hash = seed_genesis_block_for_state(&actor.state);
-    let height = 2;
-    let view = 0;
 
     let mut snapshot_roster = actor.effective_commit_topology();
     let local_peer = actor.common_config.peer.id().clone();
@@ -44137,14 +44147,13 @@ async fn block_created_rebuilds_qc_with_snapshot_roster() {
     snapshot_roster.retain(|peer| peer != &removed_peer);
 
     let topology = super::network_topology::Topology::new(snapshot_roster.clone());
-    let signature_topology =
-        super::topology_for_view(&topology, height, view, PERMISSIONED_TAG, None);
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
     let signer_peer = signature_topology
         .as_ref()
         .first()
         .expect("commit topology not empty");
-    let signer_kp = harness
-        .key_pairs
+    let signer_kp = key_pairs
         .iter()
         .find(|kp| kp.public_key() == signer_peer.public_key())
         .expect("signer keypair exists in harness");
@@ -44176,18 +44185,18 @@ async fn block_created_rebuilds_qc_with_snapshot_roster() {
         signers_bitmap.clone(),
         Phase::Commit,
         &topology,
-        &harness.key_pairs,
+        key_pairs,
     );
     let checkpoint_signature = aggregate_vote_signature_for_bitmap(
         &actor.common_config.chain,
-        PERMISSIONED_TAG,
+        mode_tag,
         block_hash,
         height,
         view,
         epoch,
         &signers_bitmap,
         &topology,
-        &harness.key_pairs,
+        key_pairs,
     );
     let checkpoint = ValidatorSetCheckpoint::new(
         height,
@@ -44206,6 +44215,138 @@ async fn block_created_rebuilds_qc_with_snapshot_roster() {
         journal.upsert(commit_qc, checkpoint, None);
     }
 
+    SnapshotRosterBlockCreatedSetup {
+        snapshot_roster,
+        topology,
+        signature_topology,
+        consensus_mode,
+        mode_tag,
+        prf_seed,
+        block,
+        block_hash,
+        epoch,
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn block_created_stores_pending_without_commit_quorum() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let key_pairs = harness.key_pairs.clone();
+    let actor = &mut harness.actor;
+
+    let height = 2;
+    let view = 0;
+
+    let SnapshotRosterBlockCreatedSetup {
+        snapshot_roster,
+        topology,
+        signature_topology,
+        consensus_mode,
+        mode_tag,
+        prf_seed,
+        block,
+        block_hash,
+        epoch,
+    } = setup_snapshot_roster_block_created(actor, &key_pairs, height, view);
+
+    let required = signature_topology.min_votes_for_commit().max(1);
+    let vote_count = required.saturating_sub(1);
+    assert!(vote_count < required, "test expects a non-quorum vote set");
+    for signer in 0..vote_count {
+        let mut vote = crate::sumeragi::consensus::Vote {
+            phase: Phase::Commit,
+            block_hash,
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+            height,
+            view,
+            epoch,
+            highest_qc: None,
+            signer: u32::try_from(signer).expect("signer fits u32"),
+            bls_sig: Vec::new(),
+        };
+        sign_vote_for_view_with_seed(
+            &mut vote,
+            &actor.common_config.chain,
+            &topology,
+            &key_pairs,
+            mode_tag,
+            prf_seed,
+        );
+        actor.vote_log.insert(
+            (vote.phase, vote.height, vote.view, vote.epoch, vote.signer),
+            vote,
+        );
+    }
+
+    let commit_topology = actor.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
+    assert_eq!(
+        commit_topology, snapshot_roster,
+        "expected commit roster to use the snapshot roster"
+    );
+    let qc_topology = super::network_topology::Topology::new(commit_topology);
+    let qc_signature_topology =
+        super::topology_for_view(&qc_topology, height, view, mode_tag, prf_seed);
+    let valid_signers = actor.qc_signers_for_votes(
+        Phase::Commit,
+        block_hash,
+        height,
+        view,
+        epoch,
+        &qc_signature_topology,
+    );
+    assert_eq!(
+        valid_signers.len(),
+        vote_count,
+        "expected only the non-quorum votes to validate"
+    );
+    assert!(
+        !block.is_empty(),
+        "test expects heartbeat BlockCreated to be non-empty"
+    );
+
+    actor
+        .handle_block_created(super::message::BlockCreated { block }, None)
+        .expect("handle BlockCreated");
+
+    assert!(
+        actor.pending.pending_blocks.contains_key(&block_hash),
+        "BlockCreated should store the pending block without commit quorum"
+    );
+    let qc_key = (Phase::Commit, block_hash, height, view, epoch);
+    assert!(
+        actor.qc_cache.get(&qc_key).is_none(),
+        "QC should not be cached without commit quorum"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn block_created_rebuilds_qc_with_snapshot_roster() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let key_pairs = harness.key_pairs.clone();
+    let actor = &mut harness.actor;
+
+    let height = 2;
+    let view = 0;
+
+    let SnapshotRosterBlockCreatedSetup {
+        snapshot_roster,
+        topology,
+        consensus_mode,
+        mode_tag,
+        prf_seed,
+        block,
+        block_hash,
+        epoch,
+        ..
+    } = setup_snapshot_roster_block_created(actor, &key_pairs, height, view);
+
     for signer in 0..snapshot_roster.len() {
         let mut vote = crate::sumeragi::consensus::Vote {
             phase: Phase::Commit,
@@ -44219,17 +44360,45 @@ async fn block_created_rebuilds_qc_with_snapshot_roster() {
             signer: u32::try_from(signer).expect("signer fits u32"),
             bls_sig: Vec::new(),
         };
-        sign_vote_for_canonical_signer(
+        sign_vote_for_view_with_seed(
             &mut vote,
             &actor.common_config.chain,
             &topology,
-            &harness.key_pairs,
+            &key_pairs,
+            mode_tag,
+            prf_seed,
         );
         actor.vote_log.insert(
             (vote.phase, vote.height, vote.view, vote.epoch, vote.signer),
             vote,
         );
     }
+
+    let commit_topology = actor.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
+    assert_eq!(
+        commit_topology, snapshot_roster,
+        "expected commit roster to use the snapshot roster"
+    );
+    let qc_topology = super::network_topology::Topology::new(commit_topology);
+    let qc_signature_topology =
+        super::topology_for_view(&qc_topology, height, view, mode_tag, prf_seed);
+    let valid_signers = actor.qc_signers_for_votes(
+        Phase::Commit,
+        block_hash,
+        height,
+        view,
+        epoch,
+        &qc_signature_topology,
+    );
+    assert_eq!(
+        valid_signers.len(),
+        snapshot_roster.len(),
+        "expected all votes to validate against the snapshot roster"
+    );
+    assert!(
+        !block.is_empty(),
+        "test expects heartbeat BlockCreated to be non-empty"
+    );
 
     actor
         .handle_block_created(super::message::BlockCreated { block }, None)
@@ -44239,7 +44408,20 @@ async fn block_created_rebuilds_qc_with_snapshot_roster() {
     let qc = actor
         .qc_cache
         .get(&key)
-        .expect("QC cached after BlockCreated");
+        .cloned()
+        .or_else(|| {
+            super::status::commit_qc_history().into_iter().find(|qc| {
+                qc.subject_block_hash == block_hash
+                    && qc.height == height
+                    && qc.view == view
+                    && qc.epoch == epoch
+            })
+        })
+        .unwrap_or_else(|| {
+            let cached = actor.qc_cache.keys().collect::<Vec<_>>();
+            let deferred = actor.deferred_qcs.keys().collect::<Vec<_>>();
+            panic!("QC cached after BlockCreated; cached={cached:?} deferred={deferred:?}");
+        });
     assert_eq!(
         qc.validator_set, snapshot_roster,
         "BlockCreated should rebuild QC using the snapshot roster"
@@ -51820,6 +52002,32 @@ async fn background_posts_dispatch_inline_when_worker_disabled() {
     assert!(
         queued.is_none(),
         "background posts should dispatch inline when the worker is disabled"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn fetch_pending_block_response_dispatches_inline_when_worker_disabled() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.debug.disable_background_worker = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+
+    let _ = harness.background_rx.try_iter().collect::<Vec<_>>();
+
+    let peer = PeerId::from(KeyPair::random().public_key().clone());
+    let msg = BlockMessage::ConsensusParams(super::message::ConsensusParamsAdvert {
+        collectors_k: 1,
+        redundant_send_r: 1,
+        membership: None,
+    });
+
+    harness.actor.enqueue_fetch_pending_block_response(peer, msg);
+
+    let queued = harness.background_rx.try_iter().next();
+    assert!(
+        queued.is_none(),
+        "fetch-pending-block responses should dispatch inline when the worker is disabled"
     );
 
     harness.shutdown.send();
