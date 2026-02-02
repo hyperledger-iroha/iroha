@@ -1,6 +1,7 @@
 # Status
 
 Last update: 2026-02-02
+- Config/P2P: seed SoraNet PoW/puzzle updates to newly online peers, cache broadcast payloads, and treat PoW config frames as control-plane traffic; added unit coverage for payload encoding. Tests not run (not requested).
 - Config/P2P: skip duplicate SoraNet PoW/puzzle broadcasts so remote updates can be re-broadcast and reach multi-hop peers; added unit coverage for PoW broadcast match detection. Tests not run (not requested).
 - Sumeragi: block-sync fetch-pending responses now respect `sumeragi.debug.disable_background_worker` and dispatch inline when the worker is disabled; added unit coverage. Time-trigger integration scenario now drives one extra block to cover end-exclusive schedule boundaries.
 - Tests: not run (not requested).
