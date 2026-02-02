@@ -1381,12 +1381,7 @@ impl<'a> NoritoDeserialize<'a> for GossipTransaction {
     }
 
     fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, NoritoError> {
-        let ptr = core::ptr::from_ref(archived).cast::<u8>();
-        let bytes = norito::core::payload_slice_from_ptr(ptr)?;
-        let (signed, consumed) = norito::core::decode_field_canonical::<SignedTransaction>(bytes)?;
-        if consumed != bytes.len() {
-            return Err(NoritoError::LengthMismatch);
-        }
+        let signed = SignedTransaction::try_deserialize(archived.cast())?;
         Ok(Self {
             signed: Arc::new(signed),
             encoded: None,
@@ -1511,6 +1506,8 @@ mod tests {
     };
     use norito::codec::Decode;
     use tempfile::tempdir;
+
+    use crate::NetworkMessage;
 
     use super::*;
     use crate::{
@@ -1889,6 +1886,40 @@ mod tests {
         assert_eq!(decoded.routes[0].lane_id, LaneId::SINGLE);
         assert_eq!(decoded.routes[0].dataspace_id, DataSpaceId::GLOBAL);
         assert_eq!(decoded.plane, GossipPlane::Public);
+    }
+
+    #[test]
+    fn gossip_network_message_roundtrip_preserves_cached_payload() {
+        let (signed, _accepted) = build_transaction("cached-network");
+        let payload = payload_for(&signed);
+        let message = TransactionGossip {
+            txs: vec![GossipTransaction::with_encoded(
+                signed.clone(),
+                Arc::clone(&payload),
+            )],
+            routes: vec![GossipRoute {
+                lane_id: LaneId::SINGLE,
+                dataspace_id: DataSpaceId::GLOBAL,
+            }],
+            plane: GossipPlane::Public,
+        };
+
+        let network = NetworkMessage::TransactionGossiper(Box::new(message));
+        let encoded = network.encode();
+        let decoded: NetworkMessage =
+            Decode::decode(&mut encoded.as_slice()).expect("decode network gossip");
+
+        match decoded {
+            NetworkMessage::TransactionGossiper(message) => {
+                assert_eq!(message.txs.len(), 1);
+                assert_eq!(message.routes.len(), 1);
+                assert_eq!(message.txs[0].as_signed().hash(), signed.hash());
+                assert_eq!(message.routes[0].lane_id, LaneId::SINGLE);
+                assert_eq!(message.routes[0].dataspace_id, DataSpaceId::GLOBAL);
+                assert_eq!(message.plane, GossipPlane::Public);
+            }
+            other => panic!("unexpected network message: {other:?}"),
+        }
     }
 
     #[test]

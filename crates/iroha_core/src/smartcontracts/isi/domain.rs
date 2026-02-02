@@ -12,21 +12,140 @@ use super::super::isi::prelude::*;
 /// - update metadata
 /// - transfer, etc.
 pub mod isi {
-    use std::collections::BTreeSet;
+    use std::{collections::{BTreeSet, btree_map::Entry}, str::FromStr};
 
-    use iroha_crypto::Algorithm;
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
-        IntoKeyValue,
+        ChainId, IntoKeyValue,
         account::{
             AccountController,
             curve::{CurveId, CurveRegistryError},
         },
+        metadata::Metadata,
+        name::Name,
+        offline::OFFLINE_ASSET_ENABLED_METADATA_KEY,
         isi::error::{InstructionExecutionError, RepetitionError},
     };
     use iroha_logger::prelude::*;
 
     use super::*;
     use crate::state::account_label_is_pii;
+
+    /// Domain-separation tag for deterministic offline escrow derivation.
+    const OFFLINE_ESCROW_SEED_LABEL: &str = "iroha.offline.escrow.v1";
+
+    fn asset_definition_offline_enabled(
+        metadata: &Metadata,
+    ) -> Result<bool, InstructionExecutionError> {
+        let key = Name::from_str(OFFLINE_ASSET_ENABLED_METADATA_KEY).map_err(|err| {
+            InstructionExecutionError::InvariantViolation(
+                format!(
+                    "invalid metadata key `{OFFLINE_ASSET_ENABLED_METADATA_KEY}`: {err}"
+                )
+                .into(),
+            )
+        })?;
+        let Some(value) = metadata.get(&key) else {
+            return Ok(false);
+        };
+
+        if let Ok(flag) = value.try_into_any::<bool>() {
+            return Ok(flag);
+        }
+        if let Ok(text) = value.try_into_any::<String>() {
+            let trimmed = text.trim();
+            if trimmed.eq_ignore_ascii_case("true") {
+                return Ok(true);
+            }
+            if trimmed.eq_ignore_ascii_case("false") {
+                return Ok(false);
+            }
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "metadata entry `{OFFLINE_ASSET_ENABLED_METADATA_KEY}` must be `true` or `false`"
+                )
+                .into(),
+            ));
+        }
+
+        Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "metadata entry `{OFFLINE_ASSET_ENABLED_METADATA_KEY}` must be a boolean or string"
+            )
+            .into(),
+        ))
+    }
+
+    pub(super) fn offline_escrow_account_id(
+        chain_id: &ChainId,
+        definition_id: &AssetDefinitionId,
+    ) -> AccountId {
+        let seed_material =
+            format!("{OFFLINE_ESCROW_SEED_LABEL}|{}|{definition_id}", chain_id.as_str());
+        let seed: [u8; Hash::LENGTH] = Hash::new(seed_material).into();
+        let keypair = KeyPair::from_seed(seed.to_vec(), Algorithm::Ed25519);
+        AccountId::new(definition_id.domain().clone(), keypair.public_key().clone())
+    }
+
+    fn ensure_offline_escrow_account(
+        asset_definition: &AssetDefinition,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        if !asset_definition_offline_enabled(asset_definition.metadata())? {
+            return Ok(());
+        }
+
+        let definition_id = asset_definition.id();
+        let derived = offline_escrow_account_id(state_transaction.chain_id(), definition_id);
+        let escrow_account = match state_transaction
+            .settlement
+            .offline
+            .escrow_accounts
+            .entry(definition_id.clone())
+        {
+            Entry::Vacant(entry) => entry.insert(derived.clone()).clone(),
+            Entry::Occupied(mut entry) => {
+                if entry.get() != &derived {
+                    warn!(
+                        definition = %definition_id,
+                        configured = %entry.get(),
+                        derived = %derived,
+                        "offline escrow account overridden by deterministic derivation"
+                    );
+                    entry.insert(derived.clone());
+                }
+                entry.get().clone()
+            }
+        };
+
+        ensure_controller_capabilities(
+            escrow_account.controller(),
+            &state_transaction.crypto.allowed_signing,
+            &state_transaction.crypto.allowed_curve_ids,
+        )?;
+
+        if state_transaction.world.account(&escrow_account).is_ok() {
+            return Ok(());
+        }
+
+        let account = Account {
+            id: escrow_account.clone(),
+            metadata: Metadata::default(),
+            label: None,
+            uaid: None,
+            opaque_ids: Vec::new(),
+        };
+        let (account_id, account_value) = account.clone().into_key_value();
+        state_transaction
+            .world
+            .accounts
+            .insert(account_id, account_value);
+        state_transaction
+            .world
+            .emit_events(Some(DomainEvent::Account(AccountEvent::Created(account))));
+
+        Ok(())
+    }
 
     impl Execute for Register<Account> {
         #[metrics(+"register_account")]
@@ -327,6 +446,8 @@ pub mod isi {
                 .world
                 .asset_definitions
                 .insert(asset_definition_id.clone(), asset_definition.clone());
+
+            ensure_offline_escrow_account(&asset_definition, state_transaction)?;
 
             state_transaction
                 .world
@@ -733,7 +854,10 @@ mod tests {
     use iroha_data_model::{
         IntoKeyValue,
         account::{NewAccount, OpaqueAccountId, rekey::AccountLabel},
-        asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
+        asset::{
+            Asset, AssetDefinition, AssetDefinitionId, AssetId, Mintable, NewAssetDefinition,
+        },
+        asset::definition::AssetConfidentialPolicy,
         block::BlockHeader,
         events::data::space_directory::{
             SpaceDirectoryEvent, SpaceDirectoryManifestActivated, SpaceDirectoryManifestRevoked,
@@ -742,9 +866,10 @@ mod tests {
         name::Name,
         nexus::{AssetPermissionManifest, DataSpaceId, ManifestVersion, UniversalAccountId},
         nft::{Nft, NftId},
+        offline::OFFLINE_ASSET_ENABLED_METADATA_KEY,
         prelude::Domain,
     };
-    use iroha_primitives::{json::Json, numeric::Numeric};
+    use iroha_primitives::{json::Json, numeric::{Numeric, NumericSpec}};
     use iroha_test_samples::ALICE_ID;
     use nonzero_ext::nonzero;
 
@@ -1373,5 +1498,88 @@ mod tests {
 
         tx.apply();
         block.commit().unwrap();
+    }
+
+    #[test]
+    fn register_asset_definition_auto_creates_offline_escrow_account() {
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let domain_id: DomainId = "offline".parse().expect("domain id");
+        seed_domain(&mut state, &domain_id, &authority);
+
+        let asset_name: Name = "usd".parse().expect("asset name");
+        let definition_id = AssetDefinitionId::new(domain_id.clone(), asset_name);
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            OFFLINE_ASSET_ENABLED_METADATA_KEY
+                .parse()
+                .expect("metadata key"),
+            Json::new(true),
+        );
+
+        let new_definition = NewAssetDefinition {
+            id: definition_id.clone(),
+            spec: NumericSpec::integer(),
+            mintable: Mintable::Infinitely,
+            logo: None,
+            metadata,
+            confidential_policy: AssetConfidentialPolicy::transparent(),
+        };
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        Register::asset_definition(new_definition)
+            .execute(&authority, &mut tx)
+            .expect("register asset definition");
+
+        let escrow_account = tx
+            .settlement
+            .offline
+            .escrow_accounts
+            .get(&definition_id)
+            .expect("escrow mapping created")
+            .clone();
+        let expected = super::isi::offline_escrow_account_id(tx.chain_id(), &definition_id);
+        assert_eq!(escrow_account, expected);
+        assert!(
+            tx.world.account(&escrow_account).is_ok(),
+            "escrow account should exist"
+        );
+    }
+
+    #[test]
+    fn register_asset_definition_without_offline_flag_skips_escrow() {
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let domain_id: DomainId = "offline2".parse().expect("domain id");
+        seed_domain(&mut state, &domain_id, &authority);
+
+        let asset_name: Name = "eur".parse().expect("asset name");
+        let definition_id = AssetDefinitionId::new(domain_id.clone(), asset_name);
+        let new_definition = NewAssetDefinition {
+            id: definition_id.clone(),
+            spec: NumericSpec::integer(),
+            mintable: Mintable::Infinitely,
+            logo: None,
+            metadata: Metadata::default(),
+            confidential_policy: AssetConfidentialPolicy::transparent(),
+        };
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        Register::asset_definition(new_definition)
+            .execute(&authority, &mut tx)
+            .expect("register asset definition");
+
+        assert!(
+            tx.settlement
+                .offline
+                .escrow_accounts
+                .get(&definition_id)
+                .is_none(),
+            "escrow mapping should not be created"
+        );
     }
 }

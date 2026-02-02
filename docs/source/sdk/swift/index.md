@@ -917,7 +917,7 @@ For higher-level walkthroughs, see:
 - **Explorer:** `getExplorerInstructions` and `getExplorerTransactions` wrap
   `/v1/explorer/instructions` and `/v1/explorer/transactions` with
   `ToriiExplorerInstructionsParams`/`ToriiExplorerTransactionsParams` filters (including
-  optional `assetId` scoping). Fetch a single
+  optional `assetId` and `account` scoping). Fetch a single
   transaction with `getExplorerTransactionDetail(hashHex:)` or a single instruction with
   `getExplorerInstructionDetail(hashHex:index:)`. Use
   `getExplorerTransactionTransfers`/`getExplorerTransactionTransferSummaries` to derive transfer

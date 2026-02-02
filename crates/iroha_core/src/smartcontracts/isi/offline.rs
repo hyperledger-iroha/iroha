@@ -21,7 +21,7 @@ use iroha_crypto::{Algorithm, KeyPair, Signature};
 use iroha_data_model::offline::{OfflineAllowanceCommitment, OfflineWalletPolicy};
 use iroha_data_model::{
     ChainId,
-    asset::AssetId,
+    asset::{AssetDefinitionId, AssetId},
     events::data::offline::{
         OfflineTransferArchived, OfflineTransferEvent, OfflineTransferPruned,
         OfflineTransferSettled,
@@ -305,6 +305,41 @@ fn ensure_operator_signature(
                 "operator signature does not match allowance asset controller".into(),
             )
         })
+}
+
+fn resolve_offline_escrow_account(
+    settlement: &actual::Offline,
+    definition: &AssetDefinitionId,
+) -> Result<Option<AccountId>, InstructionExecutionError> {
+    if let Some(account) = settlement.escrow_accounts.get(definition) {
+        return Ok(Some(account.clone()));
+    }
+    if settlement.escrow_required {
+        return Err(labeled_invariant(
+            "escrow_missing",
+            format!("offline escrow account not configured for asset definition `{definition}`"),
+        ));
+    }
+    Ok(None)
+}
+
+fn reserve_offline_allowance(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    asset: &AssetId,
+    amount: &Numeric,
+) -> Result<(), Error> {
+    let escrow_account =
+        resolve_offline_escrow_account(&state_transaction.settlement.offline, asset.definition())?;
+    let Some(escrow_account) = escrow_account else {
+        return Ok(());
+    };
+    let escrow_asset = AssetId::new(asset.definition().clone(), escrow_account);
+    state_transaction
+        .world
+        .withdraw_numeric_asset(asset, amount)?;
+    state_transaction
+        .world
+        .deposit_numeric_asset(&escrow_asset, amount)
 }
 
 fn ensure_uniform_asset(receipts: &[OfflineSpendReceipt]) -> Result<AssetId, Error> {
@@ -609,6 +644,11 @@ pub mod isi {
 
         if is_genesis_block {
             let certificate_id = certificate.certificate_id();
+            reserve_offline_allowance(
+                state_transaction,
+                &certificate.allowance.asset,
+                &certificate.allowance.amount,
+            )?;
             let record = OfflineAllowanceRecord {
                 certificate: certificate.clone(),
                 current_commitment: certificate.allowance.commitment.clone(),
@@ -684,6 +724,11 @@ pub mod isi {
             ));
         }
 
+        reserve_offline_allowance(
+            state_transaction,
+            &certificate.allowance.asset,
+            &certificate.allowance.amount,
+        )?;
         let record = OfflineAllowanceRecord {
             certificate: certificate.clone(),
             current_commitment: certificate.allowance.commitment.clone(),
@@ -796,6 +841,144 @@ pub mod isi {
             certificate.allowance.amount = Numeric::new(1_000, 2);
             let spec = NumericSpec::fractional(0);
             assert!(expected_scale_for_allowance(&certificate, spec).is_err());
+        }
+
+        #[test]
+        fn register_allowance_reserves_escrow_when_required() {
+            let mut certificate = sample_certificate();
+            let operator_keys = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
+            certificate.operator_signature = Signature::new(
+                operator_keys.private_key(),
+                &certificate
+                    .operator_signing_bytes()
+                    .expect("certificate signing bytes"),
+            );
+
+            let controller = certificate.controller.clone();
+            let escrow = sample_account(0x02, "offline");
+            let definition_id = certificate.allowance.asset.definition().clone();
+            let domain = Domain::new(controller.domain().clone()).build(&controller);
+            let controller_account = Account::new(controller.clone()).build(&controller);
+            let escrow_account = Account::new(escrow.clone()).build(&escrow);
+            let asset_definition =
+                AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
+                    .build(&controller);
+            let world = World::with(
+                [domain],
+                [controller_account, escrow_account],
+                [asset_definition],
+            );
+
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new(world, Arc::clone(&kura), query);
+            state.settlement.offline.escrow_required = true;
+            state
+                .settlement
+                .offline
+                .escrow_accounts
+                .insert(definition_id.clone(), escrow.clone());
+
+            let header = BlockHeader::new(
+                nonzero!(1_u64),
+                None,
+                None,
+                None,
+                certificate.issued_at_ms + 1,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            transaction
+                .world
+                .deposit_numeric_asset(&certificate.allowance.asset, &certificate.allowance.amount)
+                .expect("prefund allowance asset");
+
+            register_allowance(
+                RegisterOfflineAllowance {
+                    certificate: certificate.clone(),
+                },
+                &controller,
+                &mut transaction,
+            )
+            .expect("register allowance");
+
+            let controller_balance = transaction
+                .world
+                .assets
+                .get(&certificate.allowance.asset)
+                .map(|asset| asset.as_ref().clone())
+                .unwrap_or_else(Numeric::zero);
+            assert_eq!(controller_balance, Numeric::zero());
+
+            let escrow_asset = AssetId::new(definition_id, escrow);
+            let escrow_balance = transaction
+                .world
+                .assets
+                .get(&escrow_asset)
+                .map(|asset| asset.as_ref().clone())
+                .unwrap_or_else(Numeric::zero);
+            assert_eq!(escrow_balance, certificate.allowance.amount);
+        }
+
+        #[test]
+        fn credit_deposit_account_debits_escrow_when_required() {
+            let escrow = sample_account(0x02, "offline");
+            let deposit = sample_account(0x03, "offline");
+            let definition_id =
+                AssetDefinitionId::from_str("xor#offline").expect("asset definition id");
+            let domain = Domain::new(deposit.domain().clone()).build(&deposit);
+            let escrow_account = Account::new(escrow.clone()).build(&escrow);
+            let deposit_account = Account::new(deposit.clone()).build(&deposit);
+            let asset_definition =
+                AssetDefinition::new(definition_id.clone(), NumericSpec::integer()).build(&deposit);
+            let world = World::with(
+                [domain],
+                [escrow_account, deposit_account],
+                [asset_definition],
+            );
+
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new(world, Arc::clone(&kura), query);
+            state.settlement.offline.escrow_required = true;
+            state
+                .settlement
+                .offline
+                .escrow_accounts
+                .insert(definition_id.clone(), escrow.clone());
+
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1_700_000_000, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let escrow_asset = AssetId::new(definition_id.clone(), escrow.clone());
+            transaction
+                .world
+                .deposit_numeric_asset(&escrow_asset, &Numeric::new(250, 0))
+                .expect("prefund escrow");
+
+            let asset = AssetId::new(definition_id.clone(), deposit.clone());
+            let amount = Numeric::new(100, 0);
+            credit_deposit_account(&mut transaction, &asset, &deposit, &amount)
+                .expect("credit deposit account");
+
+            let escrow_balance = transaction
+                .world
+                .assets
+                .get(&escrow_asset)
+                .map(|asset| asset.as_ref().clone())
+                .unwrap_or_else(Numeric::zero);
+            assert_eq!(escrow_balance, Numeric::new(150, 0));
+
+            let deposit_asset = AssetId::new(definition_id, deposit);
+            let deposit_balance = transaction
+                .world
+                .assets
+                .get(&deposit_asset)
+                .map(|asset| asset.as_ref().clone())
+                .unwrap_or_else(Numeric::zero);
+            assert_eq!(deposit_balance, amount);
         }
 
         fn sample_transfer_record_with_policy(
@@ -2140,9 +2323,18 @@ pub mod isi {
         deposit_account: &AccountId,
         amount: &Numeric,
     ) -> Result<(), Error> {
-        let deposit_asset = AssetId::new(asset.definition().clone(), deposit_account.clone());
-        let spec = state_transaction.numeric_spec_for(asset.definition())?;
+        let definition_id = asset.definition().clone();
+        let deposit_asset = AssetId::new(definition_id.clone(), deposit_account.clone());
+        let spec = state_transaction.numeric_spec_for(&definition_id)?;
         assert_numeric_spec_with(amount, spec)?;
+        let escrow_account =
+            resolve_offline_escrow_account(&state_transaction.settlement.offline, &definition_id)?;
+        if let Some(escrow_account) = escrow_account {
+            let escrow_asset = AssetId::new(definition_id, escrow_account);
+            state_transaction
+                .world
+                .withdraw_numeric_asset(&escrow_asset, amount)?;
+        }
 
         state_transaction
             .world

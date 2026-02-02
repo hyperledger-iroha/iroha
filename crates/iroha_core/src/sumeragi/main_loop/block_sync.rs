@@ -11,7 +11,7 @@ use super::message::FetchPendingBlockPriority;
 use super::*;
 
 impl Actor {
-    fn enqueue_fetch_pending_block_response(&mut self, peer: PeerId, msg: BlockMessage) {
+    pub(super) fn enqueue_fetch_pending_block_response(&mut self, peer: PeerId, msg: BlockMessage) {
         let mut msg = BlockMessageWire::new(msg);
         if !self.prepare_background_block_message(&mut msg) {
             return;

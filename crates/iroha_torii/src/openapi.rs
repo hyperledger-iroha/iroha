@@ -1548,6 +1548,10 @@ fn explorer_instructions_query_parameters() -> Vec<Value> {
         "Filter instructions by authority account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
     ));
     params.push(string_query_param(
+        "account",
+        "Filter transfer instructions by participant account (source or destination; accepts IH58 (preferred)/sora (second-best)/public-key literals).",
+    ));
+    params.push(string_query_param(
         "transaction_hash",
         "Filter instructions by transaction hash.",
     ));
@@ -3886,7 +3890,7 @@ fn explorer_paths() -> Map {
             json_get_operation(
                 "Explorer",
                 "List instructions (explorer).",
-                "List instructions for explorer usage (supports pagination and optional authority/transaction/block/kind/asset_id filtering).",
+                "List instructions for explorer usage (supports pagination and optional account/authority/transaction/block/kind/asset_id filtering).",
                 "#/components/schemas/JsonValue",
                 params,
             )
@@ -10199,6 +10203,7 @@ mod tests {
         assert!(explorer_instructions.contains(&"per_page".to_owned()));
         assert!(explorer_instructions.contains(&"asset_id".to_owned()));
         assert!(explorer_instructions.contains(&"authority".to_owned()));
+        assert!(explorer_instructions.contains(&"account".to_owned()));
         assert!(explorer_instructions.contains(&"transaction_hash".to_owned()));
         assert!(explorer_instructions.contains(&"transaction_status".to_owned()));
         assert!(explorer_instructions.contains(&"block".to_owned()));

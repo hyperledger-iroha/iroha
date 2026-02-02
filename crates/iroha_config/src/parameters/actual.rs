@@ -6328,6 +6328,10 @@ pub struct Offline {
     pub proof_mode: OfflineProofMode,
     /// Maximum age for offline receipts (0 disables age checks).
     pub max_receipt_age: Duration,
+    /// Whether offline allowances must be escrow-backed.
+    pub escrow_required: bool,
+    /// Escrow accounts keyed by asset definition for offline allowances.
+    pub escrow_accounts: BTreeMap<AssetDefinitionId, AccountId>,
     /// Optional DER-encoded trust anchors appended to the built-in Android root set.
     pub android_trust_anchors: Vec<Vec<u8>>,
 }
@@ -6343,6 +6347,8 @@ impl Default for Offline {
             max_receipt_age: Duration::from_millis(
                 defaults::settlement::offline::MAX_RECEIPT_AGE_MS,
             ),
+            escrow_required: false,
+            escrow_accounts: BTreeMap::new(),
             android_trust_anchors: Vec::new(),
         }
     }
