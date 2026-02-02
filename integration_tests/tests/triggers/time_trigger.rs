@@ -455,14 +455,16 @@ async fn mint_nft_for_every_user_every_1_sec_scenario(
             .ensure_blocks_with(|height| height.total >= target_height)
             .await?;
         sleep(offset).await;
-        println!("registered time trigger, driving {expected_count} blocks");
+        // Drive one extra block to cover schedule hits that fall on end-exclusive boundaries.
+        let blocks_to_drive = usize::try_from(expected_count)? + 1;
+        println!("registered time trigger, driving {blocks_to_drive} blocks");
 
         submit_sample_isi_on_every_block_commit(
             network,
             &test_client,
             &alice_id,
             trigger_period,
-            usize::try_from(expected_count)?,
+            blocks_to_drive,
         )
         .await?;
 

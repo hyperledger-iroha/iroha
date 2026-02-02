@@ -239,15 +239,16 @@ impl<'a> NoritoDeserialize<'a> for BlockMessageWire {
     }
 
     fn deserialize(archived: &'a Archived<Self>) -> Self {
-        let message = BlockMessage::deserialize(archived.cast());
-        Self {
-            message: Arc::new(message),
-            encoded: None,
-        }
+        Self::try_deserialize(archived).expect("BlockMessageWire decode")
     }
 
     fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, NoritoError> {
-        let message = BlockMessage::try_deserialize(archived.cast())?;
+        let ptr = core::ptr::from_ref(archived).cast::<u8>();
+        let bytes = norito::core::payload_slice_from_ptr(ptr)?;
+        let (message, consumed) = norito::core::decode_field_canonical::<BlockMessage>(bytes)?;
+        if consumed != bytes.len() {
+            return Err(NoritoError::LengthMismatch);
+        }
         Ok(Self {
             message: Arc::new(message),
             encoded: None,
