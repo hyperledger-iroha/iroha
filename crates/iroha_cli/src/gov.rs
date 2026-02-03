@@ -21,7 +21,7 @@ pub use vote::{
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
-    /// Deployment helpers (propose/meta/audit)
+    /// Deployment helpers (propose/meta/audit). Propose deployment of IVM bytecode.
     #[command(subcommand)]
     Deploy(DeployCommand),
     /// Submit a governance ballot; auto-detects referendum mode unless overridden

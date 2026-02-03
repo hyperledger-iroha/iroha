@@ -154,7 +154,14 @@ impl PetalEncodeArgs {
                 })?;
                 let total = rendered.len().max(1) as u32;
                 for frame in &rendered {
-                    let image = render_petal_frame(&frame.grid, self.dimension, frame.index, total, self.style);
+                    let image = render_petal_frame(
+                        &frame.grid,
+                        self.dimension,
+                        frame.index,
+                        total,
+                        self.style,
+                        petal_options,
+                    );
                     let path = png_dir.join(format!("frame_{:04}.png", frame.index));
                     write_png_rgba(&path, &image)?;
                 }
@@ -164,7 +171,14 @@ impl PetalEncodeArgs {
                 let frames = rendered
                     .iter()
                     .map(|frame| {
-                        render_petal_frame(&frame.grid, self.dimension, frame.index, total, self.style)
+                        render_petal_frame(
+                            &frame.grid,
+                            self.dimension,
+                            frame.index,
+                            total,
+                            self.style,
+                            petal_options,
+                        )
                     })
                     .collect::<Vec<_>>();
                 let path = output_dir.join("stream.gif");
@@ -175,7 +189,14 @@ impl PetalEncodeArgs {
                 let frames = rendered
                     .iter()
                     .map(|frame| {
-                        render_petal_frame(&frame.grid, self.dimension, frame.index, total, self.style)
+                        render_petal_frame(
+                            &frame.grid,
+                            self.dimension,
+                            frame.index,
+                            total,
+                            self.style,
+                            petal_options,
+                        )
                     })
                     .collect::<Vec<_>>();
                 let path = output_dir.join("stream.png");
@@ -363,10 +384,52 @@ struct RenderedFrame {
     grid: PetalStreamGrid,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RenderCellRole {
+    Border,
+    AnchorDark,
+    AnchorLight,
+    Data,
+}
+
+fn render_cell_role(x: u16, y: u16, grid_size: u16, options: PetalStreamOptions) -> RenderCellRole {
+    let border = options.border as u16;
+    let anchor = options.anchor_size as u16;
+    if x < border || y < border || x >= grid_size.saturating_sub(border)
+        || y >= grid_size.saturating_sub(border)
+    {
+        return RenderCellRole::Border;
+    }
+    let right = grid_size.saturating_sub(border + anchor);
+    let bottom = grid_size.saturating_sub(border + anchor);
+    let in_left = x >= border && x < border + anchor;
+    let in_right = x >= right && x < right + anchor;
+    let in_top = y >= border && y < border + anchor;
+    let in_bottom = y >= bottom && y < bottom + anchor;
+    if in_left && in_top {
+        return RenderCellRole::AnchorDark;
+    }
+    if in_left && in_bottom {
+        return RenderCellRole::AnchorDark;
+    }
+    if in_right && in_top {
+        return RenderCellRole::AnchorLight;
+    }
+    if in_right && in_bottom {
+        return RenderCellRole::AnchorLight;
+    }
+    RenderCellRole::Data
+}
+
 const SAKURA_BG_START: [f64; 3] = [0.99, 0.93, 0.96];
 const SAKURA_BG_END: [f64; 3] = [1.0, 0.98, 0.99];
 const SAKURA_PETAL: [f64; 3] = [1.0, 0.79, 0.87];
 const SAKURA_INK: [f64; 3] = [0.26, 0.08, 0.14];
+const ANCHOR_DARK: [f64; 3] = [0.06, 0.02, 0.04];
+const ANCHOR_LIGHT: [f64; 3] = [0.98, 0.98, 0.99];
+const DATA_DARK: [f64; 3] = [0.16, 0.05, 0.09];
+const DATA_LIGHT: [f64; 3] = [0.95, 0.95, 0.97];
+const DATA_CELL_ALPHA: f64 = 0.85;
 const SAKURA_WIND_STREAK_ALPHA: f64 = 0.08;
 const SAKURA_WIND_STREAK_FREQ_X: f64 = 6.0;
 const SAKURA_WIND_STREAK_FREQ_Y: f64 = 3.5;
@@ -391,6 +454,7 @@ fn render_petal_frame(
     frame_index: u32,
     frame_count: u32,
     _style: PetalRenderStyle,
+    options: PetalStreamOptions,
 ) -> image::RgbaImage {
     let grid_size = grid.grid_size as u32;
     let cell_size = (dimension / grid_size).max(1);
@@ -404,6 +468,7 @@ fn render_petal_frame(
     let glow_radius_sq = DATA_PETAL_GLOW_RADIUS * DATA_PETAL_GLOW_RADIUS;
 
     let mut cell_params = Vec::with_capacity(grid.cells.len());
+    let mut cell_roles = Vec::with_capacity(grid.cells.len());
     for y in 0..grid_size {
         for x in 0..grid_size {
             let idx = y as usize * grid_size as usize + x as usize;
@@ -420,6 +485,12 @@ fn render_petal_frame(
                 angle,
                 sway,
             });
+            cell_roles.push(render_cell_role(
+                x as u16,
+                y as u16,
+                grid.grid_size,
+                options,
+            ));
         }
     }
 
@@ -521,6 +592,25 @@ fn render_petal_frame(
                         b = lerp(b, SAKURA_PETAL[2], highlight);
                     }
                 }
+                match cell_roles[idx] {
+                    RenderCellRole::AnchorDark => {
+                        r = ANCHOR_DARK[0];
+                        g = ANCHOR_DARK[1];
+                        b = ANCHOR_DARK[2];
+                    }
+                    RenderCellRole::AnchorLight => {
+                        r = ANCHOR_LIGHT[0];
+                        g = ANCHOR_LIGHT[1];
+                        b = ANCHOR_LIGHT[2];
+                    }
+                    RenderCellRole::Data => {
+                        let target = if param.bit { DATA_DARK } else { DATA_LIGHT };
+                        r = lerp(r, target[0], DATA_CELL_ALPHA);
+                        g = lerp(g, target[1], DATA_CELL_ALPHA);
+                        b = lerp(b, target[2], DATA_CELL_ALPHA);
+                    }
+                    RenderCellRole::Border => {}
+                }
             }
 
             rgba.extend_from_slice(&[
@@ -542,9 +632,10 @@ fn sample_grid_from_rgba(
     let width = image.width();
     let height = image.height();
     let size = width.min(height);
-    let offset_x = (width - size) / 2;
-    let offset_y = (height - size) / 2;
     let cell_size = (size / grid_size as u32).max(1);
+    let grid_pixels = grid_size as u32 * cell_size;
+    let offset_x = (size.saturating_sub(grid_pixels)) / 2;
+    let offset_y = (size.saturating_sub(grid_pixels)) / 2;
     let mut samples = Vec::with_capacity(grid_size as usize * grid_size as usize);
     for y in 0..grid_size {
         for x in 0..grid_size {
@@ -722,7 +813,14 @@ mod tests {
         let payload = b"petal-cli";
         let grid = PetalStreamEncoder::encode_grid(payload, PetalStreamOptions::default())
             .expect("encode");
-        let image = render_petal_frame(&grid, 64, 0, 1, PetalRenderStyle::SakuraWind);
+        let image = render_petal_frame(
+            &grid,
+            64,
+            0,
+            1,
+            PetalRenderStyle::SakuraWind,
+            PetalStreamOptions::default(),
+        );
         assert_eq!(image.width(), 64);
         assert_eq!(image.height(), 64);
         assert_eq!(image.as_raw().len(), 64 * 64 * 4);
@@ -735,7 +833,14 @@ mod tests {
         let payload = b"petal-cli";
         let grid = PetalStreamEncoder::encode_grid(payload, PetalStreamOptions::default())
             .expect("encode");
-        let image = render_petal_frame(&grid, 32, 0, 1, PetalRenderStyle::SakuraWind);
+        let image = render_petal_frame(
+            &grid,
+            32,
+            0,
+            1,
+            PetalRenderStyle::SakuraWind,
+            PetalStreamOptions::default(),
+        );
         write_png_rgba(&path, &image).expect("write");
         let file = fs::File::open(&path).expect("open");
         let decoder = png::Decoder::new(std::io::BufReader::new(file));
@@ -750,7 +855,14 @@ mod tests {
         let payload = b"petal-cli-load";
         let grid = PetalStreamEncoder::encode_grid(payload, PetalStreamOptions::default())
             .expect("encode");
-        let image = render_petal_frame(&grid, 96, 0, 1, PetalRenderStyle::SakuraWind);
+        let image = render_petal_frame(
+            &grid,
+            96,
+            0,
+            1,
+            PetalRenderStyle::SakuraWind,
+            PetalStreamOptions::default(),
+        );
         write_png_rgba(&path, &image).expect("write");
         let decoded = load_png(&path).expect("load");
         assert_eq!(decoded.width(), image.width());
@@ -762,7 +874,14 @@ mod tests {
         let payload = b"petal-cli-decode";
         let grid = PetalStreamEncoder::encode_grid(payload, PetalStreamOptions::default())
             .expect("encode");
-        let image = render_petal_frame(&grid, 128, 0, 1, PetalRenderStyle::SakuraWind);
+        let image = render_petal_frame(
+            &grid,
+            128,
+            0,
+            1,
+            PetalRenderStyle::SakuraWind,
+            PetalStreamOptions::default(),
+        );
         let samples = sample_grid_from_rgba(&image, grid.grid_size).expect("samples");
         let decoded = PetalStreamDecoder::decode_samples(&samples, PetalStreamOptions::default())
             .expect("decode");
@@ -774,7 +893,14 @@ mod tests {
         let payload = b"petal-cli-grid";
         let grid = PetalStreamEncoder::encode_grid(payload, PetalStreamOptions::default())
             .expect("encode");
-        let image = render_petal_frame(&grid, 128, 0, 1, PetalRenderStyle::SakuraWind);
+        let image = render_petal_frame(
+            &grid,
+            128,
+            0,
+            1,
+            PetalRenderStyle::SakuraWind,
+            PetalStreamOptions::default(),
+        );
         let decoded = decode_frame_with_grid(&image, grid.grid_size, PetalStreamOptions::default())
             .expect("decode");
         assert_eq!(decoded, payload);
@@ -785,7 +911,14 @@ mod tests {
         let payload = b"petal-cli-auto";
         let grid = PetalStreamEncoder::encode_grid(payload, PetalStreamOptions::default())
             .expect("encode");
-        let image = render_petal_frame(&grid, 128, 0, 1, PetalRenderStyle::SakuraWind);
+        let image = render_petal_frame(
+            &grid,
+            128,
+            0,
+            1,
+            PetalRenderStyle::SakuraWind,
+            PetalStreamOptions::default(),
+        );
         let (grid_size, decoded) =
             decode_frame_auto(&image, PetalStreamOptions::default()).expect("auto");
         assert_eq!(grid_size, grid.grid_size);

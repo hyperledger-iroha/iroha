@@ -1421,7 +1421,8 @@ mod tests {
     #[test]
     fn transfer_args_loads_governance_hook() {
         let gov = sample_governance_file();
-        let new_owner = default_owner().to_string();
+        let owner = default_owner();
+        let new_owner = format!("{}@{}", owner.signatory(), owner.domain());
         let args = TransferArgs {
             selector: "makoto.sora".into(),
             new_owner: new_owner.clone(),

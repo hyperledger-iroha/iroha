@@ -640,8 +640,8 @@ enum MainError {
     SerializeConfig,
     #[error("Failed to get transaction metadata from file")]
     TransactionMetadata,
-    #[error("Failed to run the command")]
-    Command,
+    #[error("Failed to run the command: {0}")]
+    Command(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -840,6 +840,7 @@ fn run_with_line(build_line: BuildLine) -> ReportResult<(), MainError> {
         );
     }
 
+    let output_format = effective_output_format(&args);
     let mut context = PrintJsonContext {
         write: io::stdout(),
         err_write: io::stderr(),
@@ -847,7 +848,7 @@ fn run_with_line(build_line: BuildLine) -> ReportResult<(), MainError> {
         transaction_metadata: None,
         input_instructions: args.input,
         output_instructions: args.output,
-        output_format: args.output_format,
+        output_format,
         i18n: i18n.clone(),
     };
     if let Some(path) = args.metadata {
@@ -864,7 +865,10 @@ fn run_with_line(build_line: BuildLine) -> ReportResult<(), MainError> {
     args.command
         .run(&mut context)
         .into_report()
-        .map_err(|report| report.change_context(MainError::Command))?;
+        .map_err(|report| {
+            let message = report.to_string();
+            report.change_context(MainError::Command(message))
+        })?;
 
     Ok(())
 }
@@ -944,6 +948,14 @@ fn parse_output_format(value: &str) -> Option<CliOutputFormat> {
         "json" => Some(CliOutputFormat::Json),
         "text" => Some(CliOutputFormat::Text),
         _ => None,
+    }
+}
+
+fn effective_output_format(args: &Args) -> CliOutputFormat {
+    if matches!(&args.command, Command::Tools(tools::Command::Address(_))) {
+        CliOutputFormat::Text
+    } else {
+        args.output_format
     }
 }
 
@@ -6579,7 +6591,7 @@ fn error_kind_for_report(report: &Report<MainError>) -> CliErrorKind {
         MainError::Config => CliErrorKind::Config,
         MainError::TransactionMetadata => CliErrorKind::Input,
         MainError::SerializeConfig => CliErrorKind::Internal,
-        MainError::Command => CliErrorKind::Command,
+        MainError::Command(_) => CliErrorKind::Command,
     }
 }
 
@@ -6639,6 +6651,7 @@ fn render_cli_error(report: &Report<MainError>, output_format: CliOutputFormat) 
 mod tests {
     use super::*;
     use crate::json_macros::JsonSerialize;
+    use clap::Parser;
     use eyre::eyre;
     use futures::stream;
     use iroha::crypto::{Algorithm, KeyPair};
@@ -6690,6 +6703,28 @@ mod tests {
     }
 
     #[test]
+    fn effective_output_format_for_address_tools_is_text() {
+        let args = Args::try_parse_from([
+            "iroha",
+            "--output-format",
+            "json",
+            "tools",
+            "address",
+            "convert",
+            "0x00",
+        ])
+        .expect("parse args");
+        assert_eq!(effective_output_format(&args), CliOutputFormat::Text);
+    }
+
+    #[test]
+    fn effective_output_format_uses_args_for_other_tools() {
+        let args = Args::try_parse_from(["iroha", "--output-format", "json", "tools", "version"])
+            .expect("parse args");
+        assert_eq!(effective_output_format(&args), CliOutputFormat::Json);
+    }
+
+    #[test]
     fn render_cli_error_includes_kind_and_exit_code() {
         let report = Report::new(MainError::Config);
         let rendered = render_cli_error(&report, CliOutputFormat::Json);
@@ -6705,6 +6740,24 @@ mod tests {
         assert_eq!(
             err.get("exit_code").and_then(norito::json::Value::as_i64),
             Some(3)
+        );
+    }
+
+    #[test]
+    fn render_cli_error_includes_command_message() {
+        let report = Report::new(MainError::Command("missing budget".to_string()));
+        let rendered = render_cli_error(&report, CliOutputFormat::Json);
+        let value: norito::json::Value =
+            norito::json::from_str(&rendered.output).expect("parse error json");
+        let err = value
+            .as_object()
+            .and_then(|obj| obj.get("error"))
+            .and_then(|err| err.get("message"))
+            .and_then(norito::json::Value::as_str)
+            .expect("error message");
+        assert!(
+            err.contains("missing budget"),
+            "message should include context: {err}"
         );
     }
 

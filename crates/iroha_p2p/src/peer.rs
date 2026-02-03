@@ -2284,6 +2284,15 @@ mod run {
         Pong,
     }
 
+    impl<'a, T> ncore::DecodeFromSlice<'a> for Message<T>
+    where
+        T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
+    {
+        fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+            ncore::decode_field_canonical::<Self>(bytes)
+        }
+    }
+
     pub fn data_message_wire_len<T: Encode>(payload: T) -> usize {
         let message = Message::Data(payload);
         ncore::to_bytes(&message)
@@ -2481,6 +2490,19 @@ mod run {
             match second {
                 Message::Data(blob) => assert_eq!(blob.0, vec![1u8]),
                 _ => panic!("expected low data frame"),
+            }
+        }
+
+        #[test]
+        fn message_decode_from_slice_roundtrip() {
+            let message = Message::Data(Blob(vec![1u8, 2, 3]));
+            let bytes = ncore::to_bytes(&message).expect("encode message");
+            let view = ncore::from_bytes_view(&bytes).expect("archive view");
+            let decoded: Message<Blob> = view.decode().expect("decode message");
+
+            match decoded {
+                Message::Data(blob) => assert_eq!(blob.0, vec![1u8, 2, 3]),
+                _ => panic!("expected data message"),
             }
         }
 

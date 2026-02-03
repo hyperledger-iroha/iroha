@@ -231,6 +231,12 @@ pub enum NetworkMessage {
     SoranetPowConfig(Vec<u8>),
 }
 
+impl<'a> norito::core::DecodeFromSlice<'a> for NetworkMessage {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        norito::core::decode_field_canonical::<Self>(bytes)
+    }
+}
+
 // Derive Encode/Decode above for NetworkMessage
 
 // Classify core network messages into P2P topics for scheduling.
@@ -521,6 +527,16 @@ mod tests {
 
         let topic = NetworkMessage::SoranetPowConfig(json.into_bytes()).topic();
         assert_eq!(topic, NetworkTopic::Control);
+    }
+
+    #[test]
+    fn network_message_decode_from_slice_roundtrip() {
+        let message = NetworkMessage::Health;
+        let bytes = norito::to_bytes(&message).expect("encode network message");
+        let view = norito::core::from_bytes_view(&bytes).expect("archive view");
+        let decoded: NetworkMessage = view.decode().expect("decode network message");
+
+        assert!(matches!(decoded, NetworkMessage::Health));
     }
 
     #[test]

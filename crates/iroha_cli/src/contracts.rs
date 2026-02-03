@@ -401,11 +401,12 @@ mod tests {
             key_pair.public_key().clone(),
         );
         let mut ctx = TestContext::new(authority.clone());
+        let authority_literal = format!("{}@{}", authority.signatory(), authority.domain());
         let program = minimal_program();
         let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
         let private_key = ExposedPrivateKey(key_pair.private_key().clone()).to_string();
         let args = SimulateArgs {
-            authority: authority.to_string(),
+            authority: authority_literal,
             private_key,
             code_file: None,
             code_b64: Some(code_b64),
