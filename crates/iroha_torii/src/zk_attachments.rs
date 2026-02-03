@@ -147,7 +147,14 @@ fn attachments_dir() -> PathBuf {
 }
 
 fn ensure_dirs() {
-    let _ = fs::create_dir_all(attachments_dir());
+    if cfg!(test) {
+        let _ = fs::create_dir_all(attachments_dir());
+        return;
+    }
+    static INIT: OnceLock<()> = OnceLock::new();
+    INIT.get_or_init(|| {
+        let _ = fs::create_dir_all(attachments_dir());
+    });
 }
 
 fn meta_path(id: &str) -> PathBuf {

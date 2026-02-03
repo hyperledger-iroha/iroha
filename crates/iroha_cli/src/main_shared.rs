@@ -3881,13 +3881,15 @@ mod query {
 }
 
 mod transaction {
-    use iroha::data_model::{Level as LogLevel, isi::Log};
+    use iroha::data_model::{Level as LogLevel, isi::Log, metadata::Metadata, name::Name};
     use std::{
         sync::{
+            LazyLock,
             Mutex,
             atomic::{AtomicUsize, Ordering},
         },
         thread,
+        time::{SystemTime, UNIX_EPOCH},
     };
 
     use super::*;
@@ -3969,11 +3971,32 @@ mod transaction {
 
     pub const DEFAULT_PING_PARALLEL_CAP: usize = 1024;
 
+    static PING_NONCE_KEY: LazyLock<Name> = LazyLock::new(|| {
+        use std::str::FromStr;
+        Name::from_str("ping_nonce").expect("ping nonce metadata key must be valid")
+    });
+
     fn ping_message(base: &str, index: usize, count: usize, no_index: bool) -> String {
         if count <= 1 || no_index {
             return base.to_owned();
         }
         format!("{base}-{}", index + 1)
+    }
+
+    fn ping_nonce_seed() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0)
+    }
+
+    fn maybe_add_ping_nonce(metadata: &mut Metadata, seed: u64, index: usize) -> bool {
+        if metadata.contains(&*PING_NONCE_KEY) {
+            return false;
+        }
+        let value = seed.wrapping_add(index as u64);
+        metadata.insert(PING_NONCE_KEY.clone(), value);
+        true
     }
 
     fn resolve_ping_parallel(count: usize, parallel: usize, parallel_cap: usize) -> (usize, bool) {
@@ -4058,6 +4081,11 @@ mod transaction {
                         "Incompatible `--input` `--output` flags with batch `iroha transaction ping`"
                     );
                 }
+                let ping_seed = if no_index && count > 1 {
+                    Some(ping_nonce_seed())
+                } else {
+                    None
+                };
                 let client = Client::new(context.config().clone());
                 let metadata = context.transaction_metadata().cloned().unwrap_or_default();
                 let i18n = context.i18n().clone();
@@ -4070,7 +4098,11 @@ mod transaction {
                     move |index| {
                         let message = ping_message(&base_msg, index, count, no_index);
                         let instruction = Log::new(log_level, message);
-                        let transaction = client.build_transaction([instruction], metadata.clone());
+                        let mut metadata = metadata.clone();
+                        if let Some(seed) = ping_seed {
+                            let _ = maybe_add_ping_nonce(&mut metadata, seed, index);
+                        }
+                        let transaction = client.build_transaction([instruction], metadata);
                         let submit = if no_wait {
                             client.submit_transaction(&transaction).map(|_| ())
                         } else {
@@ -4166,6 +4198,33 @@ mod transaction {
             let (parallel, clamped) = resolve_ping_parallel(10, 8, 0);
             assert_eq!(parallel, 8);
             assert!(!clamped);
+        }
+
+        #[test]
+        fn ping_nonce_inserts_when_missing() {
+            let mut metadata = Metadata::default();
+            let inserted = maybe_add_ping_nonce(&mut metadata, 10, 2);
+            assert!(inserted);
+            let value = metadata
+                .get(&*PING_NONCE_KEY)
+                .expect("ping nonce should be set")
+                .try_into_any_norito::<u64>()
+                .expect("ping nonce should be u64");
+            assert_eq!(value, 12);
+        }
+
+        #[test]
+        fn ping_nonce_skips_when_present() {
+            let mut metadata = Metadata::default();
+            metadata.insert(PING_NONCE_KEY.clone(), 99_u64);
+            let inserted = maybe_add_ping_nonce(&mut metadata, 10, 2);
+            assert!(!inserted);
+            let value = metadata
+                .get(&*PING_NONCE_KEY)
+                .expect("ping nonce should remain set")
+                .try_into_any_norito::<u64>()
+                .expect("ping nonce should be u64");
+            assert_eq!(value, 99);
         }
     }
 
