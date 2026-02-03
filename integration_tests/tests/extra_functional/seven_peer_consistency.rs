@@ -62,10 +62,10 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
             BlockParameter::MaxTransactions(nonzero!(1_u64)),
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::BlockTimeMs(2_000),
+            SumeragiParameter::CommitTimeMs(8_000),
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CommitTimeMs(8_000),
+            SumeragiParameter::BlockTimeMs(2_000),
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::DaEnabled(true),

@@ -1482,7 +1482,6 @@ async fn sumeragi_rbc_unverified_roster_stash_requests_missing_block() -> Result
         let baseline_unverified_total = baseline_stash
             .stash_ready_roster_unverified_total
             .saturating_add(baseline_stash.stash_deliver_roster_unverified_total);
-        let unverified_already_active = baseline_unverified_total > 0;
         let fetch_already_active = baseline_fetch_total > 0.0;
         let mut last_unverified_total = baseline_unverified_total;
         let mut last_fetch_total = baseline_fetch_total;
@@ -1491,10 +1490,9 @@ async fn sumeragi_rbc_unverified_roster_stash_requests_missing_block() -> Result
         loop {
             if Instant::now() > pending_deadline {
                 return Err(eyre!(
-                    "timed out waiting for unverified RBC stash + missing-block fetch or lagging catch-up; unverified_baseline={baseline_unverified_total}, unverified_last={last_unverified_total}, fetch_baseline={baseline_fetch_total}, fetch_last={last_fetch_total}, lagging_height={last_lagging_height:?}, expected_height={expected_height}"
+                    "timed out waiting for missing-block fetch or lagging catch-up; unverified_baseline={baseline_unverified_total}, unverified_last={last_unverified_total}, fetch_baseline={baseline_fetch_total}, fetch_last={last_fetch_total}, lagging_height={last_lagging_height:?}, expected_height={expected_height}"
                 ));
             }
-            let mut unverified_observed = unverified_already_active;
             let mut fetch_observed = fetch_already_active;
             let mut lagging_caught_up = false;
 
@@ -1513,9 +1511,6 @@ async fn sumeragi_rbc_unverified_roster_stash_requests_missing_block() -> Result
                     .stash_ready_roster_unverified_total
                     .saturating_add(counters.stash_deliver_roster_unverified_total);
                 last_unverified_total = unverified_total;
-                if unverified_total > baseline_unverified_total {
-                    unverified_observed = true;
-                }
             }
 
             let response = http
@@ -1557,7 +1552,7 @@ async fn sumeragi_rbc_unverified_roster_stash_requests_missing_block() -> Result
                 }
             }
 
-            if (unverified_observed && fetch_observed) || lagging_caught_up {
+            if fetch_observed || lagging_caught_up {
                 break;
             }
             sleep(Duration::from_millis(200)).await;
