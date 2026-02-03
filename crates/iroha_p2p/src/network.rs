@@ -509,6 +509,15 @@ impl<T> RelayMessage<T> {
     }
 }
 
+impl<'a, T> norito::core::DecodeFromSlice<'a> for RelayMessage<T>
+where
+    T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
+{
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        norito::core::decode_field_canonical::<Self>(bytes)
+    }
+}
+
 /// Return the plaintext wire length of a P2P data frame containing `payload`.
 ///
 /// This accounts for the relay envelope and the `Message::Data` wrapper but
@@ -590,6 +599,35 @@ mod data_frame_wire_len_tests {
             broadcast, broadcast_expected,
             "broadcast frame size should match envelope"
         );
+    }
+
+    #[test]
+    fn relay_message_decode_from_slice_roundtrip() {
+        let origin = PeerId::from(KeyPair::random().public_key().clone());
+        let target = PeerId::from(KeyPair::random().public_key().clone());
+        let payload = Dummy { tag: 42 };
+        let frame = RelayMessage::new(
+            origin.clone(),
+            RelayTarget::Direct(target.clone()),
+            5,
+            message::Priority::High,
+            payload.clone(),
+        );
+
+        let bytes = frame.encode();
+        let (decoded, used) =
+            <RelayMessage<Dummy> as norito::core::DecodeFromSlice>::decode_from_slice(&bytes)
+                .expect("decode relay message");
+
+        assert_eq!(used, bytes.len(), "should consume full payload");
+        assert_eq!(decoded.origin, origin);
+        assert_eq!(decoded.ttl, 5);
+        assert_eq!(decoded.priority, message::Priority::High);
+        assert_eq!(decoded.payload.tag, payload.tag);
+        match decoded.target {
+            RelayTarget::Direct(peer_id) => assert_eq!(peer_id, target),
+            RelayTarget::Broadcast => panic!("expected direct relay target"),
+        }
     }
 }
 

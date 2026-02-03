@@ -933,9 +933,10 @@ mod tests {
                 outcome: FeedEventOutcome::Success(FeedSuccess {
                     value: ObservationValue::new(1_000, 2),
                     entries: vec![ReportEntry {
-                        oracle_id: "34mSYnLrmfrui7Ba2h9RbAPY1hHa7ZCvLRLUSYBujVoUYk1eeBFAZPChUmyGTH47EtrQxAFVA"
-                            .parse()
-                            .expect("oracle id"),
+                        oracle_id:
+                            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@default"
+                                .parse()
+                                .expect("oracle id"),
                         observation_hash,
                         value: ObservationValue::new(1_000, 2),
                         outlier: false,
@@ -1068,9 +1069,10 @@ mod tests {
                 outcome: FeedEventOutcome::Success(FeedSuccess {
                     value: ObservationValue::new(1_000, 2),
                     entries: vec![ReportEntry {
-                        oracle_id: "34mSYnLrmfrui7Ba2h9RbAPY1hHa7ZCvLRLUSYBujVoUYk1eeBFAZPChUmyGTH47EtrQxAFVA"
-                            .parse()
-                            .expect("oracle id"),
+                        oracle_id:
+                            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@default"
+                                .parse()
+                                .expect("oracle id"),
                         observation_hash,
                         value: ObservationValue::new(1_000, 2),
                         outlier: false,
