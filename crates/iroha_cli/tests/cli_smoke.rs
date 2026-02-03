@@ -2029,10 +2029,14 @@ fn sorafs_incentives_service_cli_roundtrip() {
 
     let state_json = read_state(&state_path);
     assert_eq!(state_json["version"].as_u64(), Some(1));
-    let treasury_str = treasury.to_string();
+    let treasury_json_literal = format!(
+        "{}@{}",
+        treasury.canonical_ih58().expect("treasury ih58"),
+        treasury.domain()
+    );
     assert_eq!(
         state_json["treasury_account"].as_str(),
-        Some(treasury_str.as_str())
+        Some(treasury_json_literal.as_str())
     );
 
     let metrics = sample_metrics();
@@ -2294,12 +2298,16 @@ fn sorafs_incentives_service_cli_process_batch_and_reconcile() {
 
     let _domain_guard = install_domain_selector_resolver(&state_json);
     let treasury_account = treasury.clone();
-    let expected_treasury = treasury_account.canonical_ih58().expect("treasury ih58");
+    let treasury_json_literal = format!(
+        "{}@{}",
+        treasury.canonical_ih58().expect("treasury ih58"),
+        treasury.domain()
+    );
     assert_eq!(
         state_json["treasury_account"]
             .as_str()
             .expect("treasury account string"),
-        expected_treasury
+        treasury_json_literal.as_str()
     );
     let payout_values = state_json["payouts"].as_array().expect("payouts array");
     let mut expected_transfers = Vec::new();
@@ -3420,8 +3428,10 @@ fn da_rent_quote_outputs_summary_and_json() {
     const POTR_MICRO: u64 = 225_000;
     const EGRESS_CREDIT_MICRO: u64 = 1_500;
 
-    let output = command()
+    let summary_output = command()
         .args([
+            "--output-format",
+            "text",
             "app",
             "da",
             "rent-quote",
@@ -3431,19 +3441,16 @@ fn da_rent_quote_outputs_summary_and_json() {
             &MONTHS.to_string(),
         ])
         .output()
-        .expect("failed to execute iroha da rent-quote");
+        .expect("failed to execute iroha da rent-quote --output-format text");
     assert!(
-        output.status.success(),
+        summary_output.status.success(),
         "rent-quote failed: {}",
-        String::from_utf8_lossy(&output.stderr)
+        String::from_utf8_lossy(&summary_output.stderr)
     );
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stdout_str = stdout.as_ref();
-    let newline_idx = stdout_str
-        .find('\n')
-        .expect("rent-quote should emit a summary line");
-    let summary_line = stdout_str[..newline_idx].trim_end_matches('\r');
+    let stdout = String::from_utf8_lossy(&summary_output.stdout);
+    let mut lines = stdout.lines();
+    let summary_line = lines.next().expect("rent-quote should emit a summary line");
     assert!(
         summary_line.contains("rent_quote base=9.000000 XOR"),
         "unexpected summary line: {summary_line}"
@@ -3456,10 +3463,30 @@ fn da_rent_quote_outputs_summary_and_json() {
         summary_line.contains("egress_credit_per_gib=0.001500 XOR/GiB"),
         "unexpected summary line: {summary_line}"
     );
+    assert!(
+        lines.any(|line| line.starts_with("policy_source: ")),
+        "rent-quote summary should include policy source: {stdout}"
+    );
 
-    let json_payload = stdout_str[newline_idx + 1..].trim();
+    let json_output = command()
+        .args([
+            "app",
+            "da",
+            "rent-quote",
+            "--gib",
+            &GIB.to_string(),
+            "--months",
+            &MONTHS.to_string(),
+        ])
+        .output()
+        .expect("failed to execute iroha da rent-quote");
+    assert!(
+        json_output.status.success(),
+        "rent-quote failed: {}",
+        String::from_utf8_lossy(&json_output.stderr)
+    );
     let value: Value =
-        norito::json::from_str(json_payload).expect("rent-quote should emit valid JSON");
+        norito::json::from_slice(&json_output.stdout).expect("rent-quote JSON output");
     assert_eq!(
         value.get("policy_source").and_then(Value::as_str),
         Some("embedded default policy")

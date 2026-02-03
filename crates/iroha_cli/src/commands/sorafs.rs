@@ -6334,7 +6334,11 @@ impl ServiceDashboardRow {
 }
 
 fn parse_account_id_str<C: RunContext>(context: &C, value: &str, flag: &str) -> Result<AccountId> {
-    crate::resolve_account_id(context, value)
+    let trimmed = value.trim();
+    if let Ok(account) = AccountId::from_str(trimmed) {
+        return Ok(account);
+    }
+    crate::resolve_account_id(context, trimmed)
         .wrap_err_with(|| format!("{flag} must be a valid account identifier"))
 }
 
@@ -12152,7 +12156,7 @@ mod tests {
             token::{self, AdmissionTokenVerifier},
         },
     };
-    use iroha_data_model::account::AccountAddress;
+    use iroha_data_model::account::{AccountAddress, address};
     use iroha_data_model::{
         asset::{AssetDefinitionId, AssetId},
         domain::DomainId,
@@ -12186,7 +12190,7 @@ mod tests {
     use url::Url;
 
     fn sample_account_literals() -> (String, String, String) {
-        let domain: DomainId = "wonderland".parse().expect("domain parses");
+        let domain: DomainId = "default".parse().expect("domain parses");
         let public_key: PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
@@ -12194,7 +12198,9 @@ mod tests {
         let account = AccountId::new(domain, public_key);
         let address = AccountAddress::from_account_id(&account).expect("address from account");
         let canonical = address.canonical_hex().expect("canonical hex");
-        let ih58 = address.to_ih58(42).expect("ih58 encode");
+        let ih58 = address
+            .to_ih58(address::chain_discriminant())
+            .expect("ih58 encode");
         let compressed = address.to_compressed_sora().expect("compressed encode");
         (canonical, ih58, compressed)
     }
@@ -12765,7 +12771,7 @@ mod tests {
     }
 
     fn sample_account_id(name: &str) -> AccountId {
-        let domain = DomainId::from_str("sora").expect("domain id");
+        let domain = DomainId::from_str("default").expect("domain id");
         let mut hasher = Blake3Hasher::new();
         hasher.update(b"sorafs-sample-account");
         hasher.update(name.as_bytes());
@@ -12777,6 +12783,11 @@ mod tests {
         let public_key =
             PublicKey::from_bytes(Algorithm::Ed25519, verifying.as_bytes()).expect("public key");
         AccountId::new(domain, public_key)
+    }
+
+    fn sample_account_literal(name: &str) -> String {
+        let account = sample_account_id(name);
+        format!("{}@{}", account.signatory(), account.domain())
     }
 
     fn xor_asset_id() -> AssetDefinitionId {
@@ -14357,7 +14368,7 @@ mod tests {
             config: config_file.path().to_path_buf(),
             metrics: metrics_file.path().to_path_buf(),
             bond: bond_file.path().to_path_buf(),
-            beneficiary: sample_account_id("beneficiary").to_string(),
+            beneficiary: sample_account_literal("beneficiary"),
             norito_out: Some(instruction_path.clone()),
             pretty: true,
         };
@@ -14393,8 +14404,8 @@ mod tests {
         let dispute_path = dispute_file.path().to_path_buf();
         let args = IncentivesOpenDisputeArgs {
             instruction: instruction_file.path().to_path_buf(),
-            treasury_account: sample_account_id("treasury").to_string(),
-            submitted_by: sample_account_id("operator").to_string(),
+            treasury_account: sample_account_literal("treasury"),
+            submitted_by: sample_account_literal("operator"),
             requested_amount: "25".into(),
             reason: "calibration".into(),
             submitted_at: Some(1_234),
@@ -14488,7 +14499,7 @@ mod tests {
         let init_args = IncentivesServiceInitArgs {
             state: state_path.clone(),
             config: config_file.path().to_path_buf(),
-            treasury_account: sample_account_id("treasury").to_string(),
+            treasury_account: sample_account_literal("treasury"),
             force: false,
             allow_missing_budget_approval: true,
         };
@@ -14572,7 +14583,7 @@ mod tests {
         );
         primary_relay_entry.insert(
             "beneficiary".to_string(),
-            Value::String(sample_account_id("relay-a").to_string()),
+            Value::String(sample_account_literal("relay-a")),
         );
         primary_relay_entry.insert(
             "bond_path".to_string(),
@@ -14587,7 +14598,7 @@ mod tests {
         );
         secondary_relay_entry.insert(
             "beneficiary".to_string(),
-            Value::String(sample_account_id("relay-b").to_string()),
+            Value::String(sample_account_literal("relay-b")),
         );
         secondary_relay_entry.insert(
             "bond_path".to_string(),
@@ -14694,7 +14705,7 @@ mod tests {
         let init_args = IncentivesServiceInitArgs {
             state: state_path.clone(),
             config: config_file.path().to_path_buf(),
-            treasury_account: sample_account_id("treasury").to_string(),
+            treasury_account: sample_account_literal("treasury"),
             force: false,
             allow_missing_budget_approval: true,
         };
@@ -14708,7 +14719,7 @@ mod tests {
             state: state_path,
             metrics: vec![metrics_file.path().to_path_buf()],
             bond: vec![bond_file.path().to_path_buf()],
-            beneficiary: vec![sample_account_id("beneficiary").to_string()],
+            beneficiary: vec![sample_account_literal("beneficiary")],
             instruction_out: None,
             transfer_out: None,
             submit_transfer: false,
@@ -14734,7 +14745,7 @@ mod tests {
         let init_args = IncentivesServiceInitArgs {
             state: state_path.clone(),
             config: config_file.path().to_path_buf(),
-            treasury_account: sample_account_id("treasury").to_string(),
+            treasury_account: sample_account_literal("treasury"),
             force: false,
             allow_missing_budget_approval: true,
         };
@@ -14751,7 +14762,7 @@ mod tests {
         );
         relay_entry.insert(
             "beneficiary".to_string(),
-            Value::String(sample_account_id("relay-audited").to_string()),
+            Value::String(sample_account_literal("relay-audited")),
         );
         relay_entry.insert(
             "bond_path".to_string(),
@@ -14855,7 +14866,7 @@ mod tests {
         let args = IncentivesServiceInitArgs {
             state: state_path.clone(),
             config: config_file.path().to_path_buf(),
-            treasury_account: sample_account_id("treasury").to_string(),
+            treasury_account: sample_account_literal("treasury"),
             force: false,
             allow_missing_budget_approval: false,
         };
@@ -14881,7 +14892,7 @@ mod tests {
         let init_args = IncentivesServiceInitArgs {
             state: state_path.clone(),
             config: config_file.path().to_path_buf(),
-            treasury_account: sample_account_id("treasury").to_string(),
+            treasury_account: sample_account_literal("treasury"),
             force: false,
             allow_missing_budget_approval: true,
         };
@@ -14897,7 +14908,7 @@ mod tests {
             state: state_path.clone(),
             metrics: vec![metrics_file.path().to_path_buf()],
             bond: vec![bond_file.path().to_path_buf()],
-            beneficiary: vec![sample_account_id("beneficiary").to_string()],
+            beneficiary: vec![sample_account_literal("beneficiary")],
             instruction_out: Some(instruction_out.path().to_path_buf()),
             transfer_out: None,
             submit_transfer: false,
@@ -14936,7 +14947,7 @@ mod tests {
         let init_args = IncentivesServiceInitArgs {
             state: state_path.clone(),
             config: config_file.path().to_path_buf(),
-            treasury_account: sample_account_id("treasury").to_string(),
+            treasury_account: sample_account_literal("treasury"),
             force: false,
             allow_missing_budget_approval: true,
         };
@@ -14954,7 +14965,7 @@ mod tests {
         relay_entry.insert("relay_id".to_string(), Value::String(relay_hex));
         relay_entry.insert(
             "beneficiary".to_string(),
-            Value::String(sample_account_id("relay-a").to_string()),
+            Value::String(sample_account_literal("relay-a")),
         );
         relay_entry.insert(
             "bond_path".to_string(),
@@ -15005,7 +15016,7 @@ mod tests {
         let init_args = IncentivesServiceInitArgs {
             state: state_path.clone(),
             config: config_file.path().to_path_buf(),
-            treasury_account: sample_account_id("treasury").to_string(),
+            treasury_account: sample_account_literal("treasury"),
             force: false,
             allow_missing_budget_approval: true,
         };
@@ -15032,7 +15043,7 @@ mod tests {
         relay_entry.insert("relay_id".to_string(), Value::String(relay_hex));
         relay_entry.insert(
             "beneficiary".to_string(),
-            Value::String(sample_account_id("relay-a").to_string()),
+            Value::String(sample_account_literal("relay-a")),
         );
         relay_entry.insert(
             "bond_path".to_string(),
@@ -15112,7 +15123,7 @@ mod tests {
         let init_args = IncentivesServiceInitArgs {
             state: state_path.clone(),
             config: config_file.path().to_path_buf(),
-            treasury_account: sample_account_id("treasury").to_string(),
+            treasury_account: sample_account_literal("treasury"),
             force: false,
             allow_missing_budget_approval: true,
         };
@@ -15139,7 +15150,7 @@ mod tests {
         relay_entry.insert("relay_id".to_string(), Value::String(relay_hex));
         relay_entry.insert(
             "beneficiary".to_string(),
-            Value::String(sample_account_id("relay-a").to_string()),
+            Value::String(sample_account_literal("relay-a")),
         );
         relay_entry.insert(
             "bond_path".to_string(),
@@ -15197,7 +15208,7 @@ mod tests {
         let init_args = IncentivesServiceInitArgs {
             state: state_path.clone(),
             config: config_file.path().to_path_buf(),
-            treasury_account: sample_account_id("treasury").to_string(),
+            treasury_account: sample_account_literal("treasury"),
             force: false,
             allow_missing_budget_approval: false,
         };
@@ -15210,7 +15221,7 @@ mod tests {
             state: state_path.clone(),
             metrics: vec![metrics_file.path().to_path_buf()],
             bond: vec![bond_file.path().to_path_buf()],
-            beneficiary: vec![sample_account_id("beneficiary").to_string()],
+            beneficiary: vec![sample_account_literal("beneficiary")],
             instruction_out: None,
             transfer_out: None,
             submit_transfer: false,
@@ -15228,7 +15239,7 @@ mod tests {
             state: state_path.clone(),
             relay_id: hex::encode(instruction.relay_id),
             epoch: instruction.epoch,
-            submitted_by: sample_account_id("operator").to_string(),
+            submitted_by: sample_account_literal("operator"),
             requested_amount: "120".into(),
             reason: "missing bandwidth".into(),
             filed_at: Some(9_999),

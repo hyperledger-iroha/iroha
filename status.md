@@ -1,7 +1,11 @@
 # Status
 
-Last update: 2026-02-02
+Last update: 2026-02-03
 - Offline allowances: create deterministic escrow accounts when `offline.enabled` metadata is set via `SetKeyValue<AssetDefinition>`; added coverage for the metadata update path and refreshed offline allowance translations + offline topup helper README to document the requirement. Tests: `cargo test -p iroha_core set_asset_definition_offline_enabled_creates_escrow_account -- --nocapture` (failed: existing `iroha_p2p` compile error in `crates/iroha_p2p/src/peer.rs:2155`, missing `DecodeFromSlice` bound). Full workspace tests not run (user requested).
+- CLI: route tools/address output through text mode so IH58/CSV conversions land on stdout; command errors now embed underlying messages; updated DA rent-quote smoke expectations and incentives-state account literal checks. Tests: `cargo test -p iroha_cli` (ok).
+- Build: `cargo build --workspace` (ok; warnings about unused gpuzstd_metal functions, `izanami` dead-code `stake_escrow`/`slash_sink`, and `irohad` dead-code `suppress_pow_broadcast`).
+- P2P: derive Norito slice decoding for the peer run message wrapper to satisfy `Pload` bounds and add a decode-from-slice roundtrip unit test. Tests not run (not requested).
+- P2P: add Norito slice decoding for `RelayMessage` to satisfy Pload bounds and add a roundtrip decode unit test. Tests not run (not requested).
 - P2P framing: decode headered frames via `norito::core::decode_from_bytes` (schema/padding-checked) and restore transparent Norito serialization for `GossipTransaction`/`BlockMessageWire` to preserve cached payload bytes and guarantee encode↔decode inverse roundtrips. Tests not run (user requested no full workspace tests).
 - Swift Torii explorer: decode instruction items from either `r#box` or legacy `box` keys; updated a fixture to use `r#box`. Tests: `swift test` (ok).
 - Norito: length-prefixed field encoding now always derives the length from serialized bytes via `write_len_prefixed` (struct/enum derives + `Result`), and added coverage for bad `encoded_len_exact` cases. Tests: `cargo test -p norito` (ok); `cargo test --workspace` failed in `integration_tests::address_canonicalisation` (`account_transactions_get_supports_address_format`, `account_transactions_query_supports_address_format`, `repo_agreements_respect_address_format`) with `expected to reach height=2` (env_dir `/var/folders/7l/w31n0ppj4zg874c4szhllss00000gn/T/irohad_test_network_qlBCOV`); `cargo fmt --all` (stable rustfmt warns about nightly-only options).

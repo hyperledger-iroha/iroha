@@ -660,7 +660,7 @@ mod tests {
         hasher.update(name.as_bytes());
         let digest = hasher.finalize();
         let key_pair = KeyPair::from_seed(digest.as_bytes().to_vec(), Algorithm::Ed25519);
-        let domain = "wonderland".parse().expect("domain");
-        AccountId::new(domain, key_pair.public_key().clone()).to_string()
+        let domain = "wonderland";
+        format!("{}@{}", key_pair.public_key(), domain)
     }
 }
