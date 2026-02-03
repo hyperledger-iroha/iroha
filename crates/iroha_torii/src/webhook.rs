@@ -319,7 +319,14 @@ where
 }
 
 fn ensure_dirs() {
-    let _ = fs::create_dir_all(queue_dir());
+    if cfg!(test) {
+        let _ = fs::create_dir_all(queue_dir());
+        return;
+    }
+    static INIT: OnceLock<()> = OnceLock::new();
+    INIT.get_or_init(|| {
+        let _ = fs::create_dir_all(queue_dir());
+    });
 }
 
 fn persist_registry() {
