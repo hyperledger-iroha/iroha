@@ -529,6 +529,7 @@ pub mod isi {
                 key,
                 value,
             } = self;
+            let ensure_offline_escrow = key.as_ref() == OFFLINE_ASSET_ENABLED_METADATA_KEY;
             crate::smartcontracts::limits::enforce_json_size(
                 state_transaction,
                 &value,
@@ -545,6 +546,14 @@ pub mod isi {
                         .metadata_mut()
                         .insert(key.clone(), value.clone())
                 })?;
+
+            if ensure_offline_escrow {
+                let asset_definition = state_transaction
+                    .world
+                    .asset_definition(&asset_definition_id)
+                    .map_err(Error::from)?;
+                ensure_offline_escrow_account(&asset_definition, state_transaction)?;
+            }
 
             state_transaction
                 .world
@@ -1584,6 +1593,65 @@ mod tests {
                 .get(&definition_id)
                 .is_none(),
             "escrow mapping should not be created"
+        );
+    }
+
+    #[test]
+    fn set_asset_definition_offline_enabled_creates_escrow_account() {
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let domain_id: DomainId = "offline3".parse().expect("domain id");
+        seed_domain(&mut state, &domain_id, &authority);
+
+        let asset_name: Name = "gbp".parse().expect("asset name");
+        let definition_id = AssetDefinitionId::new(domain_id.clone(), asset_name);
+        let new_definition = NewAssetDefinition {
+            id: definition_id.clone(),
+            spec: NumericSpec::integer(),
+            mintable: Mintable::Infinitely,
+            logo: None,
+            metadata: Metadata::default(),
+            confidential_policy: AssetConfidentialPolicy::transparent(),
+        };
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        Register::asset_definition(new_definition)
+            .execute(&authority, &mut tx)
+            .expect("register asset definition");
+
+        assert!(
+            tx.settlement
+                .offline
+                .escrow_accounts
+                .get(&definition_id)
+                .is_none(),
+            "escrow mapping should not be created before metadata update"
+        );
+
+        SetKeyValue::asset_definition(
+            definition_id.clone(),
+            OFFLINE_ASSET_ENABLED_METADATA_KEY
+                .parse()
+                .expect("metadata key"),
+            Json::new(true),
+        )
+        .execute(&authority, &mut tx)
+        .expect("set offline.enabled metadata");
+
+        let escrow_account = tx
+            .settlement
+            .offline
+            .escrow_accounts
+            .get(&definition_id)
+            .expect("escrow mapping created")
+            .clone();
+        let expected = super::isi::offline_escrow_account_id(tx.chain_id(), &definition_id);
+        assert_eq!(escrow_account, expected);
+        assert!(
+            tx.world.account(&escrow_account).is_ok(),
+            "escrow account should exist"
         );
     }
 }
