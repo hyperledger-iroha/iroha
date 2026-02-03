@@ -368,6 +368,9 @@ impl Actor {
         if !self.subsystems.validation.inflight.is_empty() {
             return Some("validation_inflight");
         }
+        if self.pending.pending_processing.get().is_some() {
+            return Some("pending_processing");
+        }
         None
     }
 
@@ -1168,6 +1171,16 @@ impl Actor {
                         &state_view,
                         self.config.consensus_mode,
                         &block,
+                    )
+                })
+                .or_else(|| {
+                    cached_qc_for(
+                        &self.qc_cache,
+                        crate::sumeragi::consensus::Phase::Commit,
+                        block_hash,
+                        block_height,
+                        block_view,
+                        expected_epoch,
                     )
                 })
         };

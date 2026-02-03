@@ -336,6 +336,7 @@ mod gossip_backoff_tests {
             sumeragi,
             kura,
             peer,
+            trusted_peers: BTreeSet::new(),
             gossip_period: Duration::from_secs(1),
             gossip_max_period: Duration::from_secs(8),
             gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
@@ -424,6 +425,7 @@ pub struct BlockSynchronizer {
     sumeragi: SumeragiHandle,
     kura: Arc<Kura>,
     peer: Peer,
+    trusted_peers: BTreeSet<PeerId>,
     gossip_period: Duration,
     gossip_max_period: Duration,
     gossip_size: NonZeroU32,
@@ -647,6 +649,7 @@ impl BlockSynchronizer {
         sumeragi: SumeragiHandle,
         kura: Arc<Kura>,
         peer: Peer,
+        trusted_peers: BTreeSet<PeerId>,
         network: IrohaNetwork,
         state: Arc<State>,
         telemetry: Option<Telemetry>,
@@ -659,6 +662,7 @@ impl BlockSynchronizer {
         let now = std::time::Instant::now();
         Self {
             peer,
+            trusted_peers,
             sumeragi,
             kura,
             gossip_period,
@@ -800,6 +804,21 @@ impl BlockSynchronizer {
             };
             (consensus_mode, mode_tag)
         };
+
+        if let Some(cert) = status::commit_qc_history().into_iter().find(|cert| {
+            cert.height == height
+                && cert.view == view
+                && cert.subject_block_hash == block_hash
+                && matches!(cert.phase, Phase::Commit)
+                && cert.mode_tag == expected_mode_tag
+        }) {
+            iroha_logger::info!(
+                height,
+                view,
+                "block sync: reusing cached commit QC from history"
+            );
+            return Some(cert);
+        }
 
         if let Some(record) = status::precommit_signers_for(block_hash) {
             if record.height != height || record.view != view {
@@ -1869,6 +1888,76 @@ mod qc_build_tests {
     }
 
     #[test]
+    fn block_sync_qc_for_uses_commit_qc_history() {
+        let _guard = status::commit_history_test_guard();
+        status::reset_commit_certs_for_tests();
+        status::reset_precommit_signer_history_for_tests();
+
+        let chain_id = ChainId::from("block-sync-qc-history");
+        let mode_tag = PERMISSIONED_TAG;
+        let keypairs = vec![
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        ];
+        let peers: Vec<_> = keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
+            .collect();
+        let topology = Topology::new(peers.clone());
+        let header = BlockHeader::new(nonzero!(4_u64), None, None, None, 0, 0);
+        let block = BlockBuilder::new(header).build_with_signature(0, keypairs[0].private_key());
+        let block_hash = block.hash();
+        let height = block.header().height().get();
+        let view = block.header().view_change_index();
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let state = State::new_for_testing(
+            World::new(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let state_view = state.view();
+
+        let mut signers = BTreeSet::new();
+        signers.insert(ValidatorIndex::try_from(0).expect("index 0"));
+        signers.insert(ValidatorIndex::try_from(1).expect("index 1"));
+        let aggregate = aggregate_signature_for_signers(
+            &chain_id,
+            mode_tag,
+            Phase::Commit,
+            block_hash,
+            height,
+            view,
+            0,
+            &signers,
+            &topology,
+            &keypairs,
+        );
+        let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
+        let qc = BlockSynchronizer::qc_from_signers(
+            ConsensusMode::Permissioned,
+            None,
+            mode_tag,
+            peers,
+            block_hash,
+            zero_root,
+            zero_root,
+            height,
+            view,
+            0,
+            signers,
+            aggregate.clone(),
+        )
+        .expect("QC should be built");
+
+        status::record_commit_qc(qc.clone());
+
+        let out =
+            BlockSynchronizer::block_sync_qc_for(&state_view, ConsensusMode::Permissioned, &block)
+                .expect("commit QC should be reused");
+        assert_eq!(out, qc);
+    }
+
+    #[test]
     fn block_sync_qc_for_accepts_nonzero_epoch() {
         let chain_id = ChainId::from("block-sync-qc-epoch");
         let mode_tag = NPOS_TAG;
@@ -2833,10 +2922,10 @@ pub mod message {
                         let view = block_sync.state.view();
                         view.world.peers().iter().any(|peer| peer == peer_id)
                     };
-                    if !is_registered {
+                    if !is_registered && !block_sync.trusted_peers.contains(peer_id) {
                         debug!(
                             requester = %peer_id,
-                            "dropping block sync request from unregistered peer"
+                            "dropping block sync request from unregistered/untrusted peer"
                         );
                         return;
                     }
@@ -3368,6 +3457,7 @@ pub mod message {
                     sumeragi,
                     kura,
                     peer,
+                    trusted_peers: BTreeSet::new(),
                     gossip_period: Duration::from_secs(1),
                     gossip_max_period: Duration::from_secs(1),
                     gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
@@ -3479,6 +3569,7 @@ pub mod message {
                     sumeragi,
                     kura,
                     peer,
+                    trusted_peers: BTreeSet::new(),
                     gossip_period: Duration::from_secs(1),
                     gossip_max_period: Duration::from_secs(1),
                     gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
@@ -3571,6 +3662,7 @@ pub mod message {
                     sumeragi,
                     kura,
                     peer,
+                    trusted_peers: BTreeSet::new(),
                     gossip_period: Duration::from_secs(1),
                     gossip_max_period: Duration::from_secs(1),
                     gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
@@ -3649,6 +3741,7 @@ pub mod message {
                     sumeragi,
                     kura,
                     peer,
+                    trusted_peers: BTreeSet::new(),
                     gossip_period: Duration::from_secs(1),
                     gossip_max_period: Duration::from_secs(1),
                     gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
@@ -3700,6 +3793,84 @@ pub mod message {
         }
 
         #[test]
+        fn get_blocks_after_allows_trusted_peer_requests() {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .expect("tokio runtime");
+
+            runtime.block_on(async {
+                let (sumeragi, _block_rx) = test_sumeragi_handle(1);
+                let kura = Kura::blank_kura_for_testing();
+                let state = Arc::new(State::new_for_testing(
+                    World::new(),
+                    Arc::clone(&kura),
+                    LiveQueryStore::start_test(),
+                ));
+
+                let trusted_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let local_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let peer = Peer::new(
+                    "127.0.0.1:0".parse().expect("valid socket address"),
+                    local_peer_id,
+                );
+
+                let mut block_sync = BlockSynchronizer {
+                    sumeragi,
+                    kura,
+                    peer,
+                    trusted_peers: BTreeSet::from([trusted_peer_id.clone()]),
+                    gossip_period: Duration::from_secs(1),
+                    gossip_max_period: Duration::from_secs(1),
+                    gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
+                    gossip_backoff: Duration::from_secs(1),
+                    gossip_next_deadline: Instant::now(),
+                    network: crate::IrohaNetwork::closed_for_tests(),
+                    relay_ttl: 1,
+                    block_sync_frame_cap: 1024,
+                    state,
+                    telemetry: None,
+                    seen_blocks: BTreeSet::new(),
+                    unknown_prev_hashes: BTreeMap::new(),
+                    request_tracker: BlockSyncRequestTracker::new(block_sync_request_ttl(
+                        Duration::from_secs(1),
+                        Duration::from_secs(1),
+                    )),
+                    latest_height: 0,
+                    last_peers: BTreeSet::new(),
+                    last_drop_count: 0,
+                    last_drop_at: None,
+                    fallback_consensus_mode: ConsensusMode::Permissioned,
+                };
+
+                let prev_hash =
+                    HashOf::from_untyped_unchecked(Hash::prehashed([0x55; Hash::LENGTH]));
+                let latest_hash =
+                    HashOf::from_untyped_unchecked(Hash::prehashed([0x66; Hash::LENGTH]));
+                let msg = message::Message::GetBlocksAfter(message::GetBlocksAfter::new(
+                    trusted_peer_id.clone(),
+                    Some(prev_hash),
+                    Some(latest_hash),
+                    BTreeSet::new(),
+                ));
+
+                msg.handle_message(&mut block_sync).await;
+
+                assert!(
+                    block_sync
+                        .unknown_prev_hashes
+                        .contains_key(&trusted_peer_id)
+                );
+                assert!(
+                    block_sync
+                        .request_tracker
+                        .pending
+                        .contains_key(&trusted_peer_id)
+                );
+            });
+        }
+
+        #[test]
         fn unsolicited_share_blocks_increments_telemetry() {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_time()
@@ -3726,6 +3897,7 @@ pub mod message {
                     sumeragi,
                     kura,
                     peer,
+                    trusted_peers: BTreeSet::new(),
                     gossip_period: Duration::from_secs(1),
                     gossip_max_period: Duration::from_secs(1),
                     gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),

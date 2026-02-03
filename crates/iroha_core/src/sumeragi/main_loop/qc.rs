@@ -987,9 +987,8 @@ impl Actor {
         epoch: u64,
         topology: &super::network_topology::Topology,
     ) {
-        if self.is_observer() {
-            return;
-        }
+        // Observers still need locally aggregated QCs for block sync, but must not broadcast them.
+        let allow_broadcast = !self.is_observer();
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
         let signature_topology = topology_for_view(topology, height, view, mode_tag, prf_seed);
         let required = signature_topology.min_votes_for_commit();
@@ -1270,18 +1269,43 @@ impl Actor {
             );
             return;
         }
-        let msg = Arc::new(BlockMessage::Qc(qc));
-        let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
-        let topology_peers = topology.as_ref();
-        let local_peer_id = self.common_config.peer.id().clone();
-        for peer in topology_peers {
-            if peer == &local_peer_id {
-                continue;
+        if allow_broadcast {
+            let msg = Arc::new(BlockMessage::Qc(qc));
+            let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
+            let topology_peers = topology.as_ref();
+            let local_peer_id = self.common_config.peer.id().clone();
+            let topology_set: BTreeSet<_> = topology_peers.iter().cloned().collect();
+            for peer in topology_peers {
+                if peer == &local_peer_id {
+                    continue;
+                }
+                self.schedule_background(BackgroundRequest::Post {
+                    peer: peer.clone(),
+                    msg: BlockMessageWire::with_encoded(Arc::clone(&msg), Arc::clone(&encoded)),
+                });
             }
-            self.schedule_background(BackgroundRequest::Post {
-                peer: peer.clone(),
-                msg: BlockMessageWire::with_encoded(Arc::clone(&msg), Arc::clone(&encoded)),
-            });
+            let trusted = self.common_config.trusted_peers.value();
+            let mut extra_targets: Vec<PeerId> = trusted
+                .others
+                .iter()
+                .map(|peer| peer.id().clone())
+                .filter(|peer| !topology_set.contains(peer))
+                .collect();
+            if !extra_targets.is_empty() {
+                let online: BTreeSet<_> = self
+                    .network
+                    .online_peers(|set| set.iter().map(|peer| peer.id().clone()).collect());
+                extra_targets.retain(|peer| online.contains(peer));
+                for peer in extra_targets {
+                    if peer == local_peer_id {
+                        continue;
+                    }
+                    self.schedule_background(BackgroundRequest::Post {
+                        peer,
+                        msg: BlockMessageWire::with_encoded(Arc::clone(&msg), Arc::clone(&encoded)),
+                    });
+                }
+            }
         }
     }
 

@@ -2678,12 +2678,46 @@ async fn observer_skips_qc_aggregation() {
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
-    let height = 1u64;
+    let _genesis_hash = seed_genesis_block_for_state(&actor.state);
+    let (committed_height, committed_hash) = {
+        let view = actor.state.view();
+        (
+            u64::try_from(view.height()).unwrap_or(u64::MAX),
+            view.latest_block_hash(),
+        )
+    };
+    let height = committed_height.saturating_add(1).max(1);
     let view = 0u64;
     let epoch = actor.epoch_for_height(height);
-    let block_hash =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xE2; Hash::LENGTH]));
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    let signer_peer = signature_topology
+        .as_ref()
+        .first()
+        .expect("commit topology not empty");
+    let signer_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == signer_peer.public_key())
+        .expect("signer keypair exists in harness");
+    let signer_idx = signature_topology
+        .position(signer_kp.public_key())
+        .expect("signer index in topology");
+    let block = heartbeat_block_for_state(
+        actor.state.as_ref(),
+        &actor.common_config.chain,
+        height,
+        view,
+        committed_hash,
+        signer_kp,
+        u64::try_from(signer_idx).expect("signer index fits u64"),
+    );
+    let block_hash = block.hash();
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, Hash::prehashed([0xE2; Hash::LENGTH]), height, view),
+    );
     let chain = actor.common_config.chain.clone();
 
     for idx in 0..topology.as_ref().len() {
@@ -2709,13 +2743,22 @@ async fn observer_skips_qc_aggregation() {
     let _ = harness.background_rx.try_iter().count();
     actor.try_form_qc_from_votes(Phase::Commit, block_hash, height, view, epoch, &topology);
     assert!(
-        actor.qc_cache.is_empty(),
-        "observer should not aggregate QCs"
+        actor
+            .qc_cache
+            .contains_key(&(Phase::Commit, block_hash, height, view, epoch)),
+        "observer should aggregate QCs for local validation"
     );
-    assert!(
-        harness.background_rx.try_iter().next().is_none(),
-        "observer should not broadcast QCs"
-    );
+    for post in harness.background_rx.try_iter() {
+        match post {
+            BackgroundPost::Post { msg, .. } | BackgroundPost::Broadcast { msg, .. } => {
+                assert!(
+                    !matches!(msg.as_ref(), BlockMessage::Qc(_)),
+                    "observer should not broadcast QCs"
+                );
+            }
+            _ => {}
+        }
+    }
 
     harness.shutdown.send();
 }
@@ -5832,6 +5875,52 @@ async fn block_sync_update_defers_while_commit_inflight_and_replays() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn block_sync_update_defers_while_pending_processing() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let view = actor.state.view();
+    let committed_height = u64::try_from(view.height()).unwrap_or(u64::MAX);
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let height = committed_height.saturating_add(1).max(1);
+    let view_idx = 0_u64;
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view_idx, parent);
+    let block_hash = block.hash();
+
+    actor.pending.pending_processing.set(Some(block_hash));
+
+    let update = super::message::BlockSyncUpdate::from(&block);
+    actor
+        .handle_block_sync_update(update, None)
+        .expect("block sync update");
+
+    assert!(
+        actor
+            .deferred_block_sync_updates
+            .contains_key(&(height, view_idx, block_hash)),
+        "block sync update should be deferred while pending processing is active"
+    );
+    assert!(
+        actor.pending.pending_blocks.get(&block_hash).is_none(),
+        "deferred block sync update should not insert a pending block"
+    );
+
+    actor.pending.pending_processing.set(None);
+    let progressed = actor.tick();
+    assert!(progressed, "tick should replay deferred block sync updates");
+    assert!(
+        !actor
+            .deferred_block_sync_updates
+            .contains_key(&(height, view_idx, block_hash)),
+        "deferred block sync update should be replayed"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn block_sync_update_accepts_pre_activation_signature_after_mode_flip() {
     use crate::sumeragi::status;
     use iroha_data_model::parameter::system::SumeragiConsensusMode;
@@ -6221,7 +6310,6 @@ async fn block_sync_update_reuses_cached_qc_when_validation_unavailable() {
         actor.common_config.peer.id(),
         &roster_cache,
     );
-    update.commit_qc = Some(qc);
 
     actor
         .handle_block_sync_update(update, None)
@@ -13671,11 +13759,16 @@ async fn precommit_vote_block_sync_update_targets_snapshot_roster() {
         let view = actor.state.view();
         view.world().peers().iter().cloned().collect::<Vec<_>>()
     };
+    let trusted = actor.common_config.trusted_peers.value();
+    let trusted_peers: Vec<PeerId> = std::iter::once(trusted.myself.id().clone())
+        .chain(trusted.others.iter().map(|peer| peer.id().clone()))
+        .collect();
     let expected_targets = Actor::block_sync_update_targets_for_peers(
         actor.common_config.peer.id(),
         actor.block_sync_gossip_limit,
         &snapshot_roster,
         &registered_peers,
+        &trusted_peers,
         &online_peers,
         block_hash.as_ref(),
     );
@@ -13727,6 +13820,7 @@ fn block_sync_update_targets_cover_full_roster_when_limit_allows() {
         gossip_limit,
         &peers,
         &registered_peers,
+        &[],
         &online_peers,
         &seed,
     );
