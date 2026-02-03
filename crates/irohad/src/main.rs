@@ -4240,11 +4240,16 @@ impl Iroha {
         let block_sync_telemetry = Some(telemetry.clone());
         #[cfg(not(feature = "telemetry"))]
         let block_sync_telemetry = None;
+        let trusted = config.common.trusted_peers.value();
+        let trusted_peers = std::iter::once(trusted.myself.id().clone())
+            .chain(trusted.others.iter().map(|peer| peer.id().clone()))
+            .collect();
         let (block_sync, child) = BlockSynchronizer::from_config(
             &config.block_sync,
             sumeragi.clone(),
             kura.clone(),
             config.common.peer.clone(),
+            trusted_peers,
             network.clone(),
             Arc::clone(&state),
             block_sync_telemetry,
