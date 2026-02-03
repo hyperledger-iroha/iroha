@@ -8,7 +8,7 @@ use iroha_data_model::{
     },
     isi::{
         error::InstructionExecutionError,
-        repo::{RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
+        repo::{RepoInstructionBox, RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
     },
     prelude::*,
     repo::{RepoAgreement, RepoGovernance},
@@ -318,6 +318,20 @@ impl Execute for RepoIsi {
         state_transaction.world.emit_events(repo_events);
 
         Ok(())
+    }
+}
+
+impl Execute for RepoInstructionBox {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        match self {
+            RepoInstructionBox::Initiate(isi) => isi.execute(authority, state_transaction),
+            RepoInstructionBox::Reverse(isi) => isi.execute(authority, state_transaction),
+            RepoInstructionBox::MarginCall(isi) => isi.execute(authority, state_transaction),
+        }
     }
 }
 
@@ -682,6 +696,7 @@ mod tests {
         events::data::prelude::{
             AccountEvent, DataEvent, DomainEvent, RepoAccountEvent, RepoAccountRole,
         },
+        isi::{repo::RepoInstructionBox, InstructionBox},
         repo::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
     };
     use iroha_primitives::numeric::Numeric;
@@ -949,6 +964,26 @@ mod tests {
 
         let view = state.view();
         assert!(view.world.repo_agreements().get(&agreement_id).is_some());
+    }
+
+    #[test]
+    fn repo_instruction_box_executes_via_instruction_dispatch() {
+        let (state, agreement_id, cash_def_id, collateral_def_id) = setup_state();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+
+        let repo_instruction =
+            repo_setup_instruction(&agreement_id, &cash_def_id, &collateral_def_id);
+        let boxed: InstructionBox = RepoInstructionBox::from(repo_instruction).into();
+        boxed
+            .execute(&ALICE_ID, &mut stx)
+            .expect("repo instruction box execution");
+
+        assert!(
+            stx.world.repo_agreements.get(&agreement_id).is_some(),
+            "repo instruction box should record the agreement"
+        );
     }
 
     #[test]

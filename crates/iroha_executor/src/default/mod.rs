@@ -35,6 +35,7 @@ use iroha_smart_contract::data_model::{
         RemoveAssetKeyValue, RetirePinManifest, SetAssetKeyValue, SetLaneRelayEmergencyValidators,
         SetPricingSchedule, SubmitOfflineToOnlineTransfer, UnregisterProviderOwner,
         UpsertProviderCredit, bridge::RecordBridgeReceipt,
+        repo::{RepoInstructionBox, RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
     },
     prelude::*,
     visit::Visit,
@@ -212,6 +213,18 @@ impl InstructionDispatch for InstructionBox {
         if let Some(isi) = any.downcast_ref::<RegisterOfflineAllowance>() {
             visit_register_offline_allowance(executor, isi);
             return;
+        }
+        if let Some(isi) = any.downcast_ref::<RepoInstructionBox>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<RepoIsi>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<ReverseRepoIsi>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<RepoMarginCallIsi>() {
+            execute!(executor, isi);
         }
         if let Some(isi) = any.downcast_ref::<RegisterPinManifest>() {
             sorafs::visit_register_pin_manifest(executor, isi);
@@ -1572,21 +1585,26 @@ pub mod asset {
             Execute, Iroha,
             data_model::{
                 ValidationFail,
-                account::AccountId,
-                asset::{AssetDefinitionId, AssetId},
-                block::BlockHeader,
-                bridge::BridgeReceipt,
-                domain::DomainId,
-                executor::Result as ExecResult,
-                isi::{InstructionBox, RegisterPublicLaneValidator, bridge::RecordBridgeReceipt},
-                metadata::Metadata,
-                name::Name,
-                nexus::LaneId,
-                peer::PeerId,
-                prelude::{Json, Numeric},
+            account::AccountId,
+            asset::{AssetDefinitionId, AssetId},
+            block::BlockHeader,
+            bridge::BridgeReceipt,
+            domain::DomainId,
+            executor::Result as ExecResult,
+            isi::{
+                InstructionBox, RegisterPublicLaneValidator,
+                bridge::RecordBridgeReceipt,
+                repo::{RepoInstructionBox, RepoIsi},
             },
-            prelude::{Context, Visit},
-        };
+            metadata::Metadata,
+            name::Name,
+            nexus::LaneId,
+            peer::PeerId,
+            prelude::{Json, Numeric},
+            repo::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
+        },
+        prelude::{Context, Visit},
+    };
 
         struct StubExecutor {
             host: Iroha,
@@ -1768,6 +1786,45 @@ pub mod asset {
             assert!(
                 executor.verdict().is_ok(),
                 "record bridge receipt should succeed during genesis"
+            );
+        }
+
+        #[test]
+        fn visit_instruction_dispatches_repo_instruction_box() {
+            let (mut executor, _) = StubExecutor::new(1);
+            let domain = executor.context().authority.domain().clone();
+            let counterparty_keypair = KeyPair::from_seed(vec![9; 32], Algorithm::Ed25519);
+            let counterparty = AccountId::new(domain.clone(), counterparty_keypair.public_key().clone());
+            let cash_def = AssetDefinitionId::new(
+                domain.clone(),
+                "cash".parse::<Name>().expect("valid name"),
+            );
+            let collateral_def = AssetDefinitionId::new(
+                domain,
+                "collateral".parse::<Name>().expect("valid name"),
+            );
+            let agreement_id: RepoAgreementId = "repo_dispatch".parse().expect("repo id");
+            let repo_instruction = RepoIsi::new(
+                agreement_id,
+                executor.context().authority.clone(),
+                counterparty,
+                None,
+                RepoCashLeg {
+                    asset_definition_id: cash_def,
+                    quantity: Numeric::from(1u32),
+                },
+                RepoCollateralLeg::new(collateral_def, Numeric::from(1u32)),
+                0,
+                1,
+                RepoGovernance::with_defaults(0, 0),
+            );
+            let instruction_box: InstructionBox = RepoInstructionBox::from(repo_instruction).into();
+
+            visit_instruction(&mut executor, &instruction_box);
+
+            assert!(
+                executor.verdict().is_ok(),
+                "repo instruction box should dispatch through executor"
             );
         }
 

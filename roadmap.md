@@ -51,7 +51,6 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 
 ## Current Open Work
 
-- [ ] Investigate `integration_tests::address_canonicalisation` failures from the 2026-02-02 `cargo test --workspace` run (network failed to reach height 2; failing tests: `account_transactions_get_supports_address_format`, `account_transactions_query_supports_address_format`, `repo_agreements_respect_address_format`; env_dir `/var/folders/7l/w31n0ppj4zg874c4szhllss00000gn/T/irohad_test_network_qlBCOV`).
 - GPU zstd (Metal): full GPU entropy coding + decode (bit-for-bit parity with CPU zstd).
  - [x] Architecture: document the full GPU zstd pipeline (frame/block layout, buffer lifetimes, deterministic bitstream packing, and kernel responsibilities) with explicit parity constraints.
  - [x] Bitstream core: implement Metal bitstream writer/reader utilities (little-endian bit packing, byte-aligned flush, overflow checks) with CPU golden vectors for validation.
