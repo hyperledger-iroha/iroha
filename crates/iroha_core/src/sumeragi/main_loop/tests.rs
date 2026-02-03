@@ -17923,11 +17923,19 @@ async fn handle_rbc_ready_stash_roster_missing_updates_pending_counters() {
         sender: 0,
         signature: vec![0x11],
     };
+    assert!(
+        !actor.effective_commit_topology().is_empty(),
+        "fallback roster should be available"
+    );
     actor.handle_rbc_ready(ready).expect("ready handled");
 
     let snapshot = super::status::pending_rbc_snapshot();
     assert_eq!(snapshot.stash_ready_total, 1);
     assert_eq!(snapshot.stash_ready_roster_missing_total, 1);
+    assert!(
+        actor.pending.missing_block_requests.contains_key(&key.0),
+        "missing block request should be scheduled after READY roster-missing stash"
+    );
 
     harness.shutdown.send();
 }
@@ -18834,6 +18842,53 @@ async fn handle_rbc_deliver_refreshes_roster_when_unverified() {
         "DELIVER should be accepted after roster refresh"
     );
     assert!(stored.deliver_signature.is_some());
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn handle_rbc_deliver_stash_roster_missing_requests_missing_block() {
+    let mut harness = test_actor_harness(4).await;
+    super::status::reset_pending_rbc_for_tests();
+
+    let actor = &mut harness.actor;
+    let height = actor.state.view().height() as u64 + 5;
+    let key = (
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD3; Hash::LENGTH])),
+        height,
+        0,
+    );
+    let payload = b"payload".to_vec();
+    let payload_hash = Hash::new(&payload);
+    let epoch = actor.epoch_for_height(height);
+    let session = Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch)
+        .expect("session");
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    let deliver = crate::sumeragi::consensus::RbcDeliver {
+        block_hash: key.0,
+        height: key.1,
+        view: key.2,
+        epoch,
+        roster_hash: Hash::prehashed([0xAA; Hash::LENGTH]),
+        chunk_root: Hash::prehashed([0xBB; Hash::LENGTH]),
+        sender: 0,
+        signature: vec![0x11],
+        ready_signatures: Vec::new(),
+    };
+    assert!(
+        !actor.effective_commit_topology().is_empty(),
+        "fallback roster should be available"
+    );
+    actor.handle_rbc_deliver(deliver).expect("deliver handled");
+
+    let snapshot = super::status::pending_rbc_snapshot();
+    assert_eq!(snapshot.stash_deliver_total, 1);
+    assert_eq!(snapshot.stash_deliver_roster_missing_total, 1);
+    assert!(
+        actor.pending.missing_block_requests.contains_key(&key.0),
+        "missing block request should be scheduled after DELIVER roster-missing stash"
+    );
 
     harness.shutdown.send();
 }
