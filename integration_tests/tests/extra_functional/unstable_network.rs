@@ -442,6 +442,19 @@ fn submit_retry_backoff(attempt: usize) -> Duration {
     scaled.min(Duration::from_secs(2))
 }
 
+fn initial_resubmit_delay(sync_timeout: Duration, pipeline_time: Duration) -> Duration {
+    let early = pipeline_time.saturating_mul(4);
+    let half = sync_timeout.checked_div(2).unwrap_or(sync_timeout);
+    early.min(half)
+}
+
+fn stagger_recovery_gap(pipeline_time: Duration) -> Duration {
+    pipeline_time
+        .checked_div(2)
+        .unwrap_or(Duration::from_secs(1))
+        .max(Duration::from_secs(1))
+}
+
 fn should_resubmit_tx(
     allow_resubmit: bool,
     already_resubmitted: bool,
@@ -1175,12 +1188,16 @@ impl UnstableNetwork {
                 .checked_div(u32::try_from(self.n_faulty_peers).unwrap_or(1))
                 .unwrap_or(Duration::from_secs(1))
                 .max(Duration::from_millis(200));
-            for peer in &faulty {
+            let recovery_gap = stagger_recovery_gap(network.pipeline_time());
+            for (idx, peer) in faulty.iter().enumerate() {
                 relay.suspend(&peer.id()).activate();
                 iroha_logger::info!(peer = peer.mnemonic(), "Suspended");
                 sleep(per_peer_pause).await;
                 relay.suspend(&peer.id()).deactivate();
                 iroha_logger::info!(peer = peer.mnemonic(), "Unsuspended");
+                if idx + 1 < faulty.len() {
+                    sleep(recovery_gap).await;
+                }
             }
         } else {
             for peer in &faulty {
@@ -1298,7 +1315,8 @@ impl UnstableNetwork {
         let expected_supply = Numeric::new((round_index + 1) as u128, 0);
         let supply_start = Instant::now();
         let supply_deadline = supply_start + sync_timeout;
-        let resubmit_at = supply_start + sync_timeout.checked_div(2).unwrap_or(sync_timeout);
+        let resubmit_at =
+            supply_start + initial_resubmit_delay(sync_timeout, network.pipeline_time());
         let allow_resubmit = self.n_faulty_peers > 0;
         let supply_peers: Vec<_> = peers
             .iter()
@@ -1610,6 +1628,30 @@ mod tests {
             now,
             now + Duration::from_secs(1)
         ));
+    }
+
+    #[test]
+    fn initial_resubmit_delay_caps_at_half_sync_timeout() {
+        let delay = initial_resubmit_delay(Duration::from_secs(10), Duration::from_secs(4));
+        assert_eq!(delay, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn initial_resubmit_delay_prefers_pipeline_multiple() {
+        let delay = initial_resubmit_delay(Duration::from_secs(600), Duration::from_secs(6));
+        assert_eq!(delay, Duration::from_secs(24));
+    }
+
+    #[test]
+    fn stagger_recovery_gap_scales_with_pipeline() {
+        assert_eq!(
+            stagger_recovery_gap(Duration::from_secs(6)),
+            Duration::from_secs(3)
+        );
+        assert_eq!(
+            stagger_recovery_gap(Duration::from_millis(500)),
+            Duration::from_secs(1)
+        );
     }
 }
 
