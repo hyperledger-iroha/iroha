@@ -3059,9 +3059,6 @@ impl IVMHost for WsvHost {
                     return Ok(0);
                 }
                 let tlv = vm.memory.validate_tlv(addr)?;
-                if tlv.type_id != PointerType::NoritoBytes {
-                    return Err(VMError::NoritoInvalid);
-                }
                 let policy = vm.syscall_policy();
                 if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
                     return Err(VMError::AbiTypeNotAllowed {
@@ -3069,8 +3066,18 @@ impl IVMHost for WsvHost {
                         type_id: tlv.type_id as u16,
                     });
                 }
-                let json: iroha_primitives::json::Json =
-                    decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let json: iroha_primitives::json::Json = match tlv.type_id {
+                    PointerType::NoritoBytes | PointerType::Json => {
+                        decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?
+                    }
+                    PointerType::Blob => {
+                        let raw =
+                            std::str::from_utf8(tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
+                        iroha_primitives::json::Json::from_str_norito(raw)
+                            .map_err(|_| VMError::NoritoInvalid)?
+                    }
+                    _ => return Err(VMError::NoritoInvalid),
+                };
                 let body = norito::to_bytes(&json).map_err(|_| VMError::NoritoInvalid)?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
                 out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
@@ -4770,13 +4777,12 @@ impl IVMHost for WsvHost {
             }
             syscalls::SYSCALL_GET_AUTHORITY => {
                 // Write a TLV with the caller AccountId into INPUT using the bump allocator and return its pointer in x10.
-                let s = self.caller.to_string();
-                let payload = s.as_bytes();
+                let payload = norito::to_bytes(&self.caller).map_err(|_| VMError::NoritoInvalid)?;
                 let mut tlv = Vec::with_capacity(7 + payload.len() + 32);
                 tlv.extend_from_slice(&(PointerType::AccountId as u16).to_be_bytes());
                 tlv.push(1);
                 tlv.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-                tlv.extend_from_slice(payload);
+                tlv.extend_from_slice(&payload);
                 let h: [u8; 32] = iroha_crypto::Hash::new(payload).into();
                 tlv.extend_from_slice(&h);
                 let ptr = vm.alloc_input_tlv(&tlv)?;

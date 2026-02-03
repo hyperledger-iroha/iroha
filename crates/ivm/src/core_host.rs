@@ -11,7 +11,7 @@ use iroha_crypto::{Hash as IrohaHash, Sm3Digest};
 use iroha_data_model::{
     isi::transfer::TransferAssetBatch,
     nexus::{AxtPolicyEntry, AxtPolicySnapshot, DataSpaceId},
-    prelude::Name,
+    prelude::{AccountId, Name},
 };
 use iroha_primitives::{
     json::Json,
@@ -1292,9 +1292,6 @@ impl IVMHost for CoreHost {
                     return Ok(0);
                 }
                 let tlv = vm.memory.validate_tlv(r10_before)?;
-                if tlv.type_id != PointerType::NoritoBytes {
-                    return Err(VMError::NoritoInvalid);
-                }
                 let policy = vm.syscall_policy();
                 if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
                     return Err(VMError::AbiTypeNotAllowed {
@@ -1302,8 +1299,17 @@ impl IVMHost for CoreHost {
                         type_id: tlv.type_id as u16,
                     });
                 }
-                let json: Json =
-                    decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let json: Json = match tlv.type_id {
+                    PointerType::NoritoBytes | PointerType::Json => {
+                        decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?
+                    }
+                    PointerType::Blob => {
+                        let raw =
+                            std::str::from_utf8(tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
+                        Json::from_str_norito(raw).map_err(|_| VMError::NoritoInvalid)?
+                    }
+                    _ => return Err(VMError::NoritoInvalid),
+                };
                 let body = to_bytes(&json).map_err(|_| VMError::NoritoInvalid)?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
                 out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
@@ -1885,12 +1891,13 @@ impl IVMHost for CoreHost {
             syscalls::SYSCALL_GET_AUTHORITY => {
                 // Produce a TLV with a fixed AccountId and return its INPUT pointer in x10
                 const ACCOUNT: &str = "alice@wonderland";
-                let payload = ACCOUNT.as_bytes();
+                let account: AccountId = ACCOUNT.parse().map_err(|_| VMError::NoritoInvalid)?;
+                let payload = to_bytes(&account).map_err(|_| VMError::NoritoInvalid)?;
                 let mut tlv = Vec::with_capacity(7 + payload.len() + 32);
                 tlv.extend_from_slice(&(PointerType::AccountId as u16).to_be_bytes());
                 tlv.push(1);
                 tlv.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-                tlv.extend_from_slice(payload);
+                tlv.extend_from_slice(&payload);
                 let h: [u8; 32] = IrohaHash::new(payload).into();
                 tlv.extend_from_slice(&h);
                 let ptr = vm.alloc_input_tlv(&tlv)?;

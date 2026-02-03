@@ -345,7 +345,7 @@ but they must not change the host ABI.
 | 0x55 | ENCODE_INT | r10=value:i64 | r10=ptr (&NoritoBytes(Norito-framed i64)) | - |
 | 0x56 | BUILD_PATH_KEY_NORITO | r10=&Name(base), r11=&NoritoBytes(key) | r10=ptr (&Name) | - |
 | 0x57 | JSON_ENCODE | r10=&Json | ptr (&NoritoBytes(Json)) | asset:gas/G_json_encode@ivm.core/v1 |
-| 0x58 | JSON_DECODE | r10=&NoritoBytes(Json) | ptr (&Json) | asset:gas/G_json_decode@ivm.core/v1 |
+| 0x58 | JSON_DECODE | r10=&NoritoBytes(Json) or &Blob(JSON text) | ptr (&Json) | asset:gas/G_json_decode@ivm.core/v1 |
 | 0x59 | SCHEMA_ENCODE | r10=&Name(schema), r11=&Json | ptr (&NoritoBytes(Json)) | - |
 | 0x5A | SCHEMA_DECODE | r10=&Name(schema), r11=&NoritoBytes(Json) | ptr (&Json) | - |
 | 0x5B | SCHEMA_INFO | r10=&Name(schema) | ptr (&Json{"id":...,"version":...}) | - |
@@ -435,7 +435,7 @@ but they must not change the host ABI.
 Codec helpers
 - 0x53 DECODE_INT — Args: `r10=&NoritoBytes(Norito-framed i64)` → Return: `r10=i64`
 - 0x57 JSON_ENCODE — Args: `r10=&Json` → Return: `ptr (&NoritoBytes(Json))` — Gas: G_json_encode
-- 0x58 JSON_DECODE — Args: `r10=&NoritoBytes(Json)` → Return: `ptr (&Json)` — Gas: G_json_decode
+- 0x58 JSON_DECODE — Args: `r10=&NoritoBytes(Json)` or `r10=&Blob(JSON text)` → Return: `ptr (&Json)` — Gas: G_json_decode
 - 0x5A SCHEMA_DECODE — Args: `r10=&Name(schema), r11=&NoritoBytes(Json)` → Return: `ptr (&Json)`
 - 0x5F TLV_EQ — Args: `r10=&Tlv, r11=&Tlv` → Return: `r10=1 if equal else 0` — Gas: -
 - 0x5C NAME_DECODE — Args: `r10=&NoritoBytes(Name)` → Return: `ptr (&Name)` — Gas: G_name_decode

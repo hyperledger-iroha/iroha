@@ -741,6 +741,16 @@ fn record_slice_access(bytes: &[u8], len: usize) {
     record_payload_access(bytes.as_ptr(), used);
 }
 
+/// Record that `len` bytes of `bytes` were accessed while decoding within an active payload
+/// context.
+///
+/// This is intended for custom `NoritoDeserialize` implementations that can validate full
+/// consumption without re-encoding, allowing `decode_field_canonical` to skip canonical-length
+/// recomputation.
+pub fn note_payload_access(bytes: &[u8], len: usize) {
+    record_slice_access(bytes, len);
+}
+
 #[inline]
 fn payload_bytes_with_offset(ptr: *const u8) -> Result<(&'static [u8], usize), Error> {
     let (base, total) = payload_ctx().ok_or(Error::MissingPayloadContext)?;
@@ -6360,6 +6370,59 @@ where
     }
 }
 
+/// Decode a field using its `DecodeFromSlice` implementation, ensuring full
+/// consumption without re-encoding for canonical length checks.
+///
+/// This is intended for hot paths where re-serializing is too costly and the
+/// slice-based decoder already guarantees canonical consumption.
+pub fn decode_field_canonical_from_slice<T>(bytes: &[u8]) -> Result<(T, usize), Error>
+where
+    T: for<'de> crate::NoritoDeserialize<'de> + for<'de> DecodeFromSlice<'de>,
+{
+    if bytes.is_empty() {
+        if core::mem::size_of::<Archived<T>>() == 0 {
+            let _guard = PayloadCtxGuard::enter(&[]);
+            let value = unsafe {
+                crate::guarded_try_deserialize(|| {
+                    T::try_deserialize(&*std::ptr::NonNull::<Archived<T>>::dangling().as_ptr())
+                })?
+            };
+            return Ok((value, 0));
+        }
+        return Err(Error::LengthMismatch);
+    }
+
+    struct RootGuard(bool);
+    impl Drop for RootGuard {
+        fn drop(&mut self) {
+            if self.0 {
+                clear_decode_root();
+            }
+        }
+    }
+    let _root_guard = if payload_root_span().is_none() {
+        set_decode_root(bytes);
+        Some(RootGuard(true))
+    } else {
+        None
+    };
+
+    let _flags_guard = if decode_flags_active() {
+        None
+    } else {
+        Some(DecodeFlagsGuard::enter(default_encode_flags()))
+    };
+
+    let payload_guard = PayloadCtxGuard::enter(bytes);
+    let (value, used) = <T as DecodeFromSlice>::decode_from_slice(bytes)?;
+    if used != bytes.len() {
+        return Err(Error::LengthMismatch);
+    }
+    note_payload_access(bytes, used);
+    drop(payload_guard);
+    Ok((value, used))
+}
+
 fn recompute_canonical_len<T>(value: &T) -> Result<usize, Error>
 where
     T: crate::NoritoSerialize,
@@ -6442,6 +6505,33 @@ mod tests {
             decode_field_canonical::<Vec<Vec<u64>>>(misaligned).expect("decode misaligned field");
         assert_eq!(decoded, value);
         assert_eq!(used, encoded.len());
+    }
+
+    #[test]
+    fn note_payload_access_updates_max_access() {
+        reset_decode_state();
+        let payload: Vec<u8> = (0..32).collect();
+        let _guard = PayloadCtxGuard::enter(&payload);
+        note_payload_access(&payload, payload.len());
+        assert_eq!(payload_ctx_max_access().unwrap(), payload.len());
+    }
+
+    #[test]
+    fn decode_field_canonical_from_slice_reads_value() {
+        let mut buf = Vec::new();
+        0xAABBCCDDu32.serialize(&mut buf).expect("encode");
+        let (value, used) = decode_field_canonical_from_slice::<u32>(&buf).expect("decode slice");
+        assert_eq!(value, 0xAABBCCDD);
+        assert_eq!(used, buf.len());
+    }
+
+    #[test]
+    fn decode_field_canonical_from_slice_rejects_trailing_bytes() {
+        let mut buf = Vec::new();
+        7u32.serialize(&mut buf).expect("encode");
+        buf.push(0xFF);
+        let err = decode_field_canonical_from_slice::<u32>(&buf).expect_err("trailing bytes");
+        assert!(matches!(err, Error::LengthMismatch));
     }
 
     #[test]
