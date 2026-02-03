@@ -1,6 +1,7 @@
 # Status
 
 Last update: 2026-02-03
+- Perf: reuse inbound gossip payloads when enqueuing (avoid re-encode), preallocate gossip target vectors/requeue buffers, and add fast BLS aggregate checks used in vote verification to avoid duplicate per-signature fallback; CLI ping default log level lowered to reduce per-tx INFO logs. Tests not run (per request).
 - Perf: reuse Norito framing buffers via `to_bytes_in` in P2P message send + Torii Norito responses, pre-allocate gossip batches + receipt signing bytes, drop per-tx Torii/gossip INFO logs to debug, and add thread-local prepared BLS public-key caches for w3f verify. Tests not run (per request).
 - Perf: removed the BLS secret-key mutex by storing canonical key bytes and reconstructing per-signature, added gossip payload length hints to pre-reserve Norito buffers, and lowered per-tx gossip logging to debug. Tests: `cargo test -p iroha_core gossip_transaction_len_hints_use_cached_payload -- --nocapture` (ok; warnings about unexpected `cfg` value `bls` in `iroha_config` and unused `mut` in `crates/iroha_core/src/kura.rs:7051`, `crates/iroha_core/src/smartcontracts/isi/staking.rs:2552`, `crates/iroha_core/src/state.rs:22969`); `cargo test -p iroha_crypto --features bls sign_is_thread_safe -- --nocapture` (ok).
 - Torii: decoupled transaction submission receipt signing from the consensus BLS key by adding `torii.receipt_public_key`/`torii.receipt_private_key`; when unset, `irohad` generates an ephemeral Ed25519 receipt signer at startup. Tests not run (not requested).

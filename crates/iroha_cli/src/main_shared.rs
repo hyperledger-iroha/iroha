@@ -3939,7 +3939,7 @@ mod transaction {
     #[derive(clap::Args, Debug)]
     pub struct Ping {
         /// Log levels: TRACE, DEBUG, INFO, WARN, ERROR (in increasing order of visibility)
-        #[arg(short, long, default_value = "INFO")]
+        #[arg(short, long, default_value = "DEBUG")]
         pub log_level: LogLevel,
         /// Log message
         #[arg(short, long)]

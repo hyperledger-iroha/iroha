@@ -17,7 +17,8 @@ pub(super) const MESSAGE_CONTEXT: &[u8; 20] = b"for signing messages";
 
 const PREPARED_PK_CACHE_LIMIT: usize = 128;
 
-struct PreparedPublicKeyCache<E: EngineBLS> {
+#[doc(hidden)]
+pub struct PreparedPublicKeyCache<E: EngineBLS> {
     entries: Vec<(Vec<u8>, E::PublicKeyPrepared)>,
 }
 
@@ -51,7 +52,8 @@ impl<E: EngineBLS> PreparedPublicKeyCache<E> {
     }
 }
 
-trait PreparedPublicKeyCacheAccess: BlsConfiguration {
+#[doc(hidden)]
+pub trait PreparedPublicKeyCacheAccess: BlsConfiguration {
     fn with_cache<R>(f: impl FnOnce(&mut PreparedPublicKeyCache<Self::Engine>) -> R) -> R;
 }
 

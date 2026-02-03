@@ -1541,10 +1541,11 @@ impl Queue {
     /// # Errors
     /// See [`enum@Error`]
     #[allow(clippy::too_many_lines)]
-    pub fn push_with_lane(
+    fn push_with_lane_internal(
         &self,
         tx: AcceptedTransaction<'static>,
         state_view: StateView,
+        gossip_payload: Option<Arc<Vec<u8>>>,
     ) -> Result<RoutingDecision, Failure> {
         let routing_decision = self.router.read().route(&tx, &state_view);
         let lane_id = routing_decision.lane_id;
@@ -1813,7 +1814,11 @@ impl Queue {
         let backpressure_telemetry: Option<&StateTelemetry> = Some(telemetry_handle);
         #[cfg(not(feature = "telemetry"))]
         let backpressure_telemetry: Option<&StateTelemetry> = None;
-        let encoded_len = Self::compute_tx_encoded_len(checked.as_accepted());
+        let gossip_payload = gossip_payload.filter(|payload| !payload.is_empty());
+        let encoded_len = gossip_payload
+            .as_ref()
+            .map(|payload| payload.len())
+            .unwrap_or_else(|| Self::compute_tx_encoded_len(checked.as_accepted()));
         let proposal_gas_cost = Self::compute_proposal_gas_cost(checked.as_accepted());
         drop(state_view);
         let hash = checked.as_ref().hash();
@@ -1882,6 +1887,9 @@ impl Queue {
             });
         }
         self.tx_encoded_len.insert(hash, encoded_len);
+        if let Some(payload) = gossip_payload {
+            self.tx_gossip_payloads.insert(hash, payload);
+        }
         self.tx_gas_cost.insert(hash, proposal_gas_cost);
         self.track_expiry_hash(hash);
         #[cfg(feature = "telemetry")]
@@ -1928,6 +1936,33 @@ impl Queue {
         );
         self.wake_sumeragi();
         Ok(routing_decision)
+    }
+
+    /// Pushes an accepted transaction into the queue using a cached gossip payload.
+    ///
+    /// # Errors
+    /// Propagates [`Failure`] when the queue rejects the transaction (for example, when it is full
+    /// or violates lane limits).
+    pub fn push_with_gossip_payload(
+        &self,
+        tx: AcceptedTransaction<'static>,
+        state_view: StateView,
+        gossip_payload: Option<Arc<Vec<u8>>>,
+    ) -> Result<(), Failure> {
+        self.push_with_lane_internal(tx, state_view, gossip_payload)
+            .map(|_| ())
+    }
+
+    /// Push transaction into queue.
+    ///
+    /// # Errors
+    /// See [`enum@Error`]
+    pub fn push_with_lane(
+        &self,
+        tx: AcceptedTransaction<'static>,
+        state_view: StateView,
+    ) -> Result<RoutingDecision, Failure> {
+        self.push_with_lane_internal(tx, state_view, None)
     }
 
     /// Pushes an accepted transaction into the queue, routing it to the lane resolved from the
@@ -4248,6 +4283,37 @@ pub mod tests {
         assert!(queue.tx_encoded_len.is_empty());
         assert!(queue.tx_gas_cost.is_empty());
         assert!(queue.tx_gossip_payloads.is_empty());
+    }
+
+    #[test]
+    fn queue_accepts_gossip_payload_cache() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(world_with_test_domains(), kura, query_handle);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Queue::test(config_factory(), &time_source);
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.as_ref().hash();
+        let payload = Arc::new(tx.as_ref().encode());
+
+        queue
+            .push_with_gossip_payload(tx, state.view(), Some(Arc::clone(&payload)))
+            .expect("push tx with payload");
+
+        let stored_payload = queue.tx_gossip_payloads.get(&hash).expect("payload stored");
+        assert_eq!(stored_payload.as_slice(), payload.as_slice());
+
+        let encoded_len = queue
+            .tx_encoded_len
+            .get(&hash)
+            .map(|entry| *entry.value())
+            .expect("encoded len stored");
+        assert_eq!(encoded_len, payload.len());
+
+        let batch = queue.gossip_batch(1, &state.view());
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch[0].payload.as_slice(), payload.as_slice());
     }
 
     #[tokio::test]
