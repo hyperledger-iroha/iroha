@@ -353,8 +353,9 @@ impl TransactionGossiper {
             let lane_config = state_view.nexus.lane_config.clone();
             let lane_catalog = state_view.nexus.lane_catalog.clone();
             let entries = self.queue.gossip_batch(self.gossip_size.get(), &state_view);
-            let commit_topology: Vec<PeerId> =
-                state_view.commit_topology().iter().cloned().collect();
+            let commit_topology_src = state_view.commit_topology();
+            let mut commit_topology = Vec::with_capacity(commit_topology_src.len());
+            commit_topology.extend(commit_topology_src.iter().cloned());
             (entries, lane_config, lane_catalog, commit_topology)
         };
 
@@ -406,7 +407,8 @@ impl TransactionGossiper {
         }
 
         for (dataspace_id, batch) in grouped {
-            let lane_ids: Vec<LaneId> = batch.lanes.iter().copied().collect();
+            let mut lane_ids = Vec::with_capacity(batch.lanes.len());
+            lane_ids.extend(batch.lanes.iter().copied());
             let entries = batch.entries;
             let plane = dataspace_plane(&lane_config, dataspace_id).or({
                 if self.dataspace_cfg.drop_unknown_dataspace {
@@ -858,13 +860,16 @@ impl TransactionGossiper {
         if total <= cap {
             return (targets, total);
         }
-        let mut scored: Vec<(u64, PeerId)> = targets
-            .into_iter()
-            .map(|peer| (Self::peer_target_score(&peer, seed), peer))
-            .collect();
+        let mut scored: Vec<(u64, PeerId)> = Vec::with_capacity(total);
+        for peer in targets {
+            scored.push((Self::peer_target_score(&peer, seed), peer));
+        }
         scored.sort_by_key(|(score, _)| *score);
         scored.truncate(cap);
-        let targets = scored.into_iter().map(|(_, peer)| peer).collect();
+        let mut targets = Vec::with_capacity(scored.len());
+        for (_, peer) in scored {
+            targets.push(peer);
+        }
         (targets, total)
     }
 
@@ -890,10 +895,13 @@ impl TransactionGossiper {
         seed: u64,
     ) -> RestrictedTargetPlan {
         let online: BTreeSet<_> = fallback_targets.iter().cloned().collect();
-        let commit_topology: Vec<PeerId> = commit_topology
-            .into_iter()
-            .filter(|peer| online.contains(peer))
-            .collect();
+        let mut filtered_commit = Vec::with_capacity(commit_topology.len());
+        for peer in commit_topology {
+            if online.contains(&peer) {
+                filtered_commit.push(peer);
+            }
+        }
+        let commit_topology = filtered_commit;
         let (capped_commit, _) = Self::select_targets_with_seed(commit_topology, target_cap, seed);
         if !capped_commit.is_empty() {
             return RestrictedTargetPlan::Send {
@@ -915,9 +923,13 @@ impl TransactionGossiper {
         tx_count: usize,
         seed: u64,
     ) -> RestrictedTargetPlan {
-        let fallback_targets: Vec<PeerId> = self
-            .network
-            .online_peers(|online| online.iter().map(|peer| peer.id().clone()).collect());
+        let fallback_targets: Vec<PeerId> = self.network.online_peers(|online| {
+            let mut peers = Vec::with_capacity(online.len());
+            for peer in online.iter() {
+                peers.push(peer.id().clone());
+            }
+            peers
+        });
         Self::restricted_target_plan_with_targets(
             commit_topology.to_vec(),
             fallback_targets,
@@ -1100,9 +1112,10 @@ impl TransactionGossiper {
                 (params.sumeragi().max_clock_drift(), params.transaction())
             };
 
+            let (signed, payload) = tx.into_signed_with_payload();
             let crypto_cfg = self.state.crypto();
             match AcceptedTransaction::accept(
-                tx.into_signed(),
+                signed,
                 &self.chain_id,
                 max_clock_drift,
                 tx_limits,
@@ -1136,7 +1149,7 @@ impl TransactionGossiper {
                         );
                         continue;
                     }
-                    match self.queue.push(tx, state_view) {
+                    match self.queue.push_with_gossip_payload(tx, state_view, payload) {
                         Ok(()) => {
                             iroha_logger::debug!(%tx_hash, "transaction enqueued from gossip");
                         }
@@ -1337,7 +1350,13 @@ impl GossipTransaction {
 
     /// Consume the wrapper and return the signed transaction.
     pub fn into_signed(self) -> SignedTransaction {
-        Arc::try_unwrap(self.signed).unwrap_or_else(|arc| (*arc).clone())
+        self.into_signed_with_payload().0
+    }
+
+    /// Consume the wrapper and return the signed transaction and cached payload.
+    pub fn into_signed_with_payload(self) -> (SignedTransaction, Option<Arc<Vec<u8>>>) {
+        let signed = Arc::try_unwrap(self.signed).unwrap_or_else(|arc| (*arc).clone());
+        (signed, self.encoded)
     }
 }
 
@@ -1443,7 +1462,7 @@ fn partition_gossip_batch(
     let reserved = max_count.min(txs.len());
     message.txs.reserve(reserved);
     message.routes.reserve(reserved);
-    let mut requeue = Vec::new();
+    let mut requeue = Vec::with_capacity(txs.len());
     let mut encoded_len = message.encoded_len();
 
     if frame_cap_bytes == 0 {

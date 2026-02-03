@@ -827,6 +827,32 @@ pub fn bls_normal_verify_aggregate_same_message(
     }
 }
 
+/// Attempt aggregate verification for BLS (normal) when all messages are identical.
+/// Requires a valid Proof-of-Possession (`PoP`) per public key to prevent rogue-key attacks.
+/// Fast path: aggregate-only check, no per-signature fallback.
+///
+/// # Errors
+/// Returns `Err(Error::BadSignature)` if any signature/public key fails to parse or verify,
+/// or if input slice lengths are inconsistent. Public keys must be unique.
+#[cfg(feature = "bls")]
+pub fn bls_normal_verify_aggregate_same_message_fast(
+    message: &[u8],
+    signatures: &[&[u8]],
+    public_keys: &[&PublicKey],
+    pops: &[&[u8]],
+) -> Result<(), Error> {
+    if signatures.len() != public_keys.len() || signatures.is_empty() {
+        return Err(Error::BadSignature);
+    }
+    let pk_bytes = bls_collect_pks_with_pop(
+        public_keys,
+        pops,
+        Algorithm::BlsNormal,
+        bls_normal_pop_verify,
+    )?;
+    signature::bls::verify_aggregate_same_message_normal(message, signatures, &pk_bytes)
+}
+
 /// Aggregate verification across distinct messages (multi-message) for BLS (normal).
 /// Attempts the shared aggregate verifier and falls back to per-signature checks when it rejects.
 ///
@@ -1031,6 +1057,28 @@ pub fn bls_small_verify_aggregate_same_message(
         }
         Ok(())
     }
+}
+
+/// Attempt aggregate verification for BLS (small) when all messages are identical.
+/// Requires a valid Proof-of-Possession (`PoP`) per public key to prevent rogue-key attacks.
+/// Fast path: aggregate-only check, no per-signature fallback.
+///
+/// # Errors
+/// Returns `Err(Error::BadSignature)` if any signature/public key fails to parse or verify,
+/// or if input slice lengths are inconsistent. Public keys must be unique.
+#[cfg(feature = "bls")]
+pub fn bls_small_verify_aggregate_same_message_fast(
+    message: &[u8],
+    signatures: &[&[u8]],
+    public_keys: &[&PublicKey],
+    pops: &[&[u8]],
+) -> Result<(), Error> {
+    if signatures.len() != public_keys.len() || signatures.is_empty() {
+        return Err(Error::BadSignature);
+    }
+    let pk_bytes =
+        bls_collect_pks_with_pop(public_keys, pops, Algorithm::BlsSmall, bls_small_pop_verify)?;
+    signature::bls::verify_aggregate_same_message_small(message, signatures, &pk_bytes)
 }
 
 /// Aggregate BLS (normal) signatures (same-message) into a single signature.
@@ -2415,6 +2463,78 @@ mod tests {
                 .unwrap_or_else(|_| panic!("Failed to deserialize algorithm {:?}", &algorithm));
             assert_eq!(algorithm, de);
         }
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
+    fn bls_normal_aggregate_fast_accepts_valid_and_rejects_bad() {
+        let msg = b"bls-normal-fast";
+        let kp1 = KeyPair::from_seed(vec![1; 32], Algorithm::BlsNormal);
+        let kp2 = KeyPair::from_seed(vec![2; 32], Algorithm::BlsNormal);
+        let (pk1, sk1) = kp1.into_parts();
+        let (pk2, sk2) = kp2.into_parts();
+        let sig1 = Signature::new(&sk1, msg);
+        let sig2 = Signature::new(&sk2, msg);
+        let signatures: Vec<&[u8]> = vec![sig1.payload(), sig2.payload()];
+        let public_keys: Vec<&PublicKey> = vec![&pk1, &pk2];
+        let pops = vec![
+            bls_normal_pop_prove(&sk1).expect("pop"),
+            bls_normal_pop_prove(&sk2).expect("pop"),
+        ];
+        let pop_refs: Vec<&[u8]> = pops.iter().map(|pop| pop.as_slice()).collect();
+
+        bls_normal_verify_aggregate_same_message_fast(msg, &signatures, &public_keys, &pop_refs)
+            .expect("aggregate fast ok");
+
+        let mut bad_sig = sig1.payload().to_vec();
+        bad_sig[0] ^= 0x01;
+        let bad_signatures: Vec<&[u8]> = vec![bad_sig.as_slice(), sig2.payload()];
+        assert!(
+            bls_normal_verify_aggregate_same_message_fast(
+                msg,
+                &bad_signatures,
+                &public_keys,
+                &pop_refs,
+            )
+            .is_err(),
+            "bad signature must be rejected"
+        );
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
+    fn bls_small_aggregate_fast_accepts_valid_and_rejects_bad() {
+        let msg = b"bls-small-fast";
+        let kp1 = KeyPair::from_seed(vec![3; 32], Algorithm::BlsSmall);
+        let kp2 = KeyPair::from_seed(vec![4; 32], Algorithm::BlsSmall);
+        let (pk1, sk1) = kp1.into_parts();
+        let (pk2, sk2) = kp2.into_parts();
+        let sig1 = Signature::new(&sk1, msg);
+        let sig2 = Signature::new(&sk2, msg);
+        let signatures: Vec<&[u8]> = vec![sig1.payload(), sig2.payload()];
+        let public_keys: Vec<&PublicKey> = vec![&pk1, &pk2];
+        let pops = vec![
+            bls_small_pop_prove(&sk1).expect("pop"),
+            bls_small_pop_prove(&sk2).expect("pop"),
+        ];
+        let pop_refs: Vec<&[u8]> = pops.iter().map(|pop| pop.as_slice()).collect();
+
+        bls_small_verify_aggregate_same_message_fast(msg, &signatures, &public_keys, &pop_refs)
+            .expect("aggregate fast ok");
+
+        let mut bad_sig = sig2.payload().to_vec();
+        bad_sig[0] ^= 0x01;
+        let bad_signatures: Vec<&[u8]> = vec![sig1.payload(), bad_sig.as_slice()];
+        assert!(
+            bls_small_verify_aggregate_same_message_fast(
+                msg,
+                &bad_signatures,
+                &public_keys,
+                &pop_refs,
+            )
+            .is_err(),
+            "bad signature must be rejected"
+        );
     }
 
     #[test]

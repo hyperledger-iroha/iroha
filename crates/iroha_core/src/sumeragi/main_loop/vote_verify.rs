@@ -258,18 +258,17 @@ pub(super) fn spawn_vote_verify_workers(
                             continue;
                         }
 
-                        let signatures: Vec<&[u8]> = indices
-                            .iter()
-                            .map(|idx| {
-                                prepared[*idx]
-                                    .as_ref()
-                                    .expect("prepared vote")
-                                    .work
-                                    .vote
-                                    .bls_sig
-                                    .as_slice()
-                            })
-                            .collect();
+                        let mut signatures = Vec::with_capacity(indices.len());
+                        for idx in &indices {
+                            let sig = prepared[*idx]
+                                .as_ref()
+                                .expect("prepared vote")
+                                .work
+                                .vote
+                                .bls_sig
+                                .as_slice();
+                            signatures.push(sig);
+                        }
                         let mut public_keys: Vec<&PublicKey> = Vec::with_capacity(indices.len());
                         let mut pops: Vec<&[u8]> = Vec::with_capacity(indices.len());
                         let mut missing_pop_count = 0usize;
@@ -300,7 +299,7 @@ pub(super) fn spawn_vote_verify_workers(
                         } else {
                             match algorithm {
                                 Algorithm::BlsNormal => {
-                                    iroha_crypto::bls_normal_verify_aggregate_same_message(
+                                    iroha_crypto::bls_normal_verify_aggregate_same_message_fast(
                                         &preimage,
                                         &signatures,
                                         &public_keys,
@@ -309,7 +308,7 @@ pub(super) fn spawn_vote_verify_workers(
                                     .is_ok()
                                 }
                                 Algorithm::BlsSmall => {
-                                    iroha_crypto::bls_small_verify_aggregate_same_message(
+                                    iroha_crypto::bls_small_verify_aggregate_same_message_fast(
                                         &preimage,
                                         &signatures,
                                         &public_keys,
