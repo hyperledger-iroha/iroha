@@ -900,15 +900,32 @@ async fn account_transactions_get_supports_address_format() -> Result<()> {
 
     // Ensure the account has at least one external transaction to format.
     let client = network.client();
+    let peer_clients: Vec<_> = network.peers().iter().map(|peer| peer.client()).collect();
     tokio::task::spawn_blocking({
         let client = client.clone();
-        move || {
+        move || -> Result<()> {
             let key: Name = "addrfmtget".parse().expect("metadata key");
-            client.submit_blocking(SetKeyValue::account(
-                ALICE_ID.clone(),
-                key,
-                norito::json!("addrfmtget"),
-            ))
+            let transaction = client.build_transaction_from_items(
+                [SetKeyValue::account(
+                    ALICE_ID.clone(),
+                    key,
+                    norito::json!("addrfmtget"),
+                )],
+                Metadata::default(),
+            );
+            let mut submitted = false;
+            let mut last_err: Option<eyre::Report> = None;
+            for peer_client in peer_clients {
+                match peer_client.submit_transaction(&transaction) {
+                    Ok(_) => submitted = true,
+                    Err(err) => last_err = Some(err),
+                }
+            }
+            if submitted {
+                Ok(())
+            } else {
+                Err(last_err.unwrap_or_else(|| eyre!("failed to submit transaction")))
+            }
         }
     })
     .await??;
@@ -1024,15 +1041,32 @@ async fn account_transactions_query_supports_address_format() -> Result<()> {
 
     // Ensure the account has at least one external transaction to format.
     let client = network.client();
+    let peer_clients: Vec<_> = network.peers().iter().map(|peer| peer.client()).collect();
     tokio::task::spawn_blocking({
         let client = client.clone();
-        move || {
+        move || -> Result<()> {
             let key: Name = "addrfmtquery".parse().expect("metadata key");
-            client.submit_blocking(SetKeyValue::account(
-                ALICE_ID.clone(),
-                key,
-                norito::json!("addrfmtquery"),
-            ))
+            let transaction = client.build_transaction_from_items(
+                [SetKeyValue::account(
+                    ALICE_ID.clone(),
+                    key,
+                    norito::json!("addrfmtquery"),
+                )],
+                Metadata::default(),
+            );
+            let mut submitted = false;
+            let mut last_err: Option<eyre::Report> = None;
+            for peer_client in peer_clients {
+                match peer_client.submit_transaction(&transaction) {
+                    Ok(_) => submitted = true,
+                    Err(err) => last_err = Some(err),
+                }
+            }
+            if submitted {
+                Ok(())
+            } else {
+                Err(last_err.unwrap_or_else(|| eyre!("failed to submit transaction")))
+            }
         }
     })
     .await??;
