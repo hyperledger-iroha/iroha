@@ -3992,12 +3992,17 @@ impl Actor {
             let view = self.state.view();
             view.world().peers().iter().cloned().collect::<Vec<_>>()
         };
+        let trusted = self.common_config.trusted_peers.value();
+        let trusted_peers: Vec<PeerId> = std::iter::once(trusted.myself.id().clone())
+            .chain(trusted.others.iter().map(|peer| peer.id().clone()))
+            .collect();
         let seed = update.block.hash();
         let targets = Self::block_sync_update_targets_for_peers(
             self.common_config.peer.id(),
             self.block_sync_gossip_limit,
             peers,
             &registered_peers,
+            &trusted_peers,
             &online_peers,
             seed.as_ref(),
         );
@@ -4033,12 +4038,17 @@ impl Actor {
             let view = self.state.view();
             view.world().peers().iter().cloned().collect::<Vec<_>>()
         };
+        let trusted = self.common_config.trusted_peers.value();
+        let trusted_peers: Vec<PeerId> = std::iter::once(trusted.myself.id().clone())
+            .chain(trusted.others.iter().map(|peer| peer.id().clone()))
+            .collect();
         let seed = created.block.hash();
         let targets = Self::block_sync_update_targets_for_peers(
             self.common_config.peer.id(),
             self.block_sync_gossip_limit,
             peers,
             &registered_peers,
+            &trusted_peers,
             &online_peers,
             seed.as_ref(),
         );
@@ -4066,6 +4076,7 @@ impl Actor {
         gossip_limit: usize,
         peers: &[PeerId],
         registered_peers: &[PeerId],
+        trusted_peers: &[PeerId],
         online_peers: &[PeerId],
         seed: &[u8],
     ) -> Vec<PeerId> {
@@ -4074,8 +4085,10 @@ impl Actor {
         }
 
         let world_peers: BTreeSet<_> = peers.iter().cloned().collect();
-        // Only target online peers that remain registered (e.g., observers), not unregistered strays.
-        let registered: BTreeSet<_> = registered_peers.iter().cloned().collect();
+        // Only target online peers that remain registered or explicitly trusted (e.g., observers),
+        // not unregistered strays.
+        let mut registered: BTreeSet<_> = registered_peers.iter().cloned().collect();
+        registered.extend(trusted_peers.iter().cloned());
         let strays: Vec<PeerId> = online_peers
             .iter()
             .filter(|peer| {
@@ -6178,10 +6191,12 @@ mod tests {
         online.push(local.clone());
         online.extend(peers.clone());
         let seed = [0xB1; 32];
-        let targets =
-            Actor::block_sync_update_targets_for_peers(&local, 3, &online, &online, &online, &seed);
-        let repeat =
-            Actor::block_sync_update_targets_for_peers(&local, 3, &online, &online, &online, &seed);
+        let targets = Actor::block_sync_update_targets_for_peers(
+            &local, 3, &online, &online, &online, &online, &seed,
+        );
+        let repeat = Actor::block_sync_update_targets_for_peers(
+            &local, 3, &online, &online, &online, &online, &seed,
+        );
 
         assert_eq!(targets, repeat);
         assert_eq!(targets.len(), 3);
@@ -6213,6 +6228,7 @@ mod tests {
             2,
             &world,
             &registered,
+            &registered,
             &online,
             &seed,
         );
@@ -6243,11 +6259,35 @@ mod tests {
             3,
             &world,
             &registered,
+            &[],
             &online,
             &seed,
         );
 
         assert!(!targets.contains(&stray));
+    }
+
+    #[test]
+    fn block_sync_update_targets_include_trusted_unregistered() {
+        let local = PeerId::new(KeyPair::random().public_key().clone());
+        let stray = PeerId::new(KeyPair::random().public_key().clone());
+        let world = vec![local.clone()];
+        let registered = world.clone();
+        let trusted = vec![stray.clone()];
+        let online = vec![local.clone(), stray.clone()];
+        let seed = [0x7D; 32];
+
+        let targets = Actor::block_sync_update_targets_for_peers(
+            &local,
+            1,
+            &world,
+            &registered,
+            &trusted,
+            &online,
+            &seed,
+        );
+
+        assert_eq!(targets, vec![stray]);
     }
 
     #[test]
@@ -6259,8 +6299,15 @@ mod tests {
         let peers = vec![local.clone(), peer_a, peer_b.clone(), peer_c];
         let online = vec![local.clone(), peer_b.clone()];
         let seed = [0x12; 32];
-        let targets =
-            Actor::block_sync_update_targets_for_peers(&local, 3, &peers, &peers, &online, &seed);
+        let targets = Actor::block_sync_update_targets_for_peers(
+            &local,
+            3,
+            &peers,
+            &peers,
+            &[],
+            &online,
+            &seed,
+        );
 
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0], peer_b);
@@ -6276,10 +6323,24 @@ mod tests {
         let peers = vec![local.clone(), peer_a.clone(), peer_b.clone()];
         let online = vec![local.clone()];
         let seed = [0xDE; 32];
-        let targets =
-            Actor::block_sync_update_targets_for_peers(&local, 1, &peers, &peers, &online, &seed);
-        let repeat =
-            Actor::block_sync_update_targets_for_peers(&local, 1, &peers, &peers, &online, &seed);
+        let targets = Actor::block_sync_update_targets_for_peers(
+            &local,
+            1,
+            &peers,
+            &peers,
+            &[],
+            &online,
+            &seed,
+        );
+        let repeat = Actor::block_sync_update_targets_for_peers(
+            &local,
+            1,
+            &peers,
+            &peers,
+            &[],
+            &online,
+            &seed,
+        );
 
         assert_eq!(targets, repeat);
         assert_eq!(targets.len(), 1);
