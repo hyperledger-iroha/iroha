@@ -76,8 +76,14 @@ pub mod boilerplate {
     use super::*;
 
     /// Shorthand for traits required for payload
-    pub trait Pload: Encode + Decode + Send + Clone + 'static {}
-    impl<T> Pload for T where T: Encode + Decode + Send + Clone + 'static {}
+    pub trait Pload:
+        Encode + Decode + for<'a> norito::core::DecodeFromSlice<'a> + Send + Clone + 'static
+    {
+    }
+    impl<T> Pload for T where
+        T: Encode + Decode + for<'a> norito::core::DecodeFromSlice<'a> + Send + Clone + 'static
+    {
+    }
 
     /// Shorthand for traits required for key exchange
     pub trait Kex: KeyExchangeScheme + Send + 'static {}
