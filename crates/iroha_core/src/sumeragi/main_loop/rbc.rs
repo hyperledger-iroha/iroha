@@ -3632,6 +3632,7 @@ impl Actor {
                 super::status::ConsensusMessageReason::RosterMissingDeferred,
                 status::PendingRbcStashReason::RosterMissing,
             )?;
+            self.request_missing_block_for_pending_rbc(key, "rbc_ready_roster_missing", None);
             return Ok(());
         }
         let mut roster_hash = rbc_roster_hash(&topology_peers);
@@ -4448,6 +4449,7 @@ impl Actor {
                 "commit roster missing",
                 status::PendingRbcStashReason::RosterMissing,
             )?;
+            self.request_missing_block_for_pending_rbc(key, "rbc_deliver_roster_missing", None);
             return Ok(());
         }
         let mut roster_hash = rbc_roster_hash(&topology_peers);
