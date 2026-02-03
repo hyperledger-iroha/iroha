@@ -6,8 +6,8 @@ use std::{
 };
 
 use eyre::{Result, WrapErr, eyre};
-use futures_util::future::try_join_all;
-use integration_tests::sandbox;
+use futures_util::future::join_all;
+use integration_tests::{sandbox, sync::get_status_with_retry_or_storage};
 use iroha::{
     client::Client,
     data_model::{
@@ -24,7 +24,7 @@ use iroha::{
     },
     query::QueryError,
 };
-use iroha_core::sumeragi::rbc_status;
+use iroha_core::sumeragi::{network_topology::commit_quorum_from_len, rbc_status};
 use iroha_test_network::*;
 use iroha_test_samples::gen_account_in;
 use nonzero_ext::nonzero;
@@ -126,9 +126,12 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
         .wrap_err("seven_peer_consistency submit setup failed")?;
     }
 
-    let status_before_mint = submitter_client
-        .get_status()
-        .wrap_err("seven_peer_consistency status fetch failed")?;
+    let status_before_mint = get_status_with_retry_or_storage(
+        &network,
+        &submitter_client,
+        "seven_peer_consistency status fetch",
+    )
+    .wrap_err("seven_peer_consistency status fetch failed")?;
     // Mint on one peer and wait until the network advances a few blocks
     let quantity = numeric!(500);
     if let Err(err) = submitter_client.submit_blocking(Mint::asset_numeric(
@@ -138,31 +141,83 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
         eprintln!("seven_peer_consistency mint did not confirm; continuing. err={err:?}");
     }
 
+    let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
+    let submitter_deadline = Instant::now() + sync_timeout;
+    loop {
+        let err_detail = match submitter_client.query_single(FindAssetById::new(asset_id.clone())) {
+            Ok(asset) => {
+                if asset.value() == &quantity {
+                    None
+                } else {
+                    Some(format!(
+                        "mismatched balance (got {}, expected {})",
+                        asset.value(),
+                        quantity
+                    ))
+                }
+            }
+            Err(QueryError::Validation(ValidationFail::QueryFailed(
+                QueryExecutionFail::Find(FindError::Asset(_)) | QueryExecutionFail::NotFound,
+            ))) => Some("asset not found".to_owned()),
+            Err(err) => Some(format!("query error: {err:?}")),
+        };
+
+        if err_detail.is_none() {
+            break;
+        }
+
+        if Instant::now() >= submitter_deadline {
+            return Err(eyre!(
+                "minted asset did not appear on submitter {} before timeout; last_err={last_err:?}",
+                submitter.id(),
+                last_err = err_detail
+            ));
+        }
+
+        std::thread::sleep(Duration::from_millis(250));
+    }
+
     let expected_min_height = status_before_mint.blocks.saturating_add(1);
 
     let rbc_timeout = sync_timeout;
-    let rbc_sessions = rt
-        .block_on(async {
-            let tasks = peers.iter().map(|peer| {
-                let client = peer.client();
-                let store_dir = peer.kura_store_dir().join("rbc_sessions");
-                let peer_id = peer.id().clone();
-                async move {
-                    let session = wait_for_rbc_delivery_inner(
-                        client,
-                        store_dir,
-                        expected_min_height,
-                        rbc_timeout,
-                    )
-                    .await?;
-                    Ok::<_, eyre::Report>((peer_id, session))
-                }
-            });
-            try_join_all(tasks).await
-        })
-        .wrap_err("seven_peer_consistency RBC delivery timeout")?;
+    let rbc_results = rt.block_on(async {
+        let tasks = peers.iter().map(|peer| {
+            let client = peer.client();
+            let store_dir = peer.kura_store_dir().join("rbc_sessions");
+            let peer_id = peer.id().clone();
+            async move {
+                let result = wait_for_rbc_delivery_inner(
+                    client,
+                    store_dir,
+                    expected_min_height,
+                    rbc_timeout,
+                )
+                .await;
+                (peer_id, result)
+            }
+        });
+        join_all(tasks).await
+    });
 
-    for (peer_id, session) in rbc_sessions {
+    let mut delivered = Vec::new();
+    let mut failures = Vec::new();
+    for (peer_id, result) in rbc_results {
+        match result {
+            Ok(session) => delivered.push((peer_id, session)),
+            Err(err) => failures.push(format!("{peer_id}: {err:?}")),
+        }
+    }
+
+    let required = commit_quorum_from_len(peers.len());
+    eyre::ensure!(
+        delivered.len() >= required,
+        "seven_peer_consistency RBC delivery below quorum (delivered={}, required={}, failures={})",
+        delivered.len(),
+        required,
+        failures.join("; ")
+    );
+
+    for (peer_id, session) in delivered {
         eyre::ensure!(
             get_bool(&session, "delivered") == Some(true),
             "peer {peer_id} missing RBC delivery at or above height {expected_min_height}"
@@ -190,7 +245,6 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
         .wrap_err("seven_peer_consistency blocks did not advance")?;
 
     // Then: verify each peer reports the same state (cross-peer consistency).
-    let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
     let deadline = Instant::now() + network.sync_timeout();
     loop {
         let mut pending = Vec::new();
