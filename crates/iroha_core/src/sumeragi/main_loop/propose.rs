@@ -1273,7 +1273,7 @@ impl Actor {
             self.record_phase_sample(PipelinePhase::Propose, proposal_height, view);
 
             let tx_count = transactions_for_plan.len();
-            iroha_logger::info!(
+            iroha_logger::debug!(
                 height = proposal_height,
                 view,
                 tx_count,

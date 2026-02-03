@@ -820,7 +820,7 @@ pub mod network {
     /// Maximum frame size for block sync / consensus payload traffic.
     pub const MAX_FRAME_BYTES_BLOCK_SYNC: NonZeroUsize = MAX_FRAME_BYTES; // allow full frame
     /// Maximum frame size for transaction gossip.
-    pub const MAX_FRAME_BYTES_TX_GOSSIP: NonZeroUsize = nonzero!(131_072_usize); // 128 KiB
+    pub const MAX_FRAME_BYTES_TX_GOSSIP: NonZeroUsize = nonzero!(262_144_usize); // 256 KiB
     /// Maximum frame size for peer gossip.
     pub const MAX_FRAME_BYTES_PEER_GOSSIP: NonZeroUsize = nonzero!(65_536_usize); // 64 KiB
     /// Maximum frame size for health-check channel messages.

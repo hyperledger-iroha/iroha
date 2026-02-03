@@ -126,6 +126,15 @@ impl BlockMessage {
     }
 }
 
+impl<'a> ncore::DecodeFromSlice<'a> for BlockMessage {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+        let mut cursor = bytes;
+        let value = Decode::decode(&mut cursor)?;
+        let consumed = bytes.len().saturating_sub(cursor.len());
+        Ok((value, consumed))
+    }
+}
+
 /// Wire wrapper for consensus payloads.
 #[derive(Debug, Clone)]
 pub struct BlockMessageWire {
@@ -180,7 +189,10 @@ impl BlockMessageWire {
     }
 
     pub(crate) fn encode_message(message: &BlockMessage) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(message.encoded_len());
+        let reserve = message
+            .encoded_len_exact()
+            .unwrap_or_else(|| message.encoded_len());
+        let mut buf = Vec::with_capacity(reserve);
         message.encode_to(&mut buf);
         buf
     }
@@ -224,7 +236,7 @@ impl<'a> NoritoDeserialize<'a> for BlockMessageWire {
     fn try_deserialize(archived: &'a ncore::Archived<Self>) -> Result<Self, ncore::Error> {
         let ptr = core::ptr::from_ref(archived).cast::<u8>();
         let bytes = ncore::payload_slice_from_ptr(ptr)?;
-        let (message, consumed) = ncore::decode_field_canonical::<BlockMessage>(bytes)?;
+        let (message, consumed) = ncore::decode_field_canonical_from_slice::<BlockMessage>(bytes)?;
         let encoded = Arc::new(bytes[..consumed].to_vec());
         Ok(Self {
             message: Arc::new(message),
@@ -235,7 +247,7 @@ impl<'a> NoritoDeserialize<'a> for BlockMessageWire {
 
 impl<'a> ncore::DecodeFromSlice<'a> for BlockMessageWire {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
-        let (message, consumed) = ncore::decode_field_canonical::<BlockMessage>(bytes)?;
+        let (message, consumed) = ncore::decode_field_canonical_from_slice::<BlockMessage>(bytes)?;
         let encoded = Arc::new(bytes[..consumed].to_vec());
         Ok((
             Self {

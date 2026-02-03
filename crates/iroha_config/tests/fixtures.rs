@@ -427,7 +427,7 @@ fn minimal_config_snapshot() {
                 max_frame_bytes_consensus: 16777216,
                 max_frame_bytes_control: 131072,
                 max_frame_bytes_block_sync: 16777216,
-                max_frame_bytes_tx_gossip: 131072,
+                max_frame_bytes_tx_gossip: 262144,
                 max_frame_bytes_peer_gossip: 65536,
                 max_frame_bytes_health: 32768,
                 max_frame_bytes_other: 131072,

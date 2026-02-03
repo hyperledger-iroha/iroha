@@ -53,6 +53,7 @@ use iroha_primitives::time::TimeSource;
 use iroha_telemetry::metrics::NexusLaneTeuBuckets;
 use ivm::ProgramMetadata;
 use mv::storage::StorageReadOnly;
+use norito::core::NoritoSerialize;
 use parking_lot::RwLock;
 pub use router::{
     ConfigLaneRouter, LaneRouter, RoutingDecision, SingleLaneRouter, evaluate_policy,
@@ -529,7 +530,10 @@ impl Queue {
     }
 
     fn compute_tx_encoded_len(tx: &AcceptedTransaction<'_>) -> usize {
-        tx.as_ref().encoded_len()
+        let signed = tx.as_ref();
+        signed
+            .encoded_len_exact()
+            .unwrap_or_else(|| signed.encoded_len())
     }
 
     pub(crate) fn compute_proposal_gas_cost(tx: &AcceptedTransaction<'_>) -> u64 {
@@ -4194,6 +4198,14 @@ pub mod tests {
     fn accepted_tx_by_someone(time_source: &TimeSource) -> AcceptedTransaction<'static> {
         let (account_id, key_pair) = gen_account_in("wonderland");
         accepted_tx_by(account_id, &key_pair, time_source)
+    }
+
+    #[test]
+    fn compute_tx_encoded_len_matches_payload() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let tx = accepted_tx_by_someone(&time_source);
+        let expected = tx.as_ref().encode().len();
+        assert_eq!(Queue::compute_tx_encoded_len(&tx), expected);
     }
 
     #[test]

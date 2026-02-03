@@ -405,7 +405,7 @@ Because queues are always bounded, overflow counters rise whenever a channel dro
   - `[network].max_frame_bytes_consensus` (default 16 MiB; caps critical consensus frames such as `BlockCreated`, `FetchPendingBlock`, and `RbcInit`/`RbcReady`/`RbcDeliver`)
   - `[network].max_frame_bytes_control` (default 128 KiB)
   - `[network].max_frame_bytes_block_sync` (default = global cap; caps bulk consensus payloads such as `BlockSyncUpdate`, `Proposal`, and `RbcChunk`, plus BlockSync responses)
-  - `[network].max_frame_bytes_tx_gossip` (default 128 KiB)
+  - `[network].max_frame_bytes_tx_gossip` (default 256 KiB)
   - `[network].max_frame_bytes_peer_gossip` (default 64 KiB)
   - `[network].max_frame_bytes_health` (default 32 KiB)
   - `[network].max_frame_bytes_other` (default 128 KiB)

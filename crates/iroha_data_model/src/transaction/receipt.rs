@@ -2,7 +2,10 @@
 
 use iroha_crypto::{HashOf, KeyPair, PublicKey, Signature};
 use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
+use norito::{
+    codec::{Decode, Encode},
+    core::NoritoSerialize,
+};
 
 use super::SignedTransaction;
 
@@ -31,7 +34,9 @@ impl TransactionSubmissionReceiptPayload {
     #[must_use]
     pub fn signing_bytes(&self) -> Vec<u8> {
         let domain = TX_SUBMISSION_RECEIPT_DOMAIN.as_bytes();
-        let payload_len = self.encoded_len();
+        let payload_len = self
+            .encoded_len_exact()
+            .unwrap_or_else(|| self.encoded_len());
         let mut bytes = Vec::with_capacity(domain.len() + payload_len);
         bytes.extend_from_slice(domain);
         self.encode_to(&mut bytes);

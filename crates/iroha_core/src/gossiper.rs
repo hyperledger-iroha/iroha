@@ -1294,7 +1294,7 @@ pub(crate) fn dataspace_label(dataspace: DataSpaceId) -> String {
 }
 
 /// Message for gossiping batches of transactions.
-#[derive(Decode, Encode, Debug, Clone)]
+#[derive(Decode, Debug, Clone)]
 pub struct TransactionGossip {
     /// Batch of transactions.
     pub txs: Vec<GossipTransaction>,
@@ -1316,6 +1316,26 @@ impl TransactionGossip {
             routes: Vec::new(),
             plane: GossipPlane::Public,
         }
+    }
+}
+
+impl NoritoSerialize for TransactionGossip {
+    fn serialize<W: Write>(&self, mut writer: W) -> Result<(), ncore::Error> {
+        let mut tmp = ncore::DeriveSmallBuf::new();
+        ncore::write_len_prefixed(&mut writer, &self.txs, &mut tmp)?;
+        ncore::write_len_prefixed(&mut writer, &self.routes, &mut tmp)?;
+        ncore::write_len_prefixed(&mut writer, &self.plane, &mut tmp)?;
+        Ok(())
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        self.encoded_len_exact()
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        let txs_payload_len = gossip_vec_payload_len_exact(self.txs.iter())?;
+        let routes_payload_len = gossip_routes_payload_len(self.routes.len())?;
+        gossip_message_encoded_len(txs_payload_len, routes_payload_len)
     }
 }
 
@@ -1401,7 +1421,8 @@ impl<'a> NoritoDeserialize<'a> for GossipTransaction {
     fn try_deserialize(archived: &'a ncore::Archived<Self>) -> Result<Self, ncore::Error> {
         let ptr = core::ptr::from_ref(archived).cast::<u8>();
         let bytes = ncore::payload_slice_from_ptr(ptr)?;
-        let (signed, consumed) = ncore::decode_field_canonical::<SignedTransaction>(bytes)?;
+        let (signed, consumed) =
+            ncore::decode_field_canonical_from_slice::<SignedTransaction>(bytes)?;
         let encoded = Arc::new(bytes[..consumed].to_vec());
         Ok(Self {
             signed: Arc::new(signed),
@@ -1412,7 +1433,8 @@ impl<'a> NoritoDeserialize<'a> for GossipTransaction {
 
 impl<'a> ncore::DecodeFromSlice<'a> for GossipTransaction {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
-        let (signed, consumed) = ncore::decode_field_canonical::<SignedTransaction>(bytes)?;
+        let (signed, consumed) =
+            ncore::decode_field_canonical_from_slice::<SignedTransaction>(bytes)?;
         let encoded = Arc::new(bytes[..consumed].to_vec());
         Ok((
             Self {
@@ -1433,8 +1455,40 @@ pub enum GossipPlane {
     Restricted,
 }
 
+const GOSSIP_LEN_HEADER_BYTES: usize = core::mem::size_of::<u64>();
+const GOSSIP_PLANE_BYTES: usize = core::mem::size_of::<u32>();
+const GOSSIP_ROUTE_BYTES: usize =
+    GOSSIP_LEN_HEADER_BYTES * 2 + core::mem::size_of::<u32>() + core::mem::size_of::<u64>();
+
+fn gossip_message_encoded_len(txs_payload_len: usize, routes_payload_len: usize) -> Option<usize> {
+    let mut total = GOSSIP_LEN_HEADER_BYTES.checked_add(txs_payload_len)?;
+    total = total.checked_add(GOSSIP_LEN_HEADER_BYTES)?;
+    total = total.checked_add(routes_payload_len)?;
+    total = total.checked_add(GOSSIP_LEN_HEADER_BYTES)?;
+    total = total.checked_add(GOSSIP_PLANE_BYTES)?;
+    Some(total)
+}
+
+fn gossip_vec_payload_len_exact<'a>(
+    items: impl Iterator<Item = &'a GossipTransaction>,
+) -> Option<usize> {
+    let mut total = GOSSIP_LEN_HEADER_BYTES;
+    for item in items {
+        let item_len = item.encoded_len_exact()?;
+        total = total.checked_add(GOSSIP_LEN_HEADER_BYTES)?;
+        total = total.checked_add(item_len)?;
+    }
+    Some(total)
+}
+
+fn gossip_routes_payload_len(len: usize) -> Option<usize> {
+    let per_elem = GOSSIP_LEN_HEADER_BYTES.checked_add(GOSSIP_ROUTE_BYTES)?;
+    let elems = per_elem.checked_mul(len)?;
+    GOSSIP_LEN_HEADER_BYTES.checked_add(elems)
+}
+
 /// Lane/dataspace tags carried alongside gossiped transactions for visibility gating.
-#[derive(Decode, Encode, Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Decode, Encode)]
 pub struct GossipRoute {
     /// Lane assigned to the transaction at the sender.
     pub lane_id: LaneId,
@@ -1463,7 +1517,10 @@ fn partition_gossip_batch(
     message.txs.reserve(reserved);
     message.routes.reserve(reserved);
     let mut requeue = Vec::with_capacity(txs.len());
-    let mut encoded_len = message.encoded_len();
+    let mut txs_payload_len = GOSSIP_LEN_HEADER_BYTES;
+    let mut routes_payload_len = GOSSIP_LEN_HEADER_BYTES;
+    let mut encoded_len =
+        gossip_message_encoded_len(txs_payload_len, routes_payload_len).unwrap_or(usize::MAX);
 
     if frame_cap_bytes == 0 {
         requeue.extend(txs.into_iter().map(|entry| entry.tx.as_ref().hash()));
@@ -1483,6 +1540,32 @@ fn partition_gossip_batch(
         }
 
         let routing = entry.routing;
+        let tx_payload_len = entry.payload.len();
+        let Some(next_txs_payload_len) = txs_payload_len
+            .checked_add(GOSSIP_LEN_HEADER_BYTES)
+            .and_then(|total| total.checked_add(tx_payload_len))
+        else {
+            requeue.push(hash);
+            continue;
+        };
+        let Some(next_routes_payload_len) = routes_payload_len
+            .checked_add(GOSSIP_LEN_HEADER_BYTES)
+            .and_then(|total| total.checked_add(GOSSIP_ROUTE_BYTES))
+        else {
+            requeue.push(hash);
+            continue;
+        };
+        let Some(next_encoded_len) =
+            gossip_message_encoded_len(next_txs_payload_len, next_routes_payload_len)
+        else {
+            requeue.push(hash);
+            continue;
+        };
+        if next_encoded_len > frame_cap_bytes {
+            requeue.push(hash);
+            continue;
+        }
+
         message.txs.push(GossipTransaction::with_encoded(
             SignedTransaction::from(entry.tx),
             entry.payload,
@@ -1491,13 +1574,9 @@ fn partition_gossip_batch(
             lane_id: routing.lane_id,
             dataspace_id: routing.dataspace_id,
         });
-        encoded_len = message.encoded_len();
-        if encoded_len > frame_cap_bytes {
-            message.txs.pop();
-            message.routes.pop();
-            requeue.push(hash);
-            encoded_len = message.encoded_len();
-        }
+        txs_payload_len = next_txs_payload_len;
+        routes_payload_len = next_routes_payload_len;
+        encoded_len = next_encoded_len;
     }
 
     PartitionedGossipBatch {
@@ -1941,6 +2020,56 @@ mod tests {
             ncore::NoritoSerialize::encoded_len_exact(&tx),
             Some(payload.len())
         );
+    }
+
+    #[test]
+    fn gossip_route_encoded_len_matches_wire() {
+        let route = GossipRoute {
+            lane_id: LaneId::new(3),
+            dataspace_id: DataSpaceId::new(7),
+        };
+
+        let encoded = route.encode();
+        assert_eq!(encoded.len(), GOSSIP_ROUTE_BYTES);
+
+        let decoded: GossipRoute =
+            Decode::decode(&mut encoded.as_slice()).expect("decode gossip route");
+        assert_eq!(decoded.lane_id, route.lane_id);
+        assert_eq!(decoded.dataspace_id, route.dataspace_id);
+    }
+
+    #[test]
+    fn transaction_gossip_encoded_len_exact_matches_encode() {
+        let (signed, _accepted) = build_transaction("len");
+        let payload = payload_for(&signed);
+        let message = TransactionGossip {
+            txs: vec![GossipTransaction::with_encoded(
+                signed,
+                Arc::clone(&payload),
+            )],
+            routes: vec![GossipRoute {
+                lane_id: LaneId::SINGLE,
+                dataspace_id: DataSpaceId::GLOBAL,
+            }],
+            plane: GossipPlane::Public,
+        };
+
+        let encoded = message.encode();
+        assert_eq!(
+            ncore::NoritoSerialize::encoded_len_exact(&message),
+            Some(encoded.len())
+        );
+    }
+
+    #[test]
+    fn gossip_transaction_decode_rejects_trailing_bytes() {
+        let (signed, _accepted) = build_transaction("trailing");
+        let mut encoded = norito::codec::Encode::encode(&signed);
+        encoded.extend_from_slice(&[0xAA, 0xBB]);
+
+        let err =
+            ncore::decode_field_canonical::<GossipTransaction>(&encoded).expect_err("bad bytes");
+        assert!(matches!(err, ncore::Error::LengthMismatch));
     }
 
     #[test]
