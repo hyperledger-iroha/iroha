@@ -541,7 +541,14 @@ against duplicate `(certificate_id, counter)` claims.
    - Certificate expiry > issued_at and policy coverage ≥ certificate lifetime.
    - `policy.max_balance >= allowance.amount` and `policy.max_tx_value <= max_balance`.
    - Operator signature matches the allowance asset owner.
-3. Ledger stores an `OfflineAllowanceRecord` keyed by `certificate_id` and seeds
+3. Asset definitions intended for offline allowances must set metadata
+   `offline.enabled = true`. On registration, the ledger derives a deterministic escrow account in
+   the asset definition’s domain (seeded from `Hash("iroha.offline.escrow.v1|<chain_id>|<asset_def_id>")`)
+   and records it in `settlement.offline.escrow_accounts` (creating the account if needed).
+4. If `settlement.offline.escrow_required=true`, ledger transfers the allowance amount from
+   `allowance.asset.account()` into the configured escrow account for the asset definition
+   (`settlement.offline.escrow_accounts`); missing bindings reject the registration.
+5. Ledger stores an `OfflineAllowanceRecord` keyed by `certificate_id` and seeds
    `remaining_amount = allowance.amount`.
 
 ### 5.2 `SubmitOfflineToOnlineTransfer`
