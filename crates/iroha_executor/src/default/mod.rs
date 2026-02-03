@@ -34,7 +34,8 @@ use iroha_smart_contract::data_model::{
         RegisterPinManifest, RegisterProviderOwner, RegisterPublicLaneValidator,
         RemoveAssetKeyValue, RetirePinManifest, SetAssetKeyValue, SetLaneRelayEmergencyValidators,
         SetPricingSchedule, SubmitOfflineToOnlineTransfer, UnregisterProviderOwner,
-        UpsertProviderCredit, bridge::RecordBridgeReceipt,
+        UpsertProviderCredit,
+        bridge::RecordBridgeReceipt,
         repo::{RepoInstructionBox, RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
     },
     prelude::*,
@@ -1585,26 +1586,26 @@ pub mod asset {
             Execute, Iroha,
             data_model::{
                 ValidationFail,
-            account::AccountId,
-            asset::{AssetDefinitionId, AssetId},
-            block::BlockHeader,
-            bridge::BridgeReceipt,
-            domain::DomainId,
-            executor::Result as ExecResult,
-            isi::{
-                InstructionBox, RegisterPublicLaneValidator,
-                bridge::RecordBridgeReceipt,
-                repo::{RepoInstructionBox, RepoIsi},
+                account::AccountId,
+                asset::{AssetDefinitionId, AssetId},
+                block::BlockHeader,
+                bridge::BridgeReceipt,
+                domain::DomainId,
+                executor::Result as ExecResult,
+                isi::{
+                    InstructionBox, RegisterPublicLaneValidator,
+                    bridge::RecordBridgeReceipt,
+                    repo::{RepoInstructionBox, RepoIsi},
+                },
+                metadata::Metadata,
+                name::Name,
+                nexus::LaneId,
+                peer::PeerId,
+                prelude::{Json, Numeric},
+                repo::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
             },
-            metadata::Metadata,
-            name::Name,
-            nexus::LaneId,
-            peer::PeerId,
-            prelude::{Json, Numeric},
-            repo::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
-        },
-        prelude::{Context, Visit},
-    };
+            prelude::{Context, Visit},
+        };
 
         struct StubExecutor {
             host: Iroha,
@@ -1794,15 +1795,12 @@ pub mod asset {
             let (mut executor, _) = StubExecutor::new(1);
             let domain = executor.context().authority.domain().clone();
             let counterparty_keypair = KeyPair::from_seed(vec![9; 32], Algorithm::Ed25519);
-            let counterparty = AccountId::new(domain.clone(), counterparty_keypair.public_key().clone());
-            let cash_def = AssetDefinitionId::new(
-                domain.clone(),
-                "cash".parse::<Name>().expect("valid name"),
-            );
-            let collateral_def = AssetDefinitionId::new(
-                domain,
-                "collateral".parse::<Name>().expect("valid name"),
-            );
+            let counterparty =
+                AccountId::new(domain.clone(), counterparty_keypair.public_key().clone());
+            let cash_def =
+                AssetDefinitionId::new(domain.clone(), "cash".parse::<Name>().expect("valid name"));
+            let collateral_def =
+                AssetDefinitionId::new(domain, "collateral".parse::<Name>().expect("valid name"));
             let agreement_id: RepoAgreementId = "repo_dispatch".parse().expect("repo id");
             let repo_instruction = RepoIsi::new(
                 agreement_id,

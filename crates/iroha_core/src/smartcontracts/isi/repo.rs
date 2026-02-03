@@ -696,7 +696,7 @@ mod tests {
         events::data::prelude::{
             AccountEvent, DataEvent, DomainEvent, RepoAccountEvent, RepoAccountRole,
         },
-        isi::{repo::RepoInstructionBox, InstructionBox},
+        isi::{InstructionBox, repo::RepoInstructionBox},
         repo::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
     };
     use iroha_primitives::numeric::Numeric;

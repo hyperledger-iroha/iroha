@@ -12393,6 +12393,12 @@ pub struct Torii {
     /// Base directory for Torii persistence (attachments, webhooks, DA queues).
     #[config(default = "defaults::torii::data_dir()")]
     pub data_dir: PathBuf,
+    /// Optional public key used to sign transaction submission receipts (must be paired).
+    #[config(env = "TORII_RECEIPT_PUBLIC_KEY")]
+    pub receipt_public_key: Option<PublicKey>,
+    /// Optional private key used to sign transaction submission receipts (must be paired).
+    #[config(env = "TORII_RECEIPT_PRIVATE_KEY")]
+    pub receipt_private_key: Option<ExposedPrivateKey>,
     /// Maximum idle duration for long-running queries.
     #[config(default = "defaults::torii::QUERY_IDLE_TIME.into()")]
     pub query_idle_time_ms: DurationMs,
@@ -12811,6 +12817,37 @@ impl ToriiPush {
 }
 
 impl Torii {
+    fn parse_receipt_signer(
+        receipt_public_key: Option<&PublicKey>,
+        receipt_private_key: Option<&ExposedPrivateKey>,
+    ) -> Option<KeyPair> {
+        match (receipt_public_key, receipt_private_key) {
+            (None, None) => None,
+            (Some(_), None) => {
+                panic!(
+                    "torii.receipt_private_key must be set when torii.receipt_public_key is set"
+                );
+            }
+            (None, Some(_)) => {
+                panic!(
+                    "torii.receipt_public_key must be set when torii.receipt_private_key is set"
+                );
+            }
+            (Some(public_key), Some(private_key)) => {
+                let key_pair = KeyPair::new(public_key.clone(), private_key.0.clone())
+                    .unwrap_or_else(|err| panic!("invalid torii receipt key pair: {err}"));
+                #[cfg(feature = "bls")]
+                if matches!(
+                    key_pair.public_key().algorithm(),
+                    Algorithm::BlsNormal | Algorithm::BlsSmall
+                ) {
+                    panic!("torii.receipt_* must not use BLS keys; use ed25519 or secp256k1");
+                }
+                Some(key_pair)
+            }
+        }
+    }
+
     fn parse(self) -> (actual::Torii, actual::LiveQueryStore) {
         let configured_versions = if self.api_versions.is_empty() {
             super::defaults::torii::api_supported_versions()
@@ -12888,6 +12925,10 @@ impl Torii {
             sorafs_gateway,
             sorafs_por,
         ) = self.sorafs.parse();
+        let receipt_signer = Self::parse_receipt_signer(
+            self.receipt_public_key.as_ref(),
+            self.receipt_private_key.as_ref(),
+        );
         let torii = actual::Torii {
             address: self.address,
             api_versions,
@@ -12896,6 +12937,7 @@ impl Torii {
             api_version_sunset_unix,
             max_content_len: self.max_content_len,
             data_dir: self.data_dir,
+            receipt_signer,
             events_buffer_capacity: self.events_buffer_capacity,
             ws_message_timeout: self.ws_message_timeout_ms.get(),
             query_rate_per_authority_per_sec: self

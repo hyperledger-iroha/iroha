@@ -5111,7 +5111,7 @@ async fn handle_transaction_inner(
             return Err(Error::AcceptTransaction(err));
         }
     };
-    iroha_logger::info!(
+    iroha_logger::debug!(
         tx = %accepted_tx.as_ref().hash(),
         "transaction accepted by Torii; enqueuing"
     );
@@ -5132,7 +5132,7 @@ async fn handle_transaction_inner(
             backpressure,
         })
         .inspect(|decision| {
-            iroha_logger::info!(
+            iroha_logger::debug!(
                 lane = %decision.lane_id.as_u32(),
                 dataspace = %decision.dataspace_id.as_u64(),
                 "transaction enqueued successfully"

@@ -444,6 +444,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             api_version_sunset_unix: defaults::torii::API_SUNSET_UNIX,
             max_content_len: (1_048_576u64).into(),
             data_dir: defaults::torii::data_dir(),
+            receipt_signer: None,
             events_buffer_capacity: defaults::torii::events_buffer_capacity(),
             ws_message_timeout: Duration::from_millis(defaults::torii::WS_MESSAGE_TIMEOUT_MS),
             query_rate_per_authority_per_sec: None,

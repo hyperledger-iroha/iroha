@@ -28,6 +28,7 @@ use iroha_config::parameters::{
     user::{Root as UserConfig, ToriiSoranetPrivacyIngest},
 };
 use iroha_config_base::{env::MockEnv, read::ConfigReader};
+use iroha_crypto::{Algorithm, PublicKey};
 use iroha_data_model::{account::AccountId, name::Name};
 use soranet_pq::MlKemSuite;
 use thiserror::Error;
@@ -473,6 +474,7 @@ fn minimal_config_snapshot() {
                     16777216,
                 ),
                 data_dir: "./storage/torii",
+                receipt_signer: None,
                 query_rate_per_authority_per_sec: Some(
                     25,
                 ),
@@ -2082,6 +2084,22 @@ fn minimal_config_snapshot() {
             },
         }"#]]
     .assert_eq(&format!("{config:#?}"));
+}
+
+#[test]
+fn torii_receipt_signer_parses() {
+    let config =
+        load_config_from_fixtures("torii_receipt_signer.toml").expect("config should be valid");
+    let signer = config
+        .torii
+        .receipt_signer
+        .expect("receipt signer should be configured");
+    let expected = PublicKey::from_str(
+        "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB",
+    )
+    .expect("receipt public key");
+    assert_eq!(signer.public_key(), &expected);
+    assert_eq!(signer.public_key().algorithm(), Algorithm::Ed25519);
 }
 
 #[test]

@@ -32,7 +32,10 @@ use iroha_crypto::soranet::{
     puzzle::{self, ChallengeBinding as PuzzleBinding, Parameters as PuzzleParameters},
 };
 use message::*;
-use norito::{codec::{Decode, DecodeAll, Encode}, core as ncore};
+use norito::{
+    codec::{Decode, DecodeAll, Encode},
+    core as ncore,
+};
 use rand::{CryptoRng, RngCore, SeedableRng, rngs::StdRng};
 #[cfg(feature = "noise_handshake")]
 use snow::{Builder, params::NoiseParams};
@@ -2211,7 +2214,7 @@ mod run {
         /// # Errors
         /// - If encryption fail.
         fn prepare_message<T: Pload>(&mut self, msg: &T, priority: Priority) -> Result<(), Error> {
-            self.buffer = ncore::to_bytes(msg)?;
+            ncore::to_bytes_in(msg, &mut self.buffer)?;
             let encrypted = self.cryptographer.encrypt(&self.buffer)?;
 
             let size = encrypted.len();

@@ -168,21 +168,24 @@ where
     T: JsonSerialize + norito::core::NoritoSerialize,
 {
     match format {
-        ResponseFormat::Norito => match norito::to_bytes(&value) {
-            Ok(bytes) => Response::builder()
-                .status(StatusCode::OK)
-                .header(CONTENT_TYPE, HeaderValue::from_static(NORITO_MIME_TYPE))
-                .body(axum::body::Body::from(bytes))
-                .expect("build Norito response"),
-            Err(err) => {
-                iroha_logger::error!(?err, "failed to serialise response payload");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "failed to serialise response",
-                )
-                    .into_response()
+        ResponseFormat::Norito => {
+            let mut bytes = Vec::new();
+            match norito::core::to_bytes_in(&value, &mut bytes) {
+                Ok(()) => Response::builder()
+                    .status(StatusCode::OK)
+                    .header(CONTENT_TYPE, HeaderValue::from_static(NORITO_MIME_TYPE))
+                    .body(axum::body::Body::from(bytes))
+                    .expect("build Norito response"),
+                Err(err) => {
+                    iroha_logger::error!(?err, "failed to serialise response payload");
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "failed to serialise response",
+                    )
+                        .into_response()
+                }
             }
-        },
+        }
         ResponseFormat::Json => match norito::json::to_value(&value) {
             Ok(payload) => JsonBody(payload).into_response(),
             Err(err) => {
@@ -209,8 +212,9 @@ fn respond_value_as_norito(value: Value) -> Response {
                 .into_response();
         }
     };
-    match norito::to_bytes(&json) {
-        Ok(bytes) => Response::builder()
+    let mut bytes = Vec::new();
+    match norito::core::to_bytes_in(&json, &mut bytes) {
+        Ok(()) => Response::builder()
             .status(StatusCode::OK)
             .header(CONTENT_TYPE, HeaderValue::from_static(NORITO_MIME_TYPE))
             .body(axum::body::Body::from(bytes))
@@ -324,7 +328,8 @@ pub struct NoritoBody<T>(pub T);
 impl<T: NoritoSerialize + Send> IntoResponse for NoritoBody<T> {
     fn into_response(self) -> Response {
         // Encode with Norito header + checksum so clients can reliably decode.
-        let buf = norito::to_bytes(&self.0).expect("norito serialization failed");
+        let mut buf = Vec::new();
+        norito::core::to_bytes_in(&self.0, &mut buf).expect("norito serialization failed");
         let mut res = Response::new(buf.into());
         res.headers_mut()
             .insert(CONTENT_TYPE, HeaderValue::from_static(NORITO_MIME_TYPE));

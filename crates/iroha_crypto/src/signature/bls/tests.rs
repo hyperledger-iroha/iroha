@@ -201,6 +201,26 @@ mod normal {
     }
 
     #[test]
+    fn sign_is_thread_safe() {
+        use std::sync::Arc;
+
+        let (pk, sk) = BlsImpl::<NormalConfiguration>::keypair(KeyGenOption::Random);
+        let sk = Arc::new(sk);
+        let msg = b"concurrent-signing";
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let sk = Arc::clone(&sk);
+                std::thread::spawn(move || BlsImpl::<NormalConfiguration>::sign(msg, &sk))
+            })
+            .collect();
+        for handle in handles {
+            let sig = handle.join().expect("sign thread");
+            BlsImpl::<NormalConfiguration>::verify(msg, &sig, &pk)
+                .expect("signature should verify");
+        }
+    }
+
+    #[test]
     fn aggregate_same_message_rejects_canceling_pairs() {
         let msg = b"aggregate-canceling";
         let pk = G1Affine::generator() * Scalar::from(7u64);

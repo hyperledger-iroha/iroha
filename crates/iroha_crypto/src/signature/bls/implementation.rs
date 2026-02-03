@@ -1,6 +1,7 @@
 use core::marker::PhantomData;
 use std::{
-    borrow::ToOwned as _, collections::BTreeSet, string::ToString as _, sync::Mutex, vec, vec::Vec,
+    borrow::ToOwned as _, cell::RefCell, collections::BTreeSet, string::ToString as _, vec,
+    vec::Vec,
 };
 
 use sha2::Sha256;
@@ -10,18 +11,82 @@ use w3f_bls::{
 };
 use zeroize::Zeroize as _;
 
+use super::{normal::NormalConfiguration, small::SmallConfiguration};
+
 pub(super) const MESSAGE_CONTEXT: &[u8; 20] = b"for signing messages";
+
+const PREPARED_PK_CACHE_LIMIT: usize = 128;
+
+struct PreparedPublicKeyCache<E: EngineBLS> {
+    entries: Vec<(Vec<u8>, E::PublicKeyPrepared)>,
+}
+
+impl<E: EngineBLS> PreparedPublicKeyCache<E> {
+    fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
+
+    fn get_or_insert(&mut self, pk: &PublicKey<E>, pk_bytes: &[u8]) -> E::PublicKeyPrepared {
+        if let Some(pos) = self
+            .entries
+            .iter()
+            .position(|(bytes, _)| bytes.as_slice() == pk_bytes)
+        {
+            let prepared = self.entries[pos].1.clone();
+            if pos + 1 != self.entries.len() {
+                let entry = self.entries.remove(pos);
+                self.entries.push(entry);
+            }
+            return prepared;
+        }
+        let prepared = E::prepare_public_key(pk.0);
+        self.entries.push((pk_bytes.to_vec(), prepared.clone()));
+        if self.entries.len() > PREPARED_PK_CACHE_LIMIT {
+            let drain = self.entries.len() - PREPARED_PK_CACHE_LIMIT;
+            self.entries.drain(0..drain);
+        }
+        prepared
+    }
+}
+
+trait PreparedPublicKeyCacheAccess: BlsConfiguration {
+    fn with_cache<R>(f: impl FnOnce(&mut PreparedPublicKeyCache<Self::Engine>) -> R) -> R;
+}
+
+thread_local! {
+    static PREPARED_PK_CACHE_NORMAL: RefCell<
+        PreparedPublicKeyCache<<NormalConfiguration as BlsConfiguration>::Engine>
+    > = RefCell::new(PreparedPublicKeyCache::new());
+    static PREPARED_PK_CACHE_SMALL: RefCell<
+        PreparedPublicKeyCache<<SmallConfiguration as BlsConfiguration>::Engine>
+    > = RefCell::new(PreparedPublicKeyCache::new());
+}
+
+impl PreparedPublicKeyCacheAccess for NormalConfiguration {
+    fn with_cache<R>(f: impl FnOnce(&mut PreparedPublicKeyCache<Self::Engine>) -> R) -> R {
+        PREPARED_PK_CACHE_NORMAL.with(|cache| f(&mut cache.borrow_mut()))
+    }
+}
+
+impl PreparedPublicKeyCacheAccess for SmallConfiguration {
+    fn with_cache<R>(f: impl FnOnce(&mut PreparedPublicKeyCache<Self::Engine>) -> R) -> R {
+        PREPARED_PK_CACHE_SMALL.with(|cache| f(&mut cache.borrow_mut()))
+    }
+}
 
 /// Thread-safe wrapper around the w3f `SecretKey` that allows interior mutability.
 pub struct ManagedSecretKey<C: BlsConfiguration + ?Sized> {
-    inner: Mutex<W3fSecretKey<C::Engine>>,
+    bytes: Vec<u8>,
+    _marker: PhantomData<C>,
 }
 
 impl<C: BlsConfiguration + ?Sized> Clone for ManagedSecretKey<C> {
     fn clone(&self) -> Self {
-        let guard = self.lock();
         Self {
-            inner: Mutex::new(guard.clone()),
+            bytes: self.bytes.clone(),
+            _marker: PhantomData,
         }
     }
 }
@@ -29,30 +94,28 @@ impl<C: BlsConfiguration + ?Sized> Clone for ManagedSecretKey<C> {
 impl<C: BlsConfiguration + ?Sized> ManagedSecretKey<C> {
     fn new(secret: W3fSecretKey<C::Engine>) -> Self {
         Self {
-            inner: Mutex::new(secret),
+            bytes: secret.clone().into_vartime().to_bytes(),
+            _marker: PhantomData,
         }
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, W3fSecretKey<C::Engine>> {
-        self.inner
-            .lock()
-            .expect("BLS secret key mutex should not be poisoned")
+    fn load_secret(&self) -> W3fSecretKey<C::Engine> {
+        W3fSecretKey::<C::Engine>::from_bytes(&self.bytes)
+            .expect("stored BLS secret key must decode")
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
-        let guard = self.lock();
-        guard.clone().into_vartime().to_bytes()
+        self.bytes.clone()
     }
 
     pub fn to_fixed_bytes(&self) -> [u8; 32] {
         let mut arr = [0u8; 32];
-        arr.copy_from_slice(&self.to_bytes());
+        arr.copy_from_slice(&self.bytes);
         arr
     }
 
     pub fn public_key(&self) -> PublicKey<C::Engine> {
-        let guard = self.lock();
-        guard.clone().into_public()
+        self.load_secret().into_public()
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ParseError> {
@@ -62,7 +125,7 @@ impl<C: BlsConfiguration + ?Sized> ManagedSecretKey<C> {
     }
 
     fn sign_bytes(&self, message: &[u8]) -> Vec<u8> {
-        let mut guard = self.lock();
+        let mut guard = self.load_secret();
         let msg = w3f_bls::Message::new(MESSAGE_CONTEXT, message);
         #[cfg(feature = "rand")]
         {
@@ -77,11 +140,10 @@ impl<C: BlsConfiguration + ?Sized> ManagedSecretKey<C> {
 
 impl<C: BlsConfiguration + ?Sized> zeroize::Zeroize for ManagedSecretKey<C> {
     fn zeroize(&mut self) {
-        let mut guard = self.lock();
         let mut zero_seed = vec![0u8; C::Engine::SECRET_KEY_SIZE];
-        let new_secret = W3fSecretKey::from_seed(&zero_seed);
+        let new_secret = W3fSecretKey::<C::Engine>::from_seed(&zero_seed);
         zero_seed.zeroize();
-        *guard = new_secret;
+        self.bytes = new_secret.into_vartime().to_bytes();
     }
 }
 
@@ -142,9 +204,13 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
         message: &[u8],
         signature_bytes: &[u8],
         pk: &PublicKey<C::Engine>,
-    ) -> Result<(), Error> {
+    ) -> Result<(), Error>
+    where
+        C: PreparedPublicKeyCacheAccess,
+    {
+        let pk_bytes = pk.to_bytes();
         let identity_pk = PublicKey::<C::Engine>(Default::default());
-        if pk.to_bytes() == identity_pk.to_bytes() {
+        if pk_bytes == identity_pk.to_bytes() {
             return Err(ParseError("BLS public key is identity".to_string()).into());
         }
 
@@ -160,8 +226,16 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
         }
 
         let message = w3f_bls::Message::new(MESSAGE_CONTEXT, message);
+        let prepared_pk = C::with_cache(|cache| cache.get_or_insert(pk, &pk_bytes));
+        let prepared_message = <C::Engine as EngineBLS>::prepare_signature(
+            message.hash_to_signature_curve::<C::Engine>(),
+        );
+        let prepared_signature = <C::Engine as EngineBLS>::prepare_signature(signature.0);
 
-        if !signature.verify(&message, pk) {
+        if !<C::Engine as EngineBLS>::verify_prepared(
+            prepared_signature,
+            &[(prepared_pk, prepared_message)],
+        ) {
             return Err(Error::BadSignature);
         }
 
@@ -454,7 +528,22 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
                 .zip(public_keys.iter())
             {
                 let pk = Self::parse_public_key(pk_bytes)?;
-                Self::verify(m, s, &pk)?;
+                let signature = w3f_bls::Signature::<C::Engine>::from_bytes(s)
+                    .map_err(|_| ParseError("Failed to parse signature.".to_owned()))?;
+                let canonical = signature.to_bytes();
+                if canonical.as_slice() != *s {
+                    return Err(
+                        ParseError("non-canonical BLS signature encoding".to_string()).into(),
+                    );
+                }
+                let identity_sig = BlsSignature::<C::Engine>(Default::default()).to_bytes();
+                if canonical == identity_sig {
+                    return Err(ParseError("BLS signature is identity".to_string()).into());
+                }
+                let message = w3f_bls::Message::new(MESSAGE_CONTEXT, m);
+                if !signature.verify(&message, &pk) {
+                    return Err(Error::BadSignature);
+                }
             }
             Ok(())
         }

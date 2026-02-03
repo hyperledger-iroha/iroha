@@ -5293,6 +5293,25 @@ impl ByteSink {
         }
     }
 
+    /// Reuse an existing buffer while reserving headroom and payload capacity.
+    pub(crate) fn with_headroom_from(
+        mut buf: Vec<u8>,
+        payload_capacity: usize,
+        headroom: usize,
+    ) -> Self {
+        buf.clear();
+        let min_capacity = headroom + payload_capacity.max(1024);
+        if buf.capacity() < min_capacity {
+            buf.reserve(min_capacity - buf.capacity());
+        }
+        buf.resize(headroom, 0);
+        Self {
+            buf,
+            headroom,
+            digest: crc64fast::Digest::new(),
+        }
+    }
+
     #[inline]
     pub(crate) fn ensure_capacity(&mut self, extra: usize) {
         let needed = self.buf.len() + extra;
@@ -5453,6 +5472,61 @@ pub fn to_bytes<T: NoritoSerialize>(value: &T) -> Result<Vec<u8>, Error> {
     header.write(&mut out)?;
     append_payload_with_padding::<T>(&mut out, &payload);
     Ok(out)
+}
+
+/// Serialize an object into the provided byte buffer.
+///
+/// The output buffer will be overwritten with a Norito-framed payload containing
+/// the header, alignment padding, and archived bytes.
+pub fn to_bytes_in<T: NoritoSerialize>(value: &T, out: &mut Vec<u8>) -> Result<(), Error> {
+    let encode_guard = EncodeContextGuard::enter();
+    let base_flags = current_decode_flags_effective().unwrap_or_else(default_encode_flags);
+    let estimated = value
+        .encoded_len_exact()
+        .or_else(|| value.encoded_len_hint())
+        .unwrap_or(0);
+    let flags = base_flags;
+    let padding = payload_alignment_padding_for::<T>();
+    let headroom = Header::SIZE + padding;
+    let mut sink = ByteSink::with_headroom_from(std::mem::take(out), estimated, headroom);
+    {
+        let _guard = DecodeFlagsGuard::enter(flags);
+        value.serialize(&mut sink)?;
+    }
+    let payload_len = sink.buf.len().saturating_sub(headroom) as u64;
+    let checksum = sink.checksum();
+    let fixed_offsets_used = fixed_offsets_used();
+    let field_bitset_used = field_bitset_used();
+    let compact_len_used = compact_len_used();
+    drop(encode_guard);
+
+    let mut final_flags = flags;
+    if field_bitset_used {
+        final_flags |= header_flags::FIELD_BITSET;
+    } else {
+        final_flags &= !header_flags::FIELD_BITSET;
+    }
+    if compact_len_used {
+        final_flags |= header_flags::COMPACT_LEN;
+    } else {
+        final_flags &= !header_flags::COMPACT_LEN;
+    }
+    let packed_seq_used = fixed_offsets_used;
+    if packed_seq_used {
+        final_flags |= header_flags::PACKED_SEQ;
+    } else {
+        final_flags &= !header_flags::PACKED_SEQ;
+    }
+    record_last_header_flags(final_flags);
+
+    let mut header = Header::new(T::schema_hash(), payload_len, checksum);
+    header.flags |= final_flags;
+    {
+        let mut header_slice = &mut sink.buf[..Header::SIZE];
+        header.write(&mut header_slice)?;
+    }
+    *out = sink.into_inner();
+    Ok(())
 }
 
 /// Frame a bare payload (produced by `codec::Encode::encode_to`) with a Norito header
@@ -6368,6 +6442,29 @@ mod tests {
             decode_field_canonical::<Vec<Vec<u64>>>(misaligned).expect("decode misaligned field");
         assert_eq!(decoded, value);
         assert_eq!(used, encoded.len());
+    }
+
+    #[test]
+    fn to_bytes_in_matches_to_bytes() {
+        let value: Vec<u64> = vec![1, 2, 3, 4];
+        let mut out = Vec::with_capacity(128);
+        to_bytes_in(&value, &mut out).expect("encode to buffer");
+        let expected = to_bytes(&value).expect("encode expected");
+        assert_eq!(out, expected);
+
+        let cap = out.capacity();
+        to_bytes_in(&value, &mut out).expect("encode to buffer again");
+        assert!(out.capacity() >= cap);
+    }
+
+    #[test]
+    fn byte_sink_with_headroom_from_preserves_capacity() {
+        let mut buf = Vec::with_capacity(2048);
+        buf.extend_from_slice(&[1u8, 2, 3, 4]);
+        let cap = buf.capacity();
+        let sink = ByteSink::with_headroom_from(buf, 16, Header::SIZE);
+        assert_eq!(sink.buf.len(), Header::SIZE);
+        assert!(sink.buf.capacity() >= cap);
     }
 
     #[derive(Clone, Copy, Debug, PartialEq)]
