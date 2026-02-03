@@ -4275,6 +4275,18 @@ impl Iroha {
         let (kiso, child) = KisoHandle::start(config.clone());
         supervisor.monitor(child);
 
+        let receipt_signer = config
+            .torii
+            .receipt_signer
+            .clone()
+            .unwrap_or_else(|| {
+                let key = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::Ed25519);
+                iroha_logger::info!(
+                    algorithm = ?key.public_key().algorithm(),
+                    "torii receipt signer not configured; generated ephemeral key"
+                );
+                key
+            });
         let torii = Torii::new_with_handle(
             config.common.chain.clone(),
             kiso.clone(),
@@ -4284,7 +4296,7 @@ impl Iroha {
             live_query_store,
             kura.clone(),
             state.clone(),
-            config.common.key_pair.clone(),
+            receipt_signer,
             iroha_torii::OnlinePeersProvider::new(network.online_peers_receiver()),
             Some(sumeragi.clone()),
             torii_telemetry,

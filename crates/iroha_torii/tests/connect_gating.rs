@@ -192,6 +192,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             api_version_sunset_unix: iroha_config::parameters::defaults::torii::API_SUNSET_UNIX,
             max_content_len: (1_048_576u64).into(),
             data_dir: iroha_config::parameters::defaults::torii::data_dir(),
+            receipt_signer: None,
             transport: A::ToriiTransport::default(),
             // minimal defaults
             query_rate_per_authority_per_sec: None,

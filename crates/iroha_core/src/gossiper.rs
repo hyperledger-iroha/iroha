@@ -499,8 +499,10 @@ impl TransactionGossiper {
             return;
         }
 
-        let sent_hashes: Vec<HashOf<SignedTransaction>> =
-            message.txs.iter().map(|tx| tx.as_signed().hash()).collect();
+        let mut sent_hashes = Vec::with_capacity(message.txs.len());
+        for tx in &message.txs {
+            sent_hashes.push(tx.as_signed().hash());
+        }
         let batch_txs = message.txs.len();
         let frame_bytes = encoded_len;
 
@@ -534,7 +536,7 @@ impl TransactionGossiper {
         }
 
         if self.dataspace_cfg.public_target_cap.is_some() {
-            iroha_logger::info!(
+            iroha_logger::debug!(
                 tx_count = message.txs.len(),
                 size_bytes = encoded_len,
                 targets = targets.len(),
@@ -563,7 +565,7 @@ impl TransactionGossiper {
                 None,
             );
         } else {
-            iroha_logger::info!(
+            iroha_logger::debug!(
                 tx_count = message.txs.len(),
                 size_bytes = encoded_len,
                 online_peers = total_online,
@@ -647,8 +649,10 @@ impl TransactionGossiper {
 
         let batch_txs = message.txs.len();
         let frame_bytes = encoded_len;
-        let sent_hashes: Vec<HashOf<SignedTransaction>> =
-            message.txs.iter().map(|tx| tx.as_signed().hash()).collect();
+        let mut sent_hashes = Vec::with_capacity(message.txs.len());
+        for tx in &message.txs {
+            sent_hashes.push(tx.as_signed().hash());
+        }
 
         let seed = Self::seed_for_plane(gossip_seed, dataspace_id, GOSSIP_SEED_RESTRICTED_DOMAIN);
         let plan = self.restricted_target_plan(commit_topology, batch_txs, seed);
@@ -691,7 +695,7 @@ impl TransactionGossiper {
             });
         }
 
-        iroha_logger::info!(
+        iroha_logger::debug!(
             tx_count = message.txs.len(),
             size_bytes = encoded_len,
             targets = targets.len(),
@@ -930,7 +934,7 @@ impl TransactionGossiper {
         &self,
         TransactionGossip { txs, routes, plane }: TransactionGossip,
     ) {
-        iroha_logger::info!(size = txs.len(), "received transaction gossip batch");
+        iroha_logger::debug!(size = txs.len(), "received transaction gossip batch");
         let batch_txs = txs.len();
 
         if routes.is_empty() {
@@ -1134,7 +1138,7 @@ impl TransactionGossiper {
                     }
                     match self.queue.push(tx, state_view) {
                         Ok(()) => {
-                            iroha_logger::info!(%tx_hash, "transaction enqueued from gossip");
+                            iroha_logger::debug!(%tx_hash, "transaction enqueued from gossip");
                         }
                         Err(crate::queue::Failure {
                             tx,
@@ -1290,10 +1294,12 @@ pub struct TransactionGossip {
 impl TransactionGossip {
     /// Constructor.
     pub fn new(txs: Vec<AcceptedTransaction<'static>>) -> Self {
+        let mut gossip_txs = Vec::with_capacity(txs.len());
+        gossip_txs.extend(txs.into_iter().map(GossipTransaction::new));
         Self {
             // Converting into non-accepted transaction because it's not possible
             // to guarantee that the sending peer checked transaction limits
-            txs: txs.into_iter().map(GossipTransaction::new).collect(),
+            txs: gossip_txs,
             routes: Vec::new(),
             plane: GossipPlane::Public,
         }
@@ -1351,6 +1357,20 @@ impl NoritoSerialize for GossipTransaction {
             return Ok(());
         }
         self.signed.serialize(writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        self.encoded
+            .as_ref()
+            .map(|bytes| bytes.len())
+            .or_else(|| self.signed.encoded_len_hint())
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        self.encoded
+            .as_ref()
+            .map(|bytes| bytes.len())
+            .or_else(|| self.signed.encoded_len_exact())
     }
 }
 
@@ -1420,6 +1440,9 @@ fn partition_gossip_batch(
         routes: Vec::new(),
         plane,
     };
+    let reserved = max_count.min(txs.len());
+    message.txs.reserve(reserved);
+    message.routes.reserve(reserved);
     let mut requeue = Vec::new();
     let mut encoded_len = message.encoded_len();
 
@@ -1498,7 +1521,7 @@ mod tests {
     use iroha_test_samples::{
         ALICE_ID, ALICE_KEYPAIR, BOB_KEYPAIR, CARPENTER_KEYPAIR, PEER_KEYPAIR,
     };
-    use norito::codec::Decode;
+    use norito::{codec::Decode, core as ncore};
     use tempfile::tempdir;
 
     use crate::NetworkMessage;
@@ -1877,15 +1900,28 @@ mod tests {
         assert_eq!(decoded.txs.len(), 1);
         assert_eq!(decoded.routes.len(), 1);
         assert_eq!(decoded.txs[0].as_signed().hash(), signed.hash());
-        let decoded_payload = decoded.txs[0]
-            .encoded
-            .as_ref()
-            .expect("cached payload");
+        let decoded_payload = decoded.txs[0].encoded.as_ref().expect("cached payload");
         assert_eq!(decoded_payload.as_slice(), payload.as_slice());
         assert_eq!(decoded.routes[0].lane_id, LaneId::SINGLE);
         assert_eq!(decoded.routes[0].dataspace_id, DataSpaceId::GLOBAL);
         assert_eq!(decoded.plane, GossipPlane::Public);
         assert_eq!(decoded.txs[0].encode().as_slice(), payload.as_slice());
+    }
+
+    #[test]
+    fn gossip_transaction_len_hints_use_cached_payload() {
+        let (signed, _accepted) = build_transaction("hint");
+        let payload = payload_for(&signed);
+        let tx = GossipTransaction::with_encoded(signed, Arc::clone(&payload));
+
+        assert_eq!(
+            ncore::NoritoSerialize::encoded_len_hint(&tx),
+            Some(payload.len())
+        );
+        assert_eq!(
+            ncore::NoritoSerialize::encoded_len_exact(&tx),
+            Some(payload.len())
+        );
     }
 
     #[test]
@@ -1914,10 +1950,7 @@ mod tests {
                 assert_eq!(message.txs.len(), 1);
                 assert_eq!(message.routes.len(), 1);
                 assert_eq!(message.txs[0].as_signed().hash(), signed.hash());
-                let decoded_payload = message.txs[0]
-                    .encoded
-                    .as_ref()
-                    .expect("cached payload");
+                let decoded_payload = message.txs[0].encoded.as_ref().expect("cached payload");
                 assert_eq!(decoded_payload.as_slice(), payload.as_slice());
                 assert_eq!(message.routes[0].lane_id, LaneId::SINGLE);
                 assert_eq!(message.routes[0].dataspace_id, DataSpaceId::GLOBAL);

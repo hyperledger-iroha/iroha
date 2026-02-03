@@ -30,9 +30,11 @@ impl TransactionSubmissionReceiptPayload {
     /// Deterministic signing bytes for this receipt payload.
     #[must_use]
     pub fn signing_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(TX_SUBMISSION_RECEIPT_DOMAIN.as_bytes());
-        bytes.extend_from_slice(&self.encode());
+        let domain = TX_SUBMISSION_RECEIPT_DOMAIN.as_bytes();
+        let payload_len = self.encoded_len();
+        let mut bytes = Vec::with_capacity(domain.len() + payload_len);
+        bytes.extend_from_slice(domain);
+        self.encode_to(&mut bytes);
         bytes
     }
 }

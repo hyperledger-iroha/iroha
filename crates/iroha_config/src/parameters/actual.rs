@@ -4405,6 +4405,8 @@ pub struct Torii {
     pub max_content_len: Bytes<u64>,
     /// Base directory for Torii persistence (attachments, webhooks, DA queues).
     pub data_dir: PathBuf,
+    /// Optional key pair used to sign transaction submission receipts.
+    pub receipt_signer: Option<KeyPair>,
     /// Optional per-authority query rate (tokens/sec). None disables limiting.
     pub query_rate_per_authority_per_sec: Option<NonZeroU32>,
     /// Optional per-authority burst capacity (tokens).
