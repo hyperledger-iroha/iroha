@@ -21,6 +21,22 @@ pub mod isi {
     use base64::engine::Engine as _;
     use eyre::Result;
     use iroha_crypto::{Algorithm, Hash, Hash as CryptoHash, PublicKey, blake2::Blake2b512};
+    use iroha_executor_data_model::permission::{
+        account::{CanModifyAccountMetadata, CanRegisterAccount, CanUnregisterAccount},
+        asset::{
+            CanBurnAsset, CanBurnAssetWithDefinition, CanMintAsset, CanMintAssetWithDefinition,
+            CanModifyAssetMetadata, CanModifyAssetMetadataWithDefinition, CanTransferAsset,
+            CanTransferAssetWithDefinition,
+        },
+        asset_definition::{
+            CanModifyAssetDefinitionMetadata, CanRegisterAssetDefinition,
+            CanUnregisterAssetDefinition,
+        },
+        domain::{CanModifyDomainMetadata, CanUnregisterDomain},
+        nexus::CanUseFeeSponsor,
+        nft::{CanModifyNftMetadata, CanRegisterNft, CanTransferNft, CanUnregisterNft},
+        trigger::CanRegisterTrigger,
+    };
     // Governance ISIs
     use iroha_data_model::isi::confidential;
     // Bring runtime upgrade ISIs into scope
@@ -9055,6 +9071,163 @@ pub mod isi {
         }
     }
 
+    fn is_permission_domain_associated(permission: &Permission, domain_id: &DomainId) -> bool {
+        if let Ok(permission) = CanUnregisterDomain::try_from(permission) {
+            return &permission.domain == domain_id;
+        }
+        if let Ok(permission) = CanModifyDomainMetadata::try_from(permission) {
+            return &permission.domain == domain_id;
+        }
+        if let Ok(permission) = CanRegisterAccount::try_from(permission) {
+            return &permission.domain == domain_id;
+        }
+        if let Ok(permission) = CanRegisterAssetDefinition::try_from(permission) {
+            return &permission.domain == domain_id;
+        }
+        if let Ok(permission) = CanUnregisterAssetDefinition::try_from(permission) {
+            return permission.asset_definition.domain() == domain_id;
+        }
+        if let Ok(permission) = CanModifyAssetDefinitionMetadata::try_from(permission) {
+            return permission.asset_definition.domain() == domain_id;
+        }
+        if let Ok(permission) = CanMintAssetWithDefinition::try_from(permission) {
+            return permission.asset_definition.domain() == domain_id;
+        }
+        if let Ok(permission) = CanBurnAssetWithDefinition::try_from(permission) {
+            return permission.asset_definition.domain() == domain_id;
+        }
+        if let Ok(permission) = CanTransferAssetWithDefinition::try_from(permission) {
+            return permission.asset_definition.domain() == domain_id;
+        }
+        if let Ok(permission) = CanModifyAssetMetadataWithDefinition::try_from(permission) {
+            return permission.asset_definition.domain() == domain_id;
+        }
+        if let Ok(permission) = CanMintAsset::try_from(permission) {
+            return permission.asset.definition().domain() == domain_id
+                || permission.asset.account().domain() == domain_id;
+        }
+        if let Ok(permission) = CanBurnAsset::try_from(permission) {
+            return permission.asset.definition().domain() == domain_id
+                || permission.asset.account().domain() == domain_id;
+        }
+        if let Ok(permission) = CanTransferAsset::try_from(permission) {
+            return permission.asset.definition().domain() == domain_id
+                || permission.asset.account().domain() == domain_id;
+        }
+        if let Ok(permission) = CanModifyAssetMetadata::try_from(permission) {
+            return permission.asset.definition().domain() == domain_id
+                || permission.asset.account().domain() == domain_id;
+        }
+        if let Ok(permission) = CanUseFeeSponsor::try_from(permission) {
+            return permission.sponsor.domain() == domain_id;
+        }
+        if let Ok(permission) = CanRegisterNft::try_from(permission) {
+            return &permission.domain == domain_id;
+        }
+        if let Ok(permission) = CanUnregisterNft::try_from(permission) {
+            return permission.nft.domain() == domain_id;
+        }
+        if let Ok(permission) = CanTransferNft::try_from(permission) {
+            return permission.nft.domain() == domain_id;
+        }
+        if let Ok(permission) = CanModifyNftMetadata::try_from(permission) {
+            return permission.nft.domain() == domain_id;
+        }
+        if let Ok(permission) = CanUnregisterAccount::try_from(permission) {
+            return permission.account.domain() == domain_id;
+        }
+        if let Ok(permission) = CanModifyAccountMetadata::try_from(permission) {
+            return permission.account.domain() == domain_id;
+        }
+        if let Ok(permission) = CanRegisterTrigger::try_from(permission) {
+            return permission.authority.domain() == domain_id;
+        }
+
+        false
+    }
+
+    fn remove_domain_associated_permissions(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        domain_id: &DomainId,
+    ) {
+        let account_ids: Vec<AccountId> = state_transaction
+            .world
+            .account_permissions
+            .iter()
+            .map(|(account_id, _)| account_id.clone())
+            .collect();
+
+        for account_id in account_ids {
+            let should_remove = state_transaction
+                .world
+                .account_permissions
+                .get(&account_id)
+                .is_some_and(|permissions| {
+                    permissions
+                        .iter()
+                        .any(|permission| is_permission_domain_associated(permission, domain_id))
+                });
+            if !should_remove {
+                continue;
+            }
+
+            let remove_entry = if let Some(permissions) = state_transaction
+                .world
+                .account_permissions
+                .get_mut(&account_id)
+            {
+                permissions
+                    .retain(|permission| !is_permission_domain_associated(permission, domain_id));
+                permissions.is_empty()
+            } else {
+                false
+            };
+
+            if remove_entry {
+                state_transaction
+                    .world
+                    .account_permissions
+                    .remove(account_id.clone());
+            }
+
+            state_transaction.invalidate_permission_cache_for_account(&account_id);
+        }
+
+        let role_ids: Vec<RoleId> = state_transaction
+            .world
+            .roles
+            .iter()
+            .map(|(role_id, _)| role_id.clone())
+            .collect();
+
+        for role_id in role_ids {
+            let should_remove = state_transaction
+                .world
+                .roles
+                .get(&role_id)
+                .is_some_and(|role| {
+                    role.permissions()
+                        .any(|permission| is_permission_domain_associated(permission, domain_id))
+                });
+            if !should_remove {
+                continue;
+            }
+
+            let impacted_accounts = state_transaction.accounts_with_role(&role_id);
+
+            if let Some(role) = state_transaction.world.roles.get_mut(&role_id) {
+                role.permissions
+                    .retain(|permission| !is_permission_domain_associated(permission, domain_id));
+                role.permission_epochs
+                    .retain(|permission, _| role.permissions.contains(permission));
+            }
+
+            if !impacted_accounts.is_empty() {
+                state_transaction.invalidate_permission_cache_for(impacted_accounts.iter());
+            }
+        }
+    }
+
     impl Execute for Unregister<Domain> {
         #[metrics("unregister_domain")]
         fn execute(
@@ -9063,6 +9236,8 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let domain_id = self.object().clone();
+
+            remove_domain_associated_permissions(state_transaction, &domain_id);
 
             state_transaction
                 .world()
@@ -9815,6 +9990,7 @@ pub mod isi {
             let raw = format!("sha256:{}", "aa".repeat(32));
             assert!(super::parse_hex32_hint(&raw).is_none());
         }
+        use iroha_executor_data_model::permission::domain::CanModifyDomainMetadata;
         use iroha_primitives::{json::Json, numeric::Numeric};
         #[allow(unused_imports)]
         use iroha_schema::Ident;
@@ -10386,6 +10562,84 @@ pub mod isi {
             assert!(
                 stx.world.asset_metadata.get(&asset_id).is_none(),
                 "asset metadata should be removed with assets"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_removes_associated_permissions_from_accounts_and_roles() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "kingdom".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            bootstrap_alice_account(&mut stx);
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register kingdom domain");
+
+            let owner_domain = ALICE_ID.domain().clone();
+            let (bob_id, _) = gen_account_in(&owner_domain);
+            Register::account(Account::new(bob_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register bob account");
+
+            let permission: Permission = CanModifyDomainMetadata {
+                domain: domain_id.clone(),
+            }
+            .into();
+            Grant::account_permission(permission.clone(), bob_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant permission to bob");
+
+            let role_id: RoleId = "KINGDOM_ADMIN".parse().expect("role id parses");
+            Register::role(Role::new(role_id.clone(), ALICE_ID.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register role");
+            Grant::role_permission(permission.clone(), role_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant permission to role");
+            Grant::account_role(role_id.clone(), bob_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant role to bob");
+
+            assert!(
+                stx.world
+                    .account_permissions
+                    .get(&bob_id)
+                    .is_some_and(|perms| perms.contains(&permission)),
+                "bob should have permission before unregister"
+            );
+            let role = stx.world.roles.get(&role_id).expect("role should exist");
+            assert!(
+                role.permissions().any(|perm| perm == &permission),
+                "role should have permission before unregister"
+            );
+
+            Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("unregister domain");
+
+            assert!(
+                !stx.world
+                    .account_permissions
+                    .get(&bob_id)
+                    .is_some_and(|perms| perms.contains(&permission)),
+                "bob permission should be removed"
+            );
+            let role = stx.world.roles.get(&role_id).expect("role should exist");
+            assert!(
+                !role.permissions().any(|perm| perm == &permission),
+                "role permission should be removed"
+            );
+            assert!(
+                !role.permission_epochs().contains_key(&permission),
+                "permission epochs should be pruned"
             );
         }
 
