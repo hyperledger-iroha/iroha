@@ -21038,6 +21038,102 @@ async fn handle_rbc_init_uses_active_roster_when_derived_missing() {
     harness.shutdown.send();
 }
 
+async fn assert_missing_block_request_on_init_missing_roster(consensus_mode: ConsensusMode) {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = consensus_mode;
+    consensus_cfg.da.enabled = true;
+
+    super::status::reset_commit_certs_for_tests();
+    let _guard = super::status::missing_block_fetch_test_guard();
+    super::status::reset_missing_block_fetch_counters_for_tests();
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = {
+        let view = actor.state.view();
+        u64::try_from(view.height()).unwrap_or(u64::MAX)
+    };
+    let height = committed_height.saturating_add(2).max(2);
+    let view = 0_u64;
+    let (consensus_mode, _, _) = actor.consensus_context_for_height(height);
+    let active_roster = {
+        let view = actor.state.view();
+        let roster = super::roster::derive_active_topology_for_mode(
+            &view,
+            actor.common_config.trusted_peers.value(),
+            actor.common_config.peer.id(),
+            consensus_mode,
+        );
+        drop(view);
+        super::roster::canonicalize_roster_for_mode(roster, consensus_mode)
+    };
+    assert!(
+        active_roster.len() >= 2,
+        "test requires at least two peers in the active topology"
+    );
+
+    let mut unverified_roster = active_roster.clone();
+    unverified_roster.remove(0);
+    assert!(
+        !unverified_roster.is_empty(),
+        "unverified roster must remain non-empty"
+    );
+    assert_ne!(
+        unverified_roster, active_roster,
+        "unverified roster should differ from active topology"
+    );
+
+    let (block_header, leader_signature) =
+        rbc_header_and_signature(actor, &unverified_roster, height, view, &harness.key_pairs);
+    let block_hash = block_header.hash();
+    let key = (block_hash, height, view);
+    assert!(
+        actor.rbc_roster_for_session(key).is_empty(),
+        "derived roster should be empty for future height without history"
+    );
+
+    let digests = vec![[0x45; 32]];
+    let chunk_root = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(digests.clone())
+        .root()
+        .map(Hash::from)
+        .expect("chunk root");
+    let init = crate::sumeragi::consensus::RbcInit {
+        block_hash,
+        height,
+        view,
+        epoch: actor.epoch_for_height(height),
+        roster: unverified_roster.clone(),
+        roster_hash: roster_hash(&unverified_roster),
+        total_chunks: u32::try_from(digests.len()).expect("chunk count fits u32"),
+        chunk_digests: digests,
+        payload_hash: Hash::prehashed([0x33; 32]),
+        chunk_root,
+        block_header,
+        leader_signature,
+    };
+
+    actor.handle_rbc_init(init, None).expect("init handled");
+    assert!(
+        actor
+            .pending
+            .missing_block_requests
+            .contains_key(&block_hash),
+        "missing-block request should be recorded for unverified roster"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn handle_rbc_init_missing_roster_requests_missing_block_permissioned() {
+    assert_missing_block_request_on_init_missing_roster(ConsensusMode::Permissioned).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn handle_rbc_init_missing_roster_requests_missing_block_npos() {
+    assert_missing_block_request_on_init_missing_roster(ConsensusMode::Npos).await;
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn handle_rbc_init_ignores_result_merkle_root_mismatch() {
     let mut consensus_cfg = test_sumeragi_config();
