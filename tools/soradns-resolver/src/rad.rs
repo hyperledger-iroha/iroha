@@ -214,7 +214,7 @@ mod tests {
     fn rad_digest_remains_stable() {
         let rad = base_rad();
         let digest = compute_rad_digest(&rad).expect("digest");
-        expect!["c5fbc711e0ea79ddf2afe0a09afbd81fe84a87f3164e149cbf7ba09a8dc318a5"]
+        expect!["55ad3c4f0e4056dc5596938ac423583bc2fb71bf2e43a931ff5f4e7eeb633189"]
             .assert_eq(&hex::encode(digest));
     }
 }

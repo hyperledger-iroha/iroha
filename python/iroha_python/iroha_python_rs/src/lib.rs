@@ -2322,7 +2322,7 @@ fn sorafs_multi_fetch_local_py(
             })
             .collect(),
         files: vec![FilePlan {
-            path: vec!["payload.bin".to_string()],
+            path: Vec::new(),
             first_chunk: 0,
             chunk_count: chunk_specs.len(),
             size: content_length,
@@ -2800,7 +2800,7 @@ fn sorafs_gateway_fetch_py(
             })
             .collect(),
         files: vec![FilePlan {
-            path: vec!["payload.bin".to_string()],
+            path: Vec::new(),
             first_chunk: 0,
             chunk_count: chunk_specs.len(),
             size: content_length,
@@ -3494,8 +3494,11 @@ mod tests {
         Python,
         types::{PyBytes, PyDict, PyList},
     };
-    use sorafs_car::multi_fetch::PolicyBlockEvidence;
-    use sorafs_manifest::{StreamTokenBodyV1, StreamTokenV1};
+    use sorafs_car::{CarWriter, multi_fetch::PolicyBlockEvidence};
+    use sorafs_manifest::{
+        BLAKE3_256_MULTIHASH_CODE, CouncilSignature, DagCodecId, GovernanceProofs, ManifestBuilder,
+        PinPolicy, StreamTokenBodyV1, StreamTokenV1,
+    };
     use tempfile::tempdir;
 
     use super::*;
@@ -3737,12 +3740,79 @@ mod tests {
             sorafs_car::fetch_plan::chunk_fetch_specs_to_string(&plan.chunk_fetch_specs())
                 .expect("serialise plan");
 
-        let manifest_id_hex = hex::encode([0x24u8; 32]);
+        let mut car_bytes = Vec::new();
+        let stats = CarWriter::new(&plan, &payload)
+            .expect("car writer")
+            .write_to(&mut car_bytes)
+            .expect("car build");
+        let root_cid = stats
+            .root_cids
+            .get(0)
+            .cloned()
+            .expect("car must have one root");
+        let manifest = ManifestBuilder::new()
+            .root_cid(root_cid.clone())
+            .dag_codec(DagCodecId(stats.dag_codec))
+            .chunking_from_profile(ChunkProfile::DEFAULT, BLAKE3_256_MULTIHASH_CODE)
+            .content_length(plan.content_length)
+            .car_digest(*stats.car_archive_digest.as_bytes())
+            .car_size(stats.car_size)
+            .pin_policy(PinPolicy::default())
+            .governance(GovernanceProofs {
+                council_signatures: vec![CouncilSignature {
+                    signer: [0x11; 32],
+                    signature: vec![0x22; 64],
+                }],
+            })
+            .build()
+            .expect("manifest");
+        let manifest_bytes = manifest.encode().expect("manifest bytes");
+        let manifest_digest = manifest.digest().expect("manifest digest");
+        let manifest_id_hex = hex::encode(manifest_digest.as_bytes());
+        let chunk_profile_handle = format!(
+            "{}.{}@{}",
+            manifest.chunking.namespace, manifest.chunking.name, manifest.chunking.semver
+        );
         let provider_id_bytes = [0x55u8; 32];
         let provider_id_hex = hex::encode(provider_id_bytes);
 
         let chunk_specs = plan.chunk_fetch_specs();
         let server = MockServer::start();
+        let manifest_body = {
+            let mut obj = json::Map::new();
+            obj.insert(
+                "manifest_b64".into(),
+                json::Value::from(BASE64_STANDARD.encode(manifest_bytes)),
+            );
+            obj.insert(
+                "manifest_digest_hex".into(),
+                json::Value::from(manifest_id_hex.clone()),
+            );
+            obj.insert(
+                "payload_digest_hex".into(),
+                json::Value::from(hex::encode(plan.payload_digest.as_bytes())),
+            );
+            obj.insert(
+                "content_length".into(),
+                json::Value::from(plan.content_length),
+            );
+            obj.insert(
+                "chunk_count".into(),
+                json::Value::from(plan.chunks.len() as u64),
+            );
+            obj.insert(
+                "chunk_profile_handle".into(),
+                json::Value::from(chunk_profile_handle.clone()),
+            );
+            json::to_string(&json::Value::Object(obj)).expect("manifest response")
+        };
+        let manifest_id_clone = manifest_id_hex.clone();
+        let manifest_body_clone = manifest_body.clone();
+        let manifest_mock = server.mock(move |when, then| {
+            when.method(GET)
+                .path(format!("/v1/sorafs/storage/manifest/{manifest_id_clone}"));
+            then.status(200).body(manifest_body_clone.clone());
+        });
         let mut mocks = Vec::with_capacity(chunk_specs.len());
         for spec in &chunk_specs {
             let digest_hex = hex::encode(spec.digest);
@@ -3762,9 +3832,9 @@ mod tests {
         let signing = SigningKey::from_bytes(&[0x7Bu8; 32]);
         let token_body = StreamTokenBodyV1 {
             token_id: "py-gateway-test".to_string(),
-            manifest_cid: vec![0x01, 0x55, 0x01],
+            manifest_cid: root_cid,
             provider_id: provider_id_bytes,
-            profile_handle: "sorafs.sf1@1.0.0".to_string(),
+            profile_handle: chunk_profile_handle.clone(),
             max_streams: 4,
             ttl_epoch: 1_900_000_000,
             rate_limit_bytes: 32 * 1024 * 1024,
@@ -3793,6 +3863,7 @@ mod tests {
                 retry_budget: Some(2),
                 local_proxy: Some(PyLocalProxyOptions {
                     proxy_mode: Some("bridge".to_string()),
+                    emit_browser_manifest: Some(false),
                     norito_bridge: Some(PyLocalProxyNoritoBridgeOptions {
                         spool_dir: "/tmp/norito-spool".to_string(),
                         extension: Some("norito".to_string()),
@@ -3809,7 +3880,7 @@ mod tests {
             let result = sorafs_gateway_fetch_py(
                 py,
                 &manifest_id_hex,
-                "sorafs.sf1@1.0.0",
+                &chunk_profile_handle,
                 &plan_json,
                 providers,
                 Some(options),
@@ -3940,6 +4011,7 @@ mod tests {
         for mock in mocks {
             mock.assert();
         }
+        manifest_mock.assert();
     }
 
     #[test]

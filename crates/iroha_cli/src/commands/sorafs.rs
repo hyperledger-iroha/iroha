@@ -6798,7 +6798,7 @@ pub struct HandshakeTokenIssueArgs {
     /// Token lifetime in seconds (defaults to 600s when --expires-at is omitted).
     #[arg(long = "ttl", value_name = "SECONDS", conflicts_with = "expires_at")]
     ttl_secs: Option<u64>,
-    /// Token flags (opaque 8-bit field, defaults to 0).
+    /// Token flags (reserved; must be 0 for v1 tokens).
     #[arg(long = "flags", value_parser = clap::value_parser!(u8))]
     flags: Option<u8>,
     /// Optional path to write the encoded token.

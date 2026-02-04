@@ -227,7 +227,12 @@
           23
         ]
       ],
-      "parity": false
+      "parity": false,
+      "role": {
+        "role": "Data",
+        "value": null
+      },
+      "group_id": 0
     },
     {
       "index": 1,
@@ -269,7 +274,12 @@
           245
         ]
       ],
-      "parity": false
+      "parity": false,
+      "role": {
+        "role": "Data",
+        "value": null
+      },
+      "group_id": 0
     },
     {
       "index": 2,
@@ -312,7 +322,11 @@
         ]
       ],
       "parity": false,
-      "group_id": 1
+      "group_id": 1,
+      "role": {
+        "role": "Data",
+        "value": null
+      }
     },
     {
       "index": 3,
@@ -355,7 +369,11 @@
         ]
       ],
       "parity": false,
-      "group_id": 1
+      "group_id": 1,
+      "role": {
+        "role": "Data",
+        "value": null
+      }
     },
     {
       "index": 4,
@@ -398,7 +416,11 @@
         ]
       ],
       "parity": false,
-      "group_id": 2
+      "group_id": 2,
+      "role": {
+        "role": "Data",
+        "value": null
+      }
     },
     {
       "index": 5,
@@ -441,7 +463,11 @@
         ]
       ],
       "parity": false,
-      "group_id": 2
+      "group_id": 2,
+      "role": {
+        "role": "Data",
+        "value": null
+      }
     },
     {
       "index": 6,
@@ -483,7 +509,12 @@
           134
         ]
       ],
-      "parity": true
+      "parity": true,
+      "role": {
+        "role": "GlobalParity",
+        "value": null
+      },
+      "group_id": 0
     },
     {
       "index": 7,
@@ -525,7 +556,12 @@
           130
         ]
       ],
-      "parity": true
+      "parity": true,
+      "role": {
+        "role": "GlobalParity",
+        "value": null
+      },
+      "group_id": 0
     },
     {
       "index": 8,
@@ -568,7 +604,11 @@
         ]
       ],
       "parity": true,
-      "group_id": 1
+      "group_id": 1,
+      "role": {
+        "role": "GlobalParity",
+        "value": null
+      }
     },
     {
       "index": 9,
@@ -611,7 +651,11 @@
         ]
       ],
       "parity": true,
-      "group_id": 1
+      "group_id": 1,
+      "role": {
+        "role": "GlobalParity",
+        "value": null
+      }
     },
     {
       "index": 10,
@@ -654,7 +698,11 @@
         ]
       ],
       "parity": true,
-      "group_id": 2
+      "group_id": 2,
+      "role": {
+        "role": "GlobalParity",
+        "value": null
+      }
     },
     {
       "index": 11,
@@ -697,7 +745,11 @@
         ]
       ],
       "parity": true,
-      "group_id": 2
+      "group_id": 2,
+      "role": {
+        "role": "GlobalParity",
+        "value": null
+      }
     }
   ],
   "ipa_commitment": [
@@ -737,9 +789,7 @@
     ]
   ],
   "metadata": {
-    "items": [
-      
-    ]
+    "items": []
   },
   "issued_at_unix": 1701111111
 }
