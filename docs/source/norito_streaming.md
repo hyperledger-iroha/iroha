@@ -32,6 +32,19 @@ These checks mirror the requirements captured under “Segment Layout” in
 `norito_streaming.md` and provide idiomatic errors (`SegmentError`, `CodecError`)
 so callers can surface meaningful diagnostics.
 
+Codec constraints enforced by the reference implementation:
+- Segments are capped at `u16::MAX` frames because chunk IDs and `SegmentHeader.chunk_count`
+  are encoded as `u16`. Oversized segments are rejected up-front.
+- 4:2:0 chroma requires even frame dimensions. Odd-width/height streams must omit chroma or
+  resample before encoding.
+- Audio uses one frame per video frame; `AudioEncoderConfig.frame_samples` must match the
+  rounded cadence `sample_rate * frame_duration_ns / 1_000_000_000` so timestamps remain
+  deterministic.
+- The optional build feature `streaming-fixed-point-dct` swaps the floating-point DCT/IDCT
+  implementation for a fixed-point path to improve determinism and CPU predictability.
+
+For future math upgrades (non-normative), see `docs/source/norito_streaming_math_notes.md`.
+
 ## Key Management
 
 `streaming::StreamingSession` provides helpers for the control-plane handshake:

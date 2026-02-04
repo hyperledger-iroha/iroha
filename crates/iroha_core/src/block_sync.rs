@@ -5333,17 +5333,45 @@ pub mod message {
                 signature_topology_for_block(&block, &topology, &state_view, &mode_tag);
             let leader_candidates = [&kp_leader, &kp_validator, &kp_proxy, &kp_set_b];
             let leader = leader_keypair(&signature_topology, &leader_candidates);
+            let keypair_for_index = |idx: usize| {
+                let pk = signature_topology
+                    .as_ref()
+                    .get(idx)
+                    .expect("index in topology")
+                    .public_key();
+                leader_candidates
+                    .iter()
+                    .copied()
+                    .find(|kp| kp.public_key() == pk)
+                    .expect("keypair available")
+            };
+            let proxy_tail_idx = signature_topology.proxy_tail_index();
+            let validating_idx = signature_topology.leader_index() + 1;
+            assert!(
+                validating_idx < proxy_tail_idx,
+                "topology must include validating peers"
+            );
+            let set_b_idx = proxy_tail_idx + 1;
+            assert!(
+                set_b_idx < signature_topology.as_ref().len(),
+                "topology must include set B peers"
+            );
+            let validating = keypair_for_index(validating_idx);
+            let set_b = keypair_for_index(set_b_idx);
+            assert_ne!(leader.public_key(), validating.public_key());
+            assert_ne!(leader.public_key(), set_b.public_key());
+            assert_ne!(validating.public_key(), set_b.public_key());
             block = sign_block_for_topology(
                 block,
                 &signature_topology,
-                &[leader, &kp_validator, &kp_set_b],
+                &[leader, validating, set_b],
             );
 
             let signers = super::Message::commit_role_signers(&block, &signature_topology)
                 .expect("set B quorum should be accepted");
             assert_eq!(signers.len(), 3);
             let set_b_idx = signature_topology
-                .position(kp_set_b.public_key())
+                .position(set_b.public_key())
                 .expect("set B in topology");
             assert!(signers.contains(&ValidatorIndex::try_from(set_b_idx as u32).expect("index")));
         }

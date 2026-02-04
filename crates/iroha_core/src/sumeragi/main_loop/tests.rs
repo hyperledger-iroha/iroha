@@ -1675,15 +1675,35 @@ impl Drop for LocalRemovedGuard {
 
 const NETWORK_START_TIMEOUT: Duration = Duration::from_secs(5);
 
+fn real_network_requested_for_tests() -> bool {
+    std::env::var_os("IROHA_TEST_REAL_NETWORK").is_some()
+}
+
+fn real_network_allowed_for_tests(real_network_requested: bool) -> bool {
+    if !real_network_requested {
+        return false;
+    }
+    let flavor = tokio::runtime::Handle::try_current()
+        .map(|handle| handle.runtime_flavor())
+        .ok();
+    !matches!(flavor, Some(tokio::runtime::RuntimeFlavor::CurrentThread))
+}
+
 async fn start_network_or_closed(
     key_pair: KeyPair,
     network_cfg: iroha_config::parameters::actual::Network,
     chain_id: Option<ChainId>,
     shutdown: iroha_futures::supervisor::ShutdownSignal,
+    real_network_requested: bool,
 ) -> (crate::IrohaNetwork, iroha_futures::supervisor::Child) {
     // Unit tests do not need a live P2P network and concurrent sockets can introduce flakiness.
     // Opt in to real networking only when explicitly requested.
-    if std::env::var_os("IROHA_TEST_REAL_NETWORK").is_none() {
+    if !real_network_allowed_for_tests(real_network_requested) {
+        if real_network_requested {
+            eprintln!(
+                "warning: IROHA_TEST_REAL_NETWORK ignored on current-thread runtime; using closed handle"
+            );
+        }
         let handle = crate::IrohaNetwork::closed_for_tests();
         let child = iroha_futures::supervisor::Child::from(tokio::spawn(async {}));
         return (handle, child);
@@ -1720,6 +1740,18 @@ async fn start_network_or_closed(
             (handle, child)
         }
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn real_network_opt_in_is_ignored_on_current_thread() {
+    assert!(
+        !real_network_allowed_for_tests(false),
+        "real networking should remain disabled without explicit opt-in"
+    );
+    assert!(
+        !real_network_allowed_for_tests(true),
+        "current-thread runtime should not attempt real networking in tests"
+    );
 }
 
 async fn test_actor_harness(peer_count: usize) -> TestActorHarness {
@@ -1922,11 +1954,13 @@ async fn test_actor_harness_with_config_and_height_and_kura(
         quic_max_idle_timeout: None,
     };
 
+    let real_network_requested = real_network_requested_for_tests();
     let (network, network_child) = start_network_or_closed(
         key_pair.clone(),
         network_cfg.clone(),
         Some(common_config.chain.clone()),
         shutdown.clone(),
+        real_network_requested,
     )
     .await;
     let peers_gossiper = crate::peers_gossiper::PeersGossiperHandle::closed_for_tests();
@@ -25515,11 +25549,13 @@ async fn stale_pending_block_requeues_transactions() {
         quic_max_idle_timeout: None,
     };
 
+    let real_network_requested = real_network_requested_for_tests();
     let (network, _network_child) = start_network_or_closed(
         key_pair.clone(),
         network_cfg.clone(),
         Some(common_config.chain.clone()),
         shutdown.clone(),
+        real_network_requested,
     )
     .await;
     let peers_gossiper = crate::peers_gossiper::PeersGossiperHandle::closed_for_tests();
@@ -25765,7 +25801,8 @@ fn block_sync_ready_for_qc_requires_applied_block() {
 }
 
 fn bls_peer(addr: &str) -> (Peer, Vec<u8>, KeyPair) {
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let seed = iroha_crypto::Hash::new(addr.as_bytes());
+    let kp = KeyPair::from_seed(seed.as_ref().to_vec(), Algorithm::BlsNormal);
     let peer_id = PeerId::new(kp.public_key().clone());
     let pop = iroha_crypto::bls_normal_pop_prove(kp.private_key()).expect("pop");
     let address: SocketAddr = addr.parse().expect("socket address parses");
@@ -53019,11 +53056,13 @@ async fn proposal_assembly_defers_without_draining_queue_and_preserves_view_when
         quic_max_idle_timeout: None,
     };
 
+    let real_network_requested = real_network_requested_for_tests();
     let (network, _network_child) = start_network_or_closed(
         key_pair.clone(),
         network_cfg.clone(),
         Some(common_config.chain.clone()),
         shutdown.clone(),
+        real_network_requested,
     )
     .await;
     let peers_gossiper = crate::peers_gossiper::PeersGossiperHandle::closed_for_tests();
