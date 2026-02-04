@@ -2371,11 +2371,23 @@ mod run {
 
     /// Either message or ping
     #[derive(Encode, Decode, Clone, Debug)]
-    #[norito(decode_from_slice)]
     enum Message<T> {
         Data(T),
         Ping,
         Pong,
+    }
+
+    impl<'a, T> ncore::DecodeFromSlice<'a> for Message<T>
+    where
+        T: for<'de> ncore::NoritoDeserialize<'de> + ncore::NoritoSerialize,
+    {
+        fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+            let archived = ncore::archived_from_slice::<Self>(bytes)?;
+            let archived_bytes = archived.bytes();
+            let _pg = ncore::PayloadCtxGuard::enter(archived_bytes);
+            let value = <Self as ncore::NoritoDeserialize>::deserialize(archived.archived());
+            Ok((value, archived_bytes.len()))
+        }
     }
 
     pub fn data_message_wire_len<T: Encode>(payload: T) -> usize {
@@ -2582,8 +2594,10 @@ mod run {
         fn message_decode_from_slice_roundtrip() {
             let message = Message::Data(Blob(vec![1u8, 2, 3]));
             let bytes = ncore::to_bytes(&message).expect("encode message");
-            let view = ncore::from_bytes_view(&bytes).expect("archive view");
-            let decoded: Message<Blob> = view.decode().expect("decode message");
+            let (decoded, used) =
+                <Message<Blob> as ncore::DecodeFromSlice>::decode_from_slice(&bytes)
+                    .expect("decode from slice");
+            assert_eq!(used, bytes.len());
 
             match decoded {
                 Message::Data(blob) => assert_eq!(blob.0, vec![1u8, 2, 3]),
