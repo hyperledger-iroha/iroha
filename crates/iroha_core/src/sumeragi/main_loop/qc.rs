@@ -233,16 +233,38 @@ impl Actor {
         signature_topology: &super::network_topology::Topology,
     ) -> BTreeSet<ValidatorIndex> {
         let chain_id = &self.common_config.chain;
-        let (_, mode_tag, _) = self.consensus_context_for_height(height);
+        let (_, mode_tag, prf_seed) = self.consensus_context_for_height(height);
         let roster_hash = HashOf::new(&signature_topology.as_ref().to_vec());
-        let mut highest_view_by_signer: BTreeMap<ValidatorIndex, u64> = BTreeMap::new();
+        let mut canonical_roster = signature_topology.as_ref().to_vec();
+        canonical_roster.sort();
+        canonical_roster.dedup();
+        let canonical_topology = super::network_topology::Topology::new(canonical_roster);
+        let mut topology_by_view: BTreeMap<u64, super::network_topology::Topology> =
+            BTreeMap::new();
+        let mut highest_view_by_signer: BTreeMap<PeerId, u64> = BTreeMap::new();
         for stored in self.vote_log.values() {
             if stored.phase != phase || stored.height != height || stored.epoch != epoch {
                 continue;
             }
-            let entry = highest_view_by_signer
-                .entry(stored.signer)
-                .or_insert(stored.view);
+            let Ok(idx) = usize::try_from(stored.signer) else {
+                continue;
+            };
+            let key = (stored.phase, stored.height, stored.view, stored.epoch, stored.signer);
+            let view_topology = topology_by_view.entry(stored.view).or_insert_with(|| {
+                topology_for_view(&canonical_topology, height, stored.view, mode_tag, prf_seed)
+            });
+            let expected_roster_hash = HashOf::new(&view_topology.as_ref().to_vec());
+            let cache_matches = self
+                .vote_validation_cache
+                .get(&key)
+                .is_some_and(|entry| entry.roster_hash == expected_roster_hash);
+            if !cache_matches && !vote_signature_valid(stored, view_topology, chain_id, mode_tag) {
+                continue;
+            }
+            let Some(peer) = view_topology.as_ref().get(idx) else {
+                continue;
+            };
+            let entry = highest_view_by_signer.entry(peer.clone()).or_insert(stored.view);
             if stored.view > *entry {
                 *entry = stored.view;
             }
@@ -264,8 +286,14 @@ impl Actor {
                     || vote_signature_valid(vote, signature_topology, chain_id, mode_tag)
             })
             .filter(|vote| {
+                let Ok(idx) = usize::try_from(vote.signer) else {
+                    return true;
+                };
+                let Some(peer) = signature_topology.as_ref().get(idx) else {
+                    return true;
+                };
                 highest_view_by_signer
-                    .get(&vote.signer)
+                    .get(peer)
                     .copied()
                     .unwrap_or(vote.view)
                     == view

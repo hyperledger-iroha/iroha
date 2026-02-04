@@ -1,6 +1,7 @@
 # Status
 
 Last update: 2026-02-04
+- Sumeragi QC tally: fix `qc_signers_for_votes` highest-view filtering to key by stable validator identity (PeerId) instead of view-rotated signer indices (prevents commit-QC stalls under view changes); added regression coverage. Tests: `cargo test -p iroha_core qc_signers_for_votes -- --nocapture` (ok).
 - Sumeragi: stop replaying cached commit QCs after `BlockCreated`; replay deferred QCs instead to avoid lock regressions when the payload is newly cached. Tests: `cargo test -p iroha_core block_created_applies_cached_precommit_qc -- --nocapture` (ok; warnings about unexpected `cfg` `bls` in `iroha_config` and unused `mut` in `iroha_core`).
 - Repo: allow margin checks to be treated as due once the cadence boundary passes, mirror the rule in the Python helper, tighten repo integration-test error matching, and make the margin-call test deterministic with an explicit outsider account. Tests: `cargo test -p integration_tests --test repo -- --nocapture` (ok; warnings about unexpected `cfg` `bls` in `iroha_config`, single-use lifetimes in `iroha_core`).
 - P2P: add Norito `DecodeFromSlice` for `RelayMessage<T>` (Pload bound) and remove duplicate impl. Tests: `cargo test -p iroha_core sumeragi::main_loop::tests::block_created_rebuilds_qc_with_snapshot_roster -- --nocapture` (ok; warnings about unexpected `cfg` `bls` in `iroha_config` and unused `mut` in `iroha_core`).
