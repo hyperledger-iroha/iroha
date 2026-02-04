@@ -492,21 +492,6 @@ struct RelayMessage<T> {
     payload: T,
 }
 
-impl<'a, T> norito::core::DecodeFromSlice<'a> for RelayMessage<T>
-where
-    T: norito::core::NoritoSerialize + for<'de> norito::core::NoritoDeserialize<'de>,
-{
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let archived = norito::core::archived_from_slice::<Self>(bytes)?;
-        let archived_bytes = archived.bytes();
-        let _guard = norito::core::PayloadCtxGuard::enter(archived_bytes);
-        let value = <Self as norito::core::NoritoDeserialize>::try_deserialize(
-            archived.archived(),
-        )?;
-        Ok((value, archived_bytes.len()))
-    }
-}
-
 impl<T> RelayMessage<T> {
     fn new(origin: PeerId, target: RelayTarget, ttl: u8, priority: Priority, payload: T) -> Self {
         Self {
