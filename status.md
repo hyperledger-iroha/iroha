@@ -1,6 +1,7 @@
 # Status
 
 Last update: 2026-02-04
+- P2P: remove duplicate `DecodeFromSlice` impl for `RelayMessage<T>` to fix E0119 conflict. Tests not run (not requested).
 - Profiling: 7-peer permissioned + NPoS localnet (profiling endpoint) captured pprof at `/private/tmp/iroha-localnet-perm-7h/pprof-peer0.pb.gz` and `/private/tmp/iroha-localnet-npos-7h/pprof-peer0.pb.gz`. Permissioned tx_load (12k @ 100/s target, sharded): submitted 12000 in 123.90s (96.9 tps), admitted 12000 in 129.70s (92.5 tps), committed est 12000 in 124.28s (96.6 tps), blocks_non_empty +33; top pprof: `RawVec::finish_grow` 3.97% flat, `EngineBLS::verify_prepared` 3.58% flat, `State::view` 2.13% flat. NPoS tx_load required `--continue-on-failure` (one batch failed), submitted 12000 in 420.46s (28.5 tps), admitted 10285 in 420.28s (24.5 tps), committed est 10285 in 124.14s (82.8 tps), blocks_non_empty +30; top pprof: `RawVec::finish_grow` 5.24% flat, `EngineBLS::verify_prepared` 4.14% flat, `State::view` 1.44% flat. Tests not run (per request).
 - P2P: add explicit `DecodeFromSlice` impl for peer run `Message<T>` and make the roundtrip test exercise the trait directly (fixes Pload bound error). Tests not run (not requested).
 - P2P: add explicit `DecodeFromSlice` impl for `RelayMessage<T>` (generic payload) to satisfy strict-safe `decode_from_bytes` bounds; removed the ineffective derive-only attribute. Tests not run (not requested).
