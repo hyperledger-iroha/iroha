@@ -28,6 +28,9 @@ Options:
   --commit-time-ms <MS>      Override commit time (ms) in generated configs
   --consensus-mode <MODE>    Override consensus mode (permissioned or npos)
   --perf-profile <NAME>      Apply Kagami localnet perf profile (10k-permissioned or 10k-npos)
+  --queue-capacity <N>       Override transaction queue capacity in peer configs
+  --queue-capacity-per-user <N> Override per-user transaction queue capacity (defaults to --queue-capacity when set)
+  --queue-ttl-ms <MS>        Override queue transaction_time_to_live_ms (ms)
   --base-api-port <PORT>     Base Torii API port (default: 29080)
   --base-p2p-port <PORT>     Base P2P port (default: 33337)
   --bind-host <HOST>         Bind host (default: 127.0.0.1)
@@ -65,6 +68,9 @@ BLOCK_TIME_MS=""
 COMMIT_TIME_MS=""
 CONSENSUS_MODE=""
 PERF_PROFILE=""
+QUEUE_CAPACITY=""
+QUEUE_CAPACITY_PER_USER=""
+QUEUE_TTL_MS=""
 CURL_TIMEOUT_SECS=2
 PORT_SCAN_MAX_TRIES=200
 PYTHON_BIN="${PYTHON_BIN:-python3}"
@@ -105,6 +111,18 @@ while [[ $# -gt 0 ]]; do
       ;;
     --perf-profile)
       PERF_PROFILE="$2"
+      shift 2
+      ;;
+    --queue-capacity)
+      QUEUE_CAPACITY="$2"
+      shift 2
+      ;;
+    --queue-capacity-per-user)
+      QUEUE_CAPACITY_PER_USER="$2"
+      shift 2
+      ;;
+    --queue-ttl-ms)
+      QUEUE_TTL_MS="$2"
       shift 2
       ;;
     --base-api-port)
@@ -162,6 +180,10 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ -n "$QUEUE_CAPACITY" && -z "$QUEUE_CAPACITY_PER_USER" ]]; then
+  QUEUE_CAPACITY_PER_USER="$QUEUE_CAPACITY"
+fi
 
 BUILD_LINE_LOWER="$(printf '%s' "$BUILD_LINE" | tr '[:upper:]' '[:lower:]')"
 case "$BUILD_LINE_LOWER" in
@@ -353,6 +375,92 @@ if [[ -n "$TELEMETRY_PROFILE" ]]; then
         if (!inserted && !replaced) {
           print "telemetry_profile = \"" profile "\""
         }
+      }
+    ' "$cfg" > "${cfg}.tmp" && mv "${cfg}.tmp" "$cfg"
+  done
+fi
+
+if [[ -n "$QUEUE_CAPACITY" || -n "$QUEUE_CAPACITY_PER_USER" || -n "$QUEUE_TTL_MS" ]]; then
+  echo "Applying queue overrides in peer configs..."
+  for cfg in "$OUT_DIR"/peer*.toml; do
+    [[ -f "$cfg" ]] || continue
+    awk -v cap="$QUEUE_CAPACITY" -v cap_user="$QUEUE_CAPACITY_PER_USER" -v ttl="$QUEUE_TTL_MS" '
+      function flush_queue() {
+        if (!in_queue) return
+        if (cap != "" && !seen_cap) print "capacity = " cap
+        if (cap_user != "" && !seen_cap_user) print "capacity_per_user = " cap_user
+        if (ttl != "" && !seen_ttl) print "transaction_time_to_live_ms = " ttl
+      }
+      function flush_torii() {
+        if (!in_torii) return
+        if (cap != "" && !seen_torii_threshold) print "api_high_load_tx_threshold = " cap
+      }
+      BEGIN {
+        in_queue = 0
+        in_torii = 0
+        seen_cap = 0
+        seen_cap_user = 0
+        seen_ttl = 0
+        seen_torii_threshold = 0
+      }
+      /^[[:space:]]*\[queue\][[:space:]]*$/ {
+        flush_torii()
+        in_torii = 0
+        seen_torii_threshold = 0
+        flush_queue()
+        in_queue = 1
+        seen_cap = 0
+        seen_cap_user = 0
+        seen_ttl = 0
+        print
+        next
+      }
+      /^[[:space:]]*\[torii\][[:space:]]*$/ {
+        flush_queue()
+        in_queue = 0
+        flush_torii()
+        in_torii = 1
+        seen_torii_threshold = 0
+        print
+        next
+      }
+      /^[[:space:]]*\[/ {
+        flush_queue()
+        in_queue = 0
+        flush_torii()
+        in_torii = 0
+        print
+        next
+      }
+      {
+        if (in_queue) {
+          if (cap != "" && $1 == "capacity") {
+            print "capacity = " cap
+            seen_cap = 1
+            next
+          }
+          if (cap_user != "" && $1 == "capacity_per_user") {
+            print "capacity_per_user = " cap_user
+            seen_cap_user = 1
+            next
+          }
+          if (ttl != "" && $1 == "transaction_time_to_live_ms") {
+            print "transaction_time_to_live_ms = " ttl
+            seen_ttl = 1
+            next
+          }
+        } else if (in_torii) {
+          if (cap != "" && $1 == "api_high_load_tx_threshold") {
+            print "api_high_load_tx_threshold = " cap
+            seen_torii_threshold = 1
+            next
+          }
+        }
+        print
+      }
+      END {
+        flush_queue()
+        flush_torii()
       }
     ' "$cfg" > "${cfg}.tmp" && mv "${cfg}.tmp" "$cfg"
   done

@@ -61,11 +61,13 @@ def extract_status_snapshot(payload: dict) -> dict:
 @dataclass(frozen=True)
 class LoadShard:
     torii_url: str
+    status_url: str
     count: int
     parallel: int
     batch_size: int
     batch_interval: float
     client_config: Path
+    baseline_queue_size: int
 
 
 @dataclass(frozen=True)
@@ -177,6 +179,33 @@ def main() -> int:
     )
     parser.add_argument("--poll-interval", type=float, default=0.25)
     parser.add_argument("--drain-timeout", type=float, default=120.0)
+    parser.add_argument(
+        "--queue-soft-limit",
+        type=int,
+        default=0,
+        help=(
+            "If >0, pause between batches while (queue_size - baseline_queue_size) exceeds this "
+            "value (per shard)."
+        ),
+    )
+    parser.add_argument(
+        "--queue-hard-limit",
+        type=int,
+        default=0,
+        help=(
+            "If >0, abort load submission when (queue_size - baseline_queue_size) exceeds this "
+            "value (per shard)."
+        ),
+    )
+    parser.add_argument(
+        "--queue-wait-timeout",
+        type=float,
+        default=60.0,
+        help=(
+            "Maximum seconds to wait for the queue to fall below --queue-soft-limit before "
+            "aborting that shard batch (0 = wait forever)."
+        ),
+    )
     parser.add_argument("--block-max", type=int, default=10_000)
     parser.add_argument("--log-level", default="INFO")
     parser.add_argument(
@@ -201,6 +230,14 @@ def main() -> int:
         parser.error("--batch-interval must be >= 0")
     if (args.batch_size > 0) != (args.batch_interval > 0):
         parser.error("--batch-size and --batch-interval must be set together")
+    if args.queue_soft_limit < 0:
+        parser.error("--queue-soft-limit must be >= 0")
+    if args.queue_hard_limit < 0:
+        parser.error("--queue-hard-limit must be >= 0")
+    if args.queue_hard_limit and args.queue_soft_limit and args.queue_hard_limit < args.queue_soft_limit:
+        parser.error("--queue-hard-limit must be >= --queue-soft-limit")
+    if args.queue_wait_timeout < 0:
+        parser.error("--queue-wait-timeout must be >= 0")
 
     peer_urls = []
     if args.peer_urls:
@@ -303,6 +340,15 @@ def main() -> int:
         thread.join(timeout=2)
         return 1
 
+    baseline_queue_by_peer: dict[str, int] = {}
+    for torii_url in peer_urls:
+        status_url = urllib.parse.urljoin(torii_url, "status")
+        try:
+            status_raw = fetch_json(status_url)
+            baseline_queue_by_peer[torii_url] = int(status_raw.get("queue_size", 0) or 0)
+        except Exception:
+            baseline_queue_by_peer[torii_url] = baseline_status["queue_size"]
+
     base_config_text = Path(args.client_config).read_text(encoding="utf-8")
     temp_configs: list[Path] = []
     shards: list[LoadShard] = []
@@ -315,13 +361,48 @@ def main() -> int:
         shards.append(
             LoadShard(
                 torii_url=torii_url,
+                status_url=urllib.parse.urljoin(torii_url, "status"),
                 count=count,
                 parallel=parallel,
                 batch_size=batch_size,
                 batch_interval=args.batch_interval,
                 client_config=temp_path,
+                baseline_queue_size=baseline_queue_by_peer.get(
+                    torii_url, baseline_status["queue_size"]
+                ),
             )
         )
+
+    def wait_for_queue(shard: LoadShard) -> bool:
+        if args.queue_soft_limit <= 0 and args.queue_hard_limit <= 0:
+            return True
+        deadline = None
+        if args.queue_wait_timeout > 0:
+            deadline = time.monotonic() + args.queue_wait_timeout
+        while True:
+            try:
+                status_raw = fetch_json(shard.status_url)
+                status = extract_status_snapshot(status_raw)
+                delta = status["queue_size"] - shard.baseline_queue_size
+            except Exception:
+                time.sleep(args.poll_interval)
+                continue
+            if args.queue_hard_limit > 0 and delta > args.queue_hard_limit:
+                print(
+                    f"Shard {shard.torii_url}: queue delta {delta} exceeds hard limit "
+                    f"{args.queue_hard_limit}; aborting shard."
+                )
+                return False
+            if args.queue_soft_limit > 0 and delta > args.queue_soft_limit:
+                if deadline is not None and time.monotonic() >= deadline:
+                    print(
+                        f"Shard {shard.torii_url}: queue delta {delta} did not fall below soft "
+                        f"limit {args.queue_soft_limit} before timeout; aborting shard."
+                    )
+                    return False
+                time.sleep(args.poll_interval)
+                continue
+            return True
 
     def run_ping_shard(shard: LoadShard) -> LoadShardResult:
         ping_cmd = [
@@ -359,6 +440,9 @@ def main() -> int:
         if shard.batch_size > 0 and shard.batch_interval > 0:
             remaining = shard.count
             while remaining > 0:
+                if not wait_for_queue(shard):
+                    returncode = 2
+                    break
                 batch = min(shard.batch_size, remaining)
                 batch_start = time.monotonic()
                 result = run_batch(batch)
@@ -377,12 +461,15 @@ def main() -> int:
                 if sleep_for > 0:
                     time.sleep(sleep_for)
         else:
-            result = run_batch(shard.count)
-            stdout_chunks.append(result.stdout or "")
-            stderr_chunks.append(result.stderr or "")
-            combined = (result.stdout or "") + (result.stderr or "")
-            rate_limit_hits += count_rate_limit_hits(combined)
-            returncode = result.returncode
+            if not wait_for_queue(shard):
+                returncode = 2
+            else:
+                result = run_batch(shard.count)
+                stdout_chunks.append(result.stdout or "")
+                stderr_chunks.append(result.stderr or "")
+                combined = (result.stdout or "") + (result.stderr or "")
+                rate_limit_hits += count_rate_limit_hits(combined)
+                returncode = result.returncode
 
         elapsed = time.monotonic() - start
         return LoadShardResult(

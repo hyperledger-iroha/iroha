@@ -13,6 +13,20 @@ struct QcSignerSnapshot {
     total_signers: usize,
 }
 
+#[derive(Debug, Default, Clone, Copy)]
+struct QcSignerFilterStats {
+    raw_votes: usize,
+    invalid_signature: usize,
+    roster_mismatch: usize,
+    higher_view_filtered: usize,
+}
+
+impl QcSignerFilterStats {
+    fn filtered_total(self) -> usize {
+        self.invalid_signature + self.roster_mismatch + self.higher_view_filtered
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CommittedQcDecision {
     Continue,
@@ -232,12 +246,32 @@ impl Actor {
         epoch: u64,
         signature_topology: &super::network_topology::Topology,
     ) -> BTreeSet<ValidatorIndex> {
+        self.qc_signers_for_votes_with_stats(
+            phase,
+            block_hash,
+            height,
+            view,
+            epoch,
+            signature_topology,
+        )
+        .0
+    }
+
+    fn qc_signers_for_votes_with_stats(
+        &self,
+        phase: crate::sumeragi::consensus::Phase,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        epoch: u64,
+        signature_topology: &super::network_topology::Topology,
+    ) -> (BTreeSet<ValidatorIndex>, QcSignerFilterStats) {
         let chain_id = &self.common_config.chain;
         let (_, mode_tag, prf_seed) = self.consensus_context_for_height(height);
         let roster_hash = HashOf::new(&signature_topology.as_ref().to_vec());
-        let mut canonical_roster = signature_topology.as_ref().to_vec();
-        canonical_roster.sort();
-        canonical_roster.dedup();
+        let canonical_roster =
+            super::roster::canonicalize_roster(signature_topology.as_ref().to_vec());
+        let membership_hash = HashOf::new(&canonical_roster);
         let canonical_topology = super::network_topology::Topology::new(canonical_roster);
         let mut topology_by_view: BTreeMap<u64, super::network_topology::Topology> =
             BTreeMap::new();
@@ -250,6 +284,13 @@ impl Actor {
                 continue;
             };
             let key = (stored.phase, stored.height, stored.view, stored.epoch, stored.signer);
+            if self
+                .vote_validation_cache
+                .get(&key)
+                .is_some_and(|entry| entry.membership_hash != membership_hash)
+            {
+                continue;
+            }
             let view_topology = topology_by_view.entry(stored.view).or_insert_with(|| {
                 topology_for_view(&canonical_topology, height, stored.view, mode_tag, prf_seed)
             });
@@ -257,7 +298,10 @@ impl Actor {
             let cache_matches = self
                 .vote_validation_cache
                 .get(&key)
-                .is_some_and(|entry| entry.roster_hash == expected_roster_hash);
+                .is_some_and(|entry| {
+                    entry.membership_hash == membership_hash
+                        && entry.roster_hash == expected_roster_hash
+                });
             if !cache_matches && !vote_signature_valid(stored, view_topology, chain_id, mode_tag) {
                 continue;
             }
@@ -269,37 +313,54 @@ impl Actor {
                 *entry = stored.view;
             }
         }
-        self.vote_log
-            .values()
-            .filter(|stored| {
-                stored.phase == phase
-                    && stored.block_hash == block_hash
-                    && stored.height == height
-                    && stored.view == view
-                    && stored.epoch == epoch
-            })
-            .filter(|vote| {
-                let key = (vote.phase, vote.height, vote.view, vote.epoch, vote.signer);
-                self.vote_validation_cache
-                    .get(&key)
-                    .is_some_and(|entry| entry.roster_hash == roster_hash)
-                    || vote_signature_valid(vote, signature_topology, chain_id, mode_tag)
-            })
-            .filter(|vote| {
-                let Ok(idx) = usize::try_from(vote.signer) else {
-                    return true;
-                };
-                let Some(peer) = signature_topology.as_ref().get(idx) else {
-                    return true;
-                };
-                highest_view_by_signer
-                    .get(peer)
-                    .copied()
-                    .unwrap_or(vote.view)
-                    == view
-            })
-            .map(|vote| vote.signer)
-            .collect()
+        let mut stats = QcSignerFilterStats::default();
+        let mut signers = BTreeSet::new();
+        for vote in self.vote_log.values().filter(|stored| {
+            stored.phase == phase
+                && stored.block_hash == block_hash
+                && stored.height == height
+                && stored.view == view
+                && stored.epoch == epoch
+        }) {
+            stats.raw_votes = stats.raw_votes.saturating_add(1);
+            let key = (vote.phase, vote.height, vote.view, vote.epoch, vote.signer);
+            if self
+                .vote_validation_cache
+                .get(&key)
+                .is_some_and(|entry| entry.membership_hash != membership_hash)
+            {
+                stats.roster_mismatch = stats.roster_mismatch.saturating_add(1);
+                continue;
+            }
+            let cache_matches = self
+                .vote_validation_cache
+                .get(&key)
+                .is_some_and(|entry| {
+                    entry.membership_hash == membership_hash && entry.roster_hash == roster_hash
+                });
+            if !cache_matches
+                && !vote_signature_valid(vote, signature_topology, chain_id, mode_tag)
+            {
+                stats.invalid_signature = stats.invalid_signature.saturating_add(1);
+                continue;
+            }
+            if let Ok(idx) = usize::try_from(vote.signer) {
+                if let Some(peer) = signature_topology.as_ref().get(idx) {
+                    if highest_view_by_signer
+                        .get(peer)
+                        .copied()
+                        .unwrap_or(vote.view)
+                        != view
+                    {
+                        stats.higher_view_filtered =
+                            stats.higher_view_filtered.saturating_add(1);
+                        continue;
+                    }
+                }
+            }
+            signers.insert(vote.signer);
+        }
+        (signers, stats)
     }
 
     pub(super) fn defer_qc_if_block_missing(
@@ -1348,19 +1409,9 @@ impl Actor {
         signature_topology: &super::network_topology::Topology,
         required: usize,
     ) -> QcSignerSnapshot {
-        let valid_signers =
-            self.qc_signers_for_votes(phase, block_hash, height, view, epoch, signature_topology);
-        let raw_votes = self
-            .vote_log
-            .values()
-            .filter(|stored| {
-                stored.phase == phase
-                    && stored.block_hash == block_hash
-                    && stored.height == height
-                    && stored.view == view
-                    && stored.epoch == epoch
-            })
-            .count();
+        let (valid_signers, stats) =
+            self.qc_signers_for_votes_with_stats(phase, block_hash, height, view, epoch, signature_topology);
+        let raw_votes = stats.raw_votes;
         let mut signers = valid_signers.clone();
         let mut root_groups = 0;
         if phase == crate::sumeragi::consensus::Phase::Commit && !signers.is_empty() {
@@ -1382,9 +1433,13 @@ impl Actor {
                 phase = ?phase,
                 block = ?block_hash,
                 raw_votes,
+                filtered_invalid_signature = stats.invalid_signature,
+                filtered_roster_mismatch = stats.roster_mismatch,
+                filtered_higher_view = stats.higher_view_filtered,
+                filtered_total = stats.filtered_total(),
                 required,
                 topology_len = signature_topology.as_ref().len(),
-                "votes observed but no valid signers collected for QC"
+                "votes observed but no eligible signers collected for QC"
             );
         } else if raw_votes > 0 && valid_signers.len() != raw_votes {
             iroha_logger::warn!(
@@ -1394,9 +1449,13 @@ impl Actor {
                 block = ?block_hash,
                 raw_votes,
                 valid_signers = valid_signers.len(),
+                filtered_invalid_signature = stats.invalid_signature,
+                filtered_roster_mismatch = stats.roster_mismatch,
+                filtered_higher_view = stats.higher_view_filtered,
+                filtered_total = stats.filtered_total(),
                 required,
                 topology_len = signature_topology.as_ref().len(),
-                "some votes failed signature/topology validation; QC tally may stall"
+                "votes filtered during QC tally; QC may stall"
             );
         }
         if phase == crate::sumeragi::consensus::Phase::Commit
