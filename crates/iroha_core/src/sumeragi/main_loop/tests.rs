@@ -36073,6 +36073,10 @@ async fn qc_signers_for_votes_ignores_lower_view_after_higher_view_vote() {
     let block_hash_high =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x1A; Hash::LENGTH]));
 
+    let canonical_roster = super::roster::canonicalize_roster(topology.as_ref().to_vec());
+    let canonical_topology = super::network_topology::Topology::new(canonical_roster);
+    let canonical_signer = ValidatorIndex::try_from(0_u32).expect("signer fits u32");
+
     let mut vote_low = crate::sumeragi::consensus::Vote {
         phase: Phase::Commit,
         block_hash: block_hash_low,
@@ -36082,13 +36086,27 @@ async fn qc_signers_for_votes_ignores_lower_view_after_higher_view_vote() {
         view: 0,
         epoch,
         highest_qc: None,
-        signer: 0,
+        signer: 0, // canonical signer index (mapped below)
         bls_sig: Vec::new(),
     };
+    let canonical_signature_topology_low = super::topology_for_view(
+        &canonical_topology,
+        height,
+        vote_low.view,
+        mode_tag,
+        prf_seed,
+    );
+    let view_idx_low = super::view_index_for_canonical_signer(
+        canonical_signer,
+        &canonical_signature_topology_low,
+        &canonical_topology,
+    )
+    .expect("canonical signer maps to view index");
+    vote_low.signer = u32::try_from(view_idx_low).expect("view index fits u32");
     sign_vote_for_view_with_seed(
         &mut vote_low,
         &chain,
-        &topology,
+        &canonical_topology,
         &harness.key_pairs,
         mode_tag,
         prf_seed,
@@ -36103,13 +36121,27 @@ async fn qc_signers_for_votes_ignores_lower_view_after_higher_view_vote() {
         view: 1,
         epoch,
         highest_qc: None,
-        signer: 0,
+        signer: 0, // canonical signer index (mapped below)
         bls_sig: Vec::new(),
     };
+    let canonical_signature_topology_high = super::topology_for_view(
+        &canonical_topology,
+        height,
+        vote_high.view,
+        mode_tag,
+        prf_seed,
+    );
+    let view_idx_high = super::view_index_for_canonical_signer(
+        canonical_signer,
+        &canonical_signature_topology_high,
+        &canonical_topology,
+    )
+    .expect("canonical signer maps to view index");
+    vote_high.signer = u32::try_from(view_idx_high).expect("view index fits u32");
     sign_vote_for_view_with_seed(
         &mut vote_high,
         &chain,
-        &topology,
+        &canonical_topology,
         &harness.key_pairs,
         mode_tag,
         prf_seed,
@@ -36154,6 +36186,123 @@ async fn qc_signers_for_votes_ignores_lower_view_after_higher_view_vote() {
     assert!(
         signers_high.contains(&vote_high.signer),
         "highest-view vote should still be counted"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn qc_signers_for_votes_does_not_ignore_lower_view_vote_from_other_peer() {
+    let mut harness = test_actor_harness(3).await;
+    let actor = &mut harness.actor;
+    let chain = actor.common_config.chain.clone();
+    let height = 1u64;
+    let epoch = actor.epoch_for_height(height);
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    assert_eq!(
+        consensus_mode,
+        ConsensusMode::Permissioned,
+        "test assumes permissioned consensus"
+    );
+
+    let roster: Vec<PeerId> = harness
+        .key_pairs
+        .iter()
+        .map(|keypair| PeerId::new(keypair.public_key().clone()))
+        .collect();
+    let topology = super::network_topology::Topology::new(roster);
+    let block_hash_low =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x1B; Hash::LENGTH]));
+    let block_hash_high =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x1C; Hash::LENGTH]));
+
+    // Use the same view-specific signer index across views (leader slot). This index maps to a
+    // different peer after topology rotation, so higher-view votes must not suppress lower-view
+    // votes from a different validator.
+    let mut vote_low = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash: block_hash_low,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view: 0,
+        epoch,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    sign_vote_for_view_with_seed(
+        &mut vote_low,
+        &chain,
+        &topology,
+        &harness.key_pairs,
+        mode_tag,
+        prf_seed,
+    );
+
+    let mut vote_high = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash: block_hash_high,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view: 1,
+        epoch,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    sign_vote_for_view_with_seed(
+        &mut vote_high,
+        &chain,
+        &topology,
+        &harness.key_pairs,
+        mode_tag,
+        prf_seed,
+    );
+
+    let signature_topology_low =
+        super::topology_for_view(&topology, height, vote_low.view, mode_tag, prf_seed);
+    let signature_topology_high =
+        super::topology_for_view(&topology, height, vote_high.view, mode_tag, prf_seed);
+    let idx = usize::try_from(vote_low.signer).expect("signer fits usize");
+    let peer_low = signature_topology_low
+        .as_ref()
+        .get(idx)
+        .cloned()
+        .expect("signer present in topology");
+    let peer_high = signature_topology_high
+        .as_ref()
+        .get(idx)
+        .cloned()
+        .expect("signer present in topology");
+    assert_ne!(
+        peer_low, peer_high,
+        "test setup expects view rotation to move peers between indices"
+    );
+
+    for vote in [&vote_low, &vote_high] {
+        let key = (vote.phase, vote.height, vote.view, vote.epoch, vote.signer);
+        let signature_topology =
+            super::topology_for_view(&topology, height, vote.view, mode_tag, prf_seed);
+        let roster_hash = HashOf::new(&signature_topology.as_ref().to_vec());
+        actor.vote_log.insert(key, vote.clone());
+        actor
+            .vote_validation_cache
+            .insert(key, super::VoteValidationCacheEntry { roster_hash });
+    }
+
+    let signers_low = actor.qc_signers_for_votes(
+        Phase::Commit,
+        block_hash_low,
+        height,
+        vote_low.view,
+        epoch,
+        &signature_topology_low,
+    );
+    assert!(
+        signers_low.contains(&vote_low.signer),
+        "lower-view vote must not be suppressed by a higher-view vote from a different peer"
     );
 
     harness.shutdown.send();
