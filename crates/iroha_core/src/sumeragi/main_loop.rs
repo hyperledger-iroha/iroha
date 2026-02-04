@@ -4435,6 +4435,7 @@ struct VoteRosterCacheEntry {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct VoteValidationCacheEntry {
     roster_hash: HashOf<Vec<PeerId>>,
+    membership_hash: HashOf<Vec<PeerId>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

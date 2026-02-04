@@ -1398,6 +1398,9 @@ impl Actor {
     ) -> bool {
         let roster_len = u32::try_from(signature_topology.as_ref().len()).unwrap_or(u32::MAX);
         let roster_hash = iroha_crypto::HashOf::new(&signature_topology.as_ref().to_vec());
+        let canonical_roster =
+            super::roster::canonicalize_roster(signature_topology.as_ref().to_vec());
+        let membership_hash = iroha_crypto::HashOf::new(&canonical_roster);
         let peer_id = usize::try_from(vote.signer)
             .ok()
             .and_then(|idx| signature_topology.as_ref().get(idx).cloned());
@@ -1629,7 +1632,10 @@ impl Actor {
             }
         }
         let key = vote_key(vote);
-        let cache_entry = VoteValidationCacheEntry { roster_hash };
+        let cache_entry = VoteValidationCacheEntry {
+            roster_hash,
+            membership_hash,
+        };
         if let Some(existing) = self.vote_log.get(&key).cloned() {
             if existing.block_hash == vote.block_hash {
                 iroha_logger::debug!(

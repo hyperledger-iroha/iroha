@@ -36034,10 +36034,19 @@ async fn qc_signers_for_votes_revalidates_on_roster_hash_mismatch() {
     let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
     let key = (vote.phase, vote.height, vote.view, vote.epoch, vote.signer);
     let roster_hash = HashOf::new(&signature_topology.as_ref().to_vec());
+    let membership_hash = HashOf::new(&super::roster::canonicalize_roster(
+        signature_topology.as_ref().to_vec(),
+    ));
     actor.vote_log.insert(key, vote.clone());
     actor
         .vote_validation_cache
-        .insert(key, super::VoteValidationCacheEntry { roster_hash });
+        .insert(
+            key,
+            super::VoteValidationCacheEntry {
+                roster_hash,
+                membership_hash,
+            },
+        );
     assert!(
         actor.vote_validation_cache.contains_key(&key),
         "vote validation cache should track validated votes"
@@ -36080,6 +36089,85 @@ async fn qc_signers_for_votes_revalidates_on_roster_hash_mismatch() {
     assert!(
         mismatched_signers.is_empty(),
         "mismatched roster hash should force signature revalidation"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn qc_signers_for_votes_skips_membership_hash_mismatch() {
+    let mut harness = test_actor_harness(3).await;
+    let actor = &mut harness.actor;
+    let chain = actor.common_config.chain.clone();
+    let height = 1u64;
+    let view = 0u64;
+    let epoch = actor.epoch_for_height(height);
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    assert_eq!(
+        consensus_mode,
+        ConsensusMode::Permissioned,
+        "test assumes permissioned consensus"
+    );
+
+    let roster: Vec<PeerId> = harness
+        .key_pairs
+        .iter()
+        .map(|keypair| PeerId::new(keypair.public_key().clone()))
+        .collect();
+    let topology = super::network_topology::Topology::new(roster);
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x56; Hash::LENGTH]));
+    let mut vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view,
+        epoch,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    sign_vote_for_view_with_seed(
+        &mut vote,
+        &chain,
+        &topology,
+        &harness.key_pairs,
+        mode_tag,
+        prf_seed,
+    );
+
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    let key = (vote.phase, vote.height, vote.view, vote.epoch, vote.signer);
+    let roster_hash = HashOf::new(&signature_topology.as_ref().to_vec());
+    let mismatched_roster = vec![PeerId::new(
+        KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+            .public_key()
+            .clone(),
+    )];
+    let mismatched_membership_hash =
+        HashOf::new(&super::roster::canonicalize_roster(mismatched_roster));
+    actor.vote_log.insert(key, vote.clone());
+    actor.vote_validation_cache.insert(
+        key,
+        super::VoteValidationCacheEntry {
+            roster_hash,
+            membership_hash: mismatched_membership_hash,
+        },
+    );
+
+    let signers = actor.qc_signers_for_votes(
+        Phase::Commit,
+        block_hash,
+        height,
+        view,
+        epoch,
+        &signature_topology,
+    );
+    assert!(
+        signers.is_empty(),
+        "votes with mismatched membership hash must be ignored"
     );
 
     harness.shutdown.send();
@@ -36189,10 +36277,19 @@ async fn qc_signers_for_votes_ignores_lower_view_after_higher_view_vote() {
         let signature_topology =
             super::topology_for_view(&topology, height, vote.view, mode_tag, prf_seed);
         let roster_hash = HashOf::new(&signature_topology.as_ref().to_vec());
+        let membership_hash = HashOf::new(&super::roster::canonicalize_roster(
+            signature_topology.as_ref().to_vec(),
+        ));
         actor.vote_log.insert(key, vote.clone());
         actor
             .vote_validation_cache
-            .insert(key, super::VoteValidationCacheEntry { roster_hash });
+            .insert(
+                key,
+                super::VoteValidationCacheEntry {
+                    roster_hash,
+                    membership_hash,
+                },
+            );
     }
 
     let signature_topology_low =
@@ -36323,10 +36420,19 @@ async fn qc_signers_for_votes_does_not_ignore_lower_view_vote_from_other_peer() 
         let signature_topology =
             super::topology_for_view(&topology, height, vote.view, mode_tag, prf_seed);
         let roster_hash = HashOf::new(&signature_topology.as_ref().to_vec());
+        let membership_hash = HashOf::new(&super::roster::canonicalize_roster(
+            signature_topology.as_ref().to_vec(),
+        ));
         actor.vote_log.insert(key, vote.clone());
         actor
             .vote_validation_cache
-            .insert(key, super::VoteValidationCacheEntry { roster_hash });
+            .insert(
+                key,
+                super::VoteValidationCacheEntry {
+                    roster_hash,
+                    membership_hash,
+                },
+            );
     }
 
     let signers_low = actor.qc_signers_for_votes(
@@ -43802,9 +43908,16 @@ async fn qc_drop_empty_block_clears_votes_and_pending() {
     let vote_key = (vote.phase, vote.height, vote.view, vote.epoch, vote.signer);
     actor.vote_log.insert(vote_key, vote);
     let roster_hash = HashOf::new(&Vec::<PeerId>::new());
+    let membership_hash = HashOf::new(&Vec::<PeerId>::new());
     actor
         .vote_validation_cache
-        .insert(vote_key, super::VoteValidationCacheEntry { roster_hash });
+        .insert(
+            vote_key,
+            super::VoteValidationCacheEntry {
+                roster_hash,
+                membership_hash,
+            },
+        );
 
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let qc = qc_with_bitmap(
