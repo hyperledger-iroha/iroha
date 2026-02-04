@@ -35,7 +35,10 @@ use iroha_data_model::{
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_logger::prelude::*;
 use iroha_primitives::addr::SocketAddr;
-use norito::codec::{Decode, Encode};
+use norito::{
+    codec::{Decode, Encode},
+    core as ncore,
+};
 use rand::Rng as _;
 use soranet_pq::MlDsaSuite;
 use tokio::{
@@ -492,17 +495,15 @@ struct RelayMessage<T> {
     payload: T,
 }
 
-impl<'a, T> norito::core::DecodeFromSlice<'a> for RelayMessage<T>
+impl<'a, T> ncore::DecodeFromSlice<'a> for RelayMessage<T>
 where
-    T: Encode + Decode,
+    T: ncore::NoritoSerialize + for<'de> ncore::NoritoDeserialize<'de>,
 {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let archived = norito::core::archived_from_slice::<Self>(bytes)?;
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+        let archived = ncore::archived_from_slice::<Self>(bytes)?;
         let archived_bytes = archived.bytes();
-        let _guard = norito::core::PayloadCtxGuard::enter(archived_bytes);
-        let value = <Self as norito::core::NoritoDeserialize>::try_deserialize(
-            archived.archived(),
-        )?;
+        let _guard = ncore::PayloadCtxGuard::enter(archived_bytes);
+        let value = <Self as ncore::NoritoDeserialize>::try_deserialize(archived.archived())?;
         Ok((value, archived_bytes.len()))
     }
 }
@@ -622,7 +623,7 @@ mod data_frame_wire_len_tests {
 
         let bytes = frame.encode();
         let (decoded, used) =
-            <RelayMessage<Dummy> as norito::core::DecodeFromSlice>::decode_from_slice(&bytes)
+            <RelayMessage<Dummy> as ncore::DecodeFromSlice>::decode_from_slice(&bytes)
                 .expect("decode relay message");
 
         assert_eq!(used, bytes.len(), "should consume full payload");

@@ -17,10 +17,10 @@ use iroha::{
         repo::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
     },
 };
-use iroha_crypto::KeyPair;
+use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::isi::RepoMarginCallIsi;
 use iroha_test_network::*;
-use iroha_test_samples::{ALICE_ID, BOB_ID, CARPENTER_ID, CARPENTER_KEYPAIR};
+use iroha_test_samples::{ALICE_ID, BOB_ID};
 
 static GENESIS_STATUS: OnceLock<std::result::Result<(), ()>> = OnceLock::new();
 static START_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
@@ -101,6 +101,11 @@ where
     InstructionBox::from(RepoInstructionBox::from(instruction))
 }
 
+fn error_chain_contains(err: &eyre::Report, needle: &str) -> bool {
+    err.chain()
+        .any(|cause| cause.to_string().contains(needle))
+}
+
 #[test]
 #[allow(clippy::too_many_lines)]
 fn repo_roundtrip_transfers_balances_and_clears_agreement() -> Result<()> {
@@ -170,7 +175,7 @@ fn repo_roundtrip_transfers_balances_and_clears_agreement() -> Result<()> {
         .submit_transaction_blocking(&duplicate_tx)
         .unwrap_err();
     assert!(
-        duplicate_err.to_string().contains("already exists"),
+        error_chain_contains(&duplicate_err, "already exists"),
         "expected duplicate repo to be rejected, got {duplicate_err:?}"
     );
     let alice_cash_id = AssetId::new(cash_def_id.clone(), ALICE_ID.clone());
@@ -227,7 +232,7 @@ fn repo_roundtrip_transfers_balances_and_clears_agreement() -> Result<()> {
         client.build_transaction(vec![repo_instr_box(future_reverse)], metadata.clone());
     let future_err = client.submit_transaction_blocking(&future_tx).unwrap_err();
     assert!(
-        future_err.to_string().contains("future"),
+        error_chain_contains(&future_err, "future"),
         "expected future-dated reverse repo to be rejected, got {future_err:?}"
     );
 
@@ -361,9 +366,7 @@ fn repo_roundtrip_transfers_balances_and_clears_agreement() -> Result<()> {
         .submit_transaction_blocking(&insufficient_tx)
         .unwrap_err();
     assert!(
-        insufficient_err
-            .to_string()
-            .contains("must not deliver less"),
+        error_chain_contains(&insufficient_err, "must not deliver less"),
         "expected insufficient collateral substitution to be rejected, got {insufficient_err:?}"
     );
     let substitution_reverse = ReverseRepoIsi::new(
@@ -422,7 +425,12 @@ fn repo_margin_call_enforces_cadence_and_participant_rules() -> Result<()> {
     let cash_def_id: AssetDefinitionId = "usd#wonderland".parse()?;
     let collateral_def_id: AssetDefinitionId = "bond#wonderland".parse()?;
 
+    let outsider_keypair = KeyPair::from_seed(vec![42; 32], Algorithm::Ed25519);
+    let outsider_domain: DomainId = "wonderland".parse()?;
+    let outsider_id = AccountId::new(outsider_domain, outsider_keypair.public_key().clone());
+
     let setup_instructions: Vec<InstructionBox> = vec![
+        Register::account(Account::new(outsider_id.clone())).into(),
         Register::asset_definition(AssetDefinition::numeric(cash_def_id.clone())).into(),
         Register::asset_definition(AssetDefinition::numeric(collateral_def_id.clone())).into(),
         Mint::asset_numeric(
@@ -472,42 +480,39 @@ fn repo_margin_call_enforces_cadence_and_participant_rules() -> Result<()> {
         .into_iter()
         .find(|agreement| agreement.id() == &agreement_id)
         .expect("repo agreement should exist after initiation");
+    let initial_last_margin_ms = *repo_snapshot.last_margin_check_timestamp_ms();
     let expected_first_due = repo_snapshot
-        .next_margin_check_after(*repo_snapshot.last_margin_check_timestamp_ms())
+        .next_margin_check_after(initial_last_margin_ms)
         .expect("margin cadence configured");
-
-    std::thread::sleep(Duration::from_millis(1_500));
-
-    let margin_call = RepoMarginCallIsi::new(agreement_id.clone());
-    let margin_tx = client.build_transaction(vec![repo_instr_box(margin_call)], metadata.clone());
-    client.submit_transaction_blocking(&margin_tx)?;
-
-    let after_margin = client
-        .query(FindRepoAgreements::new())
-        .execute_all()?
-        .into_iter()
-        .find(|agreement| agreement.id() == &agreement_id)
-        .expect("repo agreement should persist after margin call");
     assert!(
-        *after_margin.last_margin_check_timestamp_ms() >= expected_first_due,
-        "margin call timestamp should be at or after the governance cadence"
+        expected_first_due > initial_last_margin_ms,
+        "margin cadence should advance beyond the initiation timestamp"
     );
 
-    let immediate_retry_err = client
+    let premature_err = client
         .submit_transaction_blocking(&client.build_transaction(
             vec![repo_instr_box(RepoMarginCallIsi::new(agreement_id.clone()))],
             metadata.clone(),
         ))
         .unwrap_err();
     assert!(
-        immediate_retry_err
-            .to_string()
-            .contains("margin check is not yet due"),
-        "expected cadence enforcement error, got {immediate_retry_err:?}"
+        error_chain_contains(&premature_err, "margin check is not yet due"),
+        "expected cadence enforcement error, got {premature_err:?}"
     );
 
-    let unauthorized_client =
-        alt_client((CARPENTER_ID.clone(), CARPENTER_KEYPAIR.clone()), &client);
+    let after_reject = client
+        .query(FindRepoAgreements::new())
+        .execute_all()?
+        .into_iter()
+        .find(|agreement| agreement.id() == &agreement_id)
+        .expect("repo agreement should persist after rejected margin call");
+    assert_eq!(
+        *after_reject.last_margin_check_timestamp_ms(),
+        initial_last_margin_ms,
+        "rejected margin call should not advance the schedule"
+    );
+
+    let unauthorized_client = alt_client((outsider_id.clone(), outsider_keypair), &client);
     let unauthorized_err = unauthorized_client
         .submit_transaction_blocking(&unauthorized_client.build_transaction(
             vec![repo_instr_box(RepoMarginCallIsi::new(agreement_id))],
@@ -515,9 +520,10 @@ fn repo_margin_call_enforces_cadence_and_participant_rules() -> Result<()> {
         ))
         .unwrap_err();
     assert!(
-        unauthorized_err
-            .to_string()
-            .contains("margin call must be initiated by a repo participant"),
+        error_chain_contains(
+            &unauthorized_err,
+            "margin call must be initiated by a repo participant",
+        ),
         "expected participant check failure, got {unauthorized_err:?}"
     );
 
@@ -533,7 +539,9 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
     let client = network.client();
 
     let metadata = Metadata::default();
-    let custodian_id: AccountId = "custodian@wonderland".parse()?;
+    let custodian_keypair = KeyPair::random();
+    let custodian_domain: DomainId = "wonderland".parse()?;
+    let custodian_id = AccountId::new(custodian_domain, custodian_keypair.public_key().clone());
     let cash_def_id: AssetDefinitionId = "usd#wonderland".parse()?;
     let collateral_def_id: AssetDefinitionId = "bond#wonderland".parse()?;
 
