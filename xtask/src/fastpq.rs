@@ -222,12 +222,16 @@ impl BenchManifestOptions {
 struct MatrixManifest {
     version: u32,
     #[serde(default)]
+    #[norito(default)]
     require_rows: Option<u64>,
     #[serde(default)]
+    #[norito(default)]
     max_operation_ms: BTreeMap<String, f64>,
     #[serde(default)]
+    #[norito(default)]
     min_operation_speedup: BTreeMap<String, f64>,
     #[serde(default)]
+    #[norito(default)]
     devices: Vec<MatrixDeviceEntry>,
 }
 
@@ -235,8 +239,10 @@ struct MatrixManifest {
 struct MatrixDeviceEntry {
     label: String,
     #[serde(default)]
+    #[norito(default)]
     max_operation_ms: BTreeMap<String, f64>,
     #[serde(default)]
+    #[norito(default)]
     min_operation_speedup: BTreeMap<String, f64>,
 }
 

@@ -520,6 +520,7 @@ mod tests {
             "chain": "stub",
             "executor": null,
             "ivm_dir": ".",
+            "consensus_mode": "Npos",
             "transactions": [ {} ]
         }"#,
         )

@@ -229,6 +229,9 @@ impl AdmissionToken {
         if expires_secs <= issued_secs {
             return Err(MintError::InvalidTemporalBounds);
         }
+        if flags & !TOKEN_FLAG_MASK != 0 {
+            return Err(MintError::InvalidFlags(flags));
+        }
 
         let mut nonce = [0u8; 16];
         rng.fill_bytes(&mut nonce);
@@ -875,6 +878,9 @@ pub enum MintError {
     /// `expires_at` was not greater than `issued_at`.
     #[error("token expires_at must be greater than issued_at")]
     InvalidTemporalBounds,
+    /// Flags contained undefined bits.
+    #[error("token flags contain unknown bits ({0:#04x})")]
+    InvalidFlags(u8),
     /// ML-DSA signing failure.
     #[error("ml-dsa signing failed: {0}")]
     Signature(MlDsaError),
@@ -1128,6 +1134,27 @@ mod tests {
         encoded[TOKEN_MAGIC.len() + 1] = 0x01;
         let err = AdmissionToken::decode(&encoded).expect_err("flags must be zero");
         assert!(matches!(err, DecodeError::InvalidFlags(0x01)));
+    }
+
+    #[test]
+    fn mint_rejects_non_zero_flags() {
+        let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44)
+            .expect("ML-DSA keypair generation should succeed");
+        let fingerprint = compute_issuer_fingerprint(keypair.public_key());
+        let mut rng = StdRng::seed_from_u64(321);
+        let err = AdmissionToken::mint(
+            MlDsaSuite::MlDsa44,
+            keypair.secret_key(),
+            fingerprint,
+            RELAY_ID,
+            TRANSCRIPT,
+            UNIX_EPOCH + Duration::from_secs(1_700_000_000),
+            UNIX_EPOCH + Duration::from_secs(1_700_000_600),
+            0x01,
+            &mut rng,
+        )
+        .expect_err("mint should reject non-zero flags");
+        assert!(matches!(err, MintError::InvalidFlags(0x01)));
     }
 
     #[test]

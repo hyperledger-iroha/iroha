@@ -5050,7 +5050,7 @@ mod tests {
             "downgrade endpoint missing NDJSON content-type: {downgrade_text}"
         );
         assert!(
-            downgrade_text.contains("\"reason\":\"Downgrade\""),
+            downgrade_text.contains("\"reason\":\"downgrade\""),
             "downgrade payload missing downgrade event: {downgrade_text}"
         );
         assert!(

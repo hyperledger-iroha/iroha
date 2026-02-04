@@ -82,7 +82,7 @@
     "description": "Proof tampering refusal",
     "status": 422,
     "error": "proof_mismatch",
-    "reason": "chunk digest mismatch detected in proof bundle",
+    "reason": "proof sample does not match gateway tree",
     "details": {
       "section": "proof.chunks[0]"
     },

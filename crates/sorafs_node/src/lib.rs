@@ -659,7 +659,17 @@ impl NodeHandle {
             header,
             payload: event,
         };
-        let encoded = audit_event.encode();
+        let encoded = match norito::to_bytes(&audit_event) {
+            Ok(encoded) => encoded,
+            Err(err) => {
+                iroha_logger::error!(
+                    %err,
+                    ticket = %audit_event.payload.ticket_id,
+                    "failed to encode repair audit event"
+                );
+                return;
+            }
+        };
         if let Err(err) = publisher.publish_repair_audit_event(&audit_event, &encoded) {
             iroha_logger::error!(
                 %err,
@@ -687,7 +697,13 @@ impl NodeHandle {
             header,
             payload,
         };
-        let encoded = audit_event.encode();
+        let encoded = match norito::to_bytes(&audit_event) {
+            Ok(encoded) => encoded,
+            Err(err) => {
+                iroha_logger::error!(%err, "failed to encode GC audit event");
+                return;
+            }
+        };
         if let Err(err) = publisher.publish_gc_audit_event(&audit_event, &encoded) {
             iroha_logger::error!(
                 %err,
@@ -723,7 +739,18 @@ impl NodeHandle {
         let Some(publisher) = self.governance_publisher() else {
             return;
         };
-        let encoded = proposal.encode();
+        let encoded = match norito::to_bytes(proposal) {
+            Ok(encoded) => encoded,
+            Err(err) => {
+                iroha_logger::error!(
+                    %err,
+                    ticket = %proposal.ticket_id,
+                    stage = stage.as_str(),
+                    "failed to encode repair slash proposal"
+                );
+                return;
+            }
+        };
         if let Err(err) = publisher.publish_repair_slash_proposal(proposal, &encoded, stage) {
             iroha_logger::error!(
                 %err,
