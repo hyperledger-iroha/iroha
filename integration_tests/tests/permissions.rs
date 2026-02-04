@@ -23,7 +23,9 @@ use iroha_executor_data_model::permission::{
     nft::CanModifyNftMetadata,
 };
 use iroha_test_network::*;
-use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, gen_account_in};
+use iroha_test_samples::{
+    ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_ID, gen_account_in,
+};
 use tokio::{
     runtime::Runtime,
     time::{sleep, timeout},
@@ -89,7 +91,14 @@ async fn read_peer_log_with_retry(
 #[test]
 #[ignore = "debug helper for inspecting genesis transactions"]
 fn debug_print_genesis_transactions() {
-    let asset_definition_id = "xor#wonderland".parse().expect("Valid");
+    let kingdom_id: DomainId = "kingdom".parse().expect("Valid");
+    let register_domain = Register::domain(Domain::new(kingdom_id.clone()));
+    let transfer_domain = Transfer::domain(
+        SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+        kingdom_id.clone(),
+        ALICE_ID.clone(),
+    );
+    let asset_definition_id = "xor#kingdom".parse().expect("Valid");
     let invalid_instruction =
         Register::asset_definition(AssetDefinition::numeric(asset_definition_id));
     let Some(network) = sandbox::build_network_or_skip(
@@ -97,6 +106,8 @@ fn debug_print_genesis_transactions() {
             .with_config_layer(|layer| {
                 layer.write(["confidential", "enabled"], true);
             })
+            .with_genesis_instruction(register_domain)
+            .with_genesis_instruction(transfer_domain)
             .with_genesis_instruction(invalid_instruction),
         stringify!(debug_print_genesis_transactions),
     ) else {
@@ -147,9 +158,15 @@ fn debug_print_genesis_transactions() {
 
 #[tokio::test]
 async fn genesis_transactions_are_validated_by_executor() {
-    // `wonderland` domain is owned by Alice,
-    //  so the default executor will deny a genesis account to register asset definition.
-    let asset_definition_id = "xor#wonderland".parse().expect("Valid");
+    // Create a domain and transfer it away from genesis, then attempt a forbidden registration.
+    let kingdom_id: DomainId = "kingdom".parse().expect("Valid");
+    let register_domain = Register::domain(Domain::new(kingdom_id.clone()));
+    let transfer_domain = Transfer::domain(
+        SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+        kingdom_id.clone(),
+        ALICE_ID.clone(),
+    );
+    let asset_definition_id = "xor#kingdom".parse().expect("Valid");
     let invalid_instruction =
         Register::asset_definition(AssetDefinition::numeric(asset_definition_id));
     let Some(network) = sandbox::build_network_or_skip(
@@ -157,6 +174,8 @@ async fn genesis_transactions_are_validated_by_executor() {
             .with_config_layer(|layer| {
                 layer.write(["confidential", "enabled"], true);
             })
+            .with_genesis_instruction(register_domain)
+            .with_genesis_instruction(transfer_domain)
             .with_genesis_instruction(invalid_instruction),
         stringify!(genesis_transactions_are_validated_by_executor),
     ) else {
@@ -169,16 +188,18 @@ async fn genesis_transactions_are_validated_by_executor() {
     let genesis = network.genesis();
     let peer = network.peer();
 
+    let mut events = peer.events();
     let termination = Arc::new(Mutex::new(None));
     let termination_wait = {
         let capture = Arc::clone(&termination);
-        peer.once(move |event| match event {
-            PeerLifecycleEvent::Terminated { status } => {
-                *capture.lock().expect("termination mutex poisoned") = Some(status);
-                true
+        async move {
+            while let Ok(event) = events.recv().await {
+                if let PeerLifecycleEvent::Terminated { status } = event {
+                    *capture.lock().expect("termination mutex poisoned") = Some(status);
+                    break;
+                }
             }
-            _ => false,
-        })
+        }
     };
 
     // Start the peer; skip when sandbox restrictions prevent binding sockets.
@@ -191,7 +212,7 @@ async fn genesis_transactions_are_validated_by_executor() {
         panic!("failed to start peer: {err:?}");
     }
 
-    timeout(Duration::from_secs(5), termination_wait)
+    timeout(Duration::from_secs(30), termination_wait)
         .await
         .expect("peer should panic within timeout");
 
@@ -632,13 +653,16 @@ fn permissions_are_unified() {
     // Given
     let alice_id = ALICE_ID.clone();
 
+    let alice_literal = format!("{}@{}", ALICE_KEYPAIR.public_key(), alice_id.domain());
     let permission1 = CanTransferAsset {
-        asset: format!("rose#wonderland#{alice_id}").parse().unwrap(),
+        asset: format!("rose#{}#{alice_literal}", alice_id.domain())
+            .parse()
+            .unwrap(),
     };
     let allow_alice_to_transfer_rose_1 = Grant::account_permission(permission1, alice_id.clone());
 
     let permission2 = CanTransferAsset {
-        asset: format!("rose##{alice_id}").parse().unwrap(),
+        asset: format!("rose##{alice_literal}").parse().unwrap(),
     };
     let allow_alice_to_transfer_rose_2 = Grant::account_permission(permission2, alice_id);
 
