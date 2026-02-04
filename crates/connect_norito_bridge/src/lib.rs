@@ -59,9 +59,10 @@ use iroha_data_model::{
         OFFLINE_FASTPQ_PROOF_VERSION_V1, OFFLINE_FASTPQ_REPLAY_CHAIN_DOMAIN,
         OFFLINE_FASTPQ_REPLAY_PROOF_DOMAIN, OFFLINE_FASTPQ_SUM_NONCE_DOMAIN,
         OFFLINE_FASTPQ_SUM_PROOF_DOMAIN, OfflineFastpqCounterProof, OfflineFastpqReplayProof,
-        OfflineFastpqSumProof, OfflineProofBlindingSeed, OfflineProofRequestCounter,
-        OfflineProofRequestReplay, OfflineProofRequestSum, OfflineReceiptChallengePreimage,
-        OfflineSpendReceipt, PoseidonDigest, chain_bound_receipt_hash, compute_receipts_root,
+        OfflineFastpqSumProof, OfflinePlatformProof, OfflineProofBlindingSeed,
+        OfflineProofRequestCounter, OfflineProofRequestReplay, OfflineProofRequestSum,
+        OfflineReceiptChallengePreimage, OfflineSpendReceipt, OfflineSpendReceiptPayload,
+        OfflineWalletCertificate, PoseidonDigest, chain_bound_receipt_hash, compute_receipts_root,
     },
     proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId},
     smart_contract::manifest::ContractManifest,
@@ -943,6 +944,42 @@ fn compute_offline_receipt_challenge(
     iroha_bytes.copy_from_slice(iroha_hash.as_ref());
     let client_hash: [u8; 32] = Sha256::digest(iroha_hash.as_ref()).into();
     Ok((bytes, iroha_bytes, client_hash))
+}
+
+fn encode_offline_spend_receipt_payload(
+    tx_id_hex: String,
+    from_raw: String,
+    to_raw: String,
+    asset_raw: String,
+    amount_raw: String,
+    issued_at_ms: u64,
+    invoice_id: String,
+    platform_proof_json: String,
+    certificate_json: String,
+) -> BridgeResult<Vec<u8>> {
+    let tx_id = Hash::from_str(&tx_id_hex).map_err(|_| BridgeError::OfflineNonce)?;
+    let from = AccountId::from_str(&from_raw).map_err(|_| BridgeError::Authority)?;
+    let to = AccountId::from_str(&to_raw).map_err(|_| BridgeError::Destination)?;
+    let asset = AssetId::from_str(&asset_raw).map_err(|_| BridgeError::OfflineAsset)?;
+    let amount = Numeric::from_str(&amount_raw).map_err(|_| BridgeError::Quantity)?;
+    let platform_proof: OfflinePlatformProof =
+        norito::json::from_str(&platform_proof_json).map_err(|_| BridgeError::OfflineSerialize)?;
+    let certificate: OfflineWalletCertificate =
+        norito::json::from_str(&certificate_json).map_err(|_| BridgeError::OfflineSerialize)?;
+
+    let payload = OfflineSpendReceiptPayload {
+        tx_id,
+        from,
+        to,
+        asset,
+        amount,
+        issued_at_ms,
+        invoice_id,
+        platform_proof,
+        sender_certificate: certificate,
+    };
+
+    to_bytes(&payload).map_err(|_| BridgeError::OfflineSerialize)
 }
 
 fn aggregate_receipt_amounts(amounts: &[Numeric]) -> BridgeResult<Numeric> {
@@ -9438,6 +9475,65 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Offline
 ))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_OfflineSpendReceiptPayloadEncoder_nativeEncode(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    tx_id_hex: jni::objects::JString<'_>,
+    from_account: jni::objects::JString<'_>,
+    to_account: jni::objects::JString<'_>,
+    asset_id: jni::objects::JString<'_>,
+    amount: jni::objects::JString<'_>,
+    issued_at_ms: jni::sys::jlong,
+    invoice_id: jni::objects::JString<'_>,
+    platform_proof_json: jni::objects::JString<'_>,
+    certificate_json: jni::objects::JString<'_>,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let tx_id_str = jstring_to_string(&mut env, tx_id_hex)?;
+        let from_str = jstring_to_string(&mut env, from_account)?;
+        let to_str = jstring_to_string(&mut env, to_account)?;
+        let asset_str = jstring_to_string(&mut env, asset_id)?;
+        let amount_str = jstring_to_string(&mut env, amount)?;
+        let invoice_str = jstring_to_string(&mut env, invoice_id)?;
+        let proof_json = jstring_to_string(&mut env, platform_proof_json)?;
+        let cert_json = jstring_to_string(&mut env, certificate_json)?;
+
+        let bytes = encode_offline_spend_receipt_payload(
+            tx_id_str,
+            from_str,
+            to_str,
+            asset_str,
+            amount_str,
+            issued_at_ms as u64,
+            invoice_str,
+            proof_json,
+            cert_json,
+        )
+        .map_err(|e| format!("encode error: {}", e.code()))?;
+
+        let array = env
+            .byte_array_from_slice(&bytes)
+            .map_err(|e| e.to_string())?;
+        Ok(array.into_raw())
+    })();
+
+    match result {
+        Ok(array) => array,
+        Err(msg) => {
+            throw_java_illegal_argument(&mut env, msg);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAccelerators_nativePoseidon2(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
@@ -12037,5 +12133,105 @@ mod sorafs_tests {
         if !out_report_ptr.is_null() {
             connect_norito_free(out_report_ptr);
         }
+    }
+
+    fn test_account_id(seed: u8) -> AccountId {
+        let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let (public_key, _) = keypair.into_parts();
+        let domain = DomainId::from_str("default").expect("domain");
+        AccountId::new(domain, public_key)
+    }
+
+    #[test]
+    fn encode_offline_spend_receipt_payload_matches_native() {
+        use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+        use base64::Engine as _;
+        use iroha_data_model::offline::{
+            AppleAppAttestProof, OfflineAllowanceCommitment, OfflinePlatformProof,
+            OfflineSpendReceipt, OfflineWalletCertificate, OfflineWalletPolicy,
+        };
+        use iroha_data_model::{Metadata, asset::id::AssetId};
+        use iroha_primitives::numeric::Numeric;
+
+        let sender = test_account_id(1);
+        let receiver = test_account_id(2);
+        let asset_def =
+            iroha_data_model::asset::id::AssetDefinitionId::from_str("xor#default").expect("asset def");
+        let asset = AssetId::new(asset_def, sender.clone());
+        let challenge_hash = Hash::new(vec![0x33; 32]);
+
+        let certificate = OfflineWalletCertificate {
+            controller: sender.clone(),
+            allowance: OfflineAllowanceCommitment {
+                asset: asset.clone(),
+                amount: Numeric::from(500_u32),
+                commitment: vec![0x42; 32],
+            },
+            spend_public_key: PublicKey::from_hex(
+                Algorithm::Ed25519,
+                "1509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
+            )
+            .expect("public key"),
+            attestation_report: vec![0x01, 0x02, 0x03],
+            issued_at_ms: 1_700_000_000_000,
+            expires_at_ms: 1_800_000_000_000,
+            policy: OfflineWalletPolicy {
+                max_balance: Numeric::from(1_000_u32),
+                max_tx_value: Numeric::from(200_u32),
+                expires_at_ms: 1_800_000_000_000,
+            },
+            operator_signature: Signature::from_bytes(&[0xAB; 64]),
+            metadata: Metadata::default(),
+            verdict_id: None,
+            attestation_nonce: None,
+            refresh_at_ms: None,
+        };
+
+        let platform_proof = OfflinePlatformProof::AppleAppAttest(AppleAppAttestProof {
+            key_id: BASE64_STANDARD.encode(b"TEST_KEY"),
+            counter: 42,
+            assertion: vec![0xCA, 0xFE],
+            challenge_hash,
+        });
+
+        let tx_id = Hash::new(vec![0x22; 32]);
+
+        let receipt = OfflineSpendReceipt {
+            tx_id,
+            from: sender.clone(),
+            to: receiver.clone(),
+            asset: asset.clone(),
+            amount: Numeric::from(75_u32),
+            issued_at_ms: 1_700_000_500_000,
+            invoice_id: "INV-42".into(),
+            platform_proof: platform_proof.clone(),
+            platform_snapshot: None,
+            sender_certificate: certificate.clone(),
+            sender_signature: Signature::from_bytes(&[0xCD; 64]),
+        };
+
+        let native_bytes = receipt.signing_bytes().expect("native signing bytes");
+
+        let platform_proof_json =
+            norito::json::to_json(&platform_proof).expect("platform proof json");
+        let certificate_json = norito::json::to_json(&certificate).expect("certificate json");
+
+        let jni_bytes = encode_offline_spend_receipt_payload(
+            hex::encode(tx_id.as_ref()),
+            sender.to_string(),
+            receiver.to_string(),
+            asset.to_string(),
+            "75".to_string(),
+            1_700_000_500_000,
+            "INV-42".to_string(),
+            platform_proof_json,
+            certificate_json,
+        )
+        .expect("JNI encoding");
+
+        assert_eq!(
+            native_bytes, jni_bytes,
+            "JNI encoding must match native signing_bytes"
+        );
     }
 }
