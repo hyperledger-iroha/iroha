@@ -2546,7 +2546,8 @@ impl Actor {
         // 2. Consistency Checks (Session & Roster)
         // Check against derived roster *before* signature verification to ensure we use the correct leader derivation context if available.
         let derived_roster = self.rbc_roster_for_session(key);
-        if !derived_roster.is_empty() && derived_roster != init.roster {
+        let derived_roster_missing = derived_roster.is_empty();
+        if !derived_roster_missing && derived_roster != init.roster {
             warn!(
                 height = init.height,
                 view = init.view,
@@ -2825,7 +2826,7 @@ impl Actor {
             return Ok(());
         }
 
-        let (roster, roster_source) = if derived_roster.is_empty() {
+        let (roster, roster_source) = if derived_roster_missing {
             let committed_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
             let committed_epoch = self.epoch_for_height(committed_height);
             let (consensus_mode, _, _) = self.consensus_context_for_height(init.height);
@@ -2910,6 +2911,9 @@ impl Actor {
         }
         self.cache_vote_roster(init.block_hash, init.height, init.view, roster.clone());
         self.record_rbc_session_roster(key, roster, roster_source);
+        if derived_roster_missing {
+            self.request_missing_block_for_pending_rbc(key, "rbc_init_missing_roster", None);
+        }
         if let Some(mut session) = self.subsystems.da_rbc.rbc.sessions.remove(&key) {
             if session.payload_hash().is_none() {
                 session.payload_hash = Some(init.payload_hash);
