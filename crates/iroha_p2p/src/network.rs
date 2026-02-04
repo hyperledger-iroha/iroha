@@ -484,7 +484,6 @@ enum RelayTarget {
 }
 
 #[derive(Clone, Debug, Encode, Decode)]
-#[norito(decode_from_slice)]
 struct RelayMessage<T> {
     origin: PeerId,
     target: RelayTarget,
@@ -507,6 +506,22 @@ impl<T> RelayMessage<T> {
     #[allow(dead_code)]
     fn decremented_ttl(&self) -> Option<u8> {
         self.ttl.checked_sub(1)
+    }
+}
+
+// Explicit DecodeFromSlice impl to satisfy the strict-safe decode path for generic payloads.
+impl<'a, T> norito::core::DecodeFromSlice<'a> for RelayMessage<T>
+where
+    T: for<'de> norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+{
+    #[inline]
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let archived = norito::core::archived_from_slice::<Self>(bytes)?;
+        let archived_bytes = archived.bytes();
+        let _pg = norito::core::PayloadCtxGuard::enter(archived_bytes);
+        let value =
+            <Self as norito::core::NoritoDeserialize>::try_deserialize(archived.archived())?;
+        Ok((value, archived_bytes.len()))
     }
 }
 

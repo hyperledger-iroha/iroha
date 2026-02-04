@@ -1,6 +1,8 @@
 # Status
 
 Last update: 2026-02-04
+- P2P: add explicit `DecodeFromSlice` impl for peer run `Message<T>` and make the roundtrip test exercise the trait directly (fixes Pload bound error). Tests not run (not requested).
+- P2P: add explicit `DecodeFromSlice` impl for `RelayMessage<T>` (generic payload) to satisfy strict-safe `decode_from_bytes` bounds; removed the ineffective derive-only attribute. Tests not run (not requested).
 - Perf/decode: derive Norito slice decoding for `NetworkMessage`, `RelayMessage`, and peer run `Message` wrappers, and preallocate inbound P2P read buffers based on frame caps to reduce `RawVec::finish_grow` during decode. Tests not run (per request).
 - Sumeragi: add multi-message BLS aggregate verification in vote verification batches for distinct preimages (with counters + unit coverage) to reduce per-vote verify overhead. Tests not run (per request).
 - Perf/gossip: corrected tx-gossip length accounting to honor Norito compact length prefixes (`len_prefix_len`), updated batch sizing + route sizing helpers, and eliminated TxGossip frame-cap drops. Tests not run (per request).
