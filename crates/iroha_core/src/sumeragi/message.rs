@@ -117,12 +117,9 @@ impl BlockMessage {
 
     /// Network priority for this consensus message.
     ///
-    /// RBC chunks are bulk payload data and should not preempt votes/control flow.
+    /// RBC chunks are required for deliver quorum; deprioritising them stalls consensus.
     pub fn priority(&self) -> iroha_p2p::Priority {
-        match self {
-            Self::RbcChunk(_) | Self::RbcChunkCompact(_) => iroha_p2p::Priority::Low,
-            _ => iroha_p2p::Priority::High,
-        }
+        iroha_p2p::Priority::High
     }
 }
 
@@ -236,7 +233,7 @@ impl<'a> NoritoDeserialize<'a> for BlockMessageWire {
     fn try_deserialize(archived: &'a ncore::Archived<Self>) -> Result<Self, ncore::Error> {
         let ptr = core::ptr::from_ref(archived).cast::<u8>();
         let bytes = ncore::payload_slice_from_ptr(ptr)?;
-        let (message, consumed) = ncore::decode_field_canonical_from_slice::<BlockMessage>(bytes)?;
+        let (message, consumed) = ncore::decode_field_canonical_slice::<BlockMessage>(bytes)?;
         let encoded = Arc::new(bytes[..consumed].to_vec());
         Ok(Self {
             message: Arc::new(message),
@@ -247,7 +244,7 @@ impl<'a> NoritoDeserialize<'a> for BlockMessageWire {
 
 impl<'a> ncore::DecodeFromSlice<'a> for BlockMessageWire {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
-        let (message, consumed) = ncore::decode_field_canonical_from_slice::<BlockMessage>(bytes)?;
+        let (message, consumed) = ncore::decode_field_canonical_slice::<BlockMessage>(bytes)?;
         let encoded = Arc::new(bytes[..consumed].to_vec());
         Ok((
             Self {
@@ -560,7 +557,7 @@ mod tests {
     }
 
     #[test]
-    fn block_message_priority_marks_rbc_chunk_low() {
+    fn block_message_priority_marks_rbc_chunk_high() {
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([2u8; 32]));
         let chunk = super::super::consensus::RbcChunk {
             block_hash,
@@ -571,7 +568,7 @@ mod tests {
             bytes: vec![0u8; 1],
         };
         let msg = BlockMessage::RbcChunk(chunk);
-        assert_eq!(msg.priority(), iroha_p2p::Priority::Low);
+        assert_eq!(msg.priority(), iroha_p2p::Priority::High);
 
         let requester = PeerId::from(KeyPair::random().public_key().clone());
         let fetch = BlockMessage::FetchPendingBlock(FetchPendingBlock {

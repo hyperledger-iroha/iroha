@@ -6375,7 +6375,7 @@ where
 ///
 /// This is intended for hot paths where re-serializing is too costly and the
 /// slice-based decoder already guarantees canonical consumption.
-pub fn decode_field_canonical_from_slice<T>(bytes: &[u8]) -> Result<(T, usize), Error>
+pub fn decode_field_canonical_slice<T>(bytes: &[u8]) -> Result<(T, usize), Error>
 where
     T: for<'de> crate::NoritoDeserialize<'de> + for<'de> DecodeFromSlice<'de>,
 {
@@ -6421,6 +6421,18 @@ where
     note_payload_access(bytes, used);
     drop(payload_guard);
     Ok((value, used))
+}
+
+/// Decode a field using its `DecodeFromSlice` implementation, ensuring full
+/// consumption without re-encoding for canonical length checks.
+///
+/// This is intended for hot paths where re-serializing is too costly and the
+/// slice-based decoder already guarantees canonical consumption.
+pub fn decode_field_canonical_from_slice<T>(bytes: &[u8]) -> Result<(T, usize), Error>
+where
+    T: for<'de> crate::NoritoDeserialize<'de> + for<'de> DecodeFromSlice<'de>,
+{
+    decode_field_canonical_slice(bytes)
 }
 
 fn recompute_canonical_len<T>(value: &T) -> Result<usize, Error>
@@ -6522,6 +6534,15 @@ mod tests {
         0xAABBCCDDu32.serialize(&mut buf).expect("encode");
         let (value, used) = decode_field_canonical_from_slice::<u32>(&buf).expect("decode slice");
         assert_eq!(value, 0xAABBCCDD);
+        assert_eq!(used, buf.len());
+    }
+
+    #[test]
+    fn decode_field_canonical_slice_reads_value() {
+        let mut buf = Vec::new();
+        0xDEADBEEFu32.serialize(&mut buf).expect("encode");
+        let (value, used) = decode_field_canonical_slice::<u32>(&buf).expect("decode slice");
+        assert_eq!(value, 0xDEADBEEF);
         assert_eq!(used, buf.len());
     }
 
