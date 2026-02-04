@@ -12,8 +12,13 @@ use nonzero_ext::nonzero;
 
 #[test]
 fn pagination_behaves() -> Result<()> {
+    // Stored cursors are required to validate multi-batch pagination behavior.
     let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(
-        NetworkBuilder::new().with_pipeline_time(std::time::Duration::from_secs(2)),
+        NetworkBuilder::new()
+            .with_pipeline_time(std::time::Duration::from_secs(2))
+            .with_config_layer(|layer| {
+                layer.write(["pipeline", "query_default_cursor_mode"], "stored");
+            }),
         stringify!(pagination_behaves),
     )?
     else {
