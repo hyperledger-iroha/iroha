@@ -2371,11 +2371,25 @@ mod run {
 
     /// Either message or ping
     #[derive(Encode, Decode, Clone, Debug)]
-    #[norito(decode_from_slice)]
     enum Message<T> {
         Data(T),
         Ping,
         Pong,
+    }
+
+    impl<'a, T> ncore::DecodeFromSlice<'a> for Message<T>
+    where
+        T: ncore::NoritoSerialize + for<'de> ncore::NoritoDeserialize<'de>,
+    {
+        fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+            let archived = ncore::archived_from_slice::<Self>(bytes)?;
+            let archived_bytes = archived.bytes();
+            let _guard = ncore::PayloadCtxGuard::enter(archived_bytes);
+            let value = <Self as ncore::NoritoDeserialize>::try_deserialize(
+                archived.archived(),
+            )?;
+            Ok((value, archived_bytes.len()))
+        }
     }
 
     pub fn data_message_wire_len<T: Encode>(payload: T) -> usize {

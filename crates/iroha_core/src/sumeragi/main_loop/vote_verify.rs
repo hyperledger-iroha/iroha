@@ -380,7 +380,7 @@ pub(super) fn spawn_vote_verify_workers(
 
                         let use_batch = match algorithm {
                             Algorithm::BlsNormal => {
-                                iroha_crypto::signature::bls::verify_aggregate_multi_message_normal(
+                                iroha_crypto::bls_normal_verify_aggregate_multi_message(
                                     &messages,
                                     &signatures,
                                     &public_keys,
@@ -388,7 +388,7 @@ pub(super) fn spawn_vote_verify_workers(
                                 .is_ok()
                             }
                             Algorithm::BlsSmall => {
-                                iroha_crypto::signature::bls::verify_aggregate_multi_message_small(
+                                iroha_crypto::bls_small_verify_aggregate_multi_message(
                                     &messages,
                                     &signatures,
                                     &public_keys,
