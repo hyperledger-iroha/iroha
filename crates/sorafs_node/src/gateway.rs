@@ -361,6 +361,10 @@ impl GatewayDataset {
                 || sample.leaf_digest != leaf.digest
             {
                 let mut details = json::Map::new();
+                details.insert(
+                    "section".into(),
+                    Value::from(format!("proof.chunks[{index}]")),
+                );
                 details.insert("sample_index".into(), Value::from(sample.sample_index));
                 details.insert("chunk_offset".into(), Value::from(sample.chunk_offset));
                 details.insert("chunk_size".into(), Value::from(sample.chunk_size));

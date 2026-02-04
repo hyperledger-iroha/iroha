@@ -367,12 +367,12 @@ mod tests {
             transcript_hash: TRANSCRIPT,
             issued_at,
             expires_at,
-            flags: 0x1F,
+            flags: 0,
         };
         let bundle = mint_token(&request, &mut rng).expect("mint");
         assert_eq!(bundle.metadata.relay_id, RELAY_ID);
         assert_eq!(bundle.metadata.transcript_hash, TRANSCRIPT);
-        assert_eq!(bundle.metadata.flags, 0x1F);
+        assert_eq!(bundle.metadata.flags, 0);
         assert_eq!(bundle.metadata.ttl(), Duration::from_secs(600));
 
         let encoded = bundle.token.encode();

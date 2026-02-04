@@ -37,7 +37,8 @@ pub mod isi {
     /// Domain-separation tag for deterministic offline escrow derivation.
     const OFFLINE_ESCROW_SEED_LABEL: &str = "iroha.offline.escrow.v1";
 
-    fn asset_definition_offline_enabled(
+    /// Read the `offline.enabled` metadata flag from an asset definition.
+    pub(crate) fn asset_definition_offline_enabled(
         metadata: &Metadata,
     ) -> Result<bool, InstructionExecutionError> {
         let key = Name::from_str(OFFLINE_ASSET_ENABLED_METADATA_KEY).map_err(|err| {
@@ -77,7 +78,8 @@ pub mod isi {
         ))
     }
 
-    pub(super) fn offline_escrow_account_id(
+    /// Derive the deterministic offline escrow account for an asset definition.
+    pub(crate) fn offline_escrow_account_id(
         chain_id: &ChainId,
         definition_id: &AssetDefinitionId,
     ) -> AccountId {

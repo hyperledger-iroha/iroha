@@ -4346,7 +4346,7 @@ pub mod message {
             sync::atomic::{AtomicU64, Ordering},
         };
 
-        use iroha_crypto::{Algorithm, KeyPair, PrivateKey, PublicKey, Signature, SignatureOf};
+        use iroha_crypto::{Algorithm, Hash, KeyPair, PrivateKey, PublicKey, Signature, SignatureOf};
         use iroha_data_model::{
             block::BlockSignature,
             consensus::{
@@ -4372,6 +4372,11 @@ pub mod message {
                 ChainId::from("00000000-0000-0000-0000-000000000000"),
                 PERMISSIONED_TAG.to_owned(),
             )
+        }
+
+        fn deterministic_keypair(seed: impl AsRef<[u8]>, algorithm: Algorithm) -> KeyPair {
+            let seed_hash = Hash::new(seed.as_ref());
+            KeyPair::from_seed(seed_hash.as_ref().to_vec(), algorithm)
         }
 
         fn state_with_consensus_keys(
@@ -5259,8 +5264,10 @@ pub mod message {
 
         #[test]
         fn commit_role_signers_require_proxy_tail_quorum() {
-            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_leader =
+                deterministic_keypair(b"commit-role-proxy-tail-leader", Algorithm::BlsNormal);
+            let kp_validator =
+                deterministic_keypair(b"commit-role-proxy-tail-validator", Algorithm::BlsNormal);
             let topology = Topology::new(vec![
                 PeerId::new(kp_leader.public_key().clone()),
                 PeerId::new(kp_validator.public_key().clone()),
@@ -5286,8 +5293,10 @@ pub mod message {
 
         #[test]
         fn commit_role_signers_all_keeps_partial_set() {
-            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_leader =
+                deterministic_keypair(b"commit-role-all-leader", Algorithm::BlsNormal);
+            let kp_validator =
+                deterministic_keypair(b"commit-role-all-validator", Algorithm::BlsNormal);
             let topology = Topology::new(vec![
                 PeerId::new(kp_leader.public_key().clone()),
                 PeerId::new(kp_validator.public_key().clone()),
@@ -5313,10 +5322,12 @@ pub mod message {
 
         #[test]
         fn commit_role_signers_accept_set_b_quorum() {
-            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let kp_proxy = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let kp_set_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_leader =
+                deterministic_keypair(b"commit-role-setb-leader", Algorithm::BlsNormal);
+            let kp_validator =
+                deterministic_keypair(b"commit-role-setb-validator", Algorithm::BlsNormal);
+            let kp_proxy = deterministic_keypair(b"commit-role-setb-proxy", Algorithm::BlsNormal);
+            let kp_set_b = deterministic_keypair(b"commit-role-setb-peer", Algorithm::BlsNormal);
             let topology = Topology::new(vec![
                 PeerId::new(kp_leader.public_key().clone()),
                 PeerId::new(kp_validator.public_key().clone()),
