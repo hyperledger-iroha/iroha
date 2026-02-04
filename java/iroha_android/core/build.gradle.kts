@@ -34,6 +34,10 @@ tasks.withType<Test>().configureEach {
     if (!harnessFilter.isNullOrBlank()) {
         systemProperty("android.test.mains", harnessFilter)
     }
+    val nativeLibPath = System.getenv("IROHA_NATIVE_LIBRARY_PATH")
+    if (!nativeLibPath.isNullOrBlank()) {
+        jvmArgs("-Djava.library.path=$nativeLibPath")
+    }
 }
 
 sourceSets {
