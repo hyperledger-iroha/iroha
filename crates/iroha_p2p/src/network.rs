@@ -484,6 +484,7 @@ enum RelayTarget {
 }
 
 #[derive(Clone, Debug, Encode, Decode)]
+#[norito(decode_from_slice)]
 struct RelayMessage<T> {
     origin: PeerId,
     target: RelayTarget,
@@ -506,15 +507,6 @@ impl<T> RelayMessage<T> {
     #[allow(dead_code)]
     fn decremented_ttl(&self) -> Option<u8> {
         self.ttl.checked_sub(1)
-    }
-}
-
-impl<'a, T> norito::core::DecodeFromSlice<'a> for RelayMessage<T>
-where
-    T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
-{
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        norito::core::decode_field_canonical::<Self>(bytes)
     }
 }
 

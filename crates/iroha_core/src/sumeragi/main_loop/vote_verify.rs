@@ -18,6 +18,8 @@ const VOTE_VERIFY_BATCH_MAX: usize = 64;
 static VOTE_VERIFY_AGGREGATE_USED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VOTE_VERIFY_AGGREGATE_FALLBACK_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VOTE_VERIFY_MISSING_POP_TOTAL: AtomicU64 = AtomicU64::new(0);
+static VOTE_VERIFY_MULTI_USED_TOTAL: AtomicU64 = AtomicU64::new(0);
+static VOTE_VERIFY_MULTI_FALLBACK_TOTAL: AtomicU64 = AtomicU64::new(0);
 
 fn resolve_worker_config(
     worker_threads: usize,
@@ -241,20 +243,11 @@ pub(super) fn spawn_vote_verify_workers(
                         });
                     }
 
+                    let mut multi_candidates: BTreeMap<Algorithm, Vec<usize>> = BTreeMap::new();
+
                     for ((algorithm, preimage), indices) in groups {
                         if indices.len() == 1 {
-                            let idx = indices[0];
-                            let prepared_vote = prepared[idx].as_ref().expect("prepared vote");
-                            let signature_result = verify_single(prepared_vote);
-                            if let Err(err) = &signature_result {
-                                log_vote_verify_rejection(&prepared_vote.work, err);
-                            }
-                            let prepared_vote = prepared[idx].take().expect("prepared vote");
-                            results.push(VoteVerifyResult {
-                                id: prepared_vote.work.id,
-                                key: prepared_vote.work.key,
-                                signature_result,
-                            });
+                            multi_candidates.entry(algorithm).or_default().push(indices[0]);
                             continue;
                         }
 
@@ -335,6 +328,91 @@ pub(super) fn spawn_vote_verify_workers(
                                 use_batch,
                                 ?algorithm,
                                 "vote verify aggregate status"
+                            );
+                        }
+
+                        for idx in indices {
+                            let prepared_vote = prepared[idx].as_ref().expect("prepared vote");
+                            let signature_result = if use_batch {
+                                Ok(())
+                            } else {
+                                verify_single(prepared_vote)
+                            };
+                            if let Err(err) = &signature_result {
+                                log_vote_verify_rejection(&prepared_vote.work, err);
+                            }
+                            let prepared_vote = prepared[idx].take().expect("prepared vote");
+                            results.push(VoteVerifyResult {
+                                id: prepared_vote.work.id,
+                                key: prepared_vote.work.key,
+                                signature_result,
+                            });
+                        }
+                    }
+
+                    for (algorithm, indices) in multi_candidates {
+                        if indices.len() == 1 {
+                            let idx = indices[0];
+                            let prepared_vote = prepared[idx].as_ref().expect("prepared vote");
+                            let signature_result = verify_single(prepared_vote);
+                            if let Err(err) = &signature_result {
+                                log_vote_verify_rejection(&prepared_vote.work, err);
+                            }
+                            let prepared_vote = prepared[idx].take().expect("prepared vote");
+                            results.push(VoteVerifyResult {
+                                id: prepared_vote.work.id,
+                                key: prepared_vote.work.key,
+                                signature_result,
+                            });
+                            continue;
+                        }
+
+                        let mut messages: Vec<&[u8]> = Vec::with_capacity(indices.len());
+                        let mut signatures: Vec<&[u8]> = Vec::with_capacity(indices.len());
+                        let mut public_keys: Vec<&[u8]> = Vec::with_capacity(indices.len());
+                        for idx in &indices {
+                            let prepared_vote = prepared[*idx].as_ref().expect("prepared vote");
+                            let (_, pk_bytes) = prepared_vote.public_key.to_bytes();
+                            messages.push(prepared_vote.preimage.as_slice());
+                            signatures.push(prepared_vote.work.vote.bls_sig.as_slice());
+                            public_keys.push(pk_bytes);
+                        }
+
+                        let use_batch = match algorithm {
+                            Algorithm::BlsNormal => {
+                                iroha_crypto::signature::bls::verify_aggregate_multi_message_normal(
+                                    &messages,
+                                    &signatures,
+                                    &public_keys,
+                                )
+                                .is_ok()
+                            }
+                            Algorithm::BlsSmall => {
+                                iroha_crypto::signature::bls::verify_aggregate_multi_message_small(
+                                    &messages,
+                                    &signatures,
+                                    &public_keys,
+                                )
+                                .is_ok()
+                            }
+                            _ => false,
+                        };
+                        let aggregate_total = if use_batch {
+                            VOTE_VERIFY_MULTI_USED_TOTAL
+                                .fetch_add(indices.len() as u64, Ordering::Relaxed)
+                                .saturating_add(indices.len() as u64)
+                        } else {
+                            VOTE_VERIFY_MULTI_FALLBACK_TOTAL
+                                .fetch_add(indices.len() as u64, Ordering::Relaxed)
+                                .saturating_add(indices.len() as u64)
+                        };
+                        if super::status::should_log_vote_drop_count(aggregate_total) {
+                            debug!(
+                                aggregate_total,
+                                batch = indices.len(),
+                                use_batch,
+                                ?algorithm,
+                                "vote verify multi-message aggregate status"
                             );
                         }
 
@@ -495,8 +573,25 @@ impl Actor {
 }
 
 #[cfg(test)]
+pub(super) fn reset_vote_verify_batch_metrics_for_tests() {
+    VOTE_VERIFY_AGGREGATE_USED_TOTAL.store(0, Ordering::Relaxed);
+    VOTE_VERIFY_AGGREGATE_FALLBACK_TOTAL.store(0, Ordering::Relaxed);
+    VOTE_VERIFY_MISSING_POP_TOTAL.store(0, Ordering::Relaxed);
+    VOTE_VERIFY_MULTI_USED_TOTAL.store(0, Ordering::Relaxed);
+    VOTE_VERIFY_MULTI_FALLBACK_TOTAL.store(0, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+pub(super) fn vote_verify_multi_batch_totals_for_tests() -> (u64, u64) {
+    (
+        VOTE_VERIFY_MULTI_USED_TOTAL.load(Ordering::Relaxed),
+        VOTE_VERIFY_MULTI_FALLBACK_TOTAL.load(Ordering::Relaxed),
+    )
+}
+
+#[cfg(test)]
 mod tests {
-    use super::resolve_worker_config;
+    use super::*;
 
     #[test]
     fn vote_verify_worker_config_auto_scales() {
@@ -507,5 +602,98 @@ mod tests {
         assert_eq!(threads, expected_threads);
         assert_eq!(work_cap, expected_threads.saturating_mul(4).max(4));
         assert_eq!(result_cap, expected_threads.saturating_mul(8).max(8));
+    }
+
+    #[cfg(feature = "bls")]
+    mod bls {
+        use super::*;
+        use std::time::Duration;
+
+        use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
+        use iroha_data_model::block::BlockHeader;
+        use iroha_data_model::peer::PeerId;
+
+        #[test]
+        fn vote_verify_uses_multi_message_batch_for_distinct_preimages() {
+            reset_vote_verify_batch_metrics_for_tests();
+
+            let handle = spawn_vote_verify_workers(None, 1, 8, 8);
+            let work_tx = handle.work_txs[0].clone();
+
+            let mut keypairs = Vec::new();
+            let mut peers = Vec::new();
+            for idx in 0..4u8 {
+                let seed = vec![idx; 32];
+                let kp = KeyPair::from_seed(seed, Algorithm::BlsNormal);
+                peers.push(PeerId::from(kp.public_key().clone()));
+                keypairs.push(kp);
+            }
+            let topology = Arc::new(super::network_topology::Topology::new(peers));
+            let pops = Arc::new(BTreeMap::new());
+            let chain_id: ChainId = "vote-batch-test".parse().expect("chain id");
+
+            let mut works = Vec::new();
+            for (idx, kp) in keypairs.iter().enumerate() {
+                let mut hash_bytes = [0u8; Hash::LENGTH];
+                hash_bytes[0] = idx as u8;
+                hash_bytes[1] = 0xA5;
+                hash_bytes[Hash::LENGTH - 1] = 0x5A ^ (idx as u8);
+                let block_hash =
+                    HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(hash_bytes));
+                let mut vote = crate::sumeragi::consensus::Vote {
+                    phase: crate::sumeragi::consensus::Phase::Commit,
+                    block_hash,
+                    parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
+                    post_state_root: Hash::prehashed([1u8; Hash::LENGTH]),
+                    height: 1,
+                    view: 0,
+                    epoch: 0,
+                    highest_qc: None,
+                    signer: idx as u32,
+                    bls_sig: Vec::new(),
+                };
+                let preimage = crate::sumeragi::consensus::vote_preimage(
+                    &chain_id,
+                    super::PERMISSIONED_TAG,
+                    &vote,
+                );
+                let sig = Signature::new(kp.private_key(), &preimage);
+                vote.bls_sig = sig.payload().to_vec();
+                let key = VoteVerifyKey::from_vote(&vote);
+                works.push(VoteVerifyWork {
+                    id: idx as u64,
+                    key,
+                    vote,
+                    signature_topology: Arc::clone(&topology),
+                    pops: Arc::clone(&pops),
+                    chain_id: chain_id.clone(),
+                    mode_tag: super::PERMISSIONED_TAG,
+                });
+            }
+
+            for work in works {
+                work_tx.send(work).expect("send vote verify work");
+            }
+
+            for _ in 0..4 {
+                handle
+                    .result_rx
+                    .recv_timeout(Duration::from_secs(2))
+                    .expect("vote verify result");
+            }
+
+            let (used, _fallback) = vote_verify_multi_batch_totals_for_tests();
+            assert!(
+                used >= 2,
+                "expected multi-message batch verification to be used"
+            );
+
+            drop(handle.work_txs);
+            for join in handle.join_handles {
+                if let Err(err) = join.join() {
+                    panic!("vote verify worker panicked: {err:?}");
+                }
+            }
+        }
     }
 }

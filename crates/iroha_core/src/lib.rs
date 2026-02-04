@@ -196,6 +196,7 @@ pub type EventsSender = broadcast::Sender<EventBox>;
 
 /// Network message envelope exchanged between peers.
 #[derive(Clone, Debug, Decode, Encode)]
+#[norito(decode_from_slice)]
 pub enum NetworkMessage {
     /// Blockchain consensus data message.
     SumeragiBlock(Box<BlockMessageWire>),
@@ -229,12 +230,6 @@ pub enum NetworkMessage {
     StreamingControl(Box<ControlFrame>),
     /// Gossip for `SoraNet` `PoW`/puzzle runtime configuration (Norito-encoded bytes).
     SoranetPowConfig(Vec<u8>),
-}
-
-impl<'a> norito::core::DecodeFromSlice<'a> for NetworkMessage {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        norito::core::decode_field_canonical::<Self>(bytes)
-    }
 }
 
 // Derive Encode/Decode above for NetworkMessage

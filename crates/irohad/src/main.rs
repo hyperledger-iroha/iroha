@@ -16,7 +16,7 @@ mod i18n;
 
 use std::{
     borrow::Cow,
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     convert::TryFrom,
     env,
     ffi::OsString,
@@ -93,7 +93,7 @@ use mv::storage::StorageReadOnly;
 use iroha_telemetry::metrics::set_duplicate_metrics_panic;
 use iroha_torii::Torii;
 use iroha_version::BuildLine;
-use norito::{derive::JsonDeserialize, streaming::CapabilityFlags};
+use norito::{codec::Encode, derive::JsonDeserialize, streaming::CapabilityFlags};
 use parking_lot::deadlock;
 use tokio::{
     sync::{broadcast, mpsc},
@@ -4241,9 +4241,15 @@ impl Iroha {
         #[cfg(not(feature = "telemetry"))]
         let block_sync_telemetry = None;
         let trusted = config.common.trusted_peers.value();
-        let trusted_peers = std::iter::once(trusted.myself.id().clone())
+        let self_peer_id = trusted.myself.id().clone();
+        let trusted_peers: BTreeSet<_> = std::iter::once(self_peer_id.clone())
             .chain(trusted.others.iter().map(|peer| peer.id().clone()))
             .collect();
+        let max_peer_id = trusted_peers
+            .iter()
+            .max_by_key(|peer_id| peer_id.encoded_len())
+            .cloned()
+            .unwrap_or_else(|| self_peer_id.clone());
         let (block_sync, child) = BlockSynchronizer::from_config(
             &config.block_sync,
             sumeragi.clone(),
@@ -4264,6 +4270,8 @@ impl Iroha {
             config.common.chain.clone(),
             config.transaction_gossiper,
             &config.network,
+            self_peer_id,
+            max_peer_id,
             network.clone(),
             Arc::clone(&queue),
             Arc::clone(&state),

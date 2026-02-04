@@ -4,6 +4,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     io::Write,
     num::{NonZeroU32, NonZeroUsize},
+    str::FromStr,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -12,9 +13,12 @@ use iroha_config::parameters::actual::{
     DataspaceGossip, DataspaceGossipFallback, LaneConfig as LaneGeometry, Network as NetworkConfig,
     RestrictedPublicPayload, TransactionGossiper as Config,
 };
-use iroha_crypto::HashOf;
+use iroha_crypto::{HashOf, KeyPair};
 use iroha_data_model::{
     ChainId, DataSpaceId,
+    account::AccountId,
+    domain::DomainId,
+    isi::InstructionBox,
     nexus::{LaneCatalog, LaneId, LaneVisibility},
     peer::PeerId,
     transaction::SignedTransaction,
@@ -65,8 +69,60 @@ const OUTCOME_PUBLIC_OVERLAY_FORWARD: &str = "restricted_public_overlay_forward"
 const SURFACE_PUBLIC_OVERLAY: &str = "public_overlay";
 const GOSSIP_SEED_PUBLIC_DOMAIN: u64 = 0x5055_424C_4943_5F00;
 const GOSSIP_SEED_RESTRICTED_DOMAIN: u64 = 0x5245_5354_5249_4354;
-// Reserve headroom for NetworkMessage + RelayMessage overhead in tx gossip frames.
-const TX_GOSSIP_FRAME_HEADROOM_BYTES: usize = 512;
+
+fn tx_gossip_frame_payload_cap(
+    network_cfg: &NetworkConfig,
+    chain_id: &ChainId,
+    self_peer_id: &PeerId,
+    max_peer_id: &PeerId,
+) -> usize {
+    let plaintext_cap = network_cfg
+        .max_frame_bytes_tx_gossip
+        .min(iroha_p2p::frame_plaintext_cap(network_cfg.max_frame_bytes));
+    if plaintext_cap == 0 {
+        return 0;
+    }
+    let dummy_keypair = KeyPair::random();
+    let dummy_domain = DomainId::from_str("dummy").expect("static domain id should parse");
+    let dummy_authority = AccountId::new(dummy_domain, dummy_keypair.public_key().clone());
+    let dummy_signed = iroha_data_model::transaction::TransactionBuilder::new(
+        chain_id.clone(),
+        dummy_authority,
+    )
+    .with_instructions(std::iter::empty::<InstructionBox>())
+    .sign(dummy_keypair.private_key());
+    let probe_payload_len = plaintext_cap;
+    let payload = Arc::new(vec![0u8; probe_payload_len]);
+    let probe_gossip = TransactionGossip {
+        txs: vec![GossipTransaction::with_encoded(dummy_signed, payload)],
+        routes: vec![GossipRoute {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::GLOBAL,
+        }],
+        plane: GossipPlane::Public,
+    };
+    let gossip_len = probe_gossip
+        .encoded_len_exact()
+        .or_else(|| probe_gossip.encoded_len_hint())
+        .unwrap_or(0);
+    let payload = NetworkMessage::TransactionGossiper(Box::new(probe_gossip));
+    let direct_len = iroha_p2p::network::data_frame_wire_len(
+        self_peer_id,
+        Some(max_peer_id),
+        network_cfg.relay_ttl,
+        Priority::Low,
+        &payload,
+    );
+    let broadcast_len = iroha_p2p::network::data_frame_wire_len(
+        self_peer_id,
+        None,
+        network_cfg.relay_ttl,
+        Priority::Low,
+        &payload,
+    );
+    let envelope_len = direct_len.max(broadcast_len).saturating_sub(gossip_len);
+    plaintext_cap.saturating_sub(envelope_len)
+}
 
 fn splitmix64(mut state: u64) -> u64 {
     state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
@@ -226,6 +282,8 @@ impl TransactionGossiper {
             dataspace,
         }: Config,
         network_cfg: &NetworkConfig,
+        self_peer_id: PeerId,
+        max_peer_id: PeerId,
         network: IrohaNetwork,
         queue: Arc<Queue>,
         state: Arc<State>,
@@ -239,9 +297,10 @@ impl TransactionGossiper {
             dataspace_cfg.restricted_target_reshuffle,
             now,
         );
-        // Keep gossip batches below the encrypted per-topic cap by reserving AEAD + envelope overhead.
-        let tx_frame_cap = iroha_p2p::frame_plaintext_cap(network_cfg.max_frame_bytes_tx_gossip)
-            .saturating_sub(TX_GOSSIP_FRAME_HEADROOM_BYTES);
+        // Keep gossip batches below the plaintext per-topic cap while respecting the encrypted
+        // frame ceiling and the P2P message envelope overhead.
+        let tx_frame_cap =
+            tx_gossip_frame_payload_cap(network_cfg, &chain_id, &self_peer_id, &max_peer_id);
         let gossip_deferred = vec![Vec::new(); gossip_resend_ticks.get() as usize];
         Self {
             chain_id,
@@ -1333,7 +1392,8 @@ impl NoritoSerialize for TransactionGossip {
     }
 
     fn encoded_len_exact(&self) -> Option<usize> {
-        let txs_payload_len = gossip_vec_payload_len_exact(self.txs.iter())?;
+        let txs_payload_len = gossip_vec_payload_len_cached(self.txs.iter())
+            .or_else(|| gossip_vec_payload_len_exact(self.txs.iter()))?;
         let routes_payload_len = gossip_routes_payload_len(self.routes.len())?;
         gossip_message_encoded_len(txs_payload_len, routes_payload_len)
     }
@@ -1421,8 +1481,7 @@ impl<'a> NoritoDeserialize<'a> for GossipTransaction {
     fn try_deserialize(archived: &'a ncore::Archived<Self>) -> Result<Self, ncore::Error> {
         let ptr = core::ptr::from_ref(archived).cast::<u8>();
         let bytes = ncore::payload_slice_from_ptr(ptr)?;
-        let (signed, consumed) =
-            ncore::decode_field_canonical_from_slice::<SignedTransaction>(bytes)?;
+        let (signed, consumed) = ncore::decode_field_canonical_slice::<SignedTransaction>(bytes)?;
         let encoded = Arc::new(bytes[..consumed].to_vec());
         Ok(Self {
             signed: Arc::new(signed),
@@ -1433,8 +1492,7 @@ impl<'a> NoritoDeserialize<'a> for GossipTransaction {
 
 impl<'a> ncore::DecodeFromSlice<'a> for GossipTransaction {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
-        let (signed, consumed) =
-            ncore::decode_field_canonical_from_slice::<SignedTransaction>(bytes)?;
+        let (signed, consumed) = ncore::decode_field_canonical_slice::<SignedTransaction>(bytes)?;
         let encoded = Arc::new(bytes[..consumed].to_vec());
         Ok((
             Self {
@@ -1455,36 +1513,63 @@ pub enum GossipPlane {
     Restricted,
 }
 
-const GOSSIP_LEN_HEADER_BYTES: usize = core::mem::size_of::<u64>();
 const GOSSIP_PLANE_BYTES: usize = core::mem::size_of::<u32>();
-const GOSSIP_ROUTE_BYTES: usize =
-    GOSSIP_LEN_HEADER_BYTES * 2 + core::mem::size_of::<u32>() + core::mem::size_of::<u64>();
+const GOSSIP_SEQ_LEN_BYTES: usize = core::mem::size_of::<u64>();
+
+fn gossip_route_encoded_len() -> Option<usize> {
+    let route = GossipRoute {
+        lane_id: LaneId::SINGLE,
+        dataspace_id: DataSpaceId::GLOBAL,
+    };
+    route.encoded_len_exact().or_else(|| route.encoded_len_hint())
+}
+
+fn gossip_message_empty_len() -> Option<usize> {
+    let txs_payload_len = GOSSIP_SEQ_LEN_BYTES;
+    let routes_payload_len = GOSSIP_SEQ_LEN_BYTES;
+    gossip_message_encoded_len(txs_payload_len, routes_payload_len)
+}
 
 fn gossip_message_encoded_len(txs_payload_len: usize, routes_payload_len: usize) -> Option<usize> {
-    let mut total = GOSSIP_LEN_HEADER_BYTES.checked_add(txs_payload_len)?;
-    total = total.checked_add(GOSSIP_LEN_HEADER_BYTES)?;
-    total = total.checked_add(routes_payload_len)?;
-    total = total.checked_add(GOSSIP_LEN_HEADER_BYTES)?;
-    total = total.checked_add(GOSSIP_PLANE_BYTES)?;
+    let mut total = ncore::len_prefix_len(txs_payload_len).checked_add(txs_payload_len)?;
+    total = total
+        .checked_add(ncore::len_prefix_len(routes_payload_len))?
+        .checked_add(routes_payload_len)?;
+    total = total
+        .checked_add(ncore::len_prefix_len(GOSSIP_PLANE_BYTES))?
+        .checked_add(GOSSIP_PLANE_BYTES)?;
     Some(total)
 }
 
 fn gossip_vec_payload_len_exact<'a>(
     items: impl Iterator<Item = &'a GossipTransaction>,
 ) -> Option<usize> {
-    let mut total = GOSSIP_LEN_HEADER_BYTES;
+    let mut total = GOSSIP_SEQ_LEN_BYTES;
     for item in items {
         let item_len = item.encoded_len_exact()?;
-        total = total.checked_add(GOSSIP_LEN_HEADER_BYTES)?;
+        total = total.checked_add(ncore::len_prefix_len(item_len))?;
+        total = total.checked_add(item_len)?;
+    }
+    Some(total)
+}
+
+fn gossip_vec_payload_len_cached<'a>(
+    items: impl Iterator<Item = &'a GossipTransaction>,
+) -> Option<usize> {
+    let mut total = GOSSIP_SEQ_LEN_BYTES;
+    for item in items {
+        let item_len = item.encoded.as_ref().map(|bytes| bytes.len())?;
+        total = total.checked_add(ncore::len_prefix_len(item_len))?;
         total = total.checked_add(item_len)?;
     }
     Some(total)
 }
 
 fn gossip_routes_payload_len(len: usize) -> Option<usize> {
-    let per_elem = GOSSIP_LEN_HEADER_BYTES.checked_add(GOSSIP_ROUTE_BYTES)?;
+    let route_len = gossip_route_encoded_len()?;
+    let per_elem = ncore::len_prefix_len(route_len).checked_add(route_len)?;
     let elems = per_elem.checked_mul(len)?;
-    GOSSIP_LEN_HEADER_BYTES.checked_add(elems)
+    GOSSIP_SEQ_LEN_BYTES.checked_add(elems)
 }
 
 /// Lane/dataspace tags carried alongside gossiped transactions for visibility gating.
@@ -1517,10 +1602,23 @@ fn partition_gossip_batch(
     message.txs.reserve(reserved);
     message.routes.reserve(reserved);
     let mut requeue = Vec::with_capacity(txs.len());
-    let mut txs_payload_len = GOSSIP_LEN_HEADER_BYTES;
-    let mut routes_payload_len = GOSSIP_LEN_HEADER_BYTES;
-    let mut encoded_len =
-        gossip_message_encoded_len(txs_payload_len, routes_payload_len).unwrap_or(usize::MAX);
+    let mut encoded_len = gossip_message_empty_len().unwrap_or(0);
+    let Some(route_len) = gossip_route_encoded_len() else {
+        requeue.extend(txs.into_iter().map(|entry| entry.tx.as_ref().hash()));
+        return PartitionedGossipBatch {
+            message,
+            requeue,
+            encoded_len,
+        };
+    };
+    let Some(route_entry_len) = ncore::len_prefix_len(route_len).checked_add(route_len) else {
+        requeue.extend(txs.into_iter().map(|entry| entry.tx.as_ref().hash()));
+        return PartitionedGossipBatch {
+            message,
+            requeue,
+            encoded_len,
+        };
+    };
 
     if frame_cap_bytes == 0 {
         requeue.extend(txs.into_iter().map(|entry| entry.tx.as_ref().hash()));
@@ -1541,22 +1639,14 @@ fn partition_gossip_batch(
 
         let routing = entry.routing;
         let tx_payload_len = entry.payload.len();
-        let Some(next_txs_payload_len) = txs_payload_len
-            .checked_add(GOSSIP_LEN_HEADER_BYTES)
-            .and_then(|total| total.checked_add(tx_payload_len))
+        let Some(tx_entry_len) = ncore::len_prefix_len(tx_payload_len).checked_add(tx_payload_len)
         else {
             requeue.push(hash);
             continue;
         };
-        let Some(next_routes_payload_len) = routes_payload_len
-            .checked_add(GOSSIP_LEN_HEADER_BYTES)
-            .and_then(|total| total.checked_add(GOSSIP_ROUTE_BYTES))
-        else {
-            requeue.push(hash);
-            continue;
-        };
-        let Some(next_encoded_len) =
-            gossip_message_encoded_len(next_txs_payload_len, next_routes_payload_len)
+        let Some(next_encoded_len) = encoded_len
+            .checked_add(tx_entry_len)
+            .and_then(|total| total.checked_add(route_entry_len))
         else {
             requeue.push(hash);
             continue;
@@ -1574,15 +1664,22 @@ fn partition_gossip_batch(
             lane_id: routing.lane_id,
             dataspace_id: routing.dataspace_id,
         });
-        txs_payload_len = next_txs_payload_len;
-        routes_payload_len = next_routes_payload_len;
         encoded_len = next_encoded_len;
+    }
+
+    let mut exact_len = message.encoded_len_exact().unwrap_or(encoded_len);
+    while exact_len > frame_cap_bytes && !message.txs.is_empty() {
+        if let Some(removed) = message.txs.pop() {
+            requeue.push(removed.as_signed().hash());
+        }
+        message.routes.pop();
+        exact_len = message.encoded_len_exact().unwrap_or(exact_len);
     }
 
     PartitionedGossipBatch {
         message,
         requeue,
-        encoded_len,
+        encoded_len: exact_len,
     }
 }
 
@@ -1765,11 +1862,14 @@ mod tests {
         let mut network_cfg = test_network_config(socket_addr!(127.0.0.1:0));
         network_cfg.max_frame_bytes = 512;
         network_cfg.max_frame_bytes_tx_gossip = 1024;
-        let expected = iroha_p2p::frame_plaintext_cap(network_cfg.max_frame_bytes_tx_gossip)
-            .saturating_sub(TX_GOSSIP_FRAME_HEADROOM_BYTES);
+        let self_peer_id = PeerId::new(PEER_KEYPAIR.public_key().clone());
+        let max_peer_id = self_peer_id.clone();
+        let chain_id: ChainId = "test-chain".parse().expect("chain id");
+        let expected =
+            tx_gossip_frame_payload_cap(&network_cfg, &chain_id, &self_peer_id, &max_peer_id);
 
         let (network, _child) = IrohaNetwork::start(
-            KeyPair::random(),
+            PEER_KEYPAIR.clone(),
             network_cfg.clone(),
             None,
             None,
@@ -1780,7 +1880,7 @@ mod tests {
         .expect("network starts");
 
         let gossiper = TransactionGossiper::from_config(
-            "test-chain".parse().expect("chain id"),
+            chain_id,
             Config {
                 gossip_period: Duration::from_millis(1000),
                 gossip_size: NonZeroU32::new(1).expect("nonzero size"),
@@ -1788,6 +1888,8 @@ mod tests {
                 dataspace: DataspaceGossip::default(),
             },
             &network_cfg,
+            self_peer_id,
+            max_peer_id,
             network,
             queue,
             Arc::clone(&state),
@@ -2030,7 +2132,8 @@ mod tests {
         };
 
         let encoded = route.encode();
-        assert_eq!(encoded.len(), GOSSIP_ROUTE_BYTES);
+        let expected = gossip_route_encoded_len().expect("gossip route len");
+        assert_eq!(encoded.len(), expected);
 
         let decoded: GossipRoute =
             Decode::decode(&mut encoded.as_slice()).expect("decode gossip route");
