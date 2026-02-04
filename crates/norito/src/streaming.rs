@@ -2489,6 +2489,13 @@ pub mod chunk {
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
+    pub struct FrameCountOverflowInfo {
+        pub max: u32,
+        pub found: u32,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub struct AudioSampleCountMismatchInfo {
         pub expected: u64,
         pub found: u64,
@@ -2498,6 +2505,30 @@ pub mod chunk {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub struct ChromaPayloadTruncatedInfo;
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
+    pub struct ChromaDimensionsNotEvenInfo {
+        pub width: u16,
+        pub height: u16,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
+    pub struct AudioFrameCadenceMismatchInfo {
+        pub expected: u16,
+        pub found: u16,
+        pub sample_rate: u32,
+        pub frame_duration_ns: u32,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
+    pub struct AudioFrameCadenceOverflowInfo {
+        pub expected: u64,
+        pub sample_rate: u32,
+        pub frame_duration_ns: u32,
+    }
 
     #[derive(Debug, Error)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -2542,6 +2573,12 @@ pub mod chunk {
             found = .0.found
         )]
         BlockCountMismatch(BlockCountMismatchInfo),
+        #[error(
+            "frame count exceeds u16 range: expected <= {max}, found {found}",
+            max = .0.max,
+            found = .0.found
+        )]
+        FrameCountOverflow(FrameCountOverflowInfo),
         #[error("run-length stream overflow while decoding block {0}")]
         RleOverflow(u32),
         #[error("run-length stream truncated while decoding block {0}")]
@@ -2555,6 +2592,21 @@ pub mod chunk {
         #[error("audio track provided but encoder audio is disabled")]
         AudioTrackUnexpected,
         #[error(
+            "audio frame cadence mismatch: expected {expected} samples for {sample_rate} Hz/{frame_duration_ns} ns, found {found}",
+            expected = .0.expected,
+            found = .0.found,
+            sample_rate = .0.sample_rate,
+            frame_duration_ns = .0.frame_duration_ns
+        )]
+        AudioFrameCadenceMismatch(AudioFrameCadenceMismatchInfo),
+        #[error(
+            "audio frame cadence overflow for {sample_rate} Hz/{frame_duration_ns} ns (expected {expected} samples)",
+            expected = .0.expected,
+            sample_rate = .0.sample_rate,
+            frame_duration_ns = .0.frame_duration_ns
+        )]
+        AudioFrameCadenceOverflow(AudioFrameCadenceOverflowInfo),
+        #[error(
             "audio sample count mismatch: expected {expected}, found {found}",
             expected = .0.expected,
             found = .0.found
@@ -2562,6 +2614,12 @@ pub mod chunk {
         AudioSampleCountMismatch(AudioSampleCountMismatchInfo),
         #[error("chroma payload truncated")]
         ChromaPayloadTruncated(ChromaPayloadTruncatedInfo),
+        #[error(
+            "chroma 4:2:0 requires even dimensions, got {width}x{height}",
+            width = .0.width,
+            height = .0.height
+        )]
+        ChromaDimensionsNotEven(ChromaDimensionsNotEvenInfo),
         #[error("audio sample count overflow during validation")]
         AudioSampleCountOverflow,
         #[error("audio frame count exceeds u16 range")]
@@ -2693,6 +2751,7 @@ pub mod chunk {
                 let cropped =
                     crate::streaming::codec::crop_frame_luma(&reconstructed, dims, aligned_dims);
                 let chroma = if chunk.len() > offset {
+                    crate::streaming::codec::ensure_chroma_even_dimensions(dims)?;
                     if chunk.len().saturating_sub(offset) < 8 {
                         return Err(CodecError::ChromaPayloadTruncated(
                             ChromaPayloadTruncatedInfo,
@@ -2918,8 +2977,10 @@ pub mod codec {
         RdoMode, SegmentAudio, SegmentHeader, Signature, SignedRansTablesV1, StorageClass,
         StreamMetadata, Timestamp,
         chunk::{
-            AudioSampleCountMismatchInfo, BlockCountMismatchInfo, ChunkError, CodecError,
-            FrameLengthMismatch, chunk_commitments, derive_nonce_salt, merkle_root,
+            AudioFrameCadenceMismatchInfo, AudioFrameCadenceOverflowInfo,
+            AudioSampleCountMismatchInfo, BlockCountMismatchInfo, ChromaDimensionsNotEvenInfo,
+            ChunkError, CodecError, FrameCountOverflowInfo, FrameLengthMismatch,
+            chunk_commitments, derive_nonce_salt, merkle_root,
         },
         json, norito_core, saturating_usize_to_u32, saturating_usize_to_u64,
     };
@@ -2938,6 +2999,7 @@ pub mod codec {
     const NEURAL_HIDDEN: usize = 32;
     const NEURAL_OUTPUT: usize = 4;
     const DEFAULT_NEURAL_SEED: [u8; 32] = *b"nsc-neural-predictor-v1--seed!!!";
+    #[cfg(not(feature = "streaming-fixed-point-dct"))]
     const DCT_FACTORS: [[f64; 8]; 8] = [
         [
             0.3535533905932737,
@@ -3020,6 +3082,25 @@ pub mod codec {
             -0.0975451610080643,
         ],
     ];
+
+    #[cfg(feature = "streaming-fixed-point-dct")]
+    const DCT_FACTORS_Q15: [[i16; 8]; 8] = [
+        [11585, 11585, 11585, 11585, 11585, 11585, 11585, 11585],
+        [16069, 13623, 9102, 3196, -3196, -9102, -13623, -16069],
+        [15137, 6270, -6270, -15137, -15137, -6270, 6270, 15137],
+        [13623, -3196, -16069, -9102, 9102, 16069, 3196, -13623],
+        [11585, -11585, -11585, 11585, 11585, -11585, -11585, 11585],
+        [9102, -16069, 3196, 13623, -13623, -3196, 16069, -9102],
+        [6270, -15137, 15137, -6270, -6270, 15137, -15137, 6270],
+        [3196, -9102, 13623, -16069, 16069, -13623, 9102, -3196],
+    ];
+
+    #[cfg(feature = "streaming-fixed-point-dct")]
+    const DCT_Q_BITS: u32 = 15;
+    #[cfg(feature = "streaming-fixed-point-dct")]
+    const DCT_SHIFT: u32 = DCT_Q_BITS * 2;
+    #[cfg(feature = "streaming-fixed-point-dct")]
+    const DCT_ROUND: i64 = 1 << (DCT_SHIFT - 1);
 
     #[derive(Debug, Error)]
     pub enum BundleTableError {
@@ -3806,6 +3887,12 @@ pub mod codec {
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
+    pub struct ChunkCountOverflowInfo {
+        pub found: u32,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub struct DescriptorOffsetDetails {
         pub index: u32,
         pub expected: u32,
@@ -3882,6 +3969,8 @@ pub mod codec {
             chunks = .0.chunks
         )]
         CountMismatch(ChunkListCountMismatch),
+        #[error("chunk count exceeds u16 range: found {found}", found = .0.found)]
+        ChunkCountOverflow(ChunkCountOverflowInfo),
         #[error(
             "header chunk count ({header}) does not match descriptor list ({actual})",
             header = .0.header,
@@ -4062,9 +4151,24 @@ pub mod codec {
         pub v: Bytes,
     }
 
+    pub(crate) fn ensure_chroma_even_dimensions(
+        dimensions: FrameDimensions,
+    ) -> Result<(), CodecError> {
+        if dimensions.width % 2 != 0 || dimensions.height % 2 != 0 {
+            return Err(CodecError::ChromaDimensionsNotEven(
+                ChromaDimensionsNotEvenInfo {
+                    width: dimensions.width,
+                    height: dimensions.height,
+                },
+            ));
+        }
+        Ok(())
+    }
+
     impl Chroma420Frame {
         /// Construct a chroma frame, validating that both planes match the expected dimensions.
         pub fn new(dimensions: FrameDimensions, u: Bytes, v: Bytes) -> Result<Self, CodecError> {
+            ensure_chroma_even_dimensions(dimensions)?;
             let expected = usize::from(dimensions.width / 2) * usize::from(dimensions.height / 2);
             if u.len() != expected || v.len() != expected {
                 return Err(CodecError::InvalidFrameLength(FrameLengthMismatch {
@@ -4077,6 +4181,10 @@ pub mod codec {
 
         /// Build a neutral 4:2:0 chroma frame (U/V filled with 128).
         pub fn neutral(dimensions: FrameDimensions) -> Self {
+            debug_assert!(
+                dimensions.width % 2 == 0 && dimensions.height % 2 == 0,
+                "4:2:0 chroma requires even dimensions"
+            );
             let expected = usize::from(dimensions.width / 2) * usize::from(dimensions.height / 2);
             let plane = vec![128u8; expected];
             Self {
@@ -4087,6 +4195,34 @@ pub mod codec {
     }
 
     const AUDIO_SYNC_TOLERANCE_NS: u64 = 10_000_000;
+
+    fn checked_frame_count(frame_count: usize) -> Result<u16, CodecError> {
+        u16::try_from(frame_count).map_err(|_| {
+            CodecError::FrameCountOverflow(FrameCountOverflowInfo {
+                max: u32::from(u16::MAX),
+                found: saturating_usize_to_u32(frame_count),
+            })
+        })
+    }
+
+    fn expected_audio_frame_samples(
+        sample_rate: u32,
+        frame_duration_ns: u32,
+    ) -> Result<u16, CodecError> {
+        const NS_PER_SEC: u128 = 1_000_000_000;
+        let numerator = u128::from(sample_rate) * u128::from(frame_duration_ns);
+        let expected = (numerator + NS_PER_SEC / 2) / NS_PER_SEC;
+        if expected > u16::MAX as u128 {
+            return Err(CodecError::AudioFrameCadenceOverflow(
+                AudioFrameCadenceOverflowInfo {
+                    expected: expected as u64,
+                    sample_rate,
+                    frame_duration_ns,
+                },
+            ));
+        }
+        Ok(expected as u16)
+    }
 
     struct AudioEncoderState {
         encoder: iroha_audio::Encoder,
@@ -4234,6 +4370,18 @@ pub mod codec {
                     },
                 )));
             }
+            let expected_frame_samples =
+                expected_audio_frame_samples(audio_cfg.sample_rate, self.config.frame_duration_ns)?;
+            if audio_cfg.frame_samples != expected_frame_samples {
+                return Err(CodecError::AudioFrameCadenceMismatch(
+                    AudioFrameCadenceMismatchInfo {
+                        expected: expected_frame_samples,
+                        found: audio_cfg.frame_samples,
+                        sample_rate: audio_cfg.sample_rate,
+                        frame_duration_ns: self.config.frame_duration_ns,
+                    },
+                ));
+            }
 
             let samples = audio_pcm.ok_or(CodecError::AudioTrackMissing)?;
             let channels = audio_cfg.channel_count();
@@ -4330,6 +4478,7 @@ pub mod codec {
                     ChunkError::EmptyTree,
                 )));
             }
+            let frame_count = checked_frame_count(frames.len())?;
             if let Some(chroma_frames) = chroma
                 && chroma_frames.len() != frames.len()
             {
@@ -4337,6 +4486,9 @@ pub mod codec {
                     expected: saturating_usize_to_u32(frames.len()),
                     actual: saturating_usize_to_u32(chroma_frames.len()),
                 }));
+            }
+            if chroma.is_some() {
+                ensure_chroma_even_dimensions(self.config.frame_dimensions)?;
             }
 
             let dims = self.config.frame_dimensions;
@@ -4512,7 +4664,7 @@ pub mod codec {
             });
 
             let offsets_and_lengths = compute_offsets(&chunks);
-            let chunk_ids: Vec<u16> = (0..chunks.len()).map(|idx| idx as u16).collect();
+            let chunk_ids: Vec<u16> = (0..frame_count).collect();
 
             let nonce_salt = derive_nonce_salt(segment_number, frames.len(), &chunks);
 
@@ -4556,7 +4708,7 @@ pub mod codec {
                 encryption_suite: self.config.encryption_suite,
                 layer_bitmap: self.config.layer_bitmap,
                 chunk_merkle_root: root,
-                chunk_count: descriptors.len() as u16,
+                chunk_count: frame_count,
                 timeline_start_ns,
                 duration_ns: if self.config.duration_ns == 0 {
                     self.config
@@ -4830,6 +4982,33 @@ pub mod codec {
         }
     }
 
+    /// TODO: consider SIMD/GPU acceleration for the fixed-point DCT path.
+    #[cfg(feature = "streaming-fixed-point-dct")]
+    pub(crate) fn forward_dct(block: &[i16; BLOCK_PIXELS]) -> [i32; BLOCK_PIXELS] {
+        let mut out = [0i32; BLOCK_PIXELS];
+        for u in 0..8 {
+            for v in 0..8 {
+                let mut sum: i64 = 0;
+                for x in 0..8 {
+                    for y in 0..8 {
+                        let sample = i64::from(block[x * 8 + y]);
+                        let factor_u = i64::from(DCT_FACTORS_Q15[u][x]);
+                        let factor_v = i64::from(DCT_FACTORS_Q15[v][y]);
+                        sum = sum.saturating_add(sample.saturating_mul(factor_u).saturating_mul(factor_v));
+                    }
+                }
+                let rounded = if sum >= 0 {
+                    (sum + DCT_ROUND) >> DCT_SHIFT
+                } else {
+                    (sum - DCT_ROUND) >> DCT_SHIFT
+                };
+                out[u * 8 + v] = rounded as i32;
+            }
+        }
+        out
+    }
+
+    #[cfg(not(feature = "streaming-fixed-point-dct"))]
     pub(crate) fn forward_dct(block: &[i16; BLOCK_PIXELS]) -> [i32; BLOCK_PIXELS] {
         let mut out = [0i32; BLOCK_PIXELS];
         for u in 0..8 {
@@ -4847,6 +5026,32 @@ pub mod codec {
         out
     }
 
+    #[cfg(feature = "streaming-fixed-point-dct")]
+    pub(crate) fn inverse_dct(coeffs: &[i32; BLOCK_PIXELS]) -> [i32; BLOCK_PIXELS] {
+        let mut out = [0i32; BLOCK_PIXELS];
+        for x in 0..8 {
+            for y in 0..8 {
+                let mut sum: i64 = 0;
+                for u in 0..8 {
+                    for v in 0..8 {
+                        let coeff = i64::from(coeffs[u * 8 + v]);
+                        let factor_u = i64::from(DCT_FACTORS_Q15[u][x]);
+                        let factor_v = i64::from(DCT_FACTORS_Q15[v][y]);
+                        sum = sum.saturating_add(coeff.saturating_mul(factor_u).saturating_mul(factor_v));
+                    }
+                }
+                let rounded = if sum >= 0 {
+                    (sum + DCT_ROUND) >> DCT_SHIFT
+                } else {
+                    (sum - DCT_ROUND) >> DCT_SHIFT
+                };
+                out[x * 8 + y] = rounded.clamp(-32768, 32767) as i32;
+            }
+        }
+        out
+    }
+
+    #[cfg(not(feature = "streaming-fixed-point-dct"))]
     pub(crate) fn inverse_dct(coeffs: &[i32; BLOCK_PIXELS]) -> [i32; BLOCK_PIXELS] {
         let mut out = [0i32; BLOCK_PIXELS];
         for x in 0..8 {
@@ -6995,6 +7200,14 @@ pub mod codec {
         }
     }
 
+    fn checked_chunk_count(chunk_count: usize) -> Result<u16, SegmentError> {
+        u16::try_from(chunk_count).map_err(|_| {
+            SegmentError::ChunkCountOverflow(ChunkCountOverflowInfo {
+                found: saturating_usize_to_u32(chunk_count),
+            })
+        })
+    }
+
     pub fn verify_segment(
         header: &SegmentHeader,
         descriptors: &[ChunkDescriptor],
@@ -7008,7 +7221,8 @@ pub mod codec {
             }));
         }
 
-        if header.chunk_count != descriptors.len() as u16 {
+        let descriptor_count = checked_chunk_count(descriptors.len())?;
+        if header.chunk_count != descriptor_count {
             return Err(SegmentError::HeaderCountMismatch(
                 HeaderDescriptorCountMismatch {
                     header: header.chunk_count,
@@ -7657,6 +7871,7 @@ pub mod codec {
             let mut encoder = BaselineEncoder::new(BaselineEncoderConfig {
                 frame_dimensions: dims,
                 frames_per_segment: 1,
+                frame_duration_ns: 5_000_000,
                 audio: Some(audio_cfg),
                 ..BaselineEncoderConfig::default()
             });
@@ -7795,12 +8010,12 @@ pub mod codec {
         fn baseline_encoder_produces_audio_summary() {
             let dims = FrameDimensions::new(4, 4);
             let audio_cfg = AudioEncoderConfig {
-                frame_samples: 64,
+                frame_samples: 240,
                 fec_level: 1,
                 target_bitrate: Some(96_000),
                 ..AudioEncoderConfig::default()
             };
-            let frame_duration_ns = 20_000_000;
+            let frame_duration_ns = 5_000_000;
             let mut encoder = BaselineEncoder::new(BaselineEncoderConfig {
                 frame_dimensions: dims,
                 frames_per_segment: 2,
@@ -7829,6 +8044,95 @@ pub mod codec {
             assert_eq!(audio.summary.layout, audio_cfg.layout);
             assert_eq!(audio.summary.fec_level, audio_cfg.fec_level);
             assert_eq!(segment.header.audio_summary, Some(audio.summary));
+        }
+
+        #[test]
+        fn chroma_rejects_odd_dimensions() {
+            let dims = FrameDimensions::new(7, 8);
+            let err = Chroma420Frame::new(dims, Vec::new(), Vec::new())
+                .expect_err("odd dimensions must be rejected for chroma");
+            assert!(matches!(
+                err,
+                CodecError::ChromaDimensionsNotEven(info)
+                    if info.width == 7 && info.height == 8
+            ));
+        }
+
+        #[test]
+        fn checked_frame_count_rejects_overflow() {
+            let err = checked_frame_count(u16::MAX as usize + 1)
+                .expect_err("frame count above u16 should fail");
+            assert!(matches!(
+                err,
+                CodecError::FrameCountOverflow(info)
+                    if info.found == u32::from(u16::MAX) + 1
+            ));
+        }
+
+        #[test]
+        fn checked_chunk_count_rejects_overflow() {
+            let err = checked_chunk_count(u16::MAX as usize + 1)
+                .expect_err("chunk count above u16 should fail");
+            assert!(matches!(
+                err,
+                SegmentError::ChunkCountOverflow(info)
+                    if info.found == u32::from(u16::MAX) + 1
+            ));
+        }
+
+        #[test]
+        fn audio_frame_cadence_mismatch_rejected() {
+            let dims = FrameDimensions::new(8, 8);
+            let audio_cfg = AudioEncoderConfig {
+                sample_rate: 48_000,
+                frame_samples: 240,
+                layout: AudioLayout::Stereo,
+                ..AudioEncoderConfig::default()
+            };
+            let config = BaselineEncoderConfig {
+                frame_dimensions: dims,
+                frame_duration_ns: 33_333_333,
+                frames_per_segment: 1,
+                audio: Some(audio_cfg),
+                ..BaselineEncoderConfig::default()
+            };
+            let mut encoder = BaselineEncoder::new(config);
+            let frame = RawFrame::new(dims, vec![0x22; dims.pixel_count()]).expect("frame");
+            let channels = audio_cfg.channel_count();
+            let pcm = vec![0i16; audio_cfg.frame_samples as usize * channels];
+            let err = encoder
+                .encode_segment(1, 1_000, 1, &[frame], Some(&pcm))
+                .expect_err("cadence mismatch must fail");
+            assert!(matches!(
+                err,
+                CodecError::AudioFrameCadenceMismatch(info)
+                    if info.expected == 1600 && info.found == 240
+            ));
+        }
+
+        #[test]
+        fn audio_frame_cadence_rounding_accepts_30fps() {
+            let dims = FrameDimensions::new(8, 8);
+            let audio_cfg = AudioEncoderConfig {
+                sample_rate: 48_000,
+                frame_samples: 1600,
+                layout: AudioLayout::Stereo,
+                ..AudioEncoderConfig::default()
+            };
+            let config = BaselineEncoderConfig {
+                frame_dimensions: dims,
+                frame_duration_ns: 33_333_333,
+                frames_per_segment: 1,
+                audio: Some(audio_cfg),
+                ..BaselineEncoderConfig::default()
+            };
+            let mut encoder = BaselineEncoder::new(config);
+            let frame = RawFrame::new(dims, vec![0x33; dims.pixel_count()]).expect("frame");
+            let channels = audio_cfg.channel_count();
+            let pcm = vec![0i16; audio_cfg.frame_samples as usize * channels];
+            encoder
+                .encode_segment(2, 2_000, 2, &[frame], Some(&pcm))
+                .expect("rounded cadence should pass");
         }
 
         #[test]
@@ -8602,14 +8906,11 @@ pub mod codec {
         #[test]
         fn verify_segment_accepts_audio_within_tolerance() {
             let dims = FrameDimensions::new(4, 4);
-            let audio_cfg = AudioEncoderConfig {
-                frame_samples: 64,
-                ..AudioEncoderConfig::default()
-            };
+            let audio_cfg = AudioEncoderConfig::default();
             let config = BaselineEncoderConfig {
                 frame_dimensions: dims,
                 frames_per_segment: 2,
-                frame_duration_ns: 25_000_000,
+                frame_duration_ns: 5_000_000,
                 audio: Some(audio_cfg),
                 ..BaselineEncoderConfig::default()
             };
@@ -8646,7 +8947,7 @@ pub mod codec {
             let config = BaselineEncoderConfig {
                 frame_dimensions: dims,
                 frames_per_segment: 2,
-                frame_duration_ns: 30_000_000,
+                frame_duration_ns: 5_000_000,
                 audio: Some(audio_cfg),
                 ..BaselineEncoderConfig::default()
             };
