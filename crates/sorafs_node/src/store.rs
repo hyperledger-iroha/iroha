@@ -59,7 +59,7 @@ pub enum StorageError {
     /// The provided manifest is already present in the index.
     #[error("manifest {manifest_id} already stored")]
     ManifestExists {
-        /// Canonical manifest identifier (hex-encoded CID).
+        /// Canonical manifest identifier (hex-encoded digest).
         manifest_id: String,
     },
     /// Capacity limit reached while attempting to store a manifest.
@@ -105,7 +105,7 @@ pub enum StorageError {
     /// Manifest with the requested identifier does not exist.
     #[error("manifest {manifest_id} not found")]
     ManifestNotFound {
-        /// Canonical manifest identifier (hex-encoded CID).
+        /// Canonical manifest identifier (hex-encoded digest).
         manifest_id: String,
     },
     /// Requested byte range exceeds the payload bounds.
@@ -121,7 +121,7 @@ pub enum StorageError {
     /// Manifest does not contain a chunk with the requested digest.
     #[error("chunk {digest_hex} not found in manifest {manifest_id}")]
     ChunkNotFound {
-        /// Canonical manifest identifier (hex-encoded CID).
+        /// Canonical manifest identifier (hex-encoded digest).
         manifest_id: String,
         /// Hex-encoded chunk digest.
         digest_hex: String,
@@ -1142,7 +1142,7 @@ impl StorageBackend {
 
         let manifest_bytes = manifest.encode()?;
         let manifest_digest: [u8; 32] = manifest.digest()?.into();
-        let manifest_id = hex::encode(&manifest.root_cid);
+        let manifest_id = hex::encode(manifest_digest);
         let payload_digest = *plan.payload_digest.as_bytes();
         let required_bytes = plan.content_length;
 

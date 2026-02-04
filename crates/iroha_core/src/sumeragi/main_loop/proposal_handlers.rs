@@ -1959,6 +1959,15 @@ impl Actor {
                     &topology,
                 );
             }
+            let cached_qcs: Vec<_> = qc_cache_for_subject(&self.qc_cache, block_hash)
+                .filter(|qc| !matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit))
+                .cloned()
+                .collect();
+            for qc in cached_qcs {
+                if let Err(err) = self.handle_qc(qc) {
+                    warn!(?err, "failed to replay cached QC after block payload");
+                }
+            }
             let _ = self.try_replay_deferred_qcs();
         }
         let qc_replay_ms = u64::try_from(qc_replay_start.elapsed().as_millis()).unwrap_or(u64::MAX);

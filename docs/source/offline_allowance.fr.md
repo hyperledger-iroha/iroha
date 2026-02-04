@@ -544,10 +544,11 @@ against duplicate `(certificate_id, counter)` claims.
 3. Asset definitions intended for offline allowances must set metadata
    `offline.enabled = true`. On registration, the ledger derives a deterministic escrow account in
    the asset definition’s domain (seeded from `Hash("iroha.offline.escrow.v1|<chain_id>|<asset_def_id>")`)
-   and records it in `settlement.offline.escrow_accounts` (creating the account if needed).
+   and ensures the account exists. The derived binding may be cached in
+   `settlement.offline.escrow_accounts`, but the ledger will re-derive it from metadata if the map is empty.
 4. If `settlement.offline.escrow_required=true`, ledger transfers the allowance amount from
-   `allowance.asset.account()` into the configured escrow account for the asset definition
-   (`settlement.offline.escrow_accounts`); missing bindings reject the registration.
+   `allowance.asset.account()` into the escrow account for the asset definition. Missing
+   `offline.enabled` (and no configured binding) rejects the registration.
 5. Ledger stores an `OfflineAllowanceRecord` keyed by `certificate_id` and seeds
    `remaining_amount = allowance.amount`.
 

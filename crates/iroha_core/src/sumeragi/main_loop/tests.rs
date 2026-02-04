@@ -16,7 +16,11 @@ use std::{
     net::SocketAddr,
     num::{NonZeroU64, NonZeroUsize},
     path::PathBuf,
-    sync::{Arc, Mutex, mpsc},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+        mpsc,
+    },
     time::{Duration, Instant, SystemTime},
 };
 
@@ -205,6 +209,11 @@ fn roster_validation_inputs_for_view(
 
 fn zero_state_root() -> Hash {
     Hash::prehashed([0u8; 32])
+}
+
+fn deterministic_keypair(seed: impl AsRef<[u8]>, algorithm: Algorithm) -> KeyPair {
+    let seed_hash = Hash::new(seed.as_ref());
+    KeyPair::from_seed(seed_hash.as_ref().to_vec(), algorithm)
 }
 
 fn insert_validated_pending(actor: &mut Actor, block: SignedBlock) -> HashOf<BlockHeader> {
@@ -899,7 +908,8 @@ async fn apply_mode_flip_defers_while_commit_pipeline_active() {
 
     actor.pending_mode_flip = Some(ConsensusMode::Npos);
 
-    let height = 2u64;
+    let committed_height = u64::try_from(actor.state.view().height()).unwrap_or(0);
+    let height = committed_height.saturating_add(1).max(1);
     let view = actor.phase_tracker.current_view(height).unwrap_or(0);
     let parent = seed_genesis_block_for_state(actor.state.as_ref());
     let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent));
@@ -1652,7 +1662,35 @@ struct TestActorHarness {
     shutdown: iroha_futures::supervisor::ShutdownSignal,
     _network_child: iroha_futures::supervisor::Child,
     _gossiper_child: iroha_futures::supervisor::Child,
+    _spool_dir: TestTempDir,
     key_pairs: Vec<KeyPair>,
+}
+
+static TEST_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+struct TestTempDir {
+    path: PathBuf,
+}
+
+impl TestTempDir {
+    fn new(prefix: &str) -> Self {
+        let id = TEST_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let pid = std::process::id();
+        let path = std::env::temp_dir().join(format!("iroha-{prefix}-{pid}-{id}"));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).expect("create test temp dir");
+        Self { path }
+    }
+
+    fn path(&self) -> &PathBuf {
+        &self.path
+    }
+}
+
+impl Drop for TestTempDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
 }
 
 struct LocalRemovedGuard {
@@ -2001,7 +2039,8 @@ async fn test_actor_harness_with_config_and_height_and_kura(
     let time_source = TimeSource::new_system();
     let queue = Arc::new(Queue::test(QueueConfig::default(), &time_source));
     let events_sender: crate::EventsSender = tokio::sync::broadcast::Sender::new(1);
-    let spool_dir = tempfile::tempdir().expect("tempdir");
+    let spool_dir = TestTempDir::new("sumeragi-spool");
+    let spool_path = spool_dir.path().to_path_buf();
     let genesis_network = crate::sumeragi::GenesisWithPubKey {
         genesis: None,
         public_key: key_pair.public_key().clone(),
@@ -2033,7 +2072,7 @@ async fn test_actor_harness_with_config_and_height_and_kura(
         Arc::clone(&queue),
         Arc::clone(&kura),
         network,
-        spool_dir.path().to_path_buf(),
+        spool_path,
         peers_gossiper,
         genesis_network,
         block_count,
@@ -2059,7 +2098,7 @@ async fn test_actor_harness_with_config_and_height_and_kura(
         Arc::clone(&queue),
         Arc::clone(&kura),
         network,
-        spool_dir.path().to_path_buf(),
+        spool_path,
         peers_gossiper,
         genesis_network,
         block_count,
@@ -2079,6 +2118,7 @@ async fn test_actor_harness_with_config_and_height_and_kura(
         shutdown,
         _network_child: network_child,
         _gossiper_child: gossiper_child,
+        _spool_dir: spool_dir,
         key_pairs,
     }
 }
@@ -2832,7 +2872,7 @@ fn seed_genesis_block_for_state(state: &State) -> HashOf<BlockHeader> {
         return hash;
     }
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-    let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let leader = deterministic_keypair(b"genesis-block", Algorithm::BlsNormal);
     let genesis = BlockBuilder::new(header).build_with_signature(0, leader.private_key());
     let genesis_hash = genesis.hash();
     let topology = {
@@ -2870,7 +2910,10 @@ fn seed_block_for_state(
         0,
         0,
     );
-    let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let mut seed = [0u8; 8 + Hash::LENGTH];
+    seed[..8].copy_from_slice(&height.to_le_bytes());
+    seed[8..].copy_from_slice(prev_hash.as_ref());
+    let leader = deterministic_keypair(&seed, Algorithm::BlsNormal);
     let block = BlockBuilder::new(header).build_with_signature(0, leader.private_key());
     let block_hash = block.hash();
     let topology = {
@@ -2982,7 +3025,10 @@ fn effective_commit_topology_falls_back_to_genesis_roster_when_empty() {
     state.push_block_hash_for_testing(genesis.0.hash());
     let state = Arc::new(state);
 
-    let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let key_pair = deterministic_keypair(
+        b"genesis-roster-fallback-peer",
+        Algorithm::Ed25519,
+    );
     let address: SocketAddr = "127.0.0.1:0".parse().expect("socket address parses");
     let local_peer = Peer::new(address.into(), PeerId::new(key_pair.public_key().clone()));
     let trusted_peers = trusted_with_pops(local_peer.clone(), Vec::new(), BTreeMap::new());
@@ -4669,7 +4715,10 @@ async fn block_sync_update_accepts_uncertified_next_height_in_permissioned_mode(
         .transaction()
         .clone();
     let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
-    let heartbeat_signer = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let heartbeat_signer = deterministic_keypair(
+        b"block-sync-next-height-permissioned-heartbeat",
+        Algorithm::Ed25519,
+    );
     let heartbeat = crate::tx::build_heartbeat_transaction_with_time_source(
         actor.common_config.chain.clone(),
         &heartbeat_signer,
@@ -4742,12 +4791,13 @@ async fn block_sync_update_accepts_uncertified_next_height_in_permissioned_mode(
 async fn block_sync_update_ignored_when_local_removed_from_world() {
     use crate::sumeragi::status;
 
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
     let _guard = super::status::message_handling_test_guard();
     super::status::reset_message_handling_for_tests();
     status::reset_commit_certs_for_tests();
     status::reset_validator_checkpoints_for_tests();
-    let mut harness = test_actor_harness(4).await;
-    let actor = &mut harness.actor;
     let _removed = LocalRemovedGuard::new(true);
 
     let _genesis_hash = seed_genesis_block_for_state(&actor.state);
@@ -4791,7 +4841,10 @@ async fn block_sync_update_ignored_when_local_removed_from_world() {
         .transaction()
         .clone();
     let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
-    let heartbeat_signer = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let heartbeat_signer = deterministic_keypair(
+        b"block-sync-ignored-local-removed-heartbeat",
+        Algorithm::Ed25519,
+    );
     let heartbeat = crate::tx::build_heartbeat_transaction_with_time_source(
         actor.common_config.chain.clone(),
         &heartbeat_signer,
@@ -4927,7 +4980,10 @@ async fn block_sync_update_accepts_uncertified_missing_block_when_behind() {
         .transaction()
         .clone();
     let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
-    let heartbeat_signer = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let heartbeat_signer = deterministic_keypair(
+        b"block-sync-missing-when-behind-heartbeat",
+        Algorithm::Ed25519,
+    );
     let heartbeat = crate::tx::build_heartbeat_transaction_with_time_source(
         actor.common_config.chain.clone(),
         &heartbeat_signer,
@@ -6987,13 +7043,12 @@ async fn block_sync_update_records_commit_qc_from_cached_qc() {
 async fn block_sync_update_known_block_records_commit_qc() {
     use crate::sumeragi::status;
 
-    let _guard = status::commit_history_test_guard();
-    status::reset_commit_certs_for_tests();
-    status::reset_validator_checkpoints_for_tests();
-
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
+    let _guard = status::commit_history_test_guard();
+    status::reset_commit_certs_for_tests();
+    status::reset_validator_checkpoints_for_tests();
     let block_hash = seed_genesis_block_for_state(actor.state.as_ref());
     let height = 1_u64;
     let view = 0_u64;
@@ -7677,15 +7732,14 @@ async fn block_sync_update_known_block_applies_commit_qc_to_pending() {
 async fn block_sync_update_skips_commit_roster_for_unaccepted_block() {
     use crate::sumeragi::status;
 
-    let _guard = status::commit_history_test_guard();
-    status::reset_commit_certs_for_tests();
-    status::reset_validator_checkpoints_for_tests();
-
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
+    let _guard = status::commit_history_test_guard();
+    status::reset_commit_certs_for_tests();
+    status::reset_validator_checkpoints_for_tests();
     let state_height = actor.state.view().height() as u64;
     let block_height = state_height.saturating_add(1).max(1);
     let valid_block = nonempty_block_for_actor(
@@ -8689,11 +8743,11 @@ async fn fetch_pending_block_falls_back_to_block_created_when_oversized() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn fetch_pending_block_records_not_found_when_missing() {
-    let _guard = super::status::message_handling_test_guard();
-    super::status::reset_message_handling_for_tests();
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
 
+    let _guard = super::status::message_handling_test_guard();
+    super::status::reset_message_handling_for_tests();
     let block_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xAB; Hash::LENGTH]));
     let request = super::message::FetchPendingBlock {
         requester: actor.common_config.peer.id.clone(),
@@ -8723,11 +8777,11 @@ async fn fetch_pending_block_records_not_found_when_missing() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn fetch_pending_block_stashes_and_serves_when_block_arrives() {
-    let _guard = super::status::message_handling_test_guard();
-    super::status::reset_message_handling_for_tests();
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
 
+    let _guard = super::status::message_handling_test_guard();
+    super::status::reset_message_handling_for_tests();
     let committed_height = u64::try_from(actor.state.view().height()).unwrap_or(0);
     let height = committed_height.saturating_add(1).max(1);
     let view = 0u64;
@@ -8796,11 +8850,11 @@ async fn fetch_pending_block_stashes_and_serves_when_block_arrives() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn fetch_pending_block_serves_rbc_init_without_block() {
-    let _guard = super::status::message_handling_test_guard();
-    super::status::reset_message_handling_for_tests();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
+    let _guard = super::status::message_handling_test_guard();
+    super::status::reset_message_handling_for_tests();
     let height = 2u64;
     let view = 0u64;
     let roster = actor.effective_commit_topology();
@@ -16480,14 +16534,15 @@ async fn handle_qc_uses_roster_snapshot_after_topology_change() {
 async fn handle_qc_records_commit_qc_history() {
     use crate::sumeragi::status;
 
-    let _guard = status::commit_history_test_guard();
-    status::reset_commit_certs_for_tests();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
     consensus_cfg.rbc.chunk_max_bytes = 1024 * 1024;
     let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 1).await;
     let actor = &mut harness.actor;
+
+    let _guard = status::commit_history_test_guard();
+    status::reset_commit_certs_for_tests();
     let height = 2u64;
     let view = 0u64;
     let view_index = view;
@@ -16546,9 +16601,6 @@ async fn handle_qc_records_commit_roster_for_unknown_block() {
         parameters::actual::{Kura as KuraConfig, LaneConfig as RuntimeLaneConfig},
     };
 
-    let _guard = status::commit_history_test_guard();
-    status::reset_commit_certs_for_tests();
-    status::reset_validator_checkpoints_for_tests();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
@@ -16573,6 +16625,10 @@ async fn handle_qc_records_commit_roster_for_unknown_block() {
     let mut harness =
         test_actor_harness_with_config_and_height_and_kura(4, consensus_cfg, None, 1, kura).await;
     let actor = &mut harness.actor;
+
+    let _guard = status::commit_history_test_guard();
+    status::reset_commit_certs_for_tests();
+    status::reset_validator_checkpoints_for_tests();
     let height = 2u64;
     let view = 0u64;
     let block_hash = sample_block(height, view, None).hash();
@@ -16620,13 +16676,12 @@ async fn handle_qc_records_commit_roster_for_unknown_block() {
 async fn handle_qc_records_commit_qc_for_committed_block() {
     use crate::sumeragi::status;
 
-    let _guard = status::commit_history_test_guard();
-    status::reset_commit_certs_for_tests();
-    status::reset_validator_checkpoints_for_tests();
-
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
+    let _guard = status::commit_history_test_guard();
+    status::reset_commit_certs_for_tests();
+    status::reset_validator_checkpoints_for_tests();
     let block_hash = seed_genesis_block_for_state(actor.state.as_ref());
     let height = 1_u64;
     let view = 0_u64;
@@ -16674,11 +16729,11 @@ async fn handle_qc_records_commit_qc_for_committed_block() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn handle_qc_drops_empty_block_payload() {
-    let _guard = super::status::message_handling_test_guard();
-    super::status::reset_message_handling_for_tests();
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
 
+    let _guard = super::status::message_handling_test_guard();
+    super::status::reset_message_handling_for_tests();
     let height = 1_u64;
     let view = 0_u64;
     let block = empty_block(height, view, None);
@@ -16901,7 +16956,8 @@ async fn handle_precommit_vote_accepts_stale_view_when_block_pending() {
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
 
-    let height = 2u64;
+    let committed_height = u64::try_from(actor.state.view().height()).unwrap_or(0);
+    let height = committed_height.saturating_add(1);
     let view = 0u64;
     let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, None);
     let block_hash = block.hash();
@@ -16918,6 +16974,7 @@ async fn handle_precommit_vote_accepts_stale_view_when_block_pending() {
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let chain = actor.common_config.chain.clone();
     let keypair = actor.common_config.key_pair.clone();
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
     let mut vote = crate::sumeragi::consensus::Vote {
         phase: Phase::Commit,
         block_hash,
@@ -16925,12 +16982,12 @@ async fn handle_precommit_vote_accepts_stale_view_when_block_pending() {
         post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
         height,
         view,
-        epoch: 0,
+        epoch: actor.epoch_for_height(height),
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
     };
-    sign_vote_for_view(&mut vote, &chain, &topology, &[keypair]);
+    sign_vote_for_view_with_seed(&mut vote, &chain, &topology, &[keypair], mode_tag, prf_seed);
 
     actor.handle_vote(vote);
     let recorded = actor.vote_log.values().any(|vote| {
@@ -16952,7 +17009,8 @@ async fn handle_precommit_vote_accepts_stale_view_when_block_unknown_with_da() {
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
 
-    let height = 2u64;
+    let committed_height = u64::try_from(actor.state.view().height()).unwrap_or(0);
+    let height = committed_height.saturating_add(1);
     let view = 0u64;
     let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, None);
     let block_hash = block.hash();
@@ -16973,6 +17031,7 @@ async fn handle_precommit_vote_accepts_stale_view_when_block_unknown_with_da() {
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let chain = actor.common_config.chain.clone();
     let keypair = actor.common_config.key_pair.clone();
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
     let mut vote = crate::sumeragi::consensus::Vote {
         phase: Phase::Commit,
         block_hash,
@@ -16980,12 +17039,12 @@ async fn handle_precommit_vote_accepts_stale_view_when_block_unknown_with_da() {
         post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
         height,
         view,
-        epoch: 0,
+        epoch: actor.epoch_for_height(height),
         highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
     };
-    sign_vote_for_view(&mut vote, &chain, &topology, &[keypair]);
+    sign_vote_for_view_with_seed(&mut vote, &chain, &topology, &[keypair], mode_tag, prf_seed);
 
     actor.handle_vote(vote);
     let recorded = actor.vote_log.values().any(|vote| {
@@ -17199,6 +17258,70 @@ async fn block_created_applies_cached_precommit_qc() {
     assert_eq!(locked.subject_block_hash, block_hash);
     assert_eq!(locked.height, height);
     assert_eq!(locked.view, view);
+    let highest = actor.highest_qc.expect("highest QC should be updated");
+    assert_eq!(highest.subject_block_hash, block_hash);
+    assert_eq!(highest.height, height);
+    assert_eq!(highest.view, view);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn block_created_replays_cached_prepare_qc() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let genesis_hash = seed_genesis_block_for_state(&actor.state);
+    let height = 2_u64;
+    let view = 0_u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(genesis_hash));
+    let block_hash = block.hash();
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let required = topology.min_votes_for_commit().max(1);
+    let mut signers = BTreeSet::new();
+    for idx in 0..topology.as_ref().len() {
+        if signers.len() >= required {
+            break;
+        }
+        signers.insert(
+            ValidatorIndex::try_from(u32::try_from(idx).expect("signer idx"))
+                .expect("signer idx fits"),
+        );
+    }
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let epoch = actor.epoch_for_height(height);
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        epoch,
+        signers_bitmap,
+        Phase::Prepare,
+        &topology,
+        &harness.key_pairs,
+    );
+    actor.handle_qc(qc).expect("handle qc");
+    assert!(
+        actor
+            .qc_cache
+            .contains_key(&(Phase::Prepare, block_hash, height, view, epoch)),
+        "prepare QC should be cached for unknown block"
+    );
+    assert!(
+        actor.highest_qc.is_none(),
+        "highest QC must remain unset for unknown blocks"
+    );
+
+    actor
+        .handle_block_created(super::message::BlockCreated { block }, None)
+        .expect("block created");
+
     let highest = actor.highest_qc.expect("highest QC should be updated");
     assert_eq!(highest.subject_block_hash, block_hash);
     assert_eq!(highest.height, height);
@@ -43626,10 +43749,11 @@ async fn stale_block_created_accepted_under_da() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn block_created_ignored_when_local_removed_from_world() {
-    let _guard = super::status::message_handling_test_guard();
-    super::status::reset_message_handling_for_tests();
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
+
+    let _guard = super::status::message_handling_test_guard();
+    super::status::reset_message_handling_for_tests();
     let _removed = LocalRemovedGuard::new(true);
 
     let height = 1_u64;
@@ -43674,11 +43798,11 @@ async fn block_created_ignored_when_local_removed_from_world() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn block_created_drops_empty_payload() {
-    let _guard = super::status::message_handling_test_guard();
-    super::status::reset_message_handling_for_tests();
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
 
+    let _guard = super::status::message_handling_test_guard();
+    super::status::reset_message_handling_for_tests();
     let height = 1_u64;
     let view = 0_u64;
     let block = empty_block(height, view, None);
@@ -51047,7 +51171,7 @@ fn validate_qc_against_votes_rotates_topology_for_view() {
 #[test]
 fn rbc_ready_signature_valid_accepts_signed_frame() {
     let chain: ChainId = "rbc-ready-valid".parse().expect("chain id parses");
-    let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let keypair = deterministic_keypair(b"rbc-ready-signed-frame", Algorithm::Ed25519);
     let peer_id = PeerId::new(keypair.public_key().clone());
     let topology = super::network_topology::Topology::new(vec![peer_id]);
     let block_hash =
@@ -51132,7 +51256,7 @@ fn rbc_ready_signature_valid_rejects_invalid_bls_signature() {
 #[test]
 fn rbc_deliver_signature_valid_rejects_out_of_range_sender() {
     let chain: ChainId = "rbc-deliver-invalid".parse().expect("chain id parses");
-    let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let keypair = deterministic_keypair(b"rbc-deliver-out-of-range", Algorithm::Ed25519);
     let peer_id = PeerId::new(keypair.public_key().clone());
     let topology = super::network_topology::Topology::new(vec![peer_id]);
     let block_hash =
@@ -51199,7 +51323,7 @@ fn rbc_deliver_signature_valid_rejects_invalid_bls_signature() {
 #[test]
 fn rbc_deliver_signature_valid_rejects_ready_bundle_tamper() {
     let chain: ChainId = "rbc-deliver-ready-bundle".parse().expect("chain id parses");
-    let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let keypair = deterministic_keypair(b"rbc-deliver-ready-tamper", Algorithm::Ed25519);
     let peer_id = PeerId::new(keypair.public_key().clone());
     let topology = super::network_topology::Topology::new(vec![peer_id]);
     let block_hash =
@@ -52687,8 +52811,6 @@ fn derive_vrf_material_is_deterministic() {
 
 #[tokio::test]
 async fn handle_vrf_commit_does_not_record_mode_mismatch_in_permissioned_mode() {
-    let _guard = super::status::message_handling_test_guard();
-    super::status::reset_message_handling_for_tests();
     let mut harness = test_actor_harness(1).await;
     let commit = crate::sumeragi::consensus::VrfCommit {
         epoch: 0,
@@ -52696,6 +52818,8 @@ async fn handle_vrf_commit_does_not_record_mode_mismatch_in_permissioned_mode() 
         signer: 0,
     };
 
+    let _guard = super::status::message_handling_test_guard();
+    super::status::reset_message_handling_for_tests();
     harness
         .actor
         .handle_vrf_commit(commit)
@@ -52718,8 +52842,6 @@ async fn handle_vrf_commit_does_not_record_mode_mismatch_in_permissioned_mode() 
 
 #[tokio::test]
 async fn handle_vrf_reveal_does_not_record_mode_mismatch_in_permissioned_mode() {
-    let _guard = super::status::message_handling_test_guard();
-    super::status::reset_message_handling_for_tests();
     let mut harness = test_actor_harness(1).await;
     let reveal = crate::sumeragi::consensus::VrfReveal {
         epoch: 0,
@@ -52727,6 +52849,8 @@ async fn handle_vrf_reveal_does_not_record_mode_mismatch_in_permissioned_mode() 
         signer: 0,
     };
 
+    let _guard = super::status::message_handling_test_guard();
+    super::status::reset_message_handling_for_tests();
     harness
         .actor
         .handle_vrf_reveal(reveal)
@@ -56333,7 +56457,13 @@ fn heartbeat_block_for_state(
     };
     let start_ms = height.saturating_sub(1);
     let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(start_ms));
-    let heartbeat_signer = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let mut seed = Vec::with_capacity(16 + Hash::LENGTH);
+    seed.extend_from_slice(&height.to_le_bytes());
+    seed.extend_from_slice(&view.to_le_bytes());
+    if let Some(parent_hash) = parent {
+        seed.extend_from_slice(parent_hash.as_ref());
+    }
+    let heartbeat_signer = deterministic_keypair(seed, Algorithm::Ed25519);
     let heartbeat = crate::tx::build_heartbeat_transaction_with_time_source(
         chain_id.clone(),
         &heartbeat_signer,
