@@ -52,6 +52,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 
 ## Current Open Work
 
+- Norito streaming math upgrades: motion-compensated prediction, rANS rate-model RDO, adaptive quantization + deterministic deblock, deterministic audio LPC/MDCT path, and SIMD/GPU acceleration for fixed-point DCT.
 - GPU zstd (Metal): full GPU entropy coding + decode (bit-for-bit parity with CPU zstd).
  - [x] Architecture: document the full GPU zstd pipeline (frame/block layout, buffer lifetimes, deterministic bitstream packing, and kernel responsibilities) with explicit parity constraints.
  - [x] Bitstream core: implement Metal bitstream writer/reader utilities (little-endian bit packing, byte-aligned flush, overflow checks) with CPU golden vectors for validation.

@@ -233,33 +233,44 @@ fn observer_node_catches_up() -> Result<()> {
         "heights differ: {all_totals:?}"
     );
 
-    // Verify state reflects latest metadata values on all peers (validators + observer)
-    let check_peer = |peer: &NetworkPeer| -> Result<()> {
-        let client = peer.client();
-        let accounts = client.query(FindAccounts).execute_all().unwrap();
-        let alice = accounts
-            .into_iter()
-            .find(|a| a.id() == &ALICE_ID.clone())
-            .expect("Alice account must exist");
-        let note = alice
-            .metadata()
-            .get(&"note".parse::<Name>().unwrap())
-            .cloned()
-            .expect("note key should exist");
-        let znote = alice
-            .metadata()
-            .get(&"znote".parse::<Name>().unwrap())
-            .cloned()
-            .expect("znote key should exist");
-        assert_eq!(note.as_ref(), "v4");
-        assert_eq!(znote.as_ref(), "v5");
-        Ok(())
+    // Verify state reflects latest metadata values on all peers (validators + observer).
+    // Kura heights can advance before state/indices are fully applied, so poll for metadata.
+    let note_key: Name = "note".parse().unwrap();
+    let znote_key: Name = "znote".parse().unwrap();
+    let wait_for_metadata = |peer: &NetworkPeer| -> Result<()> {
+        let deadline = std::time::Instant::now() + sync_timeout;
+        let peer_id = peer.id().to_string();
+        let mut last_note: Option<String> = None;
+        let mut last_znote: Option<String> = None;
+        loop {
+            let client = peer.client();
+            let accounts = client.query(FindAccounts).execute_all().unwrap();
+            let alice = accounts
+                .into_iter()
+                .find(|a| a.id() == &ALICE_ID.clone())
+                .expect("Alice account must exist");
+            if let Some(note) = alice.metadata().get(&note_key) {
+                last_note = Some(note.as_ref().to_string());
+            }
+            if let Some(znote) = alice.metadata().get(&znote_key) {
+                last_znote = Some(znote.as_ref().to_string());
+            }
+            if last_note.as_deref() == Some("v4") && last_znote.as_deref() == Some("v5") {
+                return Ok(());
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(eyre!(
+                    "peer {peer_id} did not observe note=v4/znote=v5 within {sync_timeout:?} (last note={last_note:?}, znote={last_znote:?})"
+                ));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
     };
 
     for p in network.peers() {
-        check_peer(p)?;
+        wait_for_metadata(p)?;
     }
-    check_peer(&observer)?;
+    wait_for_metadata(&observer)?;
 
     // Redundant HTTP verification via Torii: fetch last transactions for Alice from each peer
     let alice_id_str = format!("{}", *ALICE_ID);
