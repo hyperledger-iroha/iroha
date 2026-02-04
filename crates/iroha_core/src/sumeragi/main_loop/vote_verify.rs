@@ -379,22 +379,18 @@ pub(super) fn spawn_vote_verify_workers(
                         }
 
                         let use_batch = match algorithm {
-                            Algorithm::BlsNormal => {
-                                iroha_crypto::bls_normal_verify_aggregate_multi_message(
-                                    &messages,
-                                    &signatures,
-                                    &public_keys,
-                                )
-                                .is_ok()
-                            }
-                            Algorithm::BlsSmall => {
-                                iroha_crypto::bls_small_verify_aggregate_multi_message(
-                                    &messages,
-                                    &signatures,
-                                    &public_keys,
-                                )
-                                .is_ok()
-                            }
+                            Algorithm::BlsNormal => iroha_crypto::bls_normal_verify_aggregate_multi_message(
+                                &messages,
+                                &signatures,
+                                &public_keys,
+                            )
+                            .is_ok(),
+                            Algorithm::BlsSmall => iroha_crypto::bls_small_verify_aggregate_multi_message(
+                                &messages,
+                                &signatures,
+                                &public_keys,
+                            )
+                            .is_ok(),
                             _ => false,
                         };
                         let aggregate_total = if use_batch {

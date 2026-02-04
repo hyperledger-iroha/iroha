@@ -2596,8 +2596,10 @@ mod run {
         fn message_decode_from_slice_roundtrip() {
             let message = Message::Data(Blob(vec![1u8, 2, 3]));
             let bytes = ncore::to_bytes(&message).expect("encode message");
-            let view = ncore::from_bytes_view(&bytes).expect("archive view");
-            let decoded: Message<Blob> = view.decode().expect("decode message");
+            let (decoded, used) =
+                <Message<Blob> as ncore::DecodeFromSlice>::decode_from_slice(&bytes)
+                    .expect("decode from slice");
+            assert_eq!(used, bytes.len());
 
             match decoded {
                 Message::Data(blob) => assert_eq!(blob.0, vec![1u8, 2, 3]),
