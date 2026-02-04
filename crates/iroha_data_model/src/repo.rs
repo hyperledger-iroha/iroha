@@ -184,7 +184,8 @@ impl RepoAgreement {
     /// Returns `None` when the governance policy disables margin sweeps
     /// (frequency set to zero). Otherwise returns the earliest timestamp
     /// strictly greater than `after_timestamp_ms` that aligns to the
-    /// configured cadence starting from `initiated_timestamp_ms`.
+    /// configured cadence starting from the last recorded margin check
+    /// (initially the initiation timestamp).
     pub fn next_margin_check_after(&self, after_timestamp_ms: u64) -> Option<u64> {
         let freq_ms = self.governance.margin_frequency_millis()?;
 
@@ -201,9 +202,12 @@ impl RepoAgreement {
 
     /// Determine whether a margin check is due at the supplied timestamp.
     ///
-    /// Returns `false` when margining is disabled.
+    /// Returns `false` when margining is disabled. When margining is enabled,
+    /// a check is considered due at or after the next scheduled cadence
+    /// boundary following the last recorded margin check.
     pub fn is_margin_check_due(&self, at_timestamp_ms: u64) -> bool {
-        let Some(next_due) = self.next_margin_check_after(at_timestamp_ms.saturating_sub(1)) else {
+        let Some(next_due) = self.next_margin_check_after(self.last_margin_check_timestamp_ms)
+        else {
             return false;
         };
         at_timestamp_ms >= next_due
@@ -307,6 +311,7 @@ mod tests {
             "subsequent checks follow the cadence"
         );
         assert!(agreement.is_margin_check_due(70_000));
+        assert!(agreement.is_margin_check_due(70_001));
         assert!(!agreement.is_margin_check_due(69_999));
     }
 
@@ -317,5 +322,6 @@ mod tests {
         assert_eq!(agreement.next_margin_check_after(70_000), Some(130_000));
         assert!(!agreement.is_margin_check_due(129_999));
         assert!(agreement.is_margin_check_due(130_000));
+        assert!(agreement.is_margin_check_due(130_001));
     }
 }

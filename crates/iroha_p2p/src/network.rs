@@ -35,7 +35,10 @@ use iroha_data_model::{
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_logger::prelude::*;
 use iroha_primitives::addr::SocketAddr;
-use norito::codec::{Decode, Encode};
+use norito::{
+    codec::{Decode, Encode},
+    core as ncore,
+};
 use rand::Rng as _;
 use soranet_pq::MlDsaSuite;
 use tokio::{
@@ -490,6 +493,19 @@ struct RelayMessage<T> {
     ttl: u8,
     priority: Priority,
     payload: T,
+}
+
+impl<'a, T> ncore::DecodeFromSlice<'a> for RelayMessage<T>
+where
+    T: ncore::NoritoSerialize + for<'de> ncore::NoritoDeserialize<'de>,
+{
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+        let archived = ncore::archived_from_slice::<Self>(bytes)?;
+        let archived_bytes = archived.bytes();
+        let _guard = ncore::PayloadCtxGuard::enter(archived_bytes);
+        let value = <Self as ncore::NoritoDeserialize>::try_deserialize(archived.archived())?;
+        Ok((value, archived_bytes.len()))
+    }
 }
 
 impl<T> RelayMessage<T> {

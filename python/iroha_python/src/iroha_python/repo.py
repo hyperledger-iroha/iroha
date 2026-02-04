@@ -190,8 +190,7 @@ class RepoAgreementRecord:
     def is_margin_check_due(self, at_timestamp_ms: int) -> bool:
         """Return ``True`` when a margin call is due at the provided timestamp."""
 
-        prior = at_timestamp_ms - 1 if at_timestamp_ms > 0 else 0
-        next_due = self.next_margin_check_after(prior)
+        next_due = self.next_margin_check_after(int(self.last_margin_check_timestamp_ms))
         if next_due is None:
             return False
         return at_timestamp_ms >= next_due

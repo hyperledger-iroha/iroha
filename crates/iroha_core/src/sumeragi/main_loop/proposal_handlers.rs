@@ -1959,16 +1959,7 @@ impl Actor {
                     &topology,
                 );
             }
-            let cached_qc = qc_cache_for_subject(&self.qc_cache, block_hash)
-                .find(|cached| {
-                    cached.phase == crate::sumeragi::consensus::Phase::Commit
-                        && cached.height == height
-                        && cached.view == view
-                })
-                .cloned();
-            if let Some(qc) = cached_qc {
-                let _ = self.handle_qc(qc);
-            }
+            let _ = self.try_replay_deferred_qcs();
         }
         let qc_replay_ms = u64::try_from(qc_replay_start.elapsed().as_millis()).unwrap_or(u64::MAX);
         self.request_commit_pipeline();
