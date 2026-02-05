@@ -242,9 +242,7 @@ fn load_offline_certificate_fixture() -> Result<OfflineWalletCertificate> {
                 return Ok(decoded.certificate.clone());
             }
         }
-        if let Ok(certificate) =
-            norito::decode_from_bytes::<OfflineWalletCertificate>(&bytes)
-        {
+        if let Ok(certificate) = norito::decode_from_bytes::<OfflineWalletCertificate>(&bytes) {
             return Ok(certificate);
         }
     }
@@ -273,6 +271,25 @@ fn load_offline_certificate_fixture() -> Result<OfflineWalletCertificate> {
         .clone();
     // Fixture JSON uses *_hex/*_b64 shorthands instead of the Norito JSON layout.
     parse_offline_certificate_fixture(&certificate_value, &path)
+}
+
+fn with_offline_allowance_genesis(
+    mut builder: NetworkBuilder,
+    certificate: &OfflineWalletCertificate,
+) -> NetworkBuilder {
+    let asset_definition_id = certificate.allowance.asset.definition().clone();
+    let asset_domain = asset_definition_id.domain().clone();
+    let genesis_domain = iroha_genesis::GENESIS_DOMAIN_ID.clone();
+    let wonderland_domain: DomainId = "wonderland"
+        .parse()
+        .expect("default wonderland domain should parse");
+    if asset_domain != genesis_domain && asset_domain != wonderland_domain {
+        builder = builder.with_genesis_instruction(Register::domain(Domain::new(asset_domain)));
+    }
+    let scale = certificate.allowance.amount.scale();
+    let asset_definition =
+        AssetDefinition::new(asset_definition_id, NumericSpec::fractional(scale));
+    builder.with_genesis_instruction(Register::asset_definition(asset_definition))
 }
 
 fn parse_offline_certificate_fixture(
@@ -459,9 +476,14 @@ fn parse_offline_certificate_fixture(
         norito::json::from_value(metadata_value).map_err(|err| eyre!("metadata parse: {err}"))?;
 
     let verdict_id = parse_optional_hash(obj.get("verdict_id_hex"), path, "verdict_id_hex")?;
-    let attestation_nonce =
-        parse_optional_hash(obj.get("attestation_nonce_hex"), path, "attestation_nonce_hex")?;
-    let refresh_at_ms = obj.get("refresh_at_ms").and_then(norito::json::Value::as_u64);
+    let attestation_nonce = parse_optional_hash(
+        obj.get("attestation_nonce_hex"),
+        path,
+        "attestation_nonce_hex",
+    )?;
+    let refresh_at_ms = obj
+        .get("refresh_at_ms")
+        .and_then(norito::json::Value::as_u64);
 
     Ok(OfflineWalletCertificate {
         controller,
@@ -507,9 +529,12 @@ fn parse_optional_hash(
                     path.display()
                 )
             })?;
-            Hash::from_str(hex)
-                .map(Some)
-                .map_err(|err| eyre!("offline allowance fixture `{}` `{field}`: {err}", path.display()))
+            Hash::from_str(hex).map(Some).map_err(|err| {
+                eyre!(
+                    "offline allowance fixture `{}` `{field}`: {err}",
+                    path.display()
+                )
+            })
         }
     }
 }
@@ -2346,8 +2371,8 @@ async fn offline_allowances_listing_respects_address_format_hint() -> Result<()>
         .map_err(|err| eyre!("failed to encode fixture controller as compressed literal: {err}"))?;
     let instruction = RegisterOfflineAllowance { certificate };
 
-    let mut builder = NetworkBuilder::new();
-    builder = builder.with_genesis_instruction(instruction);
+    let builder = with_offline_allowance_genesis(NetworkBuilder::new(), &instruction.certificate)
+        .with_genesis_instruction(instruction);
 
     let Some(network) = start_network_async_or_skip(
         builder,
@@ -2369,7 +2394,7 @@ async fn offline_allowances_listing_respects_address_format_hint() -> Result<()>
     let http = http_client();
 
     let default_url = base
-        .join("/v1/offline/allowances?limit=4")
+        .join("/v1/offline/allowances?limit=4&include_expired=true")
         .expect("offline allowances url");
     let resp = http
         .get(default_url)
@@ -2394,7 +2419,7 @@ async fn offline_allowances_listing_respects_address_format_hint() -> Result<()>
     );
 
     let compressed_url = base
-        .join("/v1/offline/allowances?limit=4&address_format=compressed")
+        .join("/v1/offline/allowances?limit=4&address_format=compressed&include_expired=true")
         .expect("offline allowances url");
     let resp = http
         .get(compressed_url)
@@ -2434,8 +2459,8 @@ async fn offline_allowances_query_respects_address_format_hint() -> Result<()> {
         .map_err(|err| eyre!("failed to encode fixture controller as compressed literal: {err}"))?;
     let instruction = RegisterOfflineAllowance { certificate };
 
-    let mut builder = NetworkBuilder::new();
-    builder = builder.with_genesis_instruction(instruction);
+    let builder = with_offline_allowance_genesis(NetworkBuilder::new(), &instruction.certificate)
+        .with_genesis_instruction(instruction);
 
     let Some(network) = start_network_async_or_skip(
         builder,

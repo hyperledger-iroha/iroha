@@ -810,6 +810,9 @@ mod tests {
     use iroha_core::state::StateReadOnly;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
+        Registrable,
+        asset::AssetDefinition,
+        domain::Domain,
         isi::{offline::RegisterOfflineAllowance, register::RegisterPeerWithPop},
         parameter::system::SumeragiParameters,
     };
@@ -1037,6 +1040,8 @@ mod tests {
         let _resolver_guard = DomainSelectorResolverGuard;
         let certificate: OfflineWalletCertificate =
             norito::json::from_value(certificate_value).expect("fixture certificate should decode");
+        let asset_definition_id = certificate.allowance.asset.definition().clone();
+        let asset_scale = certificate.allowance.amount.scale();
         let instruction = InstructionBox::from(RegisterOfflineAllowance { certificate });
 
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
@@ -1060,12 +1065,17 @@ mod tests {
             uaid: None,
             opaque_ids: Vec::new(),
         };
+        let asset_domain = asset_definition_id.domain().clone();
+        let domain = Domain::new(asset_domain).build(&genesis_account);
+        let asset_definition =
+            AssetDefinition::new(asset_definition_id, NumericSpec::fractional(asset_scale))
+                .build(&genesis_account);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let world = World::with(
-            Vec::<iroha_data_model::domain::Domain>::new(),
+            vec![domain],
             vec![genesis_account_entry],
-            Vec::<iroha_data_model::asset::AssetDefinition>::new(),
+            vec![asset_definition],
         );
         let state = State::with_telemetry(world, kura, query_handle, StateTelemetry::default());
         let chain = block

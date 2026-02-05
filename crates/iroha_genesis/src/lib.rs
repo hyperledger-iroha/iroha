@@ -963,6 +963,26 @@ pub mod genesis_instructions_json {
         }
     }
 
+    fn account_literal(account: &AccountId) -> Option<String> {
+        if let Ok(ih58) = account.canonical_ih58() {
+            return Some(format!("{ih58}@{}", account.domain()));
+        }
+        account
+            .try_signatory()
+            .map(|pk| format!("{pk}@{}", account.domain()))
+    }
+
+    fn asset_literal(asset: &AssetId) -> Option<String> {
+        let account_literal = account_literal(asset.account())?;
+        let definition = asset.definition();
+        let literal = if definition.domain() == asset.account().domain() {
+            format!("{}##{account_literal}", definition.name())
+        } else {
+            format!("{definition}#{account_literal}")
+        };
+        Some(literal)
+    }
+
     #[allow(clippy::too_many_lines)]
     fn instruction_to_value(instruction: &InstructionBox) -> Option<Value> {
         use norito::json::Map;
@@ -1000,10 +1020,8 @@ pub mod genesis_instructions_json {
                         "object".to_string(),
                         Value::String(mint_asset.object().to_string()),
                     );
-                    fields.insert(
-                        "destination".to_string(),
-                        Value::String(mint_asset.destination().to_string()),
-                    );
+                    let destination = asset_literal(mint_asset.destination())?;
+                    fields.insert("destination".to_string(), Value::String(destination));
                     Some(wrap("Mint", "Asset", Value::Object(fields)))
                 }
                 _ => None,
@@ -1014,22 +1032,20 @@ pub mod genesis_instructions_json {
             return match transfer {
                 TransferBox::AssetDefinition(tr) => {
                     let mut fields = Map::new();
-                    fields.insert("source".to_string(), Value::String(tr.source().to_string()));
+                    let source = account_literal(tr.source())?;
+                    fields.insert("source".to_string(), Value::String(source));
                     fields.insert("object".to_string(), Value::String(tr.object().to_string()));
-                    fields.insert(
-                        "destination".to_string(),
-                        Value::String(tr.destination().to_string()),
-                    );
+                    let destination = account_literal(tr.destination())?;
+                    fields.insert("destination".to_string(), Value::String(destination));
                     Some(wrap("Transfer", "AssetDefinition", Value::Object(fields)))
                 }
                 TransferBox::Domain(tr) => {
                     let mut fields = Map::new();
-                    fields.insert("source".to_string(), Value::String(tr.source().to_string()));
+                    let source = account_literal(tr.source())?;
+                    fields.insert("source".to_string(), Value::String(source));
                     fields.insert("object".to_string(), Value::String(tr.object().to_string()));
-                    fields.insert(
-                        "destination".to_string(),
-                        Value::String(tr.destination().to_string()),
-                    );
+                    let destination = account_literal(tr.destination())?;
+                    fields.insert("destination".to_string(), Value::String(destination));
                     Some(wrap("Transfer", "Domain", Value::Object(fields)))
                 }
                 _ => None,
@@ -1059,10 +1075,8 @@ pub mod genesis_instructions_json {
                     permission.insert("name".to_string(), Value::String(permission_name));
                     let mut fields = Map::new();
                     fields.insert("object".to_string(), Value::Object(permission));
-                    fields.insert(
-                        "destination".to_string(),
-                        Value::String(grant_perm.destination().to_string()),
-                    );
+                    let destination = account_literal(grant_perm.destination())?;
+                    fields.insert("destination".to_string(), Value::String(destination));
                     Some(wrap("Grant", "Permission", Value::Object(fields)))
                 }
                 _ => None,
@@ -1078,14 +1092,10 @@ pub mod genesis_instructions_json {
                 "lane_id".to_string(),
                 Value::Number(Number::U64(u64::from(register.lane_id().as_u32()))),
             );
-            fields.insert(
-                "validator".to_string(),
-                Value::String(register.validator().to_string()),
-            );
-            fields.insert(
-                "stake_account".to_string(),
-                Value::String(register.stake_account().to_string()),
-            );
+            let validator = account_literal(register.validator())?;
+            fields.insert("validator".to_string(), Value::String(validator));
+            let stake_account = account_literal(register.stake_account())?;
+            fields.insert("stake_account".to_string(), Value::String(stake_account));
             fields.insert(
                 "initial_stake".to_string(),
                 Value::String(register.initial_stake().to_string()),
@@ -1109,10 +1119,8 @@ pub mod genesis_instructions_json {
                 "lane_id".to_string(),
                 Value::Number(Number::U64(u64::from(activate.lane_id().as_u32()))),
             );
-            fields.insert(
-                "validator".to_string(),
-                Value::String(activate.validator().to_string()),
-            );
+            let validator = account_literal(activate.validator())?;
+            fields.insert("validator".to_string(), Value::String(validator));
             let mut outer = Map::new();
             outer.insert(
                 "ActivatePublicLaneValidator".to_string(),
@@ -1285,8 +1293,9 @@ pub mod genesis_instructions_json {
         #[test]
         fn deserialize_grant_without_payload_defaults_to_null() {
             let account_id = ALICE_ID.clone();
+            let account_literal = account_literal(&account_id).expect("account literal");
             let grant_json = format!(
-                r#"{{"Grant":{{"Permission":{{"destination":"{account_id}","object":{{"name":"CanSetParameters"}}}}}}}}"#
+                r#"{{"Grant":{{"Permission":{{"destination":"{account_literal}","object":{{"name":"CanSetParameters"}}}}}}}}"#
             );
             let grant_value =
                 norito::json::from_str(&grant_json).expect("parse grant instruction literal");

@@ -60,7 +60,6 @@ pub struct Args {
 const DEFAULT_NPOS_BOOTSTRAP_DOMAIN: &str = "nexus";
 const DEFAULT_NPOS_BOOTSTRAP_IVM_DOMAIN: &str = "ivm";
 const DEFAULT_NPOS_BOOTSTRAP_STAKE_ASSET_ID: &str = "xor#nexus";
-const DEFAULT_NPOS_BOOTSTRAP_ESCROW_ACCOUNT_ID: &str = "gas@ivm";
 const DEFAULT_NPOS_BOOTSTRAP_STAKE_AMOUNT: u64 = 10_000;
 
 struct BootstrapRegistrations {
@@ -128,17 +127,15 @@ fn append_npos_bootstrap(
     builder: GenesisBuilder,
     registrations: &mut BootstrapRegistrations,
     topology: &[PeerId],
+    escrow_account_id: &AccountId,
 ) -> Result<GenesisBuilder, color_eyre::eyre::Error> {
     if topology.is_empty() {
-        return Err(eyre!(
-            "NPoS bootstrap requires topology peers; provide --topology or embed topology in genesis"
-        ));
+        return Ok(builder);
     }
 
     let nexus_domain: DomainId = DEFAULT_NPOS_BOOTSTRAP_DOMAIN.parse()?;
-    let ivm_domain: DomainId = DEFAULT_NPOS_BOOTSTRAP_IVM_DOMAIN.parse()?;
+    let ivm_domain: DomainId = escrow_account_id.domain().clone();
     let stake_asset_id: AssetDefinitionId = DEFAULT_NPOS_BOOTSTRAP_STAKE_ASSET_ID.parse()?;
-    let escrow_account_id: AccountId = DEFAULT_NPOS_BOOTSTRAP_ESCROW_ACCOUNT_ID.parse()?;
 
     let mut builder = builder.next_transaction();
     if !registrations.domains.contains(&nexus_domain) {
@@ -149,7 +146,7 @@ fn append_npos_bootstrap(
         builder = builder.append_instruction(Register::domain(Domain::new(ivm_domain.clone())));
         registrations.domains.insert(ivm_domain.clone());
     }
-    if !registrations.accounts.contains(&escrow_account_id) {
+    if !registrations.accounts.contains(escrow_account_id) {
         builder =
             builder.append_instruction(Register::account(Account::new(escrow_account_id.clone())));
         registrations.accounts.insert(escrow_account_id.clone());
@@ -248,21 +245,22 @@ impl<T: Write> RunArgs<T> for Args {
         {
             ensure_npos_parameters(&genesis)?;
         }
-        let uses_npos = matches!(consensus_mode, SumeragiConsensusMode::Npos)
-            || matches!(next_consensus_mode, Some(SumeragiConsensusMode::Npos));
-        let needs_npos_bootstrap = uses_npos && !manifest_has_npos_bootstrap(&genesis);
         let topology_override = if let Some(raw) = self.topology.as_deref() {
             Some(norito::json::from_str::<Vec<PeerId>>(raw).wrap_err("parse --topology JSON")?)
         } else {
             None
         };
-        let topology_peers = if needs_npos_bootstrap {
+        let uses_npos = matches!(consensus_mode, SumeragiConsensusMode::Npos)
+            || matches!(next_consensus_mode, Some(SumeragiConsensusMode::Npos));
+        let topology_peers = if uses_npos {
             topology_override
                 .clone()
                 .unwrap_or_else(|| collect_topology_peers(&genesis))
         } else {
             Vec::new()
         };
+        let needs_npos_bootstrap =
+            uses_npos && !manifest_has_npos_bootstrap(&genesis) && !topology_peers.is_empty();
         let mut bootstrap_registrations = if needs_npos_bootstrap {
             BootstrapRegistrations::from_manifest(&genesis)
         } else {
@@ -295,15 +293,22 @@ impl<T: Write> RunArgs<T> for Args {
                 SumeragiParameter::ModeActivationHeight(height),
             ));
         }
-        if needs_npos_bootstrap {
-            builder =
-                append_npos_bootstrap(builder, &mut bootstrap_registrations, &topology_peers)?;
-        }
         let genesis_key_pair = load_genesis_key(
             self.private_key.as_deref(),
             self.seed.as_deref(),
             self.algorithm,
         )?;
+        if needs_npos_bootstrap {
+            let ivm_domain: DomainId = DEFAULT_NPOS_BOOTSTRAP_IVM_DOMAIN.parse()?;
+            let escrow_account_id =
+                AccountId::new(ivm_domain, genesis_key_pair.public_key().clone());
+            builder = append_npos_bootstrap(
+                builder,
+                &mut bootstrap_registrations,
+                &topology_peers,
+                &escrow_account_id,
+            )?;
+        }
         let genesis_block = builder
             .build_raw()
             .with_consensus_mode(consensus_mode)

@@ -1,6 +1,10 @@
 //! Integration tests of the Iroha Client CLI
 
-use std::{path::PathBuf, time::Duration};
+use std::{
+    path::PathBuf,
+    sync::Once,
+    time::Duration,
+};
 
 use integration_tests::sandbox;
 use iroha::{
@@ -15,7 +19,24 @@ use iroha_test_samples::sample_ivm_path;
 use reqwest::Url;
 
 fn program() -> PathBuf {
+    enable_reentrant_builds_for_tests();
     iroha_test_network::Program::Iroha.resolve().unwrap()
+}
+
+fn enable_reentrant_builds_for_tests() {
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        // Cargo sets `CARGO` for test binaries, which disables reentrant builds by default.
+        // Allow nested builds so the CLI binary can be compiled on-demand in fresh workspaces.
+        set_env_var("IROHA_TEST_ALLOW_REENTRANT_BUILD", "1");
+    });
+}
+
+#[allow(unsafe_code)]
+fn set_env_var(key: &str, value: &str) {
+    unsafe {
+        std::env::set_var(key, value);
+    }
 }
 
 fn ivm_build_profile_exists() -> bool {

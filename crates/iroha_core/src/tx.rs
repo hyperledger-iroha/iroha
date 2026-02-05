@@ -34,10 +34,10 @@ use iroha_data_model::{
             RegisterSmartContractCode, RemoveSmartContractBytes,
         },
     },
+    nexus::UniversalAccountId,
     query::error::FindError,
     smart_contract::manifest::{ContractManifest, MANIFEST_METADATA_KEY},
     transaction::{error::TransactionLimitError, signed::TransactionSignatureError},
-    nexus::UniversalAccountId,
 };
 use iroha_logger::{debug, error, warn};
 use iroha_macro::FromVariant;

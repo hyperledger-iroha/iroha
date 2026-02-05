@@ -583,6 +583,15 @@ mod tests {
             remove_env_var(key);
             Self { key, value }
         }
+
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var(key).ok();
+            set_env_var(key, value);
+            Self {
+                key,
+                value: previous,
+            }
+        }
     }
 
     impl Drop for EnvRestore {
@@ -599,7 +608,14 @@ mod tests {
         ENV_LOCK
             .get_or_init(|| Mutex::new(()))
             .lock()
-            .expect("env lock")
+            .unwrap_or_else(|err| {
+                eprintln!("warning: env lock poisoned; continuing with recovered guard");
+                err.into_inner()
+            })
+    }
+
+    fn allow_reentrant_build_guard() -> EnvRestore {
+        EnvRestore::set("IROHA_TEST_ALLOW_REENTRANT_BUILD", "1")
     }
 
     fn network_permit_snapshot() -> (usize, usize) {
@@ -692,6 +708,7 @@ mod tests {
             return;
         }
         let _env_guard = lock_env_guard();
+        let _build_guard = allow_reentrant_build_guard();
         let _override_guard = override_network_parallelism(Some(true), None);
         let guard = serial_guard();
         let network = NetworkBuilder::new()
@@ -727,6 +744,7 @@ mod tests {
             return;
         }
         let _env_guard = lock_env_guard();
+        let _build_guard = allow_reentrant_build_guard();
         let _override_guard = override_network_parallelism(Some(true), None);
         let guard = serial_guard();
         let network = NetworkBuilder::new()
@@ -749,6 +767,7 @@ mod tests {
             return;
         }
         let _env_guard = lock_env_guard();
+        let _build_guard = allow_reentrant_build_guard();
         let _override_guard = override_network_parallelism(Some(true), None);
         let guard = serial_guard();
         let network = NetworkBuilder::new()
@@ -766,6 +785,7 @@ mod tests {
             return;
         }
         let _env_guard = lock_env_guard();
+        let _build_guard = allow_reentrant_build_guard();
         let guard = serial_guard();
         let network = NetworkBuilder::new()
             .with_auto_populated_trusted_peers()
@@ -850,6 +870,7 @@ mod tests {
             return;
         }
         let _env_guard = lock_env_guard();
+        let _build_guard = allow_reentrant_build_guard();
         let result = build_network_or_skip(
             NetworkBuilder::new(),
             "build_network_or_skip_returns_network",
@@ -908,6 +929,7 @@ mod tests {
             return Ok(());
         }
         let _env_guard = lock_env_guard();
+        let _build_guard = allow_reentrant_build_guard();
         let result = start_network_blocking_or_skip(
             NetworkBuilder::new(),
             "start_network_blocking_or_skip_includes_trusted_peer_pops",
@@ -938,6 +960,7 @@ mod tests {
             return Ok(());
         }
         let _env_guard = lock_env_guard();
+        let _build_guard = allow_reentrant_build_guard();
         let result = start_network_async_or_skip(
             NetworkBuilder::new(),
             "start_network_async_or_skip_includes_trusted_peer_pops",
