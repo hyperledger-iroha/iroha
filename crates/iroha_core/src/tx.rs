@@ -3467,8 +3467,7 @@ pub mod tests {
     };
 
     use iroha_crypto::{
-        Algorithm, Hash, KeyPair,
-        merkle::MerkleProof,
+        Algorithm, Hash, KeyPair, MerkleProof,
         privacy::{LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment},
     };
     use iroha_data_model::{
