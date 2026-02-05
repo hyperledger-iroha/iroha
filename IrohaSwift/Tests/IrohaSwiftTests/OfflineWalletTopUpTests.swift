@@ -207,6 +207,7 @@ final class OfflineWalletTopUpTests: XCTestCase {
         let policy = OfflineWalletPolicy(maxBalance: "50", maxTxValue: "10", expiresAtMs: 999)
         return OfflineWalletCertificate(
             controller: controller,
+            operatorId: controller,
             allowance: allowance,
             spendPublicKey: "ed0120deadbeef",
             attestationReport: Data([0x01, 0x02, 0x03]),
@@ -224,6 +225,7 @@ final class OfflineWalletTopUpTests: XCTestCase {
     private func makeDraft(from certificate: OfflineWalletCertificate) -> OfflineWalletCertificateDraft {
         OfflineWalletCertificateDraft(
             controller: certificate.controller,
+            operatorId: certificate.operatorId,
             allowance: certificate.allowance,
             spendPublicKey: certificate.spendPublicKey,
             attestationReport: certificate.attestationReport,

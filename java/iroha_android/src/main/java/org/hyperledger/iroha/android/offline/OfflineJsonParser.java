@@ -219,6 +219,7 @@ public final class OfflineJsonParser {
   private static OfflineWalletCertificate parseCertificate(
       final Map<String, Object> entry, final String path) {
     final String controller = asString(entry.get("controller"), path + ".controller");
+    final String operator = asString(entry.get("operator"), path + ".operator");
     final Map<String, Object> allowanceEntry =
         expectObject(entry.get("allowance"), path + ".allowance");
     final OfflineAllowanceCommitment allowance =
@@ -251,6 +252,7 @@ public final class OfflineJsonParser {
     final Long refreshAtMs = asOptionalLong(entry.get("refresh_at_ms"), path + ".refresh_at_ms");
     return new OfflineWalletCertificate(
         controller,
+        operator,
         allowance,
         spendPublicKey,
         attestationReport,

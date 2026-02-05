@@ -1,54 +1,14 @@
 {
   "certificate": {
     "allowance": {
-      "amount": "150",
-      "asset": "usd#sora#34mSYnCXkCzHXm31UDHh7SJfGvFJMFkT4FY4YhqjRbneXvpQgL6hAxjt9PQ4n9JBzYwiuLRwF",
-      "commitment_hex": "B6BC64AF113FF5CEEB7183C09BBE31EC972A324CAF5AC378B7DFD951BDAAEF62",
-      "commitment": [
-        182,
-        188,
-        100,
-        175,
-        17,
-        63,
-        245,
-        206,
-        235,
-        113,
-        131,
-        192,
-        155,
-        190,
-        49,
-        236,
-        151,
-        42,
-        50,
-        76,
-        175,
-        90,
-        195,
-        120,
-        183,
-        223,
-        217,
-        81,
-        189,
-        170,
-        239,
-        98
-      ]
+      "amount": "150.00",
+      "asset": "usd#sora#34mSYnDgbaJM58rbLoif4Tkp7G6zNhAfct4B9QLcNFzMSQjFmyWod961RVTGBpe8a2SykUPyZ",
+      "commitment_hex": "603D84687B57A4804C4E559BBB3AA7DC3BD440103EAD6401B6B19AC692EBDD14"
     },
     "attestation_nonce_hex": null,
     "attestation_report_b64": "u2a7Zg==",
-    "attestation_report": [
-      187,
-      102,
-      187,
-      102
-    ],
     "controller": "34mSYnDgbaJM58rbLoif4Tkp7G6zNhAfct4B9QLcNFzMSQjFmyWod961RVTGBpe8a2SykUPyZ",
-    "expires_at_ms": 2524593600000,
+    "expires_at_ms": 1745900000000,
     "issued_at_ms": 1730314876000,
     "metadata": {
       "android.attestation.package_names": [
@@ -61,10 +21,10 @@
       ],
       "android.integrity.policy": "marker_key"
     },
-    "operator_signature": "122AA70E4B2E22D40062D88B7582DC1D949DC4E7DD78D8FCADFE9C9B04358963AD2E951889B221B4317435DD6B38CB2AE99DE177B46F17A41BCA42322874F10A",
-    "operator_signature_hex": "122AA70E4B2E22D40062D88B7582DC1D949DC4E7DD78D8FCADFE9C9B04358963AD2E951889B221B4317435DD6B38CB2AE99DE177B46F17A41BCA42322874F10A",
+    "operator": "34mSYnDgbaJM58rbLoif4Tkp7G7VrmEx2UvM5oSfSY6GU46aEca41RKqHEBCLgaEgkuxPBX6W",
+    "operator_signature_hex": "CF0FD6A8F57114DB9D72D3043369CE64E25E5EBA4D3B6498C8970CFA87D262BE2F61A3DEAA65594F6A82F31FED88DB88A43DFFD49BDEF04694FF37D073AF510F",
     "policy": {
-      "expires_at_ms": 2524593600000,
+      "expires_at_ms": 1745900000000,
       "max_balance": "300",
       "max_tx_value": "75"
     },

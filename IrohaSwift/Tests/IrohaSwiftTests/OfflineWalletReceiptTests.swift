@@ -167,6 +167,7 @@ final class OfflineWalletReceiptTests: XCTestCase {
         let spendKey = "ed0120" + (try signingKey.publicKey()).hexUppercased()
         return OfflineWalletCertificate(
             controller: base.controller,
+            operatorId: base.operatorId,
             allowance: base.allowance,
             spendPublicKey: spendKey,
             attestationReport: base.attestationReport,

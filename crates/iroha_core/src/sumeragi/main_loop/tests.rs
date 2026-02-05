@@ -3025,10 +3025,7 @@ fn effective_commit_topology_falls_back_to_genesis_roster_when_empty() {
     state.push_block_hash_for_testing(genesis.0.hash());
     let state = Arc::new(state);
 
-    let key_pair = deterministic_keypair(
-        b"genesis-roster-fallback-peer",
-        Algorithm::Ed25519,
-    );
+    let key_pair = deterministic_keypair(b"genesis-roster-fallback-peer", Algorithm::Ed25519);
     let address: SocketAddr = "127.0.0.1:0".parse().expect("socket address parses");
     let local_peer = Peer::new(address.into(), PeerId::new(key_pair.public_key().clone()));
     let trusted_peers = trusted_with_pops(local_peer.clone(), Vec::new(), BTreeMap::new());
@@ -36177,15 +36174,13 @@ async fn qc_signers_for_votes_revalidates_on_roster_hash_mismatch() {
         signature_topology.as_ref().to_vec(),
     ));
     actor.vote_log.insert(key, vote.clone());
-    actor
-        .vote_validation_cache
-        .insert(
-            key,
-            super::VoteValidationCacheEntry {
-                roster_hash,
-                membership_hash,
-            },
-        );
+    actor.vote_validation_cache.insert(
+        key,
+        super::VoteValidationCacheEntry {
+            roster_hash,
+            membership_hash,
+        },
+    );
     assert!(
         actor.vote_validation_cache.contains_key(&key),
         "vote validation cache should track validated votes"
@@ -36420,15 +36415,13 @@ async fn qc_signers_for_votes_ignores_lower_view_after_higher_view_vote() {
             signature_topology.as_ref().to_vec(),
         ));
         actor.vote_log.insert(key, vote.clone());
-        actor
-            .vote_validation_cache
-            .insert(
-                key,
-                super::VoteValidationCacheEntry {
-                    roster_hash,
-                    membership_hash,
-                },
-            );
+        actor.vote_validation_cache.insert(
+            key,
+            super::VoteValidationCacheEntry {
+                roster_hash,
+                membership_hash,
+            },
+        );
     }
 
     let signature_topology_low =
@@ -36563,15 +36556,13 @@ async fn qc_signers_for_votes_does_not_ignore_lower_view_vote_from_other_peer() 
             signature_topology.as_ref().to_vec(),
         ));
         actor.vote_log.insert(key, vote.clone());
-        actor
-            .vote_validation_cache
-            .insert(
-                key,
-                super::VoteValidationCacheEntry {
-                    roster_hash,
-                    membership_hash,
-                },
-            );
+        actor.vote_validation_cache.insert(
+            key,
+            super::VoteValidationCacheEntry {
+                roster_hash,
+                membership_hash,
+            },
+        );
     }
 
     let signers_low = actor.qc_signers_for_votes(
@@ -44049,15 +44040,13 @@ async fn qc_drop_empty_block_clears_votes_and_pending() {
     actor.vote_log.insert(vote_key, vote);
     let roster_hash = HashOf::new(&Vec::<PeerId>::new());
     let membership_hash = HashOf::new(&Vec::<PeerId>::new());
-    actor
-        .vote_validation_cache
-        .insert(
-            vote_key,
-            super::VoteValidationCacheEntry {
-                roster_hash,
-                membership_hash,
-            },
-        );
+    actor.vote_validation_cache.insert(
+        vote_key,
+        super::VoteValidationCacheEntry {
+            roster_hash,
+            membership_hash,
+        },
+    );
 
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let qc = qc_with_bitmap(

@@ -2,12 +2,13 @@
 title: Nexus Lane Compliance & Whitelist Policy Engine (NX-12)
 ---
 
-Status: 🈯 Planned → this document provides the spec and rollout guardrails
-referenced by roadmap item **NX-12 — Lane compliance & whitelist policy engine**.
+Status: 🈴 Implemented — this document captures the live policy model and
+consensus-critical enforcement referenced by roadmap item
+**NX-12 — Lane compliance & whitelist policy engine**.
 It explains the data model, governance flows, telemetry, and rollout strategy
-that will be implemented inside `crates/iroha_core/src/compliance` and exposed
-through Torii/SDK surfaces, so every lane and dataspace can be bound to
-deterministic jurisdictional policies.
+implemented inside `crates/iroha_core/src/compliance` and enforced during both
+Torii admission and `iroha_core` transaction validation, so every lane and
+dataspace can be bound to deterministic jurisdictional policies.
 
 ## Goals
 
@@ -128,12 +129,16 @@ fetch artefacts (signed policy blob + reviewer attestations).
    - The `compliance::Engine` evaluates `deny` rules, then `allow` rules, and
      finally enforces transfer limits. Failing transactions return a typed error
      (`ERR_LANE_COMPLIANCE_DENIED`) with reason + policy id for audit trails.
+   - Admission is a fast prefilter; consensus validation re-checks the same
+     rules using the state snapshots to keep enforcement deterministic.
 2. **Execution (iroha_core)**  
-   - During block construction, `iroha_core::compliance::Engine` replays the same
-     decision using the policy id committed into the block header. This prevents
-     divergence even if Torii caches become stale.  
-   - Instructions that mutate lane manifests or policies must supply the policy
-     references they rely on so those values are captured on-chain.
+   - During block construction, `iroha_core::tx::validate_transaction_internal`
+     replays the same lane governance/UAID/privacy/compliance checks using the
+     `StateTransaction` snapshots (`lane_manifests`, `lane_privacy_registry`,
+     `lane_compliance`). This keeps enforcement consensus-critical even if Torii
+     caches become stale.  
+   - Transactions that mutate lane manifests or compliance policies still flow
+     through the same validation path; there is no admission-only bypass.
 3. **Async hooks**  
    - RBC gossip and DA fetchers attach the policy id to telemetry so late
      decisions can be traced back to the correct rule version.  

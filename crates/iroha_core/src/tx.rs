@@ -14,6 +14,7 @@
 use core::{fmt, str::FromStr as _};
 use std::{
     borrow::Cow,
+    collections::BTreeSet,
     sync::LazyLock,
     time::{Duration, SystemTime, SystemTimeError},
 };
@@ -23,11 +24,20 @@ use eyre::Result;
 use hex;
 pub use iroha_data_model::prelude::*;
 use iroha_data_model::{
+    account::address::AccountAddress,
     fraud::types::FraudAssessment,
     isi::error::Mismatch,
+    isi::{
+        runtime_upgrade::{ActivateRuntimeUpgrade, CancelRuntimeUpgrade, ProposeRuntimeUpgrade},
+        smart_contract_code::{
+            ActivateContractInstance, DeactivateContractInstance, RegisterSmartContractBytes,
+            RegisterSmartContractCode, RemoveSmartContractBytes,
+        },
+    },
     query::error::FindError,
     smart_contract::manifest::{ContractManifest, MANIFEST_METADATA_KEY},
     transaction::{error::TransactionLimitError, signed::TransactionSignatureError},
+    nexus::UniversalAccountId,
 };
 use iroha_logger::{debug, error, warn};
 use iroha_macro::FromVariant;
@@ -35,6 +45,9 @@ use iroha_primitives::time::TimeSource;
 use mv::storage::StorageReadOnly;
 
 use crate::{
+    compliance::{LaneComplianceContext, LaneComplianceEvaluation},
+    governance::manifest::{GovernanceRules, LaneManifestRegistryHandle},
+    interlane::verify_lane_privacy_proofs,
     queue::evaluate_policy_with_catalog,
     smartcontracts::ivm::cache::IvmCache,
     state::{StateBlock, StateReadOnlyWithTransactions, StateTransaction, WorldReadOnly},
@@ -78,6 +91,25 @@ static CONTRACT_MANIFEST_METADATA_NAME: LazyLock<iroha_data_model::name::Name> =
         iroha_data_model::name::Name::from_str(MANIFEST_METADATA_KEY)
             .expect("static contract manifest metadata key")
     });
+static GOV_NAMESPACE_METADATA_KEY: LazyLock<iroha_data_model::name::Name> = LazyLock::new(|| {
+    iroha_data_model::name::Name::from_str("gov_namespace").expect("static governance metadata key")
+});
+static GOV_CONTRACT_ID_METADATA_KEY: LazyLock<iroha_data_model::name::Name> = LazyLock::new(|| {
+    iroha_data_model::name::Name::from_str("gov_contract_id")
+        .expect("static governance metadata key")
+});
+static GOV_APPROVERS_METADATA_KEY: LazyLock<iroha_data_model::name::Name> = LazyLock::new(|| {
+    iroha_data_model::name::Name::from_str("gov_manifest_approvers")
+        .expect("static governance metadata key")
+});
+static CONTRACT_NAMESPACE_METADATA_KEY: LazyLock<iroha_data_model::name::Name> =
+    LazyLock::new(|| {
+        iroha_data_model::name::Name::from_str("contract_namespace")
+            .expect("static contract namespace metadata key")
+    });
+static CONTRACT_ID_METADATA_KEY: LazyLock<iroha_data_model::name::Name> = LazyLock::new(|| {
+    iroha_data_model::name::Name::from_str("contract_id").expect("static contract id metadata key")
+});
 static HEARTBEAT_METADATA_NAME: LazyLock<iroha_data_model::name::Name> = LazyLock::new(|| {
     iroha_data_model::name::Name::from_str("sumeragi_heartbeat")
         .expect("static heartbeat metadata key")
@@ -1395,19 +1427,24 @@ impl StateBlock<'_> {
         let authority = tx.as_ref().authority().clone();
         let is_heartbeat = is_heartbeat_transaction(tx.as_ref());
 
-        // Permit no-op external transactions (zero ISIs) even if the authority account
-        // has not been registered yet. This matches app-facing tests that construct
-        // simple timestamped transactions without preparing state. Transactions that
-        // contain any instructions or IVM bytecode still require a valid authority.
-        let is_noop_external = matches!(
-            tx.as_ref().instructions(),
-            iroha_data_model::transaction::executable::Executable::Instructions(v) if v.is_empty()
-        );
-
-        if state_transaction.world.accounts.get(&authority).is_none() && !is_noop_external {
+        // Heartbeat transactions may be signed by ephemeral identities; other transactions
+        // must originate from an existing account.
+        if state_transaction.world.accounts.get(&authority).is_none() && !is_heartbeat {
             return Err(TransactionRejectionReason::AccountDoesNotExist(
                 FindError::Account(authority.clone()),
             ));
+        }
+
+        if !is_heartbeat {
+            if let Executable::Instructions(instructions) = tx.as_ref().instructions()
+                && instructions.is_empty()
+            {
+                return Err(TransactionRejectionReason::Validation(
+                    ValidationFail::NotPermitted(
+                        "Transaction must contain at least one instruction".to_owned(),
+                    ),
+                ));
+            }
         }
 
         let (require_height_ttl, require_sequence) = {
@@ -1503,19 +1540,21 @@ impl StateBlock<'_> {
             }
         }
 
-        if !is_heartbeat {
-            let routing_decision = evaluate_policy_with_catalog(
-                &state_transaction.nexus.routing_policy,
-                &state_transaction.nexus.lane_catalog,
-                &state_transaction.nexus.dataspace_catalog,
-                &tx,
-            );
-            let lane_assignment = LaneAssignment {
-                lane_id: routing_decision.lane_id,
-                dataspace_id: routing_decision.dataspace_id,
-                dataspace_catalog: &state_transaction.nexus.dataspace_catalog,
-            };
+        let routing_decision = evaluate_policy_with_catalog(
+            &state_transaction.nexus.routing_policy,
+            &state_transaction.nexus.lane_catalog,
+            &state_transaction.nexus.dataspace_catalog,
+            &tx,
+        );
+        let lane_assignment = LaneAssignment {
+            lane_id: routing_decision.lane_id,
+            dataspace_id: routing_decision.dataspace_id,
+            dataspace_catalog: &state_transaction.nexus.dataspace_catalog,
+        };
 
+        enforce_lane_policies(tx.as_ref(), state_transaction, &lane_assignment)?;
+
+        if !is_heartbeat {
             enforce_fraud_policy(
                 &state_transaction.fraud_monitoring,
                 tx.as_ref().metadata(),
@@ -1963,6 +2002,700 @@ fn dataspace_label_from_catalog(catalog: &DataSpaceCatalog, id: NexusDataSpaceId
         .iter()
         .find(|entry| entry.id == id)
         .map_or_else(|| id.as_u64().to_string(), |entry| entry.alias.clone())
+}
+
+fn reject_not_permitted(reason: impl Into<String>) -> TransactionRejectionReason {
+    TransactionRejectionReason::Validation(ValidationFail::NotPermitted(reason.into()))
+}
+
+fn reject_lane_policy(alias: &str, reason: impl Into<String>) -> TransactionRejectionReason {
+    reject_not_permitted(format!("lane {alias}: {}", reason.into()))
+}
+
+fn collect_lane_privacy_proofs(
+    tx: &SignedTransaction,
+) -> Vec<iroha_data_model::nexus::LanePrivacyProof> {
+    tx.attachments()
+        .into_iter()
+        .flat_map(|list| list.0.iter())
+        .filter_map(|attachment| attachment.lane_privacy.clone())
+        .collect()
+}
+
+fn enforce_manifest_quorum(
+    alias: &str,
+    rules: &GovernanceRules,
+    tx: &SignedTransaction,
+) -> Result<(), TransactionRejectionReason> {
+    let Some(quorum) = rules.quorum else {
+        return Ok(());
+    };
+    if quorum <= 1 {
+        return Ok(());
+    }
+    if rules.validators.is_empty() {
+        return Ok(());
+    }
+
+    let approvals = collect_manifest_approvals(alias, tx)?;
+    let validators = canonical_manifest_validators(alias, rules)?;
+    let approved = approvals
+        .iter()
+        .filter(|account| validators.contains(*account))
+        .count();
+    let required = usize::try_from(quorum).unwrap_or(usize::MAX);
+    if approved < required {
+        return Err(reject_lane_policy(
+            alias,
+            format!(
+                "lane manifest quorum requires {quorum} validator approvals but {approved} were provided"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn collect_manifest_approvals(
+    alias: &str,
+    tx: &SignedTransaction,
+) -> Result<BTreeSet<String>, TransactionRejectionReason> {
+    let mut approvals = BTreeSet::new();
+    let authority = tx.authority();
+    let authority_ih58 = authority.canonical_ih58().map_err(|err| {
+        reject_lane_policy(
+            alias,
+            format!("failed to encode authority `{authority}` as ih58: {err}"),
+        )
+    })?;
+    approvals.insert(authority_ih58);
+
+    let metadata = tx.metadata();
+    let Some(raw) = metadata.get(&*GOV_APPROVERS_METADATA_KEY) else {
+        return Ok(approvals);
+    };
+    let entries = raw.try_into_any_norito::<Vec<String>>().map_err(|_| {
+        reject_lane_policy(
+            alias,
+            "`gov_manifest_approvers` metadata must be an array of account identifiers",
+        )
+    })?;
+    for entry in entries {
+        let trimmed = entry.trim();
+        if trimmed.is_empty() {
+            return Err(reject_lane_policy(
+                alias,
+                "`gov_manifest_approvers` metadata entries must not be blank",
+            ));
+        }
+        let canonical = if let Ok(account) = AccountId::from_str(trimmed) {
+            account.canonical_ih58().map_err(|err| {
+                reject_lane_policy(
+                    alias,
+                    format!("invalid account id `{trimmed}` in `gov_manifest_approvers`: {err}"),
+                )
+            })?
+        } else {
+            let prefix = iroha_data_model::account::address::chain_discriminant();
+            let (address, _) = AccountAddress::parse_any(trimmed, Some(prefix)).map_err(|err| {
+                reject_lane_policy(
+                    alias,
+                    format!("invalid account id `{trimmed}` in `gov_manifest_approvers`: {err}"),
+                )
+            })?;
+            address.to_ih58(prefix).map_err(|err| {
+                reject_lane_policy(
+                    alias,
+                    format!("invalid account id `{trimmed}` in `gov_manifest_approvers`: {err}"),
+                )
+            })?
+        };
+        approvals.insert(canonical);
+    }
+    Ok(approvals)
+}
+
+fn canonical_manifest_validators(
+    alias: &str,
+    rules: &GovernanceRules,
+) -> Result<BTreeSet<String>, TransactionRejectionReason> {
+    let mut validators = BTreeSet::new();
+    for validator in &rules.validators {
+        let ih58 = validator.canonical_ih58().map_err(|err| {
+            reject_lane_policy(
+                alias,
+                format!("failed to encode validator `{validator}` as ih58: {err}"),
+            )
+        })?;
+        validators.insert(ih58);
+    }
+    Ok(validators)
+}
+
+#[allow(clippy::too_many_lines)]
+fn enforce_manifest_protected_namespaces(
+    alias: &str,
+    rules: &GovernanceRules,
+    tx: &SignedTransaction,
+    world: &impl WorldReadOnly,
+) -> Result<(), TransactionRejectionReason> {
+    if rules.protected_namespaces.is_empty() {
+        return Ok(());
+    }
+
+    let metadata = tx.metadata();
+    let metadata_namespace = metadata
+        .get(&*GOV_NAMESPACE_METADATA_KEY)
+        .map(|value| {
+            let raw = value.try_into_any_norito::<String>().map_err(|_| {
+                reject_lane_policy(alias, "`gov_namespace` metadata must be a string value")
+            })?;
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return Err(reject_lane_policy(
+                    alias,
+                    "`gov_namespace` metadata must not be blank",
+                ));
+            }
+            Name::from_str(trimmed).map_err(|err| {
+                reject_lane_policy(
+                    alias,
+                    format!("`gov_namespace` metadata `{trimmed}` is not a valid Name: {err}"),
+                )
+            })
+        })
+        .transpose()?;
+
+    let metadata_contract_id = metadata
+        .get(&*GOV_CONTRACT_ID_METADATA_KEY)
+        .map(|value| {
+            let raw = value.try_into_any_norito::<String>().map_err(|_| {
+                reject_lane_policy(alias, "`gov_contract_id` metadata must be a string value")
+            })?;
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return Err(reject_lane_policy(
+                    alias,
+                    "`gov_contract_id` metadata must not be blank",
+                ));
+            }
+            Ok(trimmed.to_string())
+        })
+        .transpose()?;
+
+    let metadata_contract_namespace = metadata
+        .get(&*CONTRACT_NAMESPACE_METADATA_KEY)
+        .map(|value| {
+            let raw = value.try_into_any_norito::<String>().map_err(|_| {
+                reject_lane_policy(
+                    alias,
+                    "`contract_namespace` metadata must be a string value",
+                )
+            })?;
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return Err(reject_lane_policy(
+                    alias,
+                    "`contract_namespace` metadata must not be blank",
+                ));
+            }
+            Name::from_str(trimmed).map_err(|err| {
+                reject_lane_policy(
+                    alias,
+                    format!("`contract_namespace` metadata `{trimmed}` is not a valid Name: {err}"),
+                )
+            })
+        })
+        .transpose()?;
+
+    let metadata_contract_id_hint = metadata
+        .get(&*CONTRACT_ID_METADATA_KEY)
+        .map(|value| {
+            let raw = value.try_into_any_norito::<String>().map_err(|_| {
+                reject_lane_policy(alias, "`contract_id` metadata must be a string value")
+            })?;
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return Err(reject_lane_policy(
+                    alias,
+                    "`contract_id` metadata must not be blank",
+                ));
+            }
+            Ok(trimmed.to_string())
+        })
+        .transpose()?;
+
+    let mut namespaces_from_instructions = BTreeSet::new();
+    let mut contract_bindings = BTreeSet::new();
+    let mut register_code_seen = false;
+    if let Executable::Instructions(instructions) = tx.instructions() {
+        for instruction in instructions {
+            if let Some(activate) = instruction
+                .as_any()
+                .downcast_ref::<ActivateContractInstance>()
+            {
+                let ns = Name::from_str(activate.namespace.trim()).map_err(|err| {
+                    reject_lane_policy(
+                        alias,
+                        format!(
+                            "instruction namespace `{}` is not valid: {err}",
+                            activate.namespace
+                        ),
+                    )
+                })?;
+                namespaces_from_instructions.insert(ns.clone());
+                let contract_id = activate.contract_id.trim();
+                if contract_id.is_empty() {
+                    return Err(reject_lane_policy(
+                        alias,
+                        "contract_id in ActivateContractInstance must not be blank",
+                    ));
+                }
+                contract_bindings.insert((ns, contract_id.to_string()));
+            } else if let Some(deactivate) = instruction
+                .as_any()
+                .downcast_ref::<DeactivateContractInstance>()
+            {
+                let ns = Name::from_str(deactivate.namespace.trim()).map_err(|err| {
+                    reject_lane_policy(
+                        alias,
+                        format!(
+                            "instruction namespace `{}` is not valid: {err}",
+                            deactivate.namespace
+                        ),
+                    )
+                })?;
+                namespaces_from_instructions.insert(ns.clone());
+                let contract_id = deactivate.contract_id.trim();
+                if contract_id.is_empty() {
+                    return Err(reject_lane_policy(
+                        alias,
+                        "contract_id in DeactivateContractInstance must not be blank",
+                    ));
+                }
+                contract_bindings.insert((ns, contract_id.to_string()));
+            } else {
+                let modifies_contract_code = {
+                    let any = instruction.as_any();
+                    any.is::<RegisterSmartContractCode>()
+                        || any.is::<RegisterSmartContractBytes>()
+                        || any.is::<RemoveSmartContractBytes>()
+                };
+                if modifies_contract_code {
+                    register_code_seen = true;
+                }
+            }
+        }
+    }
+
+    if let Some(ns) = metadata_namespace.clone() {
+        if let Some(cid) = metadata_contract_id
+            .clone()
+            .or_else(|| metadata_contract_id_hint.clone())
+        {
+            namespaces_from_instructions.insert(ns.clone());
+            contract_bindings.insert((ns, cid));
+        }
+    } else if let Some(ns) = metadata_contract_namespace.clone() {
+        if let Some(cid) = metadata_contract_id_hint.clone() {
+            namespaces_from_instructions.insert(ns.clone());
+            contract_bindings.insert((ns, cid));
+        }
+    }
+
+    let ivm_with_contract_metadata = matches!(tx.instructions(), Executable::Ivm(_))
+        && (metadata_namespace.is_some()
+            || metadata_contract_namespace.is_some()
+            || metadata_contract_id_hint.is_some());
+
+    let contract_instr_seen =
+        register_code_seen || !contract_bindings.is_empty() || ivm_with_contract_metadata;
+
+    if contract_instr_seen && metadata_namespace.is_none() {
+        return Err(reject_lane_policy(
+            alias,
+            "transactions with contract namespace operations must set `gov_namespace` metadata when lane governance protects namespaces",
+        ));
+    }
+
+    if (contract_instr_seen || metadata_namespace.is_some()) && metadata_contract_id.is_none() {
+        return Err(reject_lane_policy(
+            alias,
+            "metadata key `gov_contract_id` is required when `gov_namespace` is provided",
+        ));
+    }
+
+    if let (Some(ns_hint), Some(ns_meta)) = (
+        metadata_contract_namespace.as_ref(),
+        metadata_namespace.as_ref(),
+    ) {
+        if ns_hint != ns_meta {
+            return Err(reject_lane_policy(
+                alias,
+                "`contract_namespace` metadata must match `gov_namespace` for protected operations",
+            ));
+        }
+    }
+
+    if let (Some(cid_hint), Some(cid_meta)) = (
+        metadata_contract_id_hint.as_ref(),
+        metadata_contract_id.as_ref(),
+    ) {
+        if cid_hint != cid_meta {
+            return Err(reject_lane_policy(
+                alias,
+                "`contract_id` metadata must match `gov_contract_id` for protected operations",
+            ));
+        }
+    }
+
+    if let Some(meta_cid) = metadata_contract_id.as_ref()
+        && let Some(target_ns) = metadata_namespace
+            .clone()
+            .or_else(|| namespaces_from_instructions.iter().next().cloned())
+    {
+        let cross_namespace = world
+            .contract_instances()
+            .iter()
+            .filter(|((_ns, cid), _)| cid == meta_cid)
+            .filter_map(|((ns, _), _)| Name::from_str(ns).ok())
+            .any(|existing_ns| existing_ns != target_ns);
+        if cross_namespace {
+            return Err(reject_lane_policy(
+                alias,
+                format!(
+                    "contract `{meta_cid}` is already bound to a different namespace; cross-namespace rebinding is not allowed"
+                ),
+            ));
+        }
+    }
+
+    let mut namespaces_to_check = namespaces_from_instructions.clone();
+    if let Some(ns) = metadata_namespace.clone() {
+        namespaces_to_check.insert(ns);
+    }
+    if let Some(ns) = metadata_contract_namespace.clone() {
+        namespaces_to_check.insert(ns);
+    }
+
+    for namespace in &namespaces_to_check {
+        if !rules.protected_namespaces.contains(namespace) {
+            return Err(reject_lane_policy(
+                alias,
+                format!("namespace `{namespace}` is not declared in lane governance protected set"),
+            ));
+        }
+    }
+
+    if let Some(ns) = metadata_namespace
+        && !namespaces_from_instructions.is_empty()
+        && namespaces_from_instructions
+            .iter()
+            .any(|other| other != &ns)
+    {
+        return Err(reject_lane_policy(
+            alias,
+            "`gov_namespace` metadata does not match namespaces referenced by contract instructions",
+        ));
+    }
+
+    if let Some(meta_contract_id) = metadata_contract_id
+        && !contract_bindings.is_empty()
+        && contract_bindings
+            .iter()
+            .any(|(_, cid)| cid != &meta_contract_id)
+    {
+        return Err(reject_lane_policy(
+            alias,
+            "`gov_contract_id` metadata does not match contract ids referenced by contract instructions",
+        ));
+    }
+
+    Ok(())
+}
+
+fn enforce_runtime_upgrade_hook(
+    alias: &str,
+    rules: &GovernanceRules,
+    tx: &SignedTransaction,
+) -> Result<bool, TransactionRejectionReason> {
+    let mut contains_runtime_upgrade = false;
+    if let Executable::Instructions(instructions) = tx.instructions() {
+        for instruction in instructions {
+            if instruction
+                .as_any()
+                .downcast_ref::<ProposeRuntimeUpgrade>()
+                .is_some()
+                || instruction
+                    .as_any()
+                    .downcast_ref::<ActivateRuntimeUpgrade>()
+                    .is_some()
+                || instruction
+                    .as_any()
+                    .downcast_ref::<CancelRuntimeUpgrade>()
+                    .is_some()
+            {
+                contains_runtime_upgrade = true;
+                break;
+            }
+        }
+    }
+    if !contains_runtime_upgrade {
+        return Ok(false);
+    }
+
+    let Some(hook) = rules.hooks.runtime_upgrade.as_ref() else {
+        return Ok(false);
+    };
+
+    if !hook.allow {
+        return Err(reject_lane_policy(
+            alias,
+            "runtime upgrade hook prohibits runtime upgrade instructions".to_string(),
+        ));
+    }
+
+    if hook.require_metadata || hook.allowed_ids.is_some() {
+        let Some(key) = hook.metadata_key.as_ref() else {
+            return Err(reject_lane_policy(
+                alias,
+                "runtime upgrade hook missing metadata_key despite requiring metadata".to_string(),
+            ));
+        };
+        let metadata = tx.metadata();
+        let Some(raw_value) = metadata.get(key) else {
+            return Err(reject_lane_policy(
+                alias,
+                format!("runtime upgrade hook requires metadata `{}`", key.as_ref()),
+            ));
+        };
+        let value = raw_value.try_into_any_norito::<String>().map_err(|_| {
+            reject_lane_policy(
+                alias,
+                format!(
+                    "runtime upgrade metadata `{}` must be a string",
+                    key.as_ref()
+                ),
+            )
+        })?;
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return Err(reject_lane_policy(
+                alias,
+                format!(
+                    "runtime upgrade metadata `{}` must not be blank",
+                    key.as_ref()
+                ),
+            ));
+        }
+        if let Some(ids) = hook.allowed_ids.as_ref()
+            && !ids.contains(trimmed)
+        {
+            return Err(reject_lane_policy(
+                alias,
+                format!(
+                    "runtime upgrade metadata `{}` value `{trimmed}` not permitted by lane manifest",
+                    key.as_ref()
+                ),
+            ));
+        }
+    }
+
+    Ok(true)
+}
+
+fn extract_lane_identity_metadata(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    dataspace_id: NexusDataSpaceId,
+    lane_alias: &str,
+) -> Result<(Option<UniversalAccountId>, Vec<String>), TransactionRejectionReason> {
+    let account_entry = match world.account(authority) {
+        Ok(entry) => entry,
+        Err(_) => return Ok((None, Vec::new())),
+    };
+    let Some(uaid) = account_entry.value().uaid().copied() else {
+        return Ok((None, Vec::new()));
+    };
+
+    let bindings = world.uaid_dataspaces().get(&uaid).ok_or_else(|| {
+        reject_lane_policy(
+            lane_alias,
+            format!(
+                "account {authority} carries UAID {uaid} but has no Space Directory bindings for dataspace {}",
+                dataspace_id.as_u64()
+            ),
+        )
+    })?;
+
+    let is_bound = bindings
+        .iter()
+        .any(|(dataspace, accounts)| *dataspace == dataspace_id && accounts.contains(authority));
+    if !is_bound {
+        return Err(reject_lane_policy(
+            lane_alias,
+            format!(
+                "account {authority} is not bound to dataspace {} for UAID {uaid}",
+                dataspace_id.as_u64()
+            ),
+        ));
+    }
+
+    let manifest_set = world
+        .space_directory_manifests()
+        .get(&uaid)
+        .ok_or_else(|| {
+            reject_lane_policy(
+                lane_alias,
+                format!(
+                    "UAID {uaid} has no manifest registry for dataspace {}",
+                    dataspace_id.as_u64()
+                ),
+            )
+        })?;
+    let record = manifest_set.get(&dataspace_id).ok_or_else(|| {
+        reject_lane_policy(
+            lane_alias,
+            format!(
+                "UAID {uaid} is missing a manifest for dataspace {}",
+                dataspace_id.as_u64()
+            ),
+        )
+    })?;
+
+    if !record.is_active() {
+        return Err(reject_lane_policy(
+            lane_alias,
+            format!(
+                "UAID {uaid} manifest for dataspace {} is not active",
+                dataspace_id.as_u64()
+            ),
+        ));
+    }
+
+    let mut tags = BTreeSet::new();
+    for entry in &record.manifest.entries {
+        if let Some(note) = &entry.notes {
+            let trimmed = note.trim();
+            if !trimmed.is_empty() {
+                tags.insert(trimmed.to_string());
+            }
+        }
+    }
+
+    Ok((Some(uaid), tags.into_iter().collect()))
+}
+
+fn enforce_lane_policies(
+    tx: &SignedTransaction,
+    state_transaction: &StateTransaction<'_, '_>,
+    lane_assignment: &LaneAssignment<'_>,
+) -> Result<(), TransactionRejectionReason> {
+    let lane_id = lane_assignment.lane_id;
+    let dataspace_id = lane_assignment.dataspace_id;
+    let manifest_registry: &LaneManifestRegistryHandle = &state_transaction.lane_manifests;
+
+    if let Err(err) = manifest_registry.ensure_lane_ready(lane_id) {
+        return Err(reject_not_permitted(err.message()));
+    }
+
+    let manifest_status = manifest_registry.status(lane_id).cloned();
+    let lane_alias = manifest_status.as_ref().map_or_else(
+        || format!("lane-{}", lane_id.as_u32()),
+        |status| status.alias.clone(),
+    );
+
+    if let Some(status) = manifest_status.as_ref() {
+        if let Some(rules) = status.rules() {
+            if !rules.validators.is_empty()
+                && !rules
+                    .validators
+                    .iter()
+                    .any(|validator| validator == tx.authority())
+            {
+                return Err(reject_lane_policy(
+                    &lane_alias,
+                    "authority not part of lane validator set".to_string(),
+                ));
+            }
+
+            let quorum_required =
+                rules.quorum.unwrap_or(0).saturating_sub(1) > 0 && !rules.validators.is_empty();
+            let quorum_result = enforce_manifest_quorum(&lane_alias, rules, tx);
+            if quorum_required {
+                quorum_result?;
+            } else if let Err(err) = quorum_result {
+                return Err(err);
+            }
+
+            enforce_manifest_protected_namespaces(
+                &lane_alias,
+                rules,
+                tx,
+                &state_transaction.world,
+            )?;
+
+            let _ = enforce_runtime_upgrade_hook(&lane_alias, rules, tx)?;
+        }
+    }
+
+    let privacy_proofs = collect_lane_privacy_proofs(tx);
+    let verified_privacy_commitments = if privacy_proofs.is_empty() {
+        BTreeSet::new()
+    } else {
+        verify_lane_privacy_proofs(
+            state_transaction.lane_privacy_registry.as_ref(),
+            lane_id,
+            &privacy_proofs,
+        )
+        .map_err(|err| {
+            reject_lane_policy(&lane_alias, format!("lane privacy proof rejected: {err}"))
+        })?
+    };
+
+    let lane_privacy_registry = if state_transaction.lane_privacy_registry.is_empty() {
+        None
+    } else {
+        Some(state_transaction.lane_privacy_registry.clone())
+    };
+
+    let lane_identity = extract_lane_identity_metadata(
+        &state_transaction.world,
+        tx.authority(),
+        dataspace_id,
+        &lane_alias,
+    )?;
+
+    if let Some(engine) = state_transaction.lane_compliance.as_ref() {
+        let (uaid_value, capability_tags) = lane_identity;
+        let ctx = LaneComplianceContext {
+            lane_id,
+            dataspace_id,
+            authority: tx.authority(),
+            uaid: uaid_value.as_ref(),
+            capability_tags: capability_tags.as_slice(),
+            lane_privacy_registry,
+            verified_privacy_commitments: &verified_privacy_commitments,
+        };
+        let evaluation = engine.evaluate(&ctx);
+        match evaluation {
+            LaneComplianceEvaluation::NotConfigured => {}
+            LaneComplianceEvaluation::Allowed(record) => {
+                record.log(engine.audit_only());
+            }
+            LaneComplianceEvaluation::Denied(record) => {
+                record.log(engine.audit_only());
+                if !engine.audit_only() {
+                    let reason = record
+                        .reason
+                        .clone()
+                        .unwrap_or_else(|| "lane compliance policy denied".to_string());
+                    return Err(reject_lane_policy(&lane_alias, reason));
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(feature = "telemetry")]
@@ -2726,12 +3459,18 @@ pub mod tests {
     use std::sync::LazyLock; // for Name::from_str in tests
     use std::{
         borrow::Cow,
-        collections::BTreeMap,
+        collections::{BTreeMap, BTreeSet},
         num::{NonZeroU16, NonZeroU64},
+        path::PathBuf,
         str::FromStr,
+        sync::Arc,
     };
 
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{
+        Algorithm, Hash, KeyPair,
+        merkle::MerkleProof,
+        privacy::{LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment},
+    };
     use iroha_data_model::{
         account::{Account, AccountId, MultisigMember, MultisigPolicy},
         block::{BlockHeader, SignedBlock},
@@ -2747,7 +3486,12 @@ pub mod tests {
         isi::{InstructionBox, Log},
         metadata::Metadata,
         name::Name,
-        nexus::{DataSpaceCatalog, DataSpaceId as TestDataSpaceId, LaneId as TestLaneId},
+        nexus::{
+            AuditControls, DataSpaceCatalog, DataSpaceId as TestDataSpaceId, JurisdictionSet,
+            LaneCompliancePolicy, LaneCompliancePolicyId, LaneComplianceRule, LaneId as TestLaneId,
+            LanePrivacyMerkleWitness, LanePrivacyProof, LanePrivacyWitness, LaneStorageProfile,
+            LaneVisibility, ParticipantSelector,
+        },
         permission::Permissions,
         proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox},
         role::{Role, RoleId},
@@ -2760,12 +3504,17 @@ pub mod tests {
     use iroha_genesis::GENESIS_DOMAIN_ID;
     use iroha_logger::Level;
     use iroha_primitives::{json::Json, numeric::Numeric, time::TimeSource};
+    use iroha_schema::Ident;
     use iroha_test_samples::gen_account_in;
     use nonzero_ext::nonzero;
 
     use super::*;
     use crate::{
         block::{BlockBuilder, CommittedBlock, ValidBlock},
+        compliance::LaneComplianceEngine,
+        governance::manifest::{
+            GovernanceRules, LaneManifestRegistry, LaneManifestStatus, RuntimeUpgradeHook,
+        },
         kura::Kura,
         query::store::LiveQueryStore,
         smartcontracts::ivm::cache::IvmCache,
@@ -6008,6 +6757,327 @@ pub mod tests {
                 ("eve", 60),
             ]);
         }
+    }
+
+    #[test]
+    fn state_rejects_empty_instructions_non_heartbeat() {
+        let chain: ChainId = "empty-instructions-chain".parse().unwrap();
+        let (authority, keypair) = gen_account_in("wonderland");
+        let domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let world = World::with([domain], [account], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+
+        let tx = TransactionBuilder::new(chain, authority)
+            .with_instructions([])
+            .sign(keypair.private_key());
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut ivm_cache = IvmCache::new();
+        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+
+        match result {
+            Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg))) => {
+                assert!(
+                    msg.contains("at least one instruction"),
+                    "expected empty-instruction rejection, got {msg}"
+                );
+            }
+            other => panic!("expected empty-instruction rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lane_privacy_proofs_collected_from_attachments() {
+        let chain: ChainId = "lane-privacy-collect".parse().unwrap();
+        let (authority, keypair) = gen_account_in("wonderland");
+        let backend = Ident::from_str("halo2/ipa").expect("ident");
+
+        let proof1 = LanePrivacyProof {
+            commitment_id: LaneCommitmentId::new(1),
+            witness: LanePrivacyWitness::Merkle(LanePrivacyMerkleWitness {
+                leaf: [0x11; 32],
+                proof: MerkleProof::from_audit_path_bytes(0, Vec::new()),
+            }),
+        };
+        let proof2 = LanePrivacyProof {
+            commitment_id: LaneCommitmentId::new(2),
+            witness: LanePrivacyWitness::Merkle(LanePrivacyMerkleWitness {
+                leaf: [0x22; 32],
+                proof: MerkleProof::from_audit_path_bytes(0, Vec::new()),
+            }),
+        };
+
+        let mut attachment1 = ProofAttachment::new_inline(
+            backend.clone(),
+            ProofBox::new(backend.clone(), vec![0xAA]),
+            VerifyingKeyBox::new(backend.clone(), vec![0xBB]),
+        );
+        attachment1.lane_privacy = Some(proof1.clone());
+        let mut attachment2 = ProofAttachment::new_inline(
+            backend.clone(),
+            ProofBox::new(backend.clone(), vec![0xCC]),
+            VerifyingKeyBox::new(backend, vec![0xDD]),
+        );
+        attachment2.lane_privacy = Some(proof2.clone());
+
+        let tx = TransactionBuilder::new(chain, authority)
+            .with_instructions([Log::new(Level::INFO, "noop".into())])
+            .with_attachments(ProofAttachmentList(vec![attachment1, attachment2]))
+            .sign(keypair.private_key());
+
+        let proofs = super::collect_lane_privacy_proofs(&tx);
+        let ids: BTreeSet<_> = proofs.iter().map(|proof| proof.commitment_id()).collect();
+        assert_eq!(proofs.len(), 2);
+        assert!(ids.contains(&LaneCommitmentId::new(1)));
+        assert!(ids.contains(&LaneCommitmentId::new(2)));
+    }
+
+    #[test]
+    fn state_manifest_quorum_requires_approvers() {
+        let chain: ChainId = "lane-manifest-quorum".parse().unwrap();
+        let (primary_id, primary_keypair) = gen_account_in("wonderland");
+        let (secondary_id, _secondary_keypair) = gen_account_in("wonderland");
+        let domain = Domain::new("wonderland".parse().unwrap()).build(&primary_id);
+        let primary_account = Account::new(primary_id.clone()).build(&primary_id);
+        let secondary_account = Account::new(secondary_id.clone()).build(&secondary_id);
+        let world = World::with([domain], [primary_account, secondary_account], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+
+        let rules = GovernanceRules {
+            validators: vec![primary_id.clone(), secondary_id.clone()],
+            quorum: Some(2),
+            ..GovernanceRules::default()
+        };
+        let status = LaneManifestStatus {
+            lane: TestLaneId::SINGLE,
+            alias: "gov".to_string(),
+            dataspace: TestDataSpaceId::GLOBAL,
+            visibility: LaneVisibility::Public,
+            storage: LaneStorageProfile::FullReplica,
+            governance: Some("parliament".to_string()),
+            manifest_path: Some(PathBuf::from("/tmp/manifest.json")),
+            governance_rules: Some(rules),
+            privacy_commitments: Vec::new(),
+        };
+        let mut statuses = BTreeMap::new();
+        statuses.insert(TestLaneId::SINGLE, status);
+        let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
+        state.install_lane_manifests(&manifests);
+
+        let tx = TransactionBuilder::new(chain.clone(), primary_id.clone())
+            .with_instructions([Log::new(Level::INFO, "noop".into())])
+            .sign(primary_keypair.private_key());
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut ivm_cache = IvmCache::new();
+        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        match result {
+            Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg))) => {
+                assert!(
+                    msg.contains("quorum"),
+                    "expected quorum rejection, got {msg}"
+                );
+            }
+            other => panic!("expected quorum rejection, got {other:?}"),
+        }
+
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            (*super::GOV_APPROVERS_METADATA_KEY).clone(),
+            Json::new(vec![secondary_id.to_string()]),
+        );
+        let tx = TransactionBuilder::new(chain, primary_id)
+            .with_instructions([Log::new(Level::INFO, "noop".into())])
+            .with_metadata(metadata)
+            .sign(primary_keypair.private_key());
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut ivm_cache = IvmCache::new();
+        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        assert!(result.is_ok(), "quorum satisfied should pass: {result:?}");
+    }
+
+    #[test]
+    fn manifest_protected_namespaces_require_metadata() {
+        let chain: ChainId = "lane-protected-ns".parse().unwrap();
+        let (authority, keypair) = gen_account_in("wonderland");
+        let mut rules = GovernanceRules::default();
+        rules
+            .protected_namespaces
+            .insert(Name::from_str("apps").expect("namespace"));
+
+        let instruction = iroha_data_model::isi::smart_contract_code::ActivateContractInstance {
+            namespace: "apps".to_string(),
+            contract_id: "calc".to_string(),
+            code_hash: Hash::prehashed([0_u8; 32]),
+        };
+        let tx = TransactionBuilder::new(chain, authority)
+            .with_instructions([instruction])
+            .sign(keypair.private_key());
+
+        let world = World::default();
+        let err = super::enforce_manifest_protected_namespaces("lane-0", &rules, &tx, &world)
+            .expect_err("missing governance metadata should reject");
+        match err {
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg)) => {
+                assert!(
+                    msg.contains("gov_namespace"),
+                    "expected gov_namespace rejection, got {msg}"
+                );
+            }
+            other => panic!("expected NotPermitted rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn runtime_upgrade_hook_requires_metadata() {
+        let chain: ChainId = "lane-runtime-hook".parse().unwrap();
+        let (authority, keypair) = gen_account_in("wonderland");
+
+        let mut rules = GovernanceRules::default();
+        rules.hooks.runtime_upgrade = Some(RuntimeUpgradeHook {
+            allow: true,
+            require_metadata: true,
+            metadata_key: Some(Name::from_str("upgrade_id").expect("key")),
+            allowed_ids: Some(BTreeSet::from(["v1".to_string()])),
+        });
+
+        let instruction = iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade {
+            manifest_bytes: vec![0x01, 0x02],
+        };
+        let tx = TransactionBuilder::new(chain.clone(), authority.clone())
+            .with_instructions([instruction.clone()])
+            .sign(keypair.private_key());
+
+        let err = super::enforce_runtime_upgrade_hook("lane-0", &rules, &tx)
+            .expect_err("missing metadata should reject");
+        match err {
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg)) => {
+                assert!(
+                    msg.contains("requires metadata"),
+                    "expected metadata rejection, got {msg}"
+                );
+            }
+            other => panic!("expected NotPermitted rejection, got {other:?}"),
+        }
+
+        let mut metadata = Metadata::default();
+        metadata.insert(Name::from_str("upgrade_id").expect("key"), Json::new("v1"));
+        let tx = TransactionBuilder::new(chain, authority)
+            .with_instructions([instruction])
+            .with_metadata(metadata)
+            .sign(keypair.private_key());
+        let ok = super::enforce_runtime_upgrade_hook("lane-0", &rules, &tx)
+            .expect("runtime upgrade hook should allow");
+        assert!(ok, "runtime upgrade hook should be applied");
+    }
+
+    #[test]
+    fn state_enforces_lane_compliance_engine() {
+        let chain: ChainId = "lane-compliance".parse().unwrap();
+        let (authority, keypair) = gen_account_in("wonderland");
+        let domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let world = World::with([domain], [account], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+
+        let policy = LaneCompliancePolicy {
+            id: LaneCompliancePolicyId::new(Hash::prehashed([0xAA; 32])),
+            version: 1,
+            lane_id: TestLaneId::SINGLE,
+            dataspace_id: TestDataSpaceId::GLOBAL,
+            jurisdiction: JurisdictionSet::default(),
+            deny: vec![LaneComplianceRule {
+                selector: ParticipantSelector {
+                    account: Some(authority.clone()),
+                    ..ParticipantSelector::default()
+                },
+                reason_code: Some("denied account".to_string()),
+                jurisdiction_override: JurisdictionSet::default(),
+            }],
+            allow: Vec::new(),
+            transfer_limits: Vec::new(),
+            audit_controls: AuditControls::default(),
+            metadata: Metadata::default(),
+        };
+        let engine = LaneComplianceEngine::from_policies(vec![policy], false).expect("engine");
+        state.install_lane_compliance_engine(Some(Arc::new(engine)));
+        assert!(
+            state.lane_compliance_engine().is_some(),
+            "lane compliance engine should be installed"
+        );
+
+        let tx = TransactionBuilder::new(chain, authority.clone())
+            .with_instructions([Log::new(Level::INFO, "noop".into())])
+            .sign(keypair.private_key());
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let stx = block.transaction();
+        let assignment = super::LaneAssignment {
+            lane_id: TestLaneId::SINGLE,
+            dataspace_id: TestDataSpaceId::GLOBAL,
+            dataspace_catalog: &stx.nexus.dataspace_catalog,
+        };
+
+        let err = super::enforce_lane_policies(&tx, &stx, &assignment)
+            .expect_err("compliance denial should reject");
+        match err {
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg)) => {
+                assert!(
+                    msg.contains("denied account") || msg.contains("lane compliance"),
+                    "expected compliance rejection, got {msg}"
+                );
+            }
+            other => panic!("expected compliance rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn install_lane_manifests_updates_privacy_registry() {
+        let chain: ChainId = "lane-privacy-registry".parse().unwrap();
+        let world = World::default();
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, chain);
+
+        let commitment = LanePrivacyCommitment::merkle(
+            LaneCommitmentId::new(9),
+            MerkleCommitment::from_root_bytes([0x11; 32], 8),
+        );
+        let status = LaneManifestStatus {
+            lane: TestLaneId::SINGLE,
+            alias: "private".to_string(),
+            dataspace: TestDataSpaceId::GLOBAL,
+            visibility: LaneVisibility::Public,
+            storage: LaneStorageProfile::CommitmentOnly,
+            governance: None,
+            manifest_path: Some(PathBuf::from("/tmp/privacy.json")),
+            governance_rules: None,
+            privacy_commitments: vec![commitment],
+        };
+        let mut statuses = BTreeMap::new();
+        statuses.insert(TestLaneId::SINGLE, status);
+        let registry = Arc::new(LaneManifestRegistry::from_statuses(statuses));
+        state.install_lane_manifests(&registry);
+
+        let snapshot = state.lane_privacy_registry.read().clone();
+        assert!(!snapshot.is_empty(), "privacy registry should not be empty");
+        assert!(
+            snapshot.lane(TestLaneId::SINGLE).is_some(),
+            "privacy registry should contain lane entry"
+        );
     }
 
     /// Lightweight end-to-end harness for exercising transaction, trigger, and block flow in tests.

@@ -92,7 +92,7 @@ pub mod isi {
         AccountId::new(definition_id.domain().clone(), keypair.public_key().clone())
     }
 
-    fn ensure_offline_escrow_account(
+    pub(crate) fn ensure_offline_escrow_account(
         asset_definition: &AssetDefinition,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {

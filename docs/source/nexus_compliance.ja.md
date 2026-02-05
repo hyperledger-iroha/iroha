@@ -11,9 +11,9 @@ translation_last_reviewed: 2026-01-01
 
 # Nexus レーン・コンプライアンスとホワイトリスト・ポリシーエンジン (NX-12)
 
-ステータス: 🈯 計画中 — 本ドキュメントはロードマップ項目 **NX-12 — レーン・コンプライアンスとホワイトリスト・ポリシーエンジン**
-で参照される仕様とロールアウトのガードレールを提供する。
-`crates/iroha_core/src/compliance` に実装され、Torii/SDK のサーフェスで公開される
+ステータス: 🈴 実装済み — 本ドキュメントは稼働中のポリシーモデルとコンセンサス・クリティカルな適用を記述する。
+ロードマップ項目 **NX-12 — レーン・コンプライアンスとホワイトリスト・ポリシーエンジン** に紐付く。
+`crates/iroha_core/src/compliance` に実装され、Torii admission と `iroha_core` トランザクション検証の双方で適用される
 データモデル、ガバナンスフロー、テレメトリ、ロールアウト戦略を説明し、
 各 lane と dataspace を決定論的な管轄ポリシーに結び付ける。
 
@@ -120,11 +120,14 @@ CLI/SDK コマンドはこれらの HTTP サーフェスをラップし、オペ
    - `compliance::Engine` は `deny` ルール、次に `allow` ルールを評価し、最後に transfer limits を適用する。
      失敗したトランザクションは監査用に理由と policy id を含む型付きエラー
      (`ERR_LANE_COMPLIANCE_DENIED`) を返す。
+   - アドミッションは高速なプリフィルタであり、コンセンサス検証が state snapshots を使って同じルールを再確認する。
 2. **実行 (iroha_core)**
-   - ブロック構築中に `iroha_core::compliance::Engine` がブロックヘッダに記録された policy id を用いて
-     同じ判断を再実行する。Torii のキャッシュが古くても分岐を防ぐ。
-   - lane manifests またはポリシーを変更する命令は、それらが依拠する policy references を提供し、
-     その値が on-chain に記録されるようにする。
+   - ブロック構築中に `iroha_core::tx::validate_transaction_internal` が
+     `StateTransaction` snapshots (`lane_manifests`, `lane_privacy_registry`, `lane_compliance`) を用いて
+     同じ lane governance/UAID/privacy/compliance の検証を再実行する。Torii のキャッシュが古くても
+     コンセンサス・クリティカルな適用を維持する。
+   - lane manifests やコンプライアンスポリシーを変更するトランザクションも同じ検証パスを通り、
+     admission だけのバイパスは存在しない。
 3. **非同期フック**
    - RBC gossip と DA fetchers は policy id をテレメトリに付与し、遅延判断を正しいルール版に紐付ける。
    - `iroha_cli` と SDK helpers は `LaneComplianceDecision::explain()` を公開し、

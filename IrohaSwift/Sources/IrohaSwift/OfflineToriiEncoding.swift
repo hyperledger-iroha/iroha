@@ -88,6 +88,7 @@ extension OfflineWalletCertificateDraft {
     func toriiJSON() throws -> ToriiJSONValue {
         .object([
             "controller": .string(controller),
+            "operator": .string(operatorId),
             "allowance": try allowance.toriiJSON(),
             "spend_public_key": .string(spendPublicKey),
             "attestation_report": OfflineToriiEncoding.bytesArray(attestationReport),
@@ -106,6 +107,7 @@ extension OfflineWalletCertificate {
     func toriiJSON() throws -> ToriiJSONValue {
         .object([
             "controller": .string(controller),
+            "operator": .string(operatorId),
             "allowance": try allowance.toriiJSON(),
             "spend_public_key": .string(spendPublicKey),
             "attestation_report": OfflineToriiEncoding.bytesArray(attestationReport),

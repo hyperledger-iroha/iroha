@@ -119,6 +119,7 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
           "certificate_id_hex": "deadbeef",
           "certificate": {
             "controller": "\(accountId)",
+            "operator": "\(accountId)",
             "allowance": {
               "asset": "\(assetId)",
               "amount": "10",
@@ -149,6 +150,7 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
           "certificate_id_hex": "beadfeed",
           "certificate": {
             "controller": "\(accountId)",
+            "operator": "\(accountId)",
             "allowance": {
               "asset": "\(assetId)",
               "amount": "11",
@@ -189,6 +191,7 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
                                                             counterCheckpoint: 1)
         let draft = OfflineWalletCertificateDraft(
             controller: accountId,
+            operatorId: accountId,
             allowance: OfflineAllowanceCommitment(assetId: assetId,
                                                   amount: "10",
                                                   commitment: Data([0x01, 0x02])),
@@ -333,6 +336,7 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
           "certificate_id_hex": "cafe",
           "certificate": {
             "controller": "\(accountId)",
+            "operator": "\(accountId)",
             "allowance": {
               "asset": "\(assetId)",
               "amount": "25",
@@ -361,6 +365,7 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
 
         let draft = OfflineWalletCertificateDraft(
             controller: accountId,
+            operatorId: accountId,
             allowance: OfflineAllowanceCommitment(assetId: assetId,
                                                   amount: "25",
                                                   commitment: Data([0x01, 0x02])),
@@ -451,6 +456,7 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
 
         let draft = OfflineWalletCertificateDraft(
             controller: accountId,
+            operatorId: accountId,
             allowance: OfflineAllowanceCommitment(assetId: assetId,
                                                   amount: "30",
                                                   commitment: Data([0x07, 0x08])),

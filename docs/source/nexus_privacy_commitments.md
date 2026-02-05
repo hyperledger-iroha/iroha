@@ -176,25 +176,26 @@ proof anchors ship with the bundle.
 
 - `LanePrivacyRegistry` (`crates/iroha_core/src/interlane/mod.rs`) snapshots the manifest loader’s
   `LaneManifestStatus` structures and stores per-lane commitment maps keyed by `LaneCommitmentId`.
-  The transaction queue installs this registry alongside every manifest reload
-  (`Queue::install_lane_manifests`), so the admission path always has access to the canonical
-  commitments.
+  The transaction queue and `State` install this registry alongside every manifest reload
+  (`Queue::install_lane_manifests`, `State::install_lane_manifests`), so admission and consensus
+  validation always have access to the canonical commitments.
 - `LaneComplianceContext` now carries an optional `Arc<LanePrivacyRegistry>` reference
   (`crates/iroha_core/src/compliance/mod.rs`). When `LaneComplianceEngine` evaluates a transaction,
   programmable-money flows can inspect the same per-lane commitments exposed through Torii before
   queueing the payload.
-- Admission keeps an `Arc<LanePrivacyRegistry>` next to the governance manifest handle
-  (`crates/iroha_core/src/queue.rs`), guaranteeing that programmable-money modules and future
-  interlane hosts read a consistent view of the privacy descriptors even as manifests rotate.
+- Admission and core validation keep an `Arc<LanePrivacyRegistry>` next to the governance manifest
+  handle (`crates/iroha_core/src/queue.rs`, `crates/iroha_core/src/state.rs`), guaranteeing that
+  programmable-money modules and future interlane hosts read a consistent view of the privacy
+  descriptors even as manifests rotate.
 
 ## Runtime Enforcement
 
-Lane privacy proofs now ride along transaction attachments via `ProofAttachment.lane_privacy`. The
-queue verifies each attachment against the routed lane’s registry using
-`LanePrivacyRegistry::verify`, records the proven commitment ids, and feeds them into the compliance
-engine. Any rule that specifies `privacy_commitments_any_of` now evaluates to `false` unless a
-matching attachment verifies successfully, so programmable-money lanes cannot be queued without the
-required witness. Unit coverage lives in `interlane::tests` and the lane compliance tests to keep
-the attachment path and policy guardrails stable.
+Lane privacy proofs now ride along transaction attachments via `ProofAttachment.lane_privacy`.
+Torii admission and `iroha_core` validation verify each attachment against the routed lane’s
+registry using `LanePrivacyRegistry::verify`, record the proven commitment ids, and feed them into
+the compliance engine. Any rule that specifies `privacy_commitments_any_of` now evaluates to `false`
+unless a matching attachment verifies successfully, so programmable-money lanes cannot be queued or
+committed without the required witness. Unit coverage lives in `interlane::tests` and the lane
+compliance tests to keep the attachment path and policy guardrails stable.
 
 For immediate experimentation, see the unit tests in [`privacy.rs`](../../crates/iroha_crypto/src/privacy.rs) which demonstrate both success and failure cases for Merkle and zk-SNARK commitments.

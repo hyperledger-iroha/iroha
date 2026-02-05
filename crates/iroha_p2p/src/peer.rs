@@ -1503,9 +1503,7 @@ pub mod handles {
             let sender = match topic {
                 crate::network::message::Topic::Consensus
                 | crate::network::message::Topic::ConsensusPayload => &self.senders.hi_consensus,
-                crate::network::message::Topic::ConsensusChunk => {
-                    &self.senders.hi_consensus_chunk
-                }
+                crate::network::message::Topic::ConsensusChunk => &self.senders.hi_consensus_chunk,
                 crate::network::message::Topic::Control => &self.senders.hi_control,
                 crate::network::message::Topic::BlockSync => &self.senders.lo_block_sync,
                 crate::network::message::Topic::TxGossip
@@ -1535,9 +1533,7 @@ pub mod handles {
         struct ConsensusChunkMsg;
 
         impl<'a> norito::core::DecodeFromSlice<'a> for ConsensusChunkMsg {
-            fn decode_from_slice(
-                bytes: &'a [u8],
-            ) -> Result<(Self, usize), norito::core::Error> {
+            fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
                 norito::core::decode_field_canonical::<Self>(bytes)
             }
         }
@@ -1580,11 +1576,23 @@ pub mod handles {
                 hi_consensus_chunk_rx.try_recv(),
                 Ok(ConsensusChunkMsg)
             ));
-            assert!(matches!(hi_consensus_rx.try_recv(), Err(TryRecvError::Empty)));
+            assert!(matches!(
+                hi_consensus_rx.try_recv(),
+                Err(TryRecvError::Empty)
+            ));
             assert!(matches!(hi_control_rx.try_recv(), Err(TryRecvError::Empty)));
-            assert!(matches!(lo_block_sync_rx.try_recv(), Err(TryRecvError::Empty)));
-            assert!(matches!(lo_tx_gossip_rx.try_recv(), Err(TryRecvError::Empty)));
-            assert!(matches!(lo_peer_gossip_rx.try_recv(), Err(TryRecvError::Empty)));
+            assert!(matches!(
+                lo_block_sync_rx.try_recv(),
+                Err(TryRecvError::Empty)
+            ));
+            assert!(matches!(
+                lo_tx_gossip_rx.try_recv(),
+                Err(TryRecvError::Empty)
+            ));
+            assert!(matches!(
+                lo_peer_gossip_rx.try_recv(),
+                Err(TryRecvError::Empty)
+            ));
             assert!(matches!(lo_health_rx.try_recv(), Err(TryRecvError::Empty)));
             assert!(matches!(lo_other_rx.try_recv(), Err(TryRecvError::Empty)));
         }
@@ -1643,10 +1651,9 @@ mod run {
 
     fn inbound_priority_from_topic(topic: Topic) -> Priority {
         match topic {
-            Topic::Consensus
-            | Topic::ConsensusPayload
-            | Topic::ConsensusChunk
-            | Topic::Control => Priority::High,
+            Topic::Consensus | Topic::ConsensusPayload | Topic::ConsensusChunk | Topic::Control => {
+                Priority::High
+            }
             Topic::BlockSync
             | Topic::TxGossip
             | Topic::TxGossipRestricted
@@ -2195,7 +2202,8 @@ mod run {
             }
             let needed = size.saturating_add(Self::U32_SIZE);
             if self.buffer.capacity() < needed {
-                self.buffer.reserve(needed.saturating_sub(self.buffer.len()));
+                self.buffer
+                    .reserve(needed.saturating_sub(self.buffer.len()));
             }
             Ok(())
         }
@@ -2385,9 +2393,7 @@ mod run {
             let archived = ncore::archived_from_slice::<Self>(bytes)?;
             let archived_bytes = archived.bytes();
             let _guard = ncore::PayloadCtxGuard::enter(archived_bytes);
-            let value = <Self as ncore::NoritoDeserialize>::try_deserialize(
-                archived.archived(),
-            )?;
+            let value = <Self as ncore::NoritoDeserialize>::try_deserialize(archived.archived())?;
             Ok((value, archived_bytes.len()))
         }
     }

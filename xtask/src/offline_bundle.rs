@@ -568,6 +568,11 @@ fn parse_certificate_json(value: JsonValue) -> Result<OfflineWalletCertificate> 
         .and_then(|v| v.as_str())
         .ok_or_else(|| eyre!("certificate missing controller"))?;
     let controller = parse_account_id(controller)?;
+    let operator = obj
+        .get("operator")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| eyre!("certificate missing operator"))?;
+    let operator = parse_account_id(operator)?;
     let allowance = obj
         .get("allowance")
         .and_then(|v| v.as_object())
@@ -643,6 +648,7 @@ fn parse_certificate_json(value: JsonValue) -> Result<OfflineWalletCertificate> 
 
     Ok(OfflineWalletCertificate {
         controller,
+        operator,
         allowance: OfflineAllowanceCommitment {
             asset,
             amount,
