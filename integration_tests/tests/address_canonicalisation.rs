@@ -220,8 +220,36 @@ impl Drop for DomainSelectorResolverGuard {
 }
 
 fn load_offline_certificate_fixture() -> Result<OfflineWalletCertificate> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../fixtures/offline_allowance/android-demo/register_instruction.json");
+    let domains: Vec<DomainId> = ["wonderland", "treasury"]
+        .into_iter()
+        .map(|label| label.parse())
+        .collect::<Result<_, _>>()
+        .map_err(|err| eyre!("failed to parse fixture domain label: {err}"))?;
+    let _resolver_guard = DomainSelectorResolverGuard::install(&domains)?;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../fixtures/offline_allowance/android-demo");
+
+    let norito_path = root.join("register_instruction.norito");
+    if let Ok(bytes) = fs::read(&norito_path) {
+        if let Ok(instruction) = norito::decode_from_bytes::<RegisterOfflineAllowance>(&bytes) {
+            return Ok(instruction.certificate);
+        }
+        if let Ok(instruction) = norito::decode_from_bytes::<InstructionBox>(&bytes) {
+            if let Some(decoded) = instruction
+                .as_any()
+                .downcast_ref::<RegisterOfflineAllowance>()
+            {
+                return Ok(decoded.certificate.clone());
+            }
+        }
+        if let Ok(certificate) =
+            norito::decode_from_bytes::<OfflineWalletCertificate>(&bytes)
+        {
+            return Ok(certificate);
+        }
+    }
+
+    let path = root.join("register_instruction.json");
     let raw = fs::read_to_string(&path).wrap_err_with(|| {
         format!(
             "failed to read offline allowance fixture `{}`",
@@ -234,12 +262,6 @@ fn load_offline_certificate_fixture() -> Result<OfflineWalletCertificate> {
             path.display()
         )
     })?;
-    let domains: Vec<DomainId> = ["wonderland", "treasury"]
-        .into_iter()
-        .map(|label| label.parse())
-        .collect::<Result<_, _>>()
-        .map_err(|err| eyre!("failed to parse fixture domain label: {err}"))?;
-    let _resolver_guard = DomainSelectorResolverGuard::install(&domains)?;
     let certificate_value = fixture
         .get("certificate")
         .ok_or_else(|| {

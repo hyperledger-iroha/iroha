@@ -6770,7 +6770,7 @@ pub mod tests {
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
 
         let tx = TransactionBuilder::new(chain, authority)
-            .with_instructions([])
+            .with_instructions(Vec::<InstructionBox>::new())
             .sign(keypair.private_key());
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
 
@@ -6925,7 +6925,8 @@ pub mod tests {
             .sign(keypair.private_key());
 
         let world = World::default();
-        let err = super::enforce_manifest_protected_namespaces("lane-0", &rules, &tx, &world)
+        let world_view = world.view();
+        let err = super::enforce_manifest_protected_namespaces("lane-0", &rules, &tx, &world_view)
             .expect_err("missing governance metadata should reject");
         match err {
             TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg)) => {
