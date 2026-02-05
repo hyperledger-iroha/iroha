@@ -3,6 +3,7 @@
 use std::{
     fs,
     path::{Path, PathBuf},
+    str::FromStr,
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
