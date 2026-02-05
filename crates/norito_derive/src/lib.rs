@@ -2374,7 +2374,34 @@ fn derive_struct_deserialize(
                             }
                         } else {
                             let mut offset = 0usize;
-                            Self { #(#deserialize_fields),* }
+                            let __value = Self { #(#deserialize_fields),* };
+                            if let Some((__base, __total)) = norito::core::payload_ctx() {
+                                if __total != 0 {
+                                    let __ptr_us = ptr as usize;
+                                    if __ptr_us < __base {
+                                        return Err(norito::core::Error::LengthMismatch);
+                                    }
+                                    let __start = __ptr_us - __base;
+                                    if __start > __total {
+                                        return Err(norito::core::Error::LengthMismatch);
+                                    }
+                                    let __payload = unsafe {
+                                        std::slice::from_raw_parts(__base as *const u8, __total)
+                                    };
+                                    let __remaining = __payload
+                                        .get(__start..)
+                                        .ok_or(norito::core::Error::LengthMismatch)?;
+                                    if offset != __remaining.len() {
+                                        return Err(norito::core::Error::LengthMismatch);
+                                    }
+                                    norito::core::note_payload_access(__remaining, offset);
+                                } else if offset != 0 {
+                                    return Err(norito::core::Error::LengthMismatch);
+                                }
+                            } else {
+                                return Err(norito::core::Error::MissingPayloadContext);
+                            }
+                            __value
                         };
                         Ok(__value)
                     }
@@ -2765,7 +2792,34 @@ fn derive_struct_deserialize(
                         } else {
                             let mut offset = 0usize;
                             #(#deserialize_fields)*
-                            Self( #(#vars),* )
+                            let __value = Self( #(#vars),* );
+                            if let Some((__base, __total)) = norito::core::payload_ctx() {
+                                if __total != 0 {
+                                    let __ptr_us = ptr as usize;
+                                    if __ptr_us < __base {
+                                        return Err(norito::core::Error::LengthMismatch);
+                                    }
+                                    let __start = __ptr_us - __base;
+                                    if __start > __total {
+                                        return Err(norito::core::Error::LengthMismatch);
+                                    }
+                                    let __payload = unsafe {
+                                        std::slice::from_raw_parts(__base as *const u8, __total)
+                                    };
+                                    let __remaining = __payload
+                                        .get(__start..)
+                                        .ok_or(norito::core::Error::LengthMismatch)?;
+                                    if offset != __remaining.len() {
+                                        return Err(norito::core::Error::LengthMismatch);
+                                    }
+                                    norito::core::note_payload_access(__remaining, offset);
+                                } else if offset != 0 {
+                                    return Err(norito::core::Error::LengthMismatch);
+                                }
+                            } else {
+                                return Err(norito::core::Error::MissingPayloadContext);
+                            }
+                            __value
                         };
                         Ok(__value)
                     }
@@ -3173,7 +3227,17 @@ fn derive_enum_deserialize(
         let v_ident = &variant.ident;
         let disc = variant_index(variant, idx);
         match &variant.fields {
-            Fields::Unit => arms.push(quote! { #disc => Self::#v_ident }),
+            Fields::Unit => arms.push(quote! {
+                #disc => {
+                    let offset = 4usize;
+                    let __payload = norito::core::payload_slice_from_ptr(ptr)?;
+                    if offset != __payload.len() {
+                        return Err(norito::core::Error::LengthMismatch);
+                    }
+                    norito::core::note_payload_access(__payload, offset);
+                    Self::#v_ident
+                }
+            }),
             Fields::Unnamed(fields) => {
                 let deser_stmts: Vec<TokenStream2> = fields
                     .unnamed
@@ -3525,7 +3589,13 @@ fn derive_enum_deserialize(
                     #disc => {
                         let mut offset = 4usize;
                         #(#deser_stmts)*
-                        Self::#v_ident(#(#vars),*)
+                        let __value = Self::#v_ident(#(#vars),*);
+                        let __payload = norito::core::payload_slice_from_ptr(ptr)?;
+                        if offset != __payload.len() {
+                            return Err(norito::core::Error::LengthMismatch);
+                        }
+                        norito::core::note_payload_access(__payload, offset);
+                        __value
                     }
                 });
             }
@@ -3772,7 +3842,13 @@ fn derive_enum_deserialize(
 
                         #(#deser_stmts)*
 
-                        Self::#v_ident { #(#names),* }
+                        let __value = Self::#v_ident { #(#names),* };
+                        let __payload = norito::core::payload_slice_from_ptr(ptr)?;
+                        if offset != __payload.len() {
+                            return Err(norito::core::Error::LengthMismatch);
+                        }
+                        norito::core::note_payload_access(__payload, offset);
+                        __value
                     }
                 });
             }

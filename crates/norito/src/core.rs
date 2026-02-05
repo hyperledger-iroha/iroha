@@ -73,8 +73,9 @@ fn serialize_owned<W: Write, T: NoritoSerialize>(mut writer: W, value: &T) -> Re
 
 #[cfg(test)]
 mod serialize_owned_tests {
-    use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
 
     static EXACT_CALLS: AtomicUsize = AtomicUsize::new(0);
 
@@ -6485,12 +6486,14 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     use crc64fast::Digest;
 
     use super::*;
     use crate::{
-        NoritoDeserialize, NoritoSerialize, codec, codec::encode_adaptive,
-        codec::encode_with_header_flags,
+        NoritoDeserialize, NoritoSerialize, codec,
+        codec::{encode_adaptive, encode_with_header_flags},
     };
 
     #[test]
@@ -6578,6 +6581,127 @@ mod tests {
             misaligned.len(),
             "outer payload ctx must observe canonical consumption from misaligned decode"
         );
+    }
+
+    static PANIC_ON_SERIALIZE: AtomicBool = AtomicBool::new(false);
+
+    #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+    struct CanonicalStruct {
+        a: u32,
+        b: Vec<u64>,
+        c: Option<Vec<u8>>,
+    }
+
+    #[repr(transparent)]
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct CanonicalStructNoRecompute(CanonicalStruct);
+
+    impl NoritoSerialize for CanonicalStructNoRecompute {
+        fn serialize<W: Write>(&self, writer: W) -> Result<(), Error> {
+            if PANIC_ON_SERIALIZE.load(Ordering::Relaxed) {
+                panic!("serialize called during canonical decode recompute");
+            }
+            self.0.serialize(writer)
+        }
+
+        fn encoded_len_hint(&self) -> Option<usize> {
+            self.0.encoded_len_hint()
+        }
+
+        fn encoded_len_exact(&self) -> Option<usize> {
+            self.0.encoded_len_exact()
+        }
+    }
+
+    impl<'a> NoritoDeserialize<'a> for CanonicalStructNoRecompute {
+        fn deserialize(archived: &'a Archived<Self>) -> Self {
+            Self::try_deserialize(archived).expect("CanonicalStructNoRecompute decode")
+        }
+
+        fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, Error> {
+            let value = CanonicalStruct::try_deserialize(archived.cast::<CanonicalStruct>())?;
+            Ok(Self(value))
+        }
+    }
+
+    #[test]
+    fn decode_field_canonical_does_not_recompute_for_derived_struct() {
+        PANIC_ON_SERIALIZE.store(false, Ordering::Relaxed);
+        reset_decode_state();
+
+        let value = CanonicalStructNoRecompute(CanonicalStruct {
+            a: 0xAABBCCDD,
+            b: vec![1, 2, 3, 4, 5],
+            c: Some(vec![9, 8, 7]),
+        });
+        let encoded = encode_adaptive(&value);
+
+        PANIC_ON_SERIALIZE.store(true, Ordering::Relaxed);
+        let (decoded, used) =
+            decode_field_canonical::<CanonicalStructNoRecompute>(&encoded).expect("decode struct");
+        assert_eq!(used, encoded.len());
+        assert_eq!(decoded, value);
+
+        PANIC_ON_SERIALIZE.store(false, Ordering::Relaxed);
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+    enum CanonicalEnum {
+        Unit,
+        One(u32),
+        Many { a: u32, b: Vec<u8> },
+    }
+
+    #[repr(transparent)]
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct CanonicalEnumNoRecompute(CanonicalEnum);
+
+    impl NoritoSerialize for CanonicalEnumNoRecompute {
+        fn serialize<W: Write>(&self, writer: W) -> Result<(), Error> {
+            if PANIC_ON_SERIALIZE.load(Ordering::Relaxed) {
+                panic!("serialize called during canonical decode recompute");
+            }
+            self.0.serialize(writer)
+        }
+
+        fn encoded_len_hint(&self) -> Option<usize> {
+            self.0.encoded_len_hint()
+        }
+
+        fn encoded_len_exact(&self) -> Option<usize> {
+            self.0.encoded_len_exact()
+        }
+    }
+
+    impl<'a> NoritoDeserialize<'a> for CanonicalEnumNoRecompute {
+        fn deserialize(archived: &'a Archived<Self>) -> Self {
+            Self::try_deserialize(archived).expect("CanonicalEnumNoRecompute decode")
+        }
+
+        fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, Error> {
+            let value = CanonicalEnum::try_deserialize(archived.cast::<CanonicalEnum>())?;
+            Ok(Self(value))
+        }
+    }
+
+    #[test]
+    fn decode_field_canonical_does_not_recompute_for_derived_enum() {
+        PANIC_ON_SERIALIZE.store(false, Ordering::Relaxed);
+        reset_decode_state();
+
+        let value = CanonicalEnumNoRecompute(CanonicalEnum::Many {
+            a: 0x01020304,
+            b: vec![0xAA, 0xBB, 0xCC],
+        });
+        let encoded = encode_adaptive(&value);
+
+        PANIC_ON_SERIALIZE.store(true, Ordering::Relaxed);
+        let (decoded, used) =
+            decode_field_canonical::<CanonicalEnumNoRecompute>(&encoded).expect("decode enum");
+        assert_eq!(used, encoded.len());
+        assert_eq!(decoded, value);
+
+        PANIC_ON_SERIALIZE.store(false, Ordering::Relaxed);
     }
 
     #[test]
