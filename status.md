@@ -1,6 +1,8 @@
 # Status
 
-Last update: 2026-02-04
+Last update: 2026-02-05
+- Integration tests: wait until the scheduled time before driving the follow-up block in `mint_asset_after_3_sec` so the time-trigger window is always hit. Tests not run (not requested).
+- Sumeragi tests: narrow commit-history/message-handling test-guard scope to avoid long-held locks that can stall concurrent QC/block-sync tests on current-thread runtimes. Tests not run (build dir lock in local environment).
 - Python SoraFS gateway test: disable `emit_browser_manifest` explicitly when asserting local proxy manifest defaults to None. Tests not run (not requested).
 - Sumeragi tests: make stale precommit vote tests use committed-height+1 and consensus-context PRF seed/epoch so signature/topology validation matches DA-enabled runtime. Tests: `cargo test -p iroha_core --lib handle_precommit_vote_accepts_stale_view_when_block_unknown_with_da -- --nocapture --test-threads=1` (ok; warnings about unexpected `cfg` `bls` in `iroha_config` and unused `mut`/single-use lifetimes in `iroha_core`).
 - Python SoraFS fetch helpers: build CarBuildPlan with empty file paths when only chunk specs are available, keeping CAR roots/car_size deterministic with gateway manifests. Tests not run (not requested).

@@ -6889,8 +6889,10 @@ async fn block_sync_update_records_commit_qc_from_cached_qc() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
-    let _guard = status::commit_history_test_guard();
-    status::reset_commit_certs_for_tests();
+    {
+        let _guard = status::commit_history_test_guard();
+        status::reset_commit_certs_for_tests();
+    }
 
     let roster = actor.effective_commit_topology();
     let topology = super::network_topology::Topology::new(roster.clone());
@@ -7046,9 +7048,11 @@ async fn block_sync_update_known_block_records_commit_qc() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
-    let _guard = status::commit_history_test_guard();
-    status::reset_commit_certs_for_tests();
-    status::reset_validator_checkpoints_for_tests();
+    {
+        let _guard = status::commit_history_test_guard();
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+    }
     let block_hash = seed_genesis_block_for_state(actor.state.as_ref());
     let height = 1_u64;
     let view = 0_u64;
@@ -7737,9 +7741,11 @@ async fn block_sync_update_skips_commit_roster_for_unaccepted_block() {
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
-    let _guard = status::commit_history_test_guard();
-    status::reset_commit_certs_for_tests();
-    status::reset_validator_checkpoints_for_tests();
+    {
+        let _guard = status::commit_history_test_guard();
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+    }
     let state_height = actor.state.view().height() as u64;
     let block_height = state_height.saturating_add(1).max(1);
     let valid_block = nonempty_block_for_actor(
@@ -7886,8 +7892,10 @@ async fn cache_block_sync_qc_records_commit_qc_history() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
-    let _guard = status::commit_history_test_guard();
-    status::reset_commit_certs_for_tests();
+    {
+        let _guard = status::commit_history_test_guard();
+        status::reset_commit_certs_for_tests();
+    }
 
     let roster = actor.effective_commit_topology();
     let topology = super::network_topology::Topology::new(roster.clone());
@@ -16541,8 +16549,10 @@ async fn handle_qc_records_commit_qc_history() {
     let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 1).await;
     let actor = &mut harness.actor;
 
-    let _guard = status::commit_history_test_guard();
-    status::reset_commit_certs_for_tests();
+    {
+        let _guard = status::commit_history_test_guard();
+        status::reset_commit_certs_for_tests();
+    }
     let height = 2u64;
     let view = 0u64;
     let view_index = view;
@@ -16626,9 +16636,11 @@ async fn handle_qc_records_commit_roster_for_unknown_block() {
         test_actor_harness_with_config_and_height_and_kura(4, consensus_cfg, None, 1, kura).await;
     let actor = &mut harness.actor;
 
-    let _guard = status::commit_history_test_guard();
-    status::reset_commit_certs_for_tests();
-    status::reset_validator_checkpoints_for_tests();
+    {
+        let _guard = status::commit_history_test_guard();
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+    }
     let height = 2u64;
     let view = 0u64;
     let block_hash = sample_block(height, view, None).hash();
@@ -16679,9 +16691,11 @@ async fn handle_qc_records_commit_qc_for_committed_block() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
-    let _guard = status::commit_history_test_guard();
-    status::reset_commit_certs_for_tests();
-    status::reset_validator_checkpoints_for_tests();
+    {
+        let _guard = status::commit_history_test_guard();
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+    }
     let block_hash = seed_genesis_block_for_state(actor.state.as_ref());
     let height = 1_u64;
     let view = 0_u64;
@@ -16732,8 +16746,10 @@ async fn handle_qc_drops_empty_block_payload() {
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
 
-    let _guard = super::status::message_handling_test_guard();
-    super::status::reset_message_handling_for_tests();
+    {
+        let _guard = super::status::message_handling_test_guard();
+        super::status::reset_message_handling_for_tests();
+    }
     let height = 1_u64;
     let view = 0_u64;
     let block = empty_block(height, view, None);
