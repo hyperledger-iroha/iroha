@@ -49880,7 +49880,6 @@ fn validate_block_for_voting_records_timings() {
 
 #[test]
 fn exec_roots_capture_fallback_uses_witness_snapshot() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
     let world = World::default();
     let kura = Arc::new(Kura::blank_kura_for_testing());
     let query = LiveQueryStore::start_test();
@@ -49890,6 +49889,7 @@ fn exec_roots_capture_fallback_uses_witness_snapshot() {
     let header = BlockHeader::new(nonzero!(2_u64), Some(genesis_hash), None, None, 0, 0);
     let block_hash = header.hash();
     let mut state_block = state.block(header);
+    let _guard = crate::sumeragi::witness::exec_witness_guard();
 
     crate::sumeragi::witness::start_block();
     let asset_def: AssetDefinitionId = "rose#wonderland"

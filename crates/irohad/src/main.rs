@@ -655,7 +655,6 @@ struct NetworkRelayShared {
     network: IrohaNetwork,
     streaming: iroha_core::streaming::StreamingHandle,
     kiso: KisoHandle,
-    suppress_pow_broadcast: Arc<AtomicBool>,
     consensus_ingress: Mutex<ConsensusIngressLimiter>,
     low_priority_ingress: Mutex<LowPriorityIngressLimiter>,
 }
@@ -1305,7 +1304,6 @@ impl NetworkRelay {
             network: self.network,
             streaming: self.streaming,
             kiso: self.kiso,
-            suppress_pow_broadcast: self.suppress_pow_broadcast,
             consensus_ingress: Mutex::new(self.consensus_ingress),
             low_priority_ingress: Mutex::new(self.low_priority_ingress),
         }
@@ -5227,6 +5225,10 @@ address = "addr:127.0.0.1:8080#8942"
 
 [genesis]
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+
+[streaming]
+identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
+identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
 "#,
         )
         .expect("minimal config")
@@ -5239,7 +5241,7 @@ chain = "00000000-0000-0000-0000-000000000000"
 public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
 private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
 trusted_peers_pop = [
-  { public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2", pop_hex = "8515da750f81182aaba5c22fc9f03a01e81ed85e4495a2ca6b29a71c0c8549537e31e79cddf6ff285b9e22d0d9dc17ce0f46e7d0cf78b2ef9feab50c849a1ea8e1e4f07e966f6113faa8a999317545d9f111b8e08a7273913710b43a20b19c08" }
+  {{ public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2", pop_hex = "8515da750f81182aaba5c22fc9f03a01e81ed85e4495a2ca6b29a71c0c8549537e31e79cddf6ff285b9e22d0d9dc17ce0f46e7d0cf78b2ef9feab50c849a1ea8e1e4f07e966f6113faa8a999317545d9f111b8e08a7273913710b43a20b19c08" }}
 ]
 
 [network]
@@ -5251,6 +5253,10 @@ address = "addr:127.0.0.1:8080#8942"
 
 [genesis]
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+
+[streaming]
+identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
+identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
 
 [nexus]
 enabled = {enabled}
@@ -5289,6 +5295,10 @@ address = "addr:127.0.0.1:8080#8942"
 
 [genesis]
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+
+[streaming]
+identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
+identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
 
 [nexus]
 enabled = false
@@ -6869,7 +6879,7 @@ fn verify_genesis_metadata(
             .collect::<Vec<_>>()
             .join("; ");
         return Err(Report::new(MainError::Config).attach(format!(
-            "none of the consensus_handshake_meta entries match runtime settings (expected mode `{expected_mode}`, bls_domain `{bls_domain}`, proto v{proto_version}, fingerprint 0x{expected_fp_hex}`); entries observed: {entries_summary}"
+            "none of the consensus_handshake_meta entries match runtime settings (expected consensus_mode `{expected_mode}`, bls_domain `{bls_domain}`, proto v{proto_version}, fingerprint 0x{expected_fp_hex}`); entries observed: {entries_summary}"
         )));
     };
 
@@ -7330,6 +7340,10 @@ mod tests {
 
                 [genesis]
                 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+
+                [streaming]
+                identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
+                identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
             };
 
             Config::from_toml_source(TomlSource::inline(table)).expect("base config")
@@ -7597,6 +7611,10 @@ mod tests {
                 [genesis]
                 public_key = "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4"
                 file = "./genesis.signed.nrt"
+
+                [streaming]
+                identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
+                identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
 
                 [torii]
                 address = "addr:127.0.0.1:8080#8942"
@@ -7933,7 +7951,7 @@ mod tests {
             use iroha_core::{kura::Kura, query::store::LiveQueryStore};
 
             iroha_genesis::init_instruction_registry();
-            let config = sample_config();
+            let mut config = sample_config();
             let genesis_keys = config.common.key_pair.clone();
             let chain = config.common.chain.clone();
 
@@ -7968,6 +7986,9 @@ mod tests {
             let (mode_tag, bls_domain, consensus_caps) =
                 compute_consensus_handshake_caps(&view, &config, &config_caps, None);
 
+            // Diverge the runtime chain after computing consensus caps to force a
+            // fingerprint mismatch without altering the embedded handshake metadata.
+            config.common.chain = ChainId::from("fingerprint-mismatch");
             let proto = iroha_core::sumeragi::consensus::PROTO_VERSION;
             let err = verify_genesis_metadata(
                 &genesis_block,
@@ -8078,6 +8099,14 @@ mod tests {
                     ["torii", "address"],
                     socket_addr!(127.0.0.1:8080).to_literal(),
                 )
+                .write(
+                    ["streaming", "identity_public_key"],
+                    "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB",
+                )
+                .write(
+                    ["streaming", "identity_private_key"],
+                    "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F",
+                )
                 .write(["confidential", "enabled"], true)
                 .write(["confidential", "assume_valid"], false)
                 .write(["genesis", "public_key"], genesis_public_key.to_string());
@@ -8105,6 +8134,7 @@ mod tests {
             let manifest_json = norito::json!({
                 "chain": "chain",
                 "ivm_dir": ".",
+                "consensus_mode": "Permissioned",
                 "transactions": [
                     {
                         "parameters": {
@@ -8174,6 +8204,7 @@ mod tests {
             let manifest_json = norito::json!({
                 "chain": "chain",
                 "ivm_dir": ".",
+                "consensus_mode": "Permissioned",
                 "transactions": [
                     {
                         "parameters": {
@@ -8336,17 +8367,43 @@ mod tests {
         #[test]
         fn stack_budget_mismatch_warns_but_allows_config() -> eyre::Result<()> {
             let (config, _dir) = load_config_with_overrides(|table, _genesis_key| {
+                let mut cpu_balanced = toml::Table::new();
+                cpu_balanced.insert(
+                    "max_cycles".to_owned(),
+                    toml::Value::Integer(10_000_000),
+                );
+                cpu_balanced.insert(
+                    "max_memory_bytes".to_owned(),
+                    toml::Value::Integer(256 * 1024 * 1024),
+                );
+                cpu_balanced.insert(
+                    "max_stack_bytes".to_owned(),
+                    toml::Value::Integer(8 * 1024 * 1024),
+                );
+                cpu_balanced.insert(
+                    "max_io_bytes".to_owned(),
+                    toml::Value::Integer(24 * 1024 * 1024),
+                );
+                cpu_balanced.insert(
+                    "max_egress_bytes".to_owned(),
+                    toml::Value::Integer(12 * 1024 * 1024),
+                );
+                cpu_balanced.insert("allow_gpu_hints".to_owned(), toml::Value::Boolean(true));
+                cpu_balanced.insert("allow_wasi".to_owned(), toml::Value::Boolean(true));
+
+                let mut profiles = toml::Table::new();
+                profiles.insert(
+                    "cpu-balanced".to_owned(),
+                    toml::Value::Table(cpu_balanced),
+                );
+
                 iroha_config::base::toml::Writer::new(table)
                     .write(["compute", "enabled"], true)
                     .write(
-                        [
-                            "compute",
-                            "resource_profiles",
-                            "cpu-balanced",
-                            "max_stack_bytes",
-                        ],
-                        8_i64 * 1024 * 1024,
+                        ["compute", "resource_profiles"],
+                        toml::Value::Table(profiles),
                     )
+                    .write(["compute", "default_resource_profile"], "cpu-balanced")
                     .write(["ivm", "memory_budget_profile"], "cpu-balanced")
                     .write(["concurrency", "guest_stack_bytes"], 4_i64 * 1024 * 1024);
             })?;
