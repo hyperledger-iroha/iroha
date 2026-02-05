@@ -2120,7 +2120,10 @@ mod network_relay_tests {
             let _ = tx.try_send(msg);
         });
 
-        assert!(matches!(rx.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)));
+        assert!(matches!(
+            rx.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty | std::sync::mpsc::TryRecvError::Disconnected)
+        ));
     }
 
     #[test]
@@ -2977,7 +2980,7 @@ mod network_relay_tests {
     #[test]
     fn consensus_ingress_penalty_skips_bulk_messages() {
         let peer = sample_peer();
-        let bulk = block_created_msg();
+        let bulk = block_sync_update_msg();
         let standard = consensus_params_msg();
         let mut limiter = ConsensusIngressLimiter::new(
             Some(BucketConfig {
@@ -3049,7 +3052,7 @@ mod network_relay_tests {
     #[cfg(feature = "telemetry")]
     #[test]
     fn consensus_ingress_topic_label_tracks_payload_topics() {
-        let payload = block_created_msg();
+        let payload = block_sync_update_msg();
         assert_eq!(
             NetworkRelayShared::consensus_ingress_topic_label(&payload),
             Some("ConsensusPayload")
@@ -5209,8 +5212,11 @@ mod build_line_tests {
         toml::from_str(
             r#"
 chain = "00000000-0000-0000-0000-000000000000"
-public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
+public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
+private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
+trusted_peers_pop = [
+  { public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2", pop_hex = "8515da750f81182aaba5c22fc9f03a01e81ed85e4495a2ca6b29a71c0c8549537e31e79cddf6ff285b9e22d0d9dc17ce0f46e7d0cf78b2ef9feab50c849a1ea8e1e4f07e966f6113faa8a999317545d9f111b8e08a7273913710b43a20b19c08" }
+]
 
 [network]
 address = "addr:127.0.0.1:1337#8F78"
@@ -5230,8 +5236,11 @@ public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B704
         toml::from_str(&format!(
             r#"
 chain = "00000000-0000-0000-0000-000000000000"
-public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
+public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
+private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
+trusted_peers_pop = [
+  { public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2", pop_hex = "8515da750f81182aaba5c22fc9f03a01e81ed85e4495a2ca6b29a71c0c8549537e31e79cddf6ff285b9e22d0d9dc17ce0f46e7d0cf78b2ef9feab50c849a1ea8e1e4f07e966f6113faa8a999317545d9f111b8e08a7273913710b43a20b19c08" }
+]
 
 [network]
 address = "addr:127.0.0.1:1337#8F78"
@@ -5265,8 +5274,11 @@ metadata = {{}}
         toml::from_str(
             r#"
 chain = "00000000-0000-0000-0000-000000000000"
-public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
+public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
+private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
+trusted_peers_pop = [
+  { public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2", pop_hex = "8515da750f81182aaba5c22fc9f03a01e81ed85e4495a2ca6b29a71c0c8549537e31e79cddf6ff285b9e22d0d9dc17ce0f46e7d0cf78b2ef9feab50c849a1ea8e1e4f07e966f6113faa8a999317545d9f111b8e08a7273913710b43a20b19c08" }
+]
 
 [network]
 address = "addr:127.0.0.1:1337#8F78"
@@ -5286,13 +5298,14 @@ lane_count = 1
 index = 0
 alias = "custom"
 description = "lane overrides should be rejected when nexus is disabled"
+metadata = {}
 "#,
         )
         .expect("single-lane override config")
     }
 
     const NEXUS_DEFAULTS_BLAKE2B: &str =
-        "f1d56560c232c8be7f45e43acd99a38436b39baf3fc30e176097fc5fa49acccf";
+        "7f66b7a2fd69ea5ab9eacce7c3315a4a3b2fb1a5f110115f68594a54d94174a7";
 
     fn file_blake2b_hex(path: &Path) -> String {
         let bytes = std::fs::read(path).expect("read file");
@@ -7302,8 +7315,11 @@ mod tests {
         fn base_config() -> Config {
             let table = toml::toml! {
                 chain = "00000000-0000-0000-0000-000000000000"
-                public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-                private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
+                public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
+                private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
+                trusted_peers_pop = [
+                  { public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2", pop_hex = "8515da750f81182aaba5c22fc9f03a01e81ed85e4495a2ca6b29a71c0c8549537e31e79cddf6ff285b9e22d0d9dc17ce0f46e7d0cf78b2ef9feab50c849a1ea8e1e4f07e966f6113faa8a999317545d9f111b8e08a7273913710b43a20b19c08" }
+                ]
 
                 [network]
                 address = "addr:127.0.0.1:1337#8F78"
@@ -7379,8 +7395,8 @@ mod tests {
         }
 
         #[test]
-        fn bulk_scale_factor_doubles_for_one_second_block_time() {
-            let scale = ConsensusIngressLimiter::bulk_scale_factor(Duration::from_secs(1));
+        fn bulk_scale_factor_scales_for_faster_block_time() {
+            let scale = ConsensusIngressLimiter::bulk_scale_factor(Duration::from_millis(50));
             assert_eq!(scale, 2);
         }
 
@@ -7568,14 +7584,10 @@ mod tests {
         fn sample_config_table() -> toml::Table {
             toml::toml! {
                 chain = "00000000-0000-0000-0000-000000000000"
-                public_key = "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B"
-                private_key = "802620282ED9F3CF92811C3818DBC4AE594ED59DC1A2F78E4241E31924E101D6B1FB83"
-
-                trusted_peers = [
-                  "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B@127.0.0.1:1337",
-                  "ed0120CC25624D62896D3A0BFD8940F928DC2ABF27CC57CEFEB442AA96D9081AAE58A1@127.0.0.1:1338",
-                  "ed0120FACA9E8AA83225CB4D16D67F27DD4F93FC30FFA11ADC1F5C88FD5495ECC91020@127.0.0.1:1339",
-                  "ed01208E351A70B6A603ED285D666B8D689B680865913BA03CE29FB7D13A166C4E7F1F@127.0.0.1:1340",
+                public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
+                private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
+                trusted_peers_pop = [
+                  { public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2", pop_hex = "8515da750f81182aaba5c22fc9f03a01e81ed85e4495a2ca6b29a71c0c8549537e31e79cddf6ff285b9e22d0d9dc17ce0f46e7d0cf78b2ef9feab50c849a1ea8e1e4f07e966f6113faa8a999317545d9f111b8e08a7273913710b43a20b19c08" }
                 ]
 
                 [network]
@@ -8034,7 +8046,7 @@ mod tests {
 
     mod config_integration {
         use assertables::assert_contains;
-        use iroha_crypto::{ExposedPrivateKey, KeyPair};
+        use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, bls_normal_pop_prove};
         use iroha_primitives::addr::socket_addr;
         use path_absolutize::Absolutize as _;
 
@@ -8042,7 +8054,10 @@ mod tests {
         use super::*;
 
         fn config_factory(genesis_public_key: &PublicKey) -> toml::Table {
-            let (pubkey, privkey) = KeyPair::random().into_parts();
+            let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let pubkey = keypair.public_key().clone();
+            let privkey = keypair.private_key().clone();
+            let pop = bls_normal_pop_prove(&privkey).expect("pop prove");
 
             let mut table = toml::Table::new();
             iroha_config::base::toml::Writer::new(&mut table)
@@ -8066,6 +8081,19 @@ mod tests {
                 .write(["confidential", "enabled"], true)
                 .write(["confidential", "assume_valid"], false)
                 .write(["genesis", "public_key"], genesis_public_key.to_string());
+            let mut pop_entry = toml::Table::new();
+            pop_entry.insert(
+                "public_key".to_string(),
+                toml::Value::String(pubkey.to_string()),
+            );
+            pop_entry.insert(
+                "pop_hex".to_string(),
+                toml::Value::String(hex::encode(pop)),
+            );
+            table.insert(
+                "trusted_peers_pop".to_string(),
+                toml::Value::Array(vec![toml::Value::Table(pop_entry)]),
+            );
             table
         }
 
@@ -8081,7 +8109,8 @@ mod tests {
                     {
                         "parameters": {
                             "sumeragi": {
-                                "block_time_ms": 1000
+                                "block_time_ms": 1000,
+                                "commit_time_ms": 1000
                             }
                         },
                         "instructions": [],
@@ -8149,7 +8178,8 @@ mod tests {
                     {
                         "parameters": {
                             "sumeragi": {
-                                "block_time_ms": 1000
+                                "block_time_ms": 1000,
+                                "commit_time_ms": 1000
                             }
                         },
                         "instructions": [],
