@@ -288,9 +288,7 @@ fn ensure_operator_signature(
         )
     })?;
     let operator_key = certificate
-        .allowance
-        .asset
-        .account()
+        .operator
         .try_signatory()
         .ok_or_else(|| {
             InstructionExecutionError::InvariantViolation(
@@ -302,17 +300,33 @@ fn ensure_operator_signature(
         .verify(operator_key, &payload)
         .map_err(|_| {
             InstructionExecutionError::InvariantViolation(
-                "operator signature does not match allowance asset controller".into(),
+                "operator signature does not match operator account".into(),
             )
         })
 }
 
+fn ensure_allowance_owner_matches_controller(
+    certificate: &OfflineWalletCertificate,
+) -> Result<(), InstructionExecutionError> {
+    if certificate.allowance.asset.account() != &certificate.controller {
+        return Err(labeled_invariant(
+            "allowance_owner_mismatch",
+            "allowance asset account must match certificate controller",
+        ));
+    }
+    Ok(())
+}
+
 fn resolve_offline_escrow_account(
-    state_transaction: &StateTransaction<'_, '_>,
+    state_transaction: &mut StateTransaction<'_, '_>,
     definition: &AssetDefinitionId,
 ) -> Result<Option<AccountId>, InstructionExecutionError> {
-    let settlement = &state_transaction.settlement.offline;
-    if let Some(account) = settlement.escrow_accounts.get(definition) {
+    if let Some(account) = state_transaction
+        .settlement
+        .offline
+        .escrow_accounts
+        .get(definition)
+    {
         return Ok(Some(account.clone()));
     }
     let asset_definition = state_transaction
@@ -322,13 +336,17 @@ fn resolve_offline_escrow_account(
     if crate::smartcontracts::isi::domain::isi::asset_definition_offline_enabled(
         asset_definition.metadata(),
     )? {
+        crate::smartcontracts::isi::domain::isi::ensure_offline_escrow_account(
+            &asset_definition,
+            state_transaction,
+        )?;
         let derived = crate::smartcontracts::isi::domain::isi::offline_escrow_account_id(
             state_transaction.chain_id(),
             definition,
         );
         return Ok(Some(derived));
     }
-    if settlement.escrow_required {
+    if state_transaction.settlement.offline.escrow_required {
         return Err(labeled_invariant(
             "escrow_missing",
             format!("offline escrow account not configured for asset definition `{definition}`"),
@@ -655,6 +673,8 @@ pub mod isi {
         let certificate = isi.certificate;
         let is_genesis_block = state_transaction.block_height() == GENESIS_HEIGHT;
 
+        ensure_allowance_owner_matches_controller(&certificate)?;
+
         if is_genesis_block {
             let certificate_id = certificate.certificate_id();
             reserve_offline_allowance(
@@ -785,15 +805,15 @@ pub mod isi {
         use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
         use iroha_crypto::Algorithm;
         use iroha_data_model::{
+            ChainId,
             account::Account,
             asset::AssetDefinition,
             block::BlockHeader,
             domain::Domain,
             offline::{
-                AppleAppAttestProof, OfflineVerdictRevocationReason,
-                OFFLINE_ASSET_ENABLED_METADATA_KEY,
+                AppleAppAttestProof, OFFLINE_ASSET_ENABLED_METADATA_KEY,
+                OfflineVerdictRevocationReason,
             },
-            ChainId,
         };
         use iroha_primitives::{json::Json, numeric::NumericSpec};
         use nonzero_ext::nonzero;
@@ -819,6 +839,7 @@ pub mod isi {
             let spend_pair = iroha_crypto::KeyPair::from_seed(vec![0xEE; 32], Algorithm::Ed25519);
             OfflineWalletCertificate {
                 controller,
+                operator: sample_account(0x01, "offline"),
                 allowance: OfflineAllowanceCommitment {
                     asset,
                     amount: Numeric::new(1_000, 0),
@@ -858,6 +879,16 @@ pub mod isi {
             certificate.allowance.amount = Numeric::new(1_000, 2);
             let spec = NumericSpec::fractional(0);
             assert!(expected_scale_for_allowance(&certificate, spec).is_err());
+        }
+
+        #[test]
+        fn allowance_owner_must_match_controller() {
+            let mut certificate = sample_certificate();
+            let definition = certificate.allowance.asset.definition().clone();
+            let other_account = sample_account(0xFF, "offline");
+            certificate.allowance.asset =
+                iroha_data_model::asset::AssetId::new(definition, other_account);
+            assert!(ensure_allowance_owner_matches_controller(&certificate).is_err());
         }
 
         #[test]
@@ -970,13 +1001,8 @@ pub mod isi {
                     &chain_id,
                     &definition_id,
                 );
-            let escrow_account = Account::new(escrow_account_id.clone()).build(&escrow_account_id);
 
-            let world = World::with(
-                [domain],
-                [controller_account, escrow_account],
-                [asset_definition],
-            );
+            let world = World::with([domain], [controller_account], [asset_definition]);
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
             let mut state = State::new_with_chain(world, Arc::clone(&kura), query, chain_id);
@@ -1005,6 +1031,11 @@ pub mod isi {
                 &mut transaction,
             )
             .expect("register allowance");
+
+            assert!(
+                transaction.world.account(&escrow_account_id).is_ok(),
+                "escrow account should be created"
+            );
 
             let escrow_asset = AssetId::new(definition_id, escrow_account_id);
             let escrow_balance = transaction
@@ -2422,8 +2453,7 @@ pub mod isi {
         let deposit_asset = AssetId::new(definition_id.clone(), deposit_account.clone());
         let spec = state_transaction.numeric_spec_for(&definition_id)?;
         assert_numeric_spec_with(amount, spec)?;
-        let escrow_account =
-            resolve_offline_escrow_account(state_transaction, &definition_id)?;
+        let escrow_account = resolve_offline_escrow_account(state_transaction, &definition_id)?;
         if let Some(escrow_account) = escrow_account {
             let escrow_asset = AssetId::new(definition_id, escrow_account);
             state_transaction
@@ -6350,11 +6380,13 @@ mod attestation {
                 operator_pair: &iroha_crypto::KeyPair,
             ) -> OfflineWalletCertificate {
                 let controller = test_account_id("sbp", 0xA1);
+                let operator = AccountId::new(controller.domain().clone(), operator_pair.public_key().clone());
                 let definition =
                     AssetDefinitionId::from_str("usd#sbp").expect("asset definition id");
                 let asset = AssetId::new(definition, controller.clone());
                 let mut certificate = OfflineWalletCertificate {
                     controller: controller.clone(),
+                    operator,
                     allowance: OfflineAllowanceCommitment {
                         asset,
                         amount: Numeric::new(1_000, 0),
@@ -6666,10 +6698,12 @@ mod attestation {
             operator_pair: &KeyPair,
         ) -> OfflineWalletCertificate {
             let controller = test_account_id("sbp", 0xC3);
+            let operator = AccountId::new(controller.domain().clone(), operator_pair.public_key().clone());
             let definition = AssetDefinitionId::from_str("usd#sbp").expect("asset definition id");
             let asset = AssetId::new(definition, controller.clone());
             let mut certificate = OfflineWalletCertificate {
                 controller,
+                operator,
                 allowance: OfflineAllowanceCommitment {
                     asset,
                     amount: Numeric::new(2_000, 0),
@@ -7021,6 +7055,7 @@ mod attestation {
             let counter_byte = u8::try_from(counter).expect("counter fits u8");
             let certificate = OfflineWalletCertificate {
                 controller: controller.clone(),
+                operator: controller.clone(),
                 allowance: OfflineAllowanceCommitment {
                     asset: asset.clone(),
                     amount: Numeric::new(1, 0),
@@ -7327,6 +7362,7 @@ mod aggregate_proof_tests {
         let init_commitment_bytes = c_init.compress().to_bytes().to_vec();
         let certificate = OfflineWalletCertificate {
             controller: controller.clone(),
+            operator: controller.clone(),
             allowance: OfflineAllowanceCommitment {
                 asset: asset.clone(),
                 amount: Numeric::new(1_000, 0),

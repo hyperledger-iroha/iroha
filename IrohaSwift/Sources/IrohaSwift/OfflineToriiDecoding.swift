@@ -18,6 +18,7 @@ enum OfflineToriiDecoding {
     static func decodeCertificate(from value: ToriiJSONValue) throws -> OfflineWalletCertificate {
         let object = try requireObject(value, field: "certificate")
         let controller = try requireString(object, field: "controller")
+        let operatorId = try requireString(object, field: "operator")
         let allowance = try decodeAllowance(from: object)
         let spendPublicKey = try requireString(object, field: "spend_public_key")
         let attestationReport = try requireBytes(object, field: "attestation_report")
@@ -31,6 +32,7 @@ enum OfflineToriiDecoding {
         let refreshAtMs = try optionalUInt64(object, field: "refresh_at_ms")
         return OfflineWalletCertificate(
             controller: controller,
+            operatorId: operatorId,
             allowance: allowance,
             spendPublicKey: spendPublicKey,
             attestationReport: attestationReport,

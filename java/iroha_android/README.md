@@ -1028,6 +1028,7 @@ Register signed certificates on-ledger by posting them to the offline allowances
 OfflineWalletCertificate certificate =
     new OfflineWalletCertificate(
         controllerId,
+        controllerId,
         allowanceCommitment,
         spendPublicKeyHex,
         attestationReportBytes,

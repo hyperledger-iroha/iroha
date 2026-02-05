@@ -246,6 +246,8 @@ fn receipt_cmp(lhs: &OfflineSpendReceipt, rhs: &OfflineSpendReceipt) -> Ordering
 pub struct OfflineWalletCertificatePayload {
     /// Account that owns the allowance.
     pub controller: AccountId,
+    /// Operator account that signs this certificate.
+    pub operator: AccountId,
     /// Commitment to the allowance this certificate governs.
     pub allowance: OfflineAllowanceCommitment,
     /// Spend public key baked into the wallet.
@@ -272,6 +274,7 @@ impl From<&OfflineWalletCertificate> for OfflineWalletCertificatePayload {
     fn from(cert: &OfflineWalletCertificate) -> Self {
         Self {
             controller: cert.controller.clone(),
+            operator: cert.operator.clone(),
             allowance: cert.allowance.clone(),
             spend_public_key: cert.spend_public_key.clone(),
             attestation_report: cert.attestation_report.clone(),
@@ -1172,6 +1175,8 @@ mod model {
     pub struct OfflineWalletCertificate {
         /// Account that owns the allowance.
         pub controller: AccountId,
+        /// Operator account that signed this certificate.
+        pub operator: AccountId,
         /// Commitment to the allowance this certificate governs.
         pub allowance: OfflineAllowanceCommitment,
         /// Spend public key baked into the wallet.
@@ -1206,6 +1211,7 @@ mod model {
         #[must_use]
         pub fn new(
             controller: AccountId,
+            operator: AccountId,
             allowance: OfflineAllowanceCommitment,
             spend_public_key: PublicKey,
             attestation_report: Vec<u8>,
@@ -1220,6 +1226,7 @@ mod model {
         ) -> Self {
             Self {
                 controller,
+                operator,
                 allowance,
                 spend_public_key,
                 attestation_report,
@@ -3362,6 +3369,7 @@ mod tests {
             platform_snapshot: None,
             sender_certificate: OfflineWalletCertificate {
                 controller: account_from_key(&sender_key, "sbp"),
+                operator: account_from_key(&sender_key, "sbp"),
                 allowance: sample_commitment(0x11),
                 spend_public_key: sender_key.clone(),
                 attestation_report: vec![0x01, 0x02],
@@ -3795,6 +3803,7 @@ mod receipt_challenge_tests {
     fn sample_certificate(controller: &AccountId, asset: &AssetId) -> OfflineWalletCertificate {
         OfflineWalletCertificate {
             controller: controller.clone(),
+            operator: controller.clone(),
             allowance: OfflineAllowanceCommitment {
                 asset: asset.clone(),
                 amount: Numeric::from(500_u32),

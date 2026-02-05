@@ -247,7 +247,10 @@ pub(super) fn spawn_vote_verify_workers(
 
                     for ((algorithm, preimage), indices) in groups {
                         if indices.len() == 1 {
-                            multi_candidates.entry(algorithm).or_default().push(indices[0]);
+                            multi_candidates
+                                .entry(algorithm)
+                                .or_default()
+                                .push(indices[0]);
                             continue;
                         }
 
@@ -379,18 +382,22 @@ pub(super) fn spawn_vote_verify_workers(
                         }
 
                         let use_batch = match algorithm {
-                            Algorithm::BlsNormal => iroha_crypto::bls_normal_verify_aggregate_multi_message(
-                                &messages,
-                                &signatures,
-                                &public_keys,
-                            )
-                            .is_ok(),
-                            Algorithm::BlsSmall => iroha_crypto::bls_small_verify_aggregate_multi_message(
-                                &messages,
-                                &signatures,
-                                &public_keys,
-                            )
-                            .is_ok(),
+                            Algorithm::BlsNormal => {
+                                iroha_crypto::bls_normal_verify_aggregate_multi_message(
+                                    &messages,
+                                    &signatures,
+                                    &public_keys,
+                                )
+                                .is_ok()
+                            }
+                            Algorithm::BlsSmall => {
+                                iroha_crypto::bls_small_verify_aggregate_multi_message(
+                                    &messages,
+                                    &signatures,
+                                    &public_keys,
+                                )
+                                .is_ok()
+                            }
                             _ => false,
                         };
                         let aggregate_total = if use_batch {

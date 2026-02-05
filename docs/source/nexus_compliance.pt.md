@@ -11,11 +11,11 @@ translation_last_reviewed: 2026-01-01
 
 # Motor de conformidade de lanes Nexus e politica de lista branca (NX-12)
 
-Status: Planejado -> este documento fornece a especificacao e os guardrails de rollout
-referenciados pelo item de roadmap **NX-12 - Motor de conformidade de lane e politica de lista branca**.
+Status: Implementado — este documento captura o modelo de politica em producao e a aplicacao critica
+para consenso referenciada pelo item de roadmap **NX-12 - Motor de conformidade de lane e politica de lista branca**.
 Ele explica o modelo de dados, os fluxos de governanca, a telemetria e a estrategia de rollout
-que serao implementados em `crates/iroha_core/src/compliance` e expostos
-via superficies Torii/SDK, para que cada lane e dataspace possa ficar vinculado a
+implementados em `crates/iroha_core/src/compliance` e aplicados tanto na
+admissao do Torii quanto na validacao de transacoes de `iroha_core`, para que cada lane e dataspace possa ficar vinculado a
 politicas jurisdicionais deterministicas.
 
 ## Objetivos
@@ -134,12 +134,16 @@ e obter artefatos (blob de politica assinado + atestacoes de revisores).
    - O `compliance::Engine` avalia regras `deny`, depois regras `allow`, e por fim aplica limites
      de transferencia. Transacoes com falha retornam um erro tipado (`ERR_LANE_COMPLIANCE_DENIED`)
      com motivo + policy id para trilhas de auditoria.
+   - A admissao e um prefiltro rapido; a validacao de consenso volta a checar as mesmas regras usando
+     snapshots do estado para manter a aplicacao deterministica.
 2. **Execucao (iroha_core)**
-   - Durante a construcao do bloco, `iroha_core::compliance::Engine` reproduz a mesma decisao usando
-     o policy id registrado no cabecalho do bloco. Isso evita divergencia mesmo se os caches do Torii
+   - Durante a construcao do bloco, `iroha_core::tx::validate_transaction_internal`
+     reproduz as mesmas verificacoes de governanca/UAID/privacidade/conformidade de lane usando os
+     snapshots de `StateTransaction` (`lane_manifests`, `lane_privacy_registry`,
+     `lane_compliance`). Isso mantem a aplicacao critica para consenso mesmo se os caches do Torii
      ficarem obsoletos.
-   - Instrucoes que mutam manifestos de lane ou politicas devem fornecer as referencias de politica
-     nas quais se apoiam para que esses valores sejam capturados on-chain.
+   - Transacoes que mutam manifestos de lane ou politicas de conformidade seguem o mesmo caminho de
+     validacao; nao ha bypass apenas na admissao.
 3. **Hooks async**
    - RBC gossip e os fetchers de DA anexam o policy id a telemetria para que decisoes tardias
      possam ser rastreadas para a versao correta de regra.

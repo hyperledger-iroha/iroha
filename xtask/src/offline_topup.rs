@@ -76,6 +76,7 @@ struct SpecFile {
 
 #[derive(Debug, JsonDeserialize)]
 struct OperatorSpec {
+    account: Option<String>,
     private_key: Option<String>,
 }
 
@@ -83,6 +84,7 @@ struct OperatorSpec {
 struct AllowanceSpec {
     label: String,
     controller: String,
+    operator: Option<String>,
     allowance_asset: String,
     amount: String,
     issued_at_ms: u64,
@@ -222,12 +224,33 @@ fn handle_allowance(
             )
         })?
         .into_account_id();
+    let operator_account = allowance
+        .operator
+        .as_deref()
+        .or_else(|| operator_from_spec.and_then(|op| op.account.as_deref()))
+        .ok_or_else(|| eyre!("operator account not provided for allowance `{label}`"))?;
+    let operator_account = AccountId::parse(operator_account)
+        .map_err(|err| {
+            eyre!(
+                "invalid `operator` value `{}` for allowance `{label}`: {}",
+                operator_account,
+                err.reason()
+            )
+        })?
+        .into_account_id();
     let asset = AssetId::from_str(&allowance.allowance_asset).wrap_err_with(|| {
         format!(
             "invalid `allowance_asset` `{}` for allowance `{label}`",
             allowance.allowance_asset
         )
     })?;
+    if asset.account() != &controller {
+        return Err(eyre!(
+            "allowance `{label}` asset account must match controller ({} != {})",
+            asset.account(),
+            controller
+        ));
+    }
     let allowance_amount = parse_numeric(&allowance.amount)
         .wrap_err_with(|| format!("invalid `amount` for allowance `{label}`"))?;
     if allowance_amount <= Numeric::zero() {
@@ -308,6 +331,7 @@ fn handle_allowance(
 
     let certificate = build_certificate(
         controller.clone(),
+        operator_account.clone(),
         asset.clone(),
         allowance_amount,
         allowance.issued_at_ms,
@@ -424,6 +448,7 @@ fn submit_allowance(
 #[allow(clippy::too_many_arguments)]
 fn build_certificate(
     controller: AccountId,
+    operator: AccountId,
     asset: AssetId,
     amount: Numeric,
     issued_at_ms: u64,
@@ -445,6 +470,7 @@ fn build_certificate(
     };
     let mut certificate = OfflineWalletCertificate {
         controller,
+        operator,
         allowance,
         spend_public_key,
         attestation_report,
@@ -590,6 +616,10 @@ fn certificate_to_json(certificate: &OfflineWalletCertificate) -> JsonValue {
     map.insert(
         "controller".to_string(),
         JsonValue::String(certificate.controller.to_string()),
+    );
+    map.insert(
+        "operator".to_string(),
+        JsonValue::String(certificate.operator.to_string()),
     );
     map.insert("allowance".to_string(), JsonValue::Object(allowance));
     map.insert(

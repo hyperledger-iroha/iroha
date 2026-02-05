@@ -168,8 +168,10 @@ use crate::telemetry::record_da_shard_cursor_lag;
 use crate::{
     Peers,
     block::{CommittedBlock, ValidBlock},
+    compliance::LaneComplianceEngine,
     executor::Executor,
     governance::manifest::{LaneManifestRegistry, LaneManifestRegistryHandle},
+    interlane::{LanePrivacyRegistry, LanePrivacyRegistryHandle},
     kura::Kura,
     nexus::space_directory::{
         SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet, UaidDataspaceBindings,
@@ -4600,6 +4602,10 @@ pub struct State {
     pub lane_relays: parking_lot::RwLock<LaneRelayStore>,
     /// Lane governance manifest registry snapshot used for lane-relay validation.
     pub lane_manifests: parking_lot::RwLock<LaneManifestRegistryHandle>,
+    /// Lane privacy commitment registry derived from governance manifests.
+    pub lane_privacy_registry: parking_lot::RwLock<LanePrivacyRegistryHandle>,
+    /// Optional lane compliance engine (consensus-critical when configured).
+    lane_compliance: parking_lot::RwLock<Option<Arc<LaneComplianceEngine>>>,
     /// Guard to ensure DA indexes are hydrated from the block log at most once.
     da_indexes_hydrated: parking_lot::RwLock<Option<Result<(), DaShardCursorError>>>,
     /// Runtime handle for the IVM to execute triggers.
@@ -4694,6 +4700,12 @@ pub struct StateBlock<'state> {
     pub crypto: Arc<iroha_config::parameters::actual::Crypto>,
     /// Nexus configuration snapshot for this block.
     pub nexus: iroha_config::parameters::actual::Nexus,
+    /// Lane governance manifest registry snapshot for this block.
+    pub lane_manifests: LaneManifestRegistryHandle,
+    /// Lane privacy commitment registry snapshot for this block.
+    pub lane_privacy_registry: LanePrivacyRegistryHandle,
+    /// Optional lane compliance engine snapshot for this block.
+    pub lane_compliance: Option<Arc<LaneComplianceEngine>>,
     /// Fraud monitoring configuration snapshot for this block.
     pub fraud_monitoring: iroha_config::parameters::actual::FraudMonitoring,
     /// Zero-knowledge verification configuration snapshot for this block.
@@ -5045,6 +5057,12 @@ pub struct StateTransaction<'block, 'state> {
     pub crypto: Arc<iroha_config::parameters::actual::Crypto>,
     /// Nexus configuration snapshot for this transaction.
     pub nexus: iroha_config::parameters::actual::Nexus,
+    /// Lane governance manifest registry snapshot for this transaction.
+    pub lane_manifests: LaneManifestRegistryHandle,
+    /// Lane privacy commitment registry snapshot for this transaction.
+    pub lane_privacy_registry: LanePrivacyRegistryHandle,
+    /// Optional lane compliance engine snapshot for this transaction.
+    pub lane_compliance: Option<Arc<LaneComplianceEngine>>,
     /// Fraud monitoring configuration snapshot for this transaction.
     pub fraud_monitoring: iroha_config::parameters::actual::FraudMonitoring,
     /// Zero-knowledge configuration snapshot for this transaction.
@@ -12739,6 +12757,8 @@ impl State {
             da_pin_intents: parking_lot::RwLock::new(DaPinStore::default()),
             lane_relays: parking_lot::RwLock::new(LaneRelayStore::default()),
             lane_manifests: parking_lot::RwLock::new(Arc::new(LaneManifestRegistry::empty())),
+            lane_privacy_registry: parking_lot::RwLock::new(Arc::new(LanePrivacyRegistry::empty())),
+            lane_compliance: parking_lot::RwLock::new(None),
             da_indexes_hydrated: parking_lot::RwLock::new(None),
             chain_id: iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             pipeline,
@@ -13276,6 +13296,9 @@ impl State {
             pacing_governor: self.pacing_governor,
             crypto: self.crypto(),
             nexus: self.nexus_snapshot(),
+            lane_manifests: self.lane_manifests.read().clone(),
+            lane_privacy_registry: self.lane_privacy_registry.read().clone(),
+            lane_compliance: self.lane_compliance.read().clone(),
             fraud_monitoring: self.fraud_monitoring.clone(),
             zk: self.zk.clone(),
             gov: self.gov.clone(),
@@ -13670,6 +13693,9 @@ impl State {
             pacing_governor: self.pacing_governor,
             crypto: self.crypto(),
             nexus: self.nexus_snapshot(),
+            lane_manifests: self.lane_manifests.read().clone(),
+            lane_privacy_registry: self.lane_privacy_registry.read().clone(),
+            lane_compliance: self.lane_compliance.read().clone(),
             fraud_monitoring: self.fraud_monitoring.clone(),
             zk: self.zk.clone(),
             gov: self.gov.clone(),
@@ -13830,8 +13856,24 @@ impl State {
 
     /// Install the lane manifest registry snapshot used for lane-relay validation.
     pub fn install_lane_manifests(&self, manifests: &LaneManifestRegistryHandle) {
-        let mut guard = self.lane_manifests.write();
-        *guard = Arc::clone(manifests);
+        {
+            let mut guard = self.lane_manifests.write();
+            *guard = Arc::clone(manifests);
+        }
+        let privacy = LanePrivacyRegistry::from_manifest_registry(manifests.as_ref());
+        let mut privacy_guard = self.lane_privacy_registry.write();
+        *privacy_guard = Arc::new(privacy);
+    }
+
+    /// Install the lane compliance engine snapshot (consensus-critical when configured).
+    pub fn install_lane_compliance_engine(&self, engine: Option<Arc<LaneComplianceEngine>>) {
+        let mut guard = self.lane_compliance.write();
+        *guard = engine;
+    }
+
+    /// Snapshot the currently configured lane compliance engine.
+    pub fn lane_compliance_engine(&self) -> Option<Arc<LaneComplianceEngine>> {
+        self.lane_compliance.read().clone()
     }
 
     fn lane_relay_committee_seed(
@@ -16416,6 +16458,9 @@ impl<'state> StateBlock<'state> {
             oracle: self.oracle.clone(),
             crypto: self.crypto.clone(),
             nexus: self.state_ref.nexus_snapshot(),
+            lane_manifests: self.lane_manifests.clone(),
+            lane_privacy_registry: self.lane_privacy_registry.clone(),
+            lane_compliance: self.lane_compliance.clone(),
             fraud_monitoring: self.fraud_monitoring.clone(),
             zk: self.zk.clone(),
             gov: self.gov.clone(),
@@ -21695,6 +21740,8 @@ pub(crate) mod deserialize {
             da_pin_intents: parking_lot::RwLock::new(DaPinStore::default()),
             lane_relays: parking_lot::RwLock::new(LaneRelayStore::default()),
             lane_manifests: parking_lot::RwLock::new(Arc::new(LaneManifestRegistry::empty())),
+            lane_privacy_registry: parking_lot::RwLock::new(Arc::new(LanePrivacyRegistry::empty())),
+            lane_compliance: parking_lot::RwLock::new(None),
             da_indexes_hydrated: parking_lot::RwLock::new(None),
             ivm,
             kura,

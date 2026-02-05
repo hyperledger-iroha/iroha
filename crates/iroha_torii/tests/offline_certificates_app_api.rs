@@ -346,6 +346,7 @@ fn build_cert_fixtures() -> CertFixtures {
 
     let certificate = OfflineWalletCertificate {
         controller: controller.clone(),
+        operator: controller.clone(),
         allowance: OfflineAllowanceCommitment {
             asset: allowance_asset.clone(),
             amount: Numeric::new(1_000, 0),

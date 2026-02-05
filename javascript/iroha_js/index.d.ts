@@ -3256,6 +3256,7 @@ export interface ToriiOfflineAllowanceListResponse {
 
 export interface ToriiOfflineWalletCertificateDraft {
   controller: string;
+  operator: string;
   allowance: {
     asset: string;
     amount: string;

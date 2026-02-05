@@ -205,24 +205,27 @@ LanePrivacyCommitment::snark(id, circuit)
 
 - `LanePrivacyRegistry` (`crates/iroha_core/src/interlane/mod.rs`) تلتقط snapshot لهياكل
   `LaneManifestStatus` من manifest loader وتخزن خرائط commitments لكل lane بمفاتيح
-  `LaneCommitmentId`. تقوم transaction queue بتثبيت هذا registry مع كل اعادة تحميل للـ manifest
-  (`Queue::install_lane_manifests`)، بحيث يمتلك مسار admission دائما الالتزامات القياسية.
+  `LaneCommitmentId`. تقوم transaction queue و`State` بتثبيت هذا registry مع كل اعادة تحميل للـ
+  manifest (`Queue::install_lane_manifests`, `State::install_lane_manifests`)، بحيث يمتلك مسار
+  admission ومسار consensus validation دائما الالتزامات القياسية.
 - `LaneComplianceContext` يحمل الان مرجعا اختياريا `Arc<LanePrivacyRegistry>`
   (`crates/iroha_core/src/compliance/mod.rs`). عندما يقوم `LaneComplianceEngine` بتقييم معاملة،
   يمكن لتدفقات programmable-money فحص نفس الالتزامات لكل lane المعروضة عبر Torii قبل ادخال
   الحمولة في الصف.
-- Admission تحتفظ بـ `Arc<LanePrivacyRegistry>` بجانب مقبض manifest الحوكمي
-  (`crates/iroha_core/src/queue.rs`) لضمان ان وحدات programmable-money والمضيفين interlane
-  المستقبليين يقرؤون رؤية متسقة لوصفات الخصوصية حتى مع تدوير manifests.
+- Admission وcore validation تحتفظان بـ `Arc<LanePrivacyRegistry>` بجانب مقبض manifest الحوكمي
+  (`crates/iroha_core/src/queue.rs`, `crates/iroha_core/src/state.rs`) لضمان ان وحدات
+  programmable-money والمضيفين interlane المستقبليين يقرؤون رؤية متسقة لوصفات الخصوصية حتى مع
+  تدوير manifests.
 
 ## فرض وقت التشغيل
 
 تنتقل اثباتات الخصوصية للـ lane الان مع attachments المعاملة عبر `ProofAttachment.lane_privacy`.
-تتحقق queue من كل attachment مقابل registry الخاص بالlane الموجه عبر `LanePrivacyRegistry::verify`،
-وتسجل commitment ids المثبتة، وتغذيها في compliance engine. اي قاعدة تحدد
-`privacy_commitments_any_of` تقيم الى `false` ما لم ينجح attachment مطابق، لذا لا يمكن وضع
-programmable-money lanes في الصف دون witness المطلوب. تغطية الاختبارات الوحدوية موجودة في
-`interlane::tests` واختبارات lane compliance للحفاظ على مسار attachments وحواجز السياسة.
+يتحقق admission عبر Torii وvalidation في `iroha_core` من كل attachment مقابل registry الخاص بالlane
+الموجه عبر `LanePrivacyRegistry::verify`، ويسجل commitment ids المثبتة، ويغذيها في compliance
+engine. اي قاعدة تحدد `privacy_commitments_any_of` تقيم الى `false` ما لم ينجح attachment مطابق،
+لذا لا يمكن وضع programmable-money lanes في الصف او commitها دون witness المطلوب. تغطية
+الاختبارات الوحدوية موجودة في `interlane::tests` واختبارات lane compliance للحفاظ على مسار
+attachments وحواجز السياسة.
 
 للتجربة الفورية، راجع الاختبارات الوحدوية في
 [`privacy.rs`](../../crates/iroha_crypto/src/privacy.rs) التي توضح حالات النجاح والفشل لالتزامات

@@ -112,10 +112,11 @@ fn build_fixtures() -> Fixtures {
     let spend_keys = KeyPair::from_seed(vec![0x41; 32], Algorithm::Ed25519);
     let asset_definition =
         AssetDefinitionId::from_str("xor#merchants").expect("asset definition id");
-    let allowance_asset = AssetId::new(asset_definition, operator.clone());
+    let allowance_asset = AssetId::new(asset_definition, controller.clone());
 
     let mut certificate = OfflineWalletCertificate {
         controller: controller.clone(),
+        operator: operator.clone(),
         allowance: OfflineAllowanceCommitment {
             asset: allowance_asset.clone(),
             amount: Numeric::new(1_000, 0),

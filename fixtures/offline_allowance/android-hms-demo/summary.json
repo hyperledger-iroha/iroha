@@ -1,10 +1,10 @@
 {
   "label": "android-hms-demo",
-  "certificate_id_hex": "AC81BD05E0743EFD3BAB3B1B3E69126DCF189D573C1A9DA9FEA789CDC6173C49",
+  "certificate_id_hex": "32D1259E698BAD11FC0C59670963233F8C289BAC0C85B813462ECED3567450BB",
   "controller": "34mSYnDgbaJM58rbLoif4Tkp7G5jowHzX2wpqErt5uNjSaXGjsQoTGzsyFsSZwxLQRwJhJgfu",
-  "allowance_asset": "jpy#sora#34mSYnCXkCzHXm31UDHh7SJfGvDnjswdpXLnF6KZZURvknsyBzZYAp52aomkRNYy7FqmzxDRE",
+  "allowance_asset": "jpy#sora#34mSYnDgbaJM58rbLoif4Tkp7G5jowHzX2wpqErt5uNjSaXGjsQoTGzsyFsSZwxLQRwJhJgfu",
   "allowance_amount": "90",
-  "commitment_hex": "B263C3FF37FA0478574B9F8A25D955D89178D6E39834328330085BB5AE9D907D",
+  "commitment_hex": "1224573F290A69CC4DEB201F4ABAF2C5C8AA0A2BD8515CFAC5FC306D4E06C365",
   "blinding_hex": "4444444444444444444444444444444444444444444444444444444444444444",
   "attestation_bytes": 4,
   "metadata_keys": [

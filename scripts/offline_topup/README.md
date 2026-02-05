@@ -18,13 +18,15 @@ $ scripts/offline_topup/run.sh \
 ```jsonc
 {
   "operator": {
+    "account": "ed0120…@wonderland",    // required unless overridden per allowance
     "private_key": "ed25519:..."        // optional, per-entry overrides take precedence
   },
   "allowances": [
     {
       "label": "retail-demo",           // folder name, used in logs
       "controller": "ed0120…@wonderland",    // canonical multihash account id
-      "allowance_asset": "xor#sora#ed0120…@sora",
+      "operator": "ed0120…@wonderland", // optional per entry override for operator account
+      "allowance_asset": "xor#sora#ed0120…@wonderland",
       "amount": "250.00",
       "issued_at_ms": 1730314876000,
       "expires_at_ms": 1745900000000,
@@ -48,8 +50,10 @@ $ scripts/offline_topup/run.sh \
 ```
 
 Controller and asset IDs must use the canonical multihash format (`ed0120…@domain`), just like the
-account strings that appear on-chain. Spend keys accept either that multihash literal or the
-`algo:hex` helper format used elsewhere in the spec.
+account strings that appear on-chain. The `allowance_asset` account must match the controller (the
+allowance is funded from the controller account, not an operator pool). Spend keys accept either
+the multihash literal or the `algo:hex` helper format used elsewhere in the spec. Each allowance
+must provide an operator account, either via `operator.account` or the per-entry `operator` override.
 
 Relative paths inside the spec (e.g., `attestation_report_file`, `metadata_file`)
 are resolved relative to the spec file. All numeric strings use the same format
