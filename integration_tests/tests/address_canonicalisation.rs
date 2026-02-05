@@ -2,11 +2,13 @@
 
 use std::{
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
+    str::FromStr,
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use eyre::{Result, WrapErr, eyre};
 use integration_tests::sandbox::start_network_async_or_skip;
 use iroha::data_model::{
@@ -19,11 +21,13 @@ use iroha::data_model::{
     prelude::*,
     repo::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
 };
+use iroha_crypto::{Hash, Signature};
 use iroha_data_model::account::{
     AccountDomainSelector,
     address::{AccountAddress, AccountAddressFormat},
     clear_account_domain_selector_resolver, set_account_domain_selector_resolver,
 };
+use iroha_data_model::metadata::Metadata;
 use iroha_data_model::prelude::RepoInstructionBox;
 use iroha_primitives::json::Json;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
@@ -245,12 +249,247 @@ fn load_offline_certificate_fixture() -> Result<OfflineWalletCertificate> {
             )
         })?
         .clone();
-    norito::json::from_value(certificate_value).map_err(|err| {
+    // Fixture JSON uses *_hex/*_b64 shorthands instead of the Norito JSON layout.
+    parse_offline_certificate_fixture(&certificate_value, &path)
+}
+
+fn parse_offline_certificate_fixture(
+    value: &norito::json::Value,
+    path: &Path,
+) -> Result<OfflineWalletCertificate> {
+    let obj = value.as_object().ok_or_else(|| {
         eyre!(
-            "failed to decode OfflineWalletCertificate from fixture `{}`: {err}",
+            "offline allowance fixture `{}` certificate must be a JSON object",
             path.display()
         )
+    })?;
+
+    let controller = obj
+        .get("controller")
+        .and_then(norito::json::Value::as_str)
+        .ok_or_else(|| {
+            eyre!(
+                "offline allowance fixture `{}` missing certificate controller",
+                path.display()
+            )
+        })?;
+    let controller = controller
+        .parse()
+        .map_err(|err| eyre!("failed to parse controller `{controller}`: {err}"))?;
+
+    let operator = obj
+        .get("operator")
+        .and_then(norito::json::Value::as_str)
+        .ok_or_else(|| {
+            eyre!(
+                "offline allowance fixture `{}` missing certificate operator",
+                path.display()
+            )
+        })?;
+    let operator = operator
+        .parse()
+        .map_err(|err| eyre!("failed to parse operator `{operator}`: {err}"))?;
+
+    let allowance = obj
+        .get("allowance")
+        .and_then(norito::json::Value::as_object)
+        .ok_or_else(|| {
+            eyre!(
+                "offline allowance fixture `{}` missing allowance block",
+                path.display()
+            )
+        })?;
+    let allowance_asset = allowance
+        .get("asset")
+        .and_then(norito::json::Value::as_str)
+        .ok_or_else(|| {
+            eyre!(
+                "offline allowance fixture `{}` missing allowance asset",
+                path.display()
+            )
+        })?;
+    let asset = allowance_asset
+        .parse()
+        .map_err(|err| eyre!("failed to parse allowance asset `{allowance_asset}`: {err}"))?;
+    let amount_str = allowance
+        .get("amount")
+        .and_then(norito::json::Value::as_str)
+        .ok_or_else(|| {
+            eyre!(
+                "offline allowance fixture `{}` missing allowance amount",
+                path.display()
+            )
+        })?;
+    let amount = amount_str
+        .parse()
+        .map_err(|err| eyre!("failed to parse allowance amount `{amount_str}`: {err}"))?;
+    let commitment_hex = allowance
+        .get("commitment_hex")
+        .and_then(norito::json::Value::as_str)
+        .ok_or_else(|| {
+            eyre!(
+                "offline allowance fixture `{}` missing allowance commitment_hex",
+                path.display()
+            )
+        })?;
+    let commitment =
+        hex::decode(commitment_hex).map_err(|err| eyre!("commitment_hex decode: {err}"))?;
+
+    let spend_public_key = obj
+        .get("spend_public_key")
+        .and_then(norito::json::Value::as_str)
+        .ok_or_else(|| {
+            eyre!(
+                "offline allowance fixture `{}` missing spend_public_key",
+                path.display()
+            )
+        })?;
+    let spend_public_key = spend_public_key
+        .parse()
+        .map_err(|err| eyre!("failed to parse spend_public_key `{spend_public_key}`: {err}"))?;
+
+    let attestation_report_b64 = obj
+        .get("attestation_report_b64")
+        .and_then(norito::json::Value::as_str)
+        .ok_or_else(|| {
+            eyre!(
+                "offline allowance fixture `{}` missing attestation_report_b64",
+                path.display()
+            )
+        })?;
+    let attestation_report = BASE64
+        .decode(attestation_report_b64)
+        .map_err(|err| eyre!("attestation_report_b64 decode: {err}"))?;
+
+    let issued_at_ms = obj
+        .get("issued_at_ms")
+        .and_then(norito::json::Value::as_u64)
+        .ok_or_else(|| {
+            eyre!(
+                "offline allowance fixture `{}` missing issued_at_ms",
+                path.display()
+            )
+        })?;
+    let expires_at_ms = obj
+        .get("expires_at_ms")
+        .and_then(norito::json::Value::as_u64)
+        .ok_or_else(|| {
+            eyre!(
+                "offline allowance fixture `{}` missing expires_at_ms",
+                path.display()
+            )
+        })?;
+
+    let policy = obj
+        .get("policy")
+        .and_then(norito::json::Value::as_object)
+        .ok_or_else(|| {
+            eyre!(
+                "offline allowance fixture `{}` missing policy block",
+                path.display()
+            )
+        })?;
+    let max_balance = policy
+        .get("max_balance")
+        .and_then(norito::json::Value::as_str)
+        .ok_or_else(|| {
+            eyre!(
+                "offline allowance fixture `{}` missing policy max_balance",
+                path.display()
+            )
+        })?;
+    let max_tx_value = policy
+        .get("max_tx_value")
+        .and_then(norito::json::Value::as_str)
+        .ok_or_else(|| {
+            eyre!(
+                "offline allowance fixture `{}` missing policy max_tx_value",
+                path.display()
+            )
+        })?;
+    let policy_expires = policy
+        .get("expires_at_ms")
+        .and_then(norito::json::Value::as_u64)
+        .ok_or_else(|| {
+            eyre!(
+                "offline allowance fixture `{}` missing policy expires_at_ms",
+                path.display()
+            )
+        })?;
+
+    let operator_signature_hex = obj
+        .get("operator_signature_hex")
+        .and_then(norito::json::Value::as_str)
+        .ok_or_else(|| {
+            eyre!(
+                "offline allowance fixture `{}` missing operator_signature_hex",
+                path.display()
+            )
+        })?;
+    let operator_signature = Signature::from_hex(operator_signature_hex)
+        .map_err(|err| eyre!("operator_signature_hex decode: {err}"))?;
+
+    let metadata_value = obj
+        .get("metadata")
+        .cloned()
+        .unwrap_or_else(|| norito::json::Value::Object(Default::default()));
+    let metadata: Metadata =
+        norito::json::from_value(metadata_value).map_err(|err| eyre!("metadata parse: {err}"))?;
+
+    let verdict_id = parse_optional_hash(obj.get("verdict_id_hex"), path, "verdict_id_hex")?;
+    let attestation_nonce =
+        parse_optional_hash(obj.get("attestation_nonce_hex"), path, "attestation_nonce_hex")?;
+    let refresh_at_ms = obj.get("refresh_at_ms").and_then(norito::json::Value::as_u64);
+
+    Ok(OfflineWalletCertificate {
+        controller,
+        operator,
+        allowance: iroha_data_model::offline::OfflineAllowanceCommitment {
+            asset,
+            amount,
+            commitment,
+        },
+        spend_public_key,
+        attestation_report,
+        issued_at_ms,
+        expires_at_ms,
+        policy: iroha_data_model::offline::OfflineWalletPolicy {
+            max_balance: max_balance
+                .parse()
+                .map_err(|err| eyre!("policy max_balance parse: {err}"))?,
+            max_tx_value: max_tx_value
+                .parse()
+                .map_err(|err| eyre!("policy max_tx_value parse: {err}"))?,
+            expires_at_ms: policy_expires,
+        },
+        operator_signature,
+        metadata,
+        verdict_id,
+        attestation_nonce,
+        refresh_at_ms,
     })
+}
+
+fn parse_optional_hash(
+    value: Option<&norito::json::Value>,
+    path: &Path,
+    field: &'static str,
+) -> Result<Option<Hash>> {
+    match value {
+        None => Ok(None),
+        Some(value) if value.is_null() => Ok(None),
+        Some(value) => {
+            let hex = value.as_str().ok_or_else(|| {
+                eyre!(
+                    "offline allowance fixture `{}` `{field}` must be hex string or null",
+                    path.display()
+                )
+            })?;
+            Hash::from_str(hex)
+                .map(Some)
+                .map_err(|err| eyre!("offline allowance fixture `{}` `{field}`: {err}", path.display()))
+        }
+    }
 }
 
 struct OfflineAllowanceSeed {
