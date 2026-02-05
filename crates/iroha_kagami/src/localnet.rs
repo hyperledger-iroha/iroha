@@ -357,14 +357,19 @@ const LOCALNET_DA_AVAILABILITY_TIMEOUT_FLOOR_MS: u64 = 2_000;
 const LOCALNET_RBC_CHUNK_MAX_BYTES: usize = 256 * 1024;
 /// Maximum RBC payload chunks broadcast per tick for localnet.
 const LOCALNET_RBC_PAYLOAD_CHUNKS_PER_TICK: usize = 128;
-/// Default queue capacity for localnet stress (keeps bursts in-memory).
-const LOCALNET_QUEUE_CAPACITY: usize = 262_144;
+/// Default queue capacity for localnet (safe-by-default).
+///
+/// This value intentionally trades peak stress throughput for bounded memory
+/// usage when consensus stalls or clients oversubmit.
+const LOCALNET_QUEUE_CAPACITY: usize = 20_000;
+/// Queue capacity used for perf-profile localnets (keeps stress bursts in-memory).
+const LOCALNET_PERF_QUEUE_CAPACITY: usize = 262_144;
+/// Default transaction TTL in the queue for localnet (ms).
+const LOCALNET_QUEUE_TTL_MS: u64 = 600_000;
 /// Default lane TEU capacity for localnet scheduling (raises per-block budget).
 const LOCALNET_LANE_TEU_CAPACITY: u32 = 1_000_000;
 /// Default multiplier for proposal queue scan budgets on localnet.
 const LOCALNET_PROPOSAL_QUEUE_SCAN_MULTIPLIER: usize = 4;
-/// Default high-load threshold for enabling Torii rate limiting (localnet bypass).
-const LOCALNET_API_HIGH_LOAD_TX_THRESHOLD: usize = LOCALNET_QUEUE_CAPACITY;
 /// Default Torii tx rate limit (per authority) for localnet.
 const LOCALNET_TORII_TX_RATE_PER_AUTHORITY_PER_SEC: u32 = 1_000_000;
 /// Default Torii tx burst limit (per authority) for localnet.
@@ -738,6 +743,11 @@ fn generate_localnet_with_line<T: Write>(
     let da_rbc_enabled = build_line.is_iroha3();
     let npos_bootstrap = localnet_uses_npos(opts.consensus_mode, opts.next_consensus_mode);
     let perf_spec = opts.perf_profile.map(LocalnetPerfProfile::spec);
+    let queue_capacity = if perf_spec.is_some() {
+        LOCALNET_PERF_QUEUE_CAPACITY
+    } else {
+        LOCALNET_QUEUE_CAPACITY
+    };
     let logger_filter = perf_spec.map(|_| LOCALNET_PERF_LOGGER_FILTER);
     let signature_batch_max_ed25519 = perf_spec.map(|_| LOCALNET_SIGNATURE_BATCH_MAX_ED25519);
     // Nexus stays enabled for Sora profiles and whenever NPoS bootstrap is requested.
@@ -876,6 +886,7 @@ fn generate_localnet_with_line<T: Write>(
             tx_gossip_overrides,
             logger_filter,
             signature_batch_max_ed25519,
+            queue_capacity,
         );
         let path = out_dir.join(format!("peer{idx}.toml"));
         fs::write(&path, rendered)
@@ -1074,6 +1085,7 @@ fn render_peer_config(
     tx_gossip_overrides: Option<LocalnetTxGossipOverrides>,
     logger_filter: Option<&str>,
     signature_batch_max_ed25519: Option<usize>,
+    queue_capacity: usize,
 ) -> String {
     use toml::{Table, Value};
 
@@ -1328,15 +1340,15 @@ fn render_peer_config(
     let mut queue = Table::new();
     queue.insert(
         "capacity".into(),
-        Value::Integer(
-            i64::try_from(LOCALNET_QUEUE_CAPACITY).expect("LOCALNET_QUEUE_CAPACITY fits i64"),
-        ),
+        Value::Integer(i64::try_from(queue_capacity).expect("queue capacity fits i64")),
     );
     queue.insert(
         "capacity_per_user".into(),
-        Value::Integer(
-            i64::try_from(LOCALNET_QUEUE_CAPACITY).expect("LOCALNET_QUEUE_CAPACITY fits i64"),
-        ),
+        Value::Integer(i64::try_from(queue_capacity).expect("queue capacity fits i64")),
+    );
+    queue.insert(
+        "transaction_time_to_live_ms".into(),
+        Value::Integer(i64::try_from(LOCALNET_QUEUE_TTL_MS).expect("queue ttl fits i64")),
     );
     root.insert("queue".into(), Value::Table(queue));
 
@@ -1544,10 +1556,7 @@ fn render_peer_config(
     );
     torii.insert(
         "api_high_load_tx_threshold".into(),
-        Value::Integer(
-            i64::try_from(LOCALNET_API_HIGH_LOAD_TX_THRESHOLD)
-                .expect("LOCALNET_API_HIGH_LOAD_TX_THRESHOLD fits i64"),
-        ),
+        Value::Integer(i64::try_from(queue_capacity).expect("queue capacity fits i64")),
     );
     // torii.transport.norito_rpc
     let mut norito_rpc = Table::new();
@@ -2606,12 +2615,17 @@ mod tests {
         assert_eq!(
             parsed.queue.capacity.get(),
             LOCALNET_QUEUE_CAPACITY,
-            "localnet should raise queue capacity for bursts"
+            "localnet should cap queue capacity by default"
         );
         assert_eq!(
             parsed.queue.capacity_per_user.get(),
             LOCALNET_QUEUE_CAPACITY,
-            "localnet should raise per-user queue capacity for bursts"
+            "localnet should cap per-user queue capacity by default"
+        );
+        assert_eq!(
+            parsed.queue.transaction_time_to_live,
+            Duration::from_millis(LOCALNET_QUEUE_TTL_MS),
+            "localnet should set a bounded queue TTL by default"
         );
         assert_eq!(
             parsed.sumeragi.block.proposal_queue_scan_multiplier.get(),
@@ -2650,8 +2664,8 @@ mod tests {
         );
         assert_eq!(
             parsed.torii.api_high_load_tx_threshold,
-            Some(LOCALNET_API_HIGH_LOAD_TX_THRESHOLD),
-            "localnet should defer API rate limiting until high load"
+            Some(LOCALNET_QUEUE_CAPACITY),
+            "localnet should configure API high-load threshold to match queue capacity"
         );
         assert_eq!(
             parsed.network.p2p_subscriber_queue_cap.get(),
