@@ -6276,6 +6276,10 @@ where
                 }
             }
         }?;
+        // Propagate canonical full-consumption to any parent payload context. Some deserializers
+        // (especially scalar-only) may not record payload accesses, which would otherwise cause
+        // parent decoders to fall back to expensive canonical-length recomputation.
+        note_payload_access(bytes, used);
         return Ok((value, used));
     }
 
@@ -6310,7 +6314,7 @@ where
         len: bytes_len,
         needs_dealloc,
     };
-    unsafe {
+    let (value, used) = unsafe {
         core::ptr::copy(bytes.as_ptr(), alloc.ptr, bytes_len);
         let tmp_slice = std::slice::from_raw_parts(alloc.ptr as *const u8, alloc.len);
         let payload_guard = PayloadCtxGuard::enter(tmp_slice);
@@ -6366,8 +6370,13 @@ where
                 }
             }
         }?;
-        Ok((value, used))
-    }
+        Result::<(T, usize), Error>::Ok((value, used))
+    }?;
+    // In the misaligned path, we decode from a temporary aligned copy, so the payload context
+    // cannot merge accesses into any parent decoder. Record canonical consumption in the restored
+    // parent payload context explicitly.
+    note_payload_access(bytes, used);
+    Ok((value, used))
 }
 
 /// Decode a field using its `DecodeFromSlice` implementation, ensuring full
@@ -6439,12 +6448,39 @@ fn recompute_canonical_len<T>(value: &T) -> Result<usize, Error>
 where
     T: crate::NoritoSerialize,
 {
-    let reserve = value
-        .encoded_len_exact()
-        .or_else(|| value.encoded_len_hint());
-    let mut tmp = Vec::with_capacity(reserve.unwrap_or(0));
-    value.serialize(&mut tmp)?;
-    Ok(tmp.len())
+    struct LenWriter {
+        len: usize,
+    }
+
+    impl std::io::Write for LenWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.len = self.len.checked_add(buf.len()).ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::Other, "norito length overflow")
+            })?;
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+
+        fn write_vectored(&mut self, bufs: &[std::io::IoSlice<'_>]) -> std::io::Result<usize> {
+            let mut total = 0usize;
+            for b in bufs {
+                total = total.checked_add(b.len()).ok_or_else(|| {
+                    std::io::Error::new(std::io::ErrorKind::Other, "norito length overflow")
+                })?;
+            }
+            self.len = self.len.checked_add(total).ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::Other, "norito length overflow")
+            })?;
+            Ok(total)
+        }
+    }
+
+    let mut sink = LenWriter { len: 0 };
+    value.serialize(&mut sink)?;
+    Ok(sink.len)
 }
 
 #[cfg(test)]
@@ -6491,11 +6527,57 @@ mod tests {
 
     #[test]
     fn decode_field_canonical_reports_scalar_consumed() {
+        reset_decode_state();
         let mut buf = Vec::new();
         0xDEADBEEFu32.serialize(&mut buf).unwrap();
         let (value, used) = decode_field_canonical::<u32>(&buf).expect("scalar decode");
         assert_eq!(value, 0xDEADBEEF);
         assert_eq!(used, buf.len());
+    }
+
+    #[test]
+    fn decode_field_canonical_propagates_access_to_parent_ctx() {
+        reset_decode_state();
+        let mut buf = Vec::new();
+        0xAABBCCDDu32.serialize(&mut buf).unwrap();
+
+        let _outer = PayloadCtxGuard::enter(&buf);
+        let (value, used) = decode_field_canonical::<u32>(&buf).expect("scalar decode");
+        assert_eq!(value, 0xAABBCCDD);
+        assert_eq!(used, buf.len());
+        assert_eq!(
+            payload_ctx_max_access().unwrap(),
+            buf.len(),
+            "outer payload ctx must observe canonical consumption"
+        );
+    }
+
+    #[test]
+    fn decode_field_canonical_propagates_access_from_misaligned_copy() {
+        reset_decode_state();
+        let mut buf = Vec::new();
+        0xDEADBEEFu32.serialize(&mut buf).unwrap();
+
+        let mut storage = Vec::with_capacity(buf.len() + 1);
+        storage.push(0xAA);
+        storage.extend_from_slice(&buf);
+        let misaligned = &storage[1..];
+        assert_ne!(
+            misaligned.as_ptr() as usize % core::mem::align_of::<Archived<u32>>(),
+            0,
+            "expected misaligned scalar payload"
+        );
+
+        let _outer = PayloadCtxGuard::enter(misaligned);
+        let (value, used) =
+            decode_field_canonical::<u32>(misaligned).expect("decode misaligned scalar");
+        assert_eq!(value, 0xDEADBEEF);
+        assert_eq!(used, misaligned.len());
+        assert_eq!(
+            payload_ctx_max_access().unwrap(),
+            misaligned.len(),
+            "outer payload ctx must observe canonical consumption from misaligned decode"
+        );
     }
 
     #[test]
