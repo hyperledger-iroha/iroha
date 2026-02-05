@@ -2979,8 +2979,8 @@ pub mod codec {
         chunk::{
             AudioFrameCadenceMismatchInfo, AudioFrameCadenceOverflowInfo,
             AudioSampleCountMismatchInfo, BlockCountMismatchInfo, ChromaDimensionsNotEvenInfo,
-            ChunkError, CodecError, FrameCountOverflowInfo, FrameLengthMismatch,
-            chunk_commitments, derive_nonce_salt, merkle_root,
+            ChunkError, CodecError, FrameCountOverflowInfo, FrameLengthMismatch, chunk_commitments,
+            derive_nonce_salt, merkle_root,
         },
         json, norito_core, saturating_usize_to_u32, saturating_usize_to_u64,
     };
@@ -4994,7 +4994,9 @@ pub mod codec {
                         let sample = i64::from(block[x * 8 + y]);
                         let factor_u = i64::from(DCT_FACTORS_Q15[u][x]);
                         let factor_v = i64::from(DCT_FACTORS_Q15[v][y]);
-                        sum = sum.saturating_add(sample.saturating_mul(factor_u).saturating_mul(factor_v));
+                        sum = sum.saturating_add(
+                            sample.saturating_mul(factor_u).saturating_mul(factor_v),
+                        );
                     }
                 }
                 let rounded = if sum >= 0 {
@@ -5037,7 +5039,9 @@ pub mod codec {
                         let coeff = i64::from(coeffs[u * 8 + v]);
                         let factor_u = i64::from(DCT_FACTORS_Q15[u][x]);
                         let factor_v = i64::from(DCT_FACTORS_Q15[v][y]);
-                        sum = sum.saturating_add(coeff.saturating_mul(factor_u).saturating_mul(factor_v));
+                        sum = sum.saturating_add(
+                            coeff.saturating_mul(factor_u).saturating_mul(factor_v),
+                        );
                     }
                 }
                 let rounded = if sum >= 0 {

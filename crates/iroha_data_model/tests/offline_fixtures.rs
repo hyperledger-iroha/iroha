@@ -192,6 +192,13 @@ fn parse_certificate_json(value: &JsonValue, label: &str) -> OfflineWalletCertif
     let controller = controller
         .parse()
         .unwrap_or_else(|err| panic!("parse controller `{controller}` for `{label}`: {err}"));
+    let operator = obj
+        .get("operator")
+        .and_then(|v| v.as_str())
+        .unwrap_or_else(|| panic!("certificate `{label}` missing operator"));
+    let operator = operator
+        .parse()
+        .unwrap_or_else(|err| panic!("parse operator `{operator}` for `{label}`: {err}"));
     let allowance = obj
         .get("allowance")
         .and_then(|v| v.as_object())
@@ -272,6 +279,7 @@ fn parse_certificate_json(value: &JsonValue, label: &str) -> OfflineWalletCertif
 
     OfflineWalletCertificate {
         controller,
+        operator,
         allowance: OfflineAllowanceCommitment {
             asset,
             amount,
@@ -351,6 +359,10 @@ fn certificate_to_value(certificate: &OfflineWalletCertificate) -> JsonValue {
     root.insert(
         "controller".into(),
         json::Value::String(certificate.controller.to_string()),
+    );
+    root.insert(
+        "operator".into(),
+        json::Value::String(certificate.operator.to_string()),
     );
     root.insert("allowance".into(), JsonValue::Object(allowance));
     root.insert(

@@ -234,7 +234,7 @@ fn build_fixtures(chain_id: &ChainId, include_proof: bool) -> Fixtures {
 
     let asset_definition =
         AssetDefinitionId::new(domain.clone(), Name::from_str("xor").expect("asset name"));
-    let allowance_asset = AssetId::new(asset_definition, operator.clone());
+    let allowance_asset = AssetId::new(asset_definition, controller.clone());
 
     let inspector_keys = KeyPair::from_seed(vec![0x51; 32], Algorithm::Ed25519);
     let inspector_pk_str = inspector_keys.public_key().to_string();
@@ -261,6 +261,7 @@ fn build_fixtures(chain_id: &ChainId, include_proof: bool) -> Fixtures {
 
     let mut certificate = OfflineWalletCertificate {
         controller: controller.clone(),
+        operator: operator.clone(),
         allowance: OfflineAllowanceCommitment {
             asset: allowance_asset.clone(),
             amount: Numeric::new(1_000, 0),

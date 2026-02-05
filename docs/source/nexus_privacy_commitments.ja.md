@@ -208,24 +208,28 @@ Commitment-only または split-replica lanes は、manifest が `privacy_commit
 
 - `LanePrivacyRegistry` (`crates/iroha_core/src/interlane/mod.rs`) は manifest loader の
   `LaneManifestStatus` 構造体を snapshot し、`LaneCommitmentId` でキーされた per-lane commitment
-  map を保持する。Transaction queue は各 manifest reload と一緒にこの registry を導入する
-  (`Queue::install_lane_manifests`) ため、admission は常に正準 commitment にアクセスできる。
+  map を保持する。Transaction queue と `State` は各 manifest reload と一緒にこの registry を
+  導入する (`Queue::install_lane_manifests`, `State::install_lane_manifests`) ため、admission と
+  consensus validation は常に正準 commitment にアクセスできる。
 - `LaneComplianceContext` はオプションの `Arc<LanePrivacyRegistry>` 参照を持つ
   (`crates/iroha_core/src/compliance/mod.rs`)。`LaneComplianceEngine` がトランザクションを評価する
   とき、programmable-money flows は Torii で露出される per-lane commitments と同じものを
   queue する前に参照できる。
-- Admission は governance manifest handle の横に `Arc<LanePrivacyRegistry>` を保持し
-  (`crates/iroha_core/src/queue.rs`)、programmable-money モジュールや将来の interlane hosts が
-  manifests のローテーション中でも一貫した privacy descriptor を読むことを保証する。
+- Admission と core validation は governance manifest handle の横に `Arc<LanePrivacyRegistry>` を
+  保持し (`crates/iroha_core/src/queue.rs`, `crates/iroha_core/src/state.rs`)、programmable-money
+  モジュールや将来の interlane hosts が manifests のローテーション中でも一貫した privacy
+  descriptor を読むことを保証する。
 
 ## Runtime Enforcement
 
 Lane privacy proofs は `ProofAttachment.lane_privacy` を通じてトランザクション attachments と
-一緒に運ばれる。Queue は各 attachment を `LanePrivacyRegistry::verify` でレーン registry に対して
-検証し、proven commitment ids を記録して compliance engine に渡す。`privacy_commitments_any_of`
-を指定するルールは、対応する attachment が検証成功しない限り `false` を返すため、
-programmable-money lanes は必要な witness なしに queue できない。ユニットカバレッジは
-`interlane::tests` と lane compliance tests にあり、attachment 経路と policy guardrails を安定させる。
+一緒に運ばれる。Torii の admission と `iroha_core` の validation は各 attachment を
+`LanePrivacyRegistry::verify` でルーティングされた lane の registry に対して検証し、proven
+commitment ids を記録して compliance engine に渡す。`privacy_commitments_any_of` を指定する
+ルールは、対応する attachment が検証成功しない限り `false` を返すため、programmable-money
+lanes は必要な witness なしに queue も commit もできない。ユニットカバレッジは
+`interlane::tests` と lane compliance tests にあり、attachment 経路と policy guardrails を
+安定させる。
 
 すぐに試す場合は [`privacy.rs`](../../crates/iroha_crypto/src/privacy.rs) のユニットテストを参照し、
 Merkle と zk-SNARK commitments の成功/失敗ケースを確認する。

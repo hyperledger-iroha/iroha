@@ -262,6 +262,7 @@ public final class OfflineToriiClientTests {
               "certificate_id_hex": "deadbeef",
               "certificate": {
                 "controller": "alice@wonderland",
+                "operator": "alice@wonderland",
                 "allowance": { "asset": "usd#wonderland", "amount": "10", "commitment": [1, 2] },
                 "spend_public_key": "ed0120deadbeef",
                 "attestation_report": [3, 4],
@@ -286,6 +287,7 @@ public final class OfflineToriiClientTests {
     final OfflineWalletPolicy policy = new OfflineWalletPolicy("10", "5", 200L);
     final OfflineWalletCertificateDraft draft =
         new OfflineWalletCertificateDraft(
+            "alice@wonderland",
             "alice@wonderland",
             allowance,
             "ed0120deadbeef",
@@ -315,6 +317,7 @@ public final class OfflineToriiClientTests {
               "certificate_id_hex": "deadbeef",
               "certificate": {
                 "controller": "alice@wonderland",
+                "operator": "alice@wonderland",
                 "allowance": { "asset": "usd#wonderland", "amount": "10", "commitment": [1, 2] },
                 "spend_public_key": "ed0120deadbeef",
                 "attestation_report": [3, 4],
@@ -381,6 +384,7 @@ public final class OfflineToriiClientTests {
     final OfflineWalletCertificate certificate =
         new OfflineWalletCertificate(
             "alice@wonderland",
+            "alice@wonderland",
             allowance,
             "ed0120deadbeef",
             new byte[] {3, 4},
@@ -431,6 +435,7 @@ public final class OfflineToriiClientTests {
     final OfflineWalletCertificate certificate =
         new OfflineWalletCertificate(
             "alice@wonderland",
+            "alice@wonderland",
             allowance,
             "ed0120deadbeef",
             new byte[] {3, 4},
@@ -458,6 +463,7 @@ public final class OfflineToriiClientTests {
                       "certificate_id_hex": "deadbeef",
                       "certificate": {
                         "controller": "alice@wonderland",
+                        "operator": "alice@wonderland",
                         "allowance": { "asset": "usd#wonderland", "amount": "10", "commitment": [1, 2] },
                         "spend_public_key": "ed0120deadbeef",
                         "attestation_report": [3, 4],
@@ -489,6 +495,7 @@ public final class OfflineToriiClientTests {
     final OfflineWalletPolicy policy = new OfflineWalletPolicy("10", "5", 200L);
     final OfflineWalletCertificateDraft draft =
         new OfflineWalletCertificateDraft(
+            "alice@wonderland",
             "alice@wonderland",
             allowance,
             "ed0120deadbeef",
@@ -524,6 +531,7 @@ public final class OfflineToriiClientTests {
                       "certificate_id_hex": "beadfeed",
                       "certificate": {
                         "controller": "alice@wonderland",
+                        "operator": "alice@wonderland",
                         "allowance": { "asset": "usd#wonderland", "amount": "10", "commitment": [1, 2] },
                         "spend_public_key": "ed0120deadbeef",
                         "attestation_report": [3, 4],
@@ -555,6 +563,7 @@ public final class OfflineToriiClientTests {
     final OfflineWalletPolicy policy = new OfflineWalletPolicy("10", "5", 200L);
     final OfflineWalletCertificateDraft draft =
         new OfflineWalletCertificateDraft(
+            "alice@wonderland",
             "alice@wonderland",
             allowance,
             "ed0120deadbeef",

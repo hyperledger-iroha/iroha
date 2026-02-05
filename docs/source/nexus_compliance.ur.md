@@ -15,10 +15,11 @@ translation_last_reviewed: 2026-01-01
 
 # Nexus Lane Compliance اور وائٹ لسٹ پالیسی انجن (NX-12)
 
-اسٹیٹس: 🈯 منصوبہ بند — یہ دستاویز روڈمیپ آئٹم **NX-12 — Lane compliance اور whitelist policy engine** میں حوالہ دی گئی
-تفصیل اور رول آؤٹ گارڈ ریلز فراہم کرتی ہے۔ یہ ڈیٹا ماڈل، گورننس فلو، ٹیلی میٹری، اور رول آؤٹ حکمت عملی
-کو بیان کرتی ہے جو `crates/iroha_core/src/compliance` میں نافذ ہوگی اور Torii/SDK سرفیسز کے ذریعے
-ایکسپوز ہوگی، تاکہ ہر lane اور dataspace کو ڈیٹرمنسٹک جرِسڈکشنل پالیسیوں سے باندھا جا سکے۔
+اسٹیٹس: 🈴 نافذ — یہ دستاویز فعال پالیسی ماڈل اور کنسینسس کے لئے اہم انفورسمنٹ بیان کرتی ہے جو روڈمیپ آئٹم
+**NX-12 — Lane compliance اور whitelist policy engine** سے جڑی ہے۔ یہ ڈیٹا ماڈل، گورننس فلو، ٹیلی میٹری،
+اور رول آؤٹ حکمت عملی کو بیان کرتی ہے جو `crates/iroha_core/src/compliance` میں نافذ ہو چکی ہے اور
+Torii admission کے ساتھ `iroha_core` ٹرانزیکشن ویلیڈیشن میں بھی لاگو ہوتی ہے، تاکہ ہر lane اور dataspace
+کو ڈیٹرمنسٹک جرِسڈکشنل پالیسیوں سے باندھا جا سکے۔
 
 ## اہداف
 
@@ -121,11 +122,12 @@ artefacts (signed policy blob + reviewer attestations) حاصل کر سکیں۔
      Torii قواعد evaluate ہونے سے پہلے ہی اس وقت ٹرانزیکشنز reject کر دیتا ہے جب UAID اس dataspace سے bind نہ ہو۔
    - `compliance::Engine` پہلے `deny` قواعد، پھر `allow` قواعد evaluate کرتا ہے، اور آخر میں transfer limits نافذ کرتا ہے۔
      ناکام ٹرانزیکشنز typed error (`ERR_LANE_COMPLIANCE_DENIED`) واپس کرتی ہیں، جس میں reason + policy id شامل ہوتا ہے۔
+   - Admission ایک تیز prefiltor ہے؛ کنسینسس ویلیڈیشن وہی قواعد state snapshots کے ساتھ دوبارہ چیک کرتی ہے تاکہ انفورسمنٹ ڈیٹرمنسٹک رہے۔
 2. **Execution (iroha_core)**
-   - بلاک کی تعمیر کے دوران `iroha_core::compliance::Engine` وہی فیصلہ دوبارہ چلاتا ہے جو بلاک ہیڈر میں commit شدہ policy id استعمال کرتا ہے۔
-     یہ Torii cache کے stale ہونے پر بھی divergence روکتا ہے۔
-   - lane manifests یا پالیسیاں تبدیل کرنے والی instructions کو وہ policy references فراہم کرنا ہوں گے جن پر وہ منحصر ہیں
-     تاکہ وہ values on-chain کیپچر ہو سکیں۔
+   - بلاک کی تعمیر کے دوران `iroha_core::tx::validate_transaction_internal` وہی lane governance/UAID/privacy/compliance چیکس
+     `StateTransaction` snapshots (`lane_manifests`, `lane_privacy_registry`, `lane_compliance`) کے ذریعے دوبارہ چلاتا ہے۔
+     یہ Torii cache کے stale ہونے پر بھی کنسینسس کے لئے اہم انفورسمنٹ برقرار رکھتا ہے۔
+   - lane manifests یا compliance پالیسیوں میں تبدیلی والی ٹرانزیکشنز بھی اسی validation path سے گزرتی ہیں؛ admission-only bypass نہیں ہے۔
 3. **Async hooks**
    - RBC gossip اور DA fetchers policy id کو ٹیلی میٹری کے ساتھ attach کرتے ہیں تاکہ دیر سے آنے والے فیصلے درست rule version سے جوڑے جا سکیں۔
    - `iroha_cli` اور SDK helpers `LaneComplianceDecision::explain()` ایکسپوز کرتے ہیں تاکہ آٹومیشن انسانی سمجھ میں آنے والی تشخیص فراہم کرے۔

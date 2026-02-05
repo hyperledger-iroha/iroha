@@ -213,26 +213,27 @@ qu'une fois les anchors deterministes de proofs incluses dans le bundle.
 
 - `LanePrivacyRegistry` (`crates/iroha_core/src/interlane/mod.rs`) snapshot les structures
   `LaneManifestStatus` du loader de manifest et stocke des maps de commitment par lane, clees par
-  `LaneCommitmentId`. La transaction queue installe ce registry a chaque reload de manifest
-  (`Queue::install_lane_manifests`), de sorte que le chemin d'admission ait toujours acces aux
-  commitments canoniques.
+  `LaneCommitmentId`. La transaction queue et `State` installent ce registry a chaque reload de
+  manifest (`Queue::install_lane_manifests`, `State::install_lane_manifests`), de sorte que
+  l'admission et la validation de consensus aient toujours acces aux commitments canoniques.
 - `LaneComplianceContext` porte maintenant une reference optionnelle `Arc<LanePrivacyRegistry>`
   (`crates/iroha_core/src/compliance/mod.rs`). Quand `LaneComplianceEngine` evalue une transaction,
   les flux programmable-money peuvent inspecter les memes commitments par lane exposes via Torii
   avant l'enqueue du payload.
-- Admission maintient un `Arc<LanePrivacyRegistry>` a cote du handle de manifest de gouvernance
-  (`crates/iroha_core/src/queue.rs`), garantissant que les modules programmable-money et les futurs
-  hosts interlane lisent une vue coherente des descripteurs de confidentialite meme quand les
-  manifests tournent.
+- Admission et la validation core maintiennent un `Arc<LanePrivacyRegistry>` a cote du handle de
+  manifest de gouvernance (`crates/iroha_core/src/queue.rs`, `crates/iroha_core/src/state.rs`),
+  garantissant que les modules programmable-money et les futurs hosts interlane lisent une vue
+  coherente des descripteurs de confidentialite meme quand les manifests tournent.
 
 ## Enforcement runtime
 
 Les proofs de confidentialite de lane transitent maintenant via `ProofAttachment.lane_privacy`.
-La queue verifie chaque attachment contre le registry de la lane routee avec
-`LanePrivacyRegistry::verify`, enregistre les commitment ids prouves, puis les transmet au moteur
-compliance. Toute regle `privacy_commitments_any_of` evalue a `false` tant qu'un attachment
-correspondant ne verifie pas avec succes, ainsi les lanes programmable-money ne peuvent etre
-enqueue sans witness requis. La couverture unitaire vit dans `interlane::tests` et les tests de
+L'admission Torii et la validation `iroha_core` verifient chaque attachment contre le registry de
+la lane routee avec `LanePrivacyRegistry::verify`, enregistrent les commitment ids prouves, puis
+les transmettent au moteur compliance. Toute regle `privacy_commitments_any_of` evalue a `false`
+tant qu'un attachment correspondant ne verifie pas avec succes, ainsi les lanes programmable-money
+ne peuvent etre enqueue ni commit sans witness requis. La couverture unitaire vit dans
+`interlane::tests` et les tests de
 lane compliance pour stabiliser le chemin des attachments et les guardrails de policy.
 
 Pour experimentation immediate, voir les tests unitaires dans

@@ -4980,8 +4980,11 @@ fn reject_direct_multisig_signing(
     let account = world.accounts().get(tx.authority())?;
 
     let metadata = account.metadata();
+    let has_multisig_role = world
+        .account_roles_iter(tx.authority())
+        .any(|role| role.name().as_ref().starts_with("MULTISIG_SIGNATORY/"));
     let spec_present = metadata.contains(&multisig_spec_key());
-    spec_present.then(|| {
+    (spec_present || has_multisig_role).then(|| {
         let rejection = SignatureVerificationFail::new(
             tx.signature().clone(),
             SignatureRejectionCode::UnsupportedAuthority,
@@ -4996,10 +4999,14 @@ mod multisig_guard_tests {
     use iroha_core::{
         kura::Kura,
         query::store::LiveQueryStore,
+        role::RoleIdWithOwner,
         state::{State, World},
     };
     use iroha_crypto::KeyPair;
-    use iroha_data_model::prelude::Json as ModelJson;
+    use iroha_data_model::{
+        prelude::Json as ModelJson,
+        role::{Role, RoleId},
+    };
 
     use super::*;
 
@@ -5019,6 +5026,41 @@ mod multisig_guard_tests {
             .with_metadata(metadata)
             .build(&multisig_id);
         let world = World::with([domain], [multisig_account], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query_handle);
+        let tx = TransactionBuilder::new(chain_id, multisig_id.clone())
+            .with_executable(Executable::Instructions(Vec::new().into()))
+            .sign(ms_keypair.private_key());
+
+        let view = state.view();
+        let rejection = reject_direct_multisig_signing(view.world(), &tx);
+        match rejection {
+            Some(AcceptTransactionFail::SignatureVerification(fail)) => {
+                assert_eq!(fail.code(), SignatureRejectionCode::UnsupportedAuthority);
+            }
+            other => panic!("expected multisig direct-sign rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn direct_multisig_signing_rejected_for_multisig_role() {
+        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let chain_id: ChainId = "multisig-role-guard".parse().unwrap();
+        let ms_keypair = KeyPair::random();
+        let multisig_id = AccountId::new(domain_id.clone(), ms_keypair.public_key().clone());
+
+        let role_id: RoleId = "MULTISIG_SIGNATORY/test/0".parse().unwrap();
+        let role = Role::new(role_id.clone(), multisig_id.clone()).build(&multisig_id);
+
+        let domain = Domain::new(domain_id.clone()).build(&multisig_id);
+        let multisig_account = Account::new(multisig_id.clone()).build(&multisig_id);
+        let mut world =
+            World::with_assets_and_roles([domain], [multisig_account], [], [], [], [role]);
+        world
+            .account_roles
+            .insert(RoleIdWithOwner::new(multisig_id.clone(), role_id), ());
+
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query_handle);
@@ -26548,6 +26590,8 @@ pub struct OfflineTransferProofRequest {
 pub struct OfflineWalletCertificateDraft {
     /// Account that owns the allowance.
     pub controller: AccountId,
+    /// Operator account that signs this certificate.
+    pub operator: AccountId,
     /// Commitment to the allowance this certificate governs.
     pub allowance: OfflineAllowanceCommitment,
     /// Spend public key baked into the wallet.
@@ -26579,6 +26623,7 @@ impl OfflineWalletCertificateDraft {
     fn into_certificate(self, operator_signature: Signature) -> OfflineWalletCertificate {
         OfflineWalletCertificate {
             controller: self.controller,
+            operator: self.operator,
             allowance: self.allowance,
             spend_public_key: self.spend_public_key,
             attestation_report: self.attestation_report,
@@ -36168,11 +36213,15 @@ fn sign_offline_certificate(
         )));
     }
 
+    if draft.allowance.asset.account() != &draft.controller {
+        return Err(conversion_error(format!(
+            "{OFFLINE_REJECTION_REASON_PREFIX}allowance_owner_mismatch:allowance asset account must match controller"
+        )));
+    }
+
     let operator_key = issuer.operator_keypair.public_key();
     let allowance_signatory = draft
-        .allowance
-        .asset
-        .account()
+        .operator
         .try_signatory()
         .ok_or_else(|| {
             conversion_error(format!(
@@ -36181,7 +36230,7 @@ fn sign_offline_certificate(
         })?;
     if allowance_signatory != operator_key {
         return Err(conversion_error(format!(
-            "{OFFLINE_REJECTION_REASON_PREFIX}operator_key_mismatch:operator key does not match allowance asset controller"
+            "{OFFLINE_REJECTION_REASON_PREFIX}operator_key_mismatch:operator key does not match operator account"
         )));
     }
 
@@ -39361,6 +39410,7 @@ mod adapter_filter_tests {
         OfflineAllowanceRecord {
             certificate: OfflineWalletCertificate {
                 controller,
+                operator: controller.clone(),
                 allowance: OfflineAllowanceCommitment {
                     asset: asset_id,
                     amount: Numeric::new(1_000, 0),
@@ -40210,6 +40260,7 @@ fn sample_transfer_record() -> OfflineTransferRecord {
     let asset_id = AssetId::new(definition, controller.clone());
     let certificate = OfflineWalletCertificate {
         controller: controller.clone(),
+        operator: controller.clone(),
         allowance: OfflineAllowanceCommitment {
             asset: asset_id.clone(),
             amount: Numeric::new(1_000, 0),

@@ -393,6 +393,7 @@ mod tests {
         };
         OfflineWalletCertificate {
             controller,
+            operator: sample_account(0xA1, "sbp"),
             allowance: sample_commitment(0x11),
             spend_public_key: sample_public_key(0xA1),
             attestation_report: vec![0xAA, 0xBB],

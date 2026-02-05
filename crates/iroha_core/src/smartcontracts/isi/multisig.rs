@@ -588,6 +588,7 @@ fn replace_account_id_in_offline_wallet_certificate(
     new: &AccountId,
 ) {
     replace_account_id(&mut certificate.controller, old, new);
+    replace_account_id(&mut certificate.operator, old, new);
     certificate.allowance.asset =
         replace_account_id_in_asset_id(&certificate.allowance.asset, old, new);
 }

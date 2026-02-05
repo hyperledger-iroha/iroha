@@ -1,6 +1,9 @@
 # Status
 
 Last update: 2026-02-05
+- Offline allowances: enforce non-custodial top-ups by requiring the allowance asset account to match the controller, add an explicit operator account field to certificates/drafts across core + SDKs (Swift/Android/JS), refresh top-up spec/docs, and regenerate offline allowance fixtures. Tests not run (fixtures regenerated via `cargo run -p xtask --bin xtask -- offline-topup --spec scripts/offline_topup/spec.example.json --output fixtures/offline_allowance`; build warnings about unexpected `cfg` `bls` and existing single-use lifetime warnings in `iroha_core`).
+- Offline escrow: ensure derived escrow accounts are created when resolving metadata-backed escrow bindings during `RegisterOfflineAllowance` (so allowance registration no longer fails if the account was not created at metadata set time); updated unit coverage. Tests not run (not requested).
+- Tx validation pipeline: snapshot lane governance/compliance/privacy registries into State (consensus validation), enforce UAID/manifest/runtime-upgrade guardrails + lane compliance in `validate_transaction_internal`, reject empty instruction sets except heartbeats, and align Torii multisig guard with role-based signatories; added unit coverage and refreshed Nexus privacy/compliance docs + translations. Tests not run (not requested).
 - Integration tests: wait until the scheduled time before driving the follow-up block in `mint_asset_after_3_sec` so the time-trigger window is always hit. Tests not run (not requested).
 - Sumeragi tests: narrow commit-history/message-handling test-guard scope to avoid long-held locks that can stall concurrent QC/block-sync tests on current-thread runtimes. Tests not run (build dir lock in local environment).
 - Python SoraFS gateway test: disable `emit_browser_manifest` explicitly when asserting local proxy manifest defaults to None. Tests not run (not requested).

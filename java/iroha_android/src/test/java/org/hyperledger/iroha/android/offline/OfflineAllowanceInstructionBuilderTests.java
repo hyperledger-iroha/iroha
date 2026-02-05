@@ -31,6 +31,7 @@ public final class OfflineAllowanceInstructionBuilderTests {
     final OfflineWalletCertificate certificate =
         OfflineWalletCertificate.builder()
             .setController("ed0120ABCDEF@wonderland")
+            .setOperator("ed0120ABCDEF@wonderland")
             .setAllowance(allowance)
             .setSpendPublicKey("ed0120ABCDEF")
             .setAttestationReportBase64("AAECAw==")
@@ -55,6 +56,8 @@ public final class OfflineAllowanceInstructionBuilderTests {
         : "action mismatch for offline allowance instruction";
     assert certificate.controller().equals(argsMap.get("certificate.controller"))
         : "controller mismatch";
+    assert certificate.operator().equals(argsMap.get("certificate.operator"))
+        : "operator mismatch";
     assert certificate.metadata().get("ios.app_attest.team_id")
         .equals(argsMap.get("certificate.metadata.ios.app_attest.team_id"))
         : "metadata mismatch";
@@ -67,6 +70,7 @@ public final class OfflineAllowanceInstructionBuilderTests {
     try {
       OfflineWalletCertificate.builder()
           .setController("ed0120ABCDEF@wonderland")
+          .setOperator("ed0120ABCDEF@wonderland")
           .setAllowance(
               OfflineAllowance.builder()
                   .setAssetId("xor#sora#ed0120EXAMPLE@sora")

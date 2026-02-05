@@ -102,8 +102,7 @@ where
 }
 
 fn error_chain_contains(err: &eyre::Report, needle: &str) -> bool {
-    err.chain()
-        .any(|cause| cause.to_string().contains(needle))
+    err.chain().any(|cause| cause.to_string().contains(needle))
 }
 
 #[test]

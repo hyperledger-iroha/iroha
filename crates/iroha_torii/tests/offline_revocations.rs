@@ -297,8 +297,9 @@ fn build_revocation_seeds() -> Vec<RevocationSeed> {
 
     let mut cert_one = OfflineWalletCertificate {
         controller: controller_one.clone(),
+        operator: operator_account.clone(),
         allowance: OfflineAllowanceCommitment {
-            asset: AssetId::new(asset_definition.clone(), operator_account.clone()),
+            asset: AssetId::new(asset_definition.clone(), controller_one.clone()),
             amount: Numeric::new(1_000, 0),
             commitment: vec![0xA1; 32],
         },
@@ -337,8 +338,9 @@ fn build_revocation_seeds() -> Vec<RevocationSeed> {
 
     let mut cert_two = OfflineWalletCertificate {
         controller: controller_two.clone(),
+        operator: operator_account.clone(),
         allowance: OfflineAllowanceCommitment {
-            asset: AssetId::new(asset_definition, operator_account),
+            asset: AssetId::new(asset_definition, controller_two.clone()),
             amount: Numeric::new(2_000, 0),
             commitment: vec![0xB2; 32],
         },

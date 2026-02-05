@@ -1498,8 +1498,10 @@ mod bundle_inspect_tests {
         let spend_keys = KeyPair::random();
         let operator_signature =
             Signature::new(operator_keys.private_key(), b"certificate payload");
+        let operator = AccountId::new(controller.domain().clone(), operator_keys.public_key().clone());
         let certificate = OfflineWalletCertificate {
             controller: controller.clone(),
+            operator,
             allowance: allowance_commitment.clone(),
             spend_public_key: spend_keys.public_key().clone(),
             attestation_report: vec![1, 2, 3],
@@ -1841,6 +1843,7 @@ mod tests {
         OfflineAllowanceRecord {
             certificate: OfflineWalletCertificate {
                 controller,
+                operator: controller.clone(),
                 allowance: OfflineAllowanceCommitment {
                     asset,
                     amount: Numeric::new(1_000, 0),

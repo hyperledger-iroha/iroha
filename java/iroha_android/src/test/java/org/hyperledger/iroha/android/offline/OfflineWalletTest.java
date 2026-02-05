@@ -290,6 +290,7 @@ public final class OfflineWalletTest {
                         "certificate_id_hex": "deadbeef",
                         "certificate": {
                           "controller": "alice@wonderland",
+                          "operator": "alice@wonderland",
                           "allowance": { "asset": "usd#wonderland", "amount": "10", "commitment": [1, 2] },
                           "spend_public_key": "ed0120deadbeef",
                           "attestation_report": [3, 4],
@@ -322,6 +323,7 @@ public final class OfflineWalletTest {
       final OfflineWalletPolicy policy = new OfflineWalletPolicy("10", "5", 200L);
       final OfflineWalletCertificateDraft draft =
           new OfflineWalletCertificateDraft(
+              "alice@wonderland",
               "alice@wonderland",
               allowance,
               "ed0120deadbeef",
