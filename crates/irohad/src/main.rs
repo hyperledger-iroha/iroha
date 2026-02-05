@@ -3330,6 +3330,7 @@ impl Iroha {
             &dataspace_catalog,
             lane_compliance.clone(),
         ));
+        state.install_lane_compliance_engine(lane_compliance.clone());
         #[cfg(feature = "telemetry")]
         let mut lane_manifest_task = None;
         #[cfg(not(feature = "telemetry"))]

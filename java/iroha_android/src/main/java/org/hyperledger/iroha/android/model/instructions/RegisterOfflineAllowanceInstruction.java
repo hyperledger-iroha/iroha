@@ -119,6 +119,7 @@ public final class RegisterOfflineAllowanceInstruction implements InstructionTem
   /** Canonical allowance bundle attached to {@code RegisterOfflineAllowance}. */
   public static final class OfflineWalletCertificate {
     private final String controller;
+    private final String operator;
     private final OfflineAllowance allowance;
     private final String spendPublicKey;
     private final String attestationReportBase64;
@@ -133,6 +134,7 @@ public final class RegisterOfflineAllowanceInstruction implements InstructionTem
 
     private OfflineWalletCertificate(final Builder builder) {
       this.controller = builder.controller;
+      this.operator = builder.operator;
       this.allowance = builder.allowance;
       this.spendPublicKey = builder.spendPublicKey;
       this.attestationReportBase64 = builder.attestationReportBase64;
@@ -149,6 +151,10 @@ public final class RegisterOfflineAllowanceInstruction implements InstructionTem
 
     public String controller() {
       return controller;
+    }
+
+    public String operator() {
+      return operator;
     }
 
     public OfflineAllowance allowance() {
@@ -197,6 +203,7 @@ public final class RegisterOfflineAllowanceInstruction implements InstructionTem
 
     private void appendArguments(final Map<String, String> target) {
       target.put("certificate.controller", controller);
+      target.put("certificate.operator", operator);
       allowance.appendArguments(target);
       target.put("certificate.spend_public_key", spendPublicKey);
       target.put("certificate.attestation_report_b64", attestationReportBase64);
@@ -221,6 +228,7 @@ public final class RegisterOfflineAllowanceInstruction implements InstructionTem
       final Builder builder =
           builder()
               .setController(require(arguments, "certificate.controller"))
+              .setOperator(require(arguments, "certificate.operator"))
               .setAllowance(OfflineAllowance.fromArguments(arguments))
               .setSpendPublicKey(require(arguments, "certificate.spend_public_key"))
               .setAttestationReportBase64(require(arguments, "certificate.attestation_report_b64"))
@@ -265,6 +273,7 @@ public final class RegisterOfflineAllowanceInstruction implements InstructionTem
         return false;
       }
       return Objects.equals(controller, other.controller)
+          && Objects.equals(operator, other.operator)
           && Objects.equals(allowance, other.allowance)
           && Objects.equals(spendPublicKey, other.spendPublicKey)
           && Objects.equals(attestationReportBase64, other.attestationReportBase64)
@@ -282,6 +291,7 @@ public final class RegisterOfflineAllowanceInstruction implements InstructionTem
     public int hashCode() {
       return Objects.hash(
           controller,
+          operator,
           allowance,
           spendPublicKey,
           attestationReportBase64,
@@ -301,6 +311,7 @@ public final class RegisterOfflineAllowanceInstruction implements InstructionTem
 
     public static final class Builder {
       private String controller;
+      private String operator;
       private OfflineAllowance allowance;
       private String spendPublicKey;
       private String attestationReportBase64;
@@ -320,6 +331,14 @@ public final class RegisterOfflineAllowanceInstruction implements InstructionTem
           throw new IllegalArgumentException("controller must not be blank");
         }
         this.controller = controller;
+        return this;
+      }
+
+      public Builder setOperator(final String operator) {
+        if (operator == null || operator.isBlank()) {
+          throw new IllegalArgumentException("operator must not be blank");
+        }
+        this.operator = operator;
         return this;
       }
 
@@ -423,6 +442,9 @@ public final class RegisterOfflineAllowanceInstruction implements InstructionTem
       public OfflineWalletCertificate build() {
         if (controller == null) {
           throw new IllegalStateException("controller must be provided");
+        }
+        if (operator == null) {
+          throw new IllegalStateException("operator must be provided");
         }
         if (allowance == null) {
           throw new IllegalStateException("allowance must be provided");

@@ -7,6 +7,7 @@ import java.util.Objects;
 /** Draft offline wallet certificate that is missing an operator signature. */
 public final class OfflineWalletCertificateDraft {
   private final String controller;
+  private final String operator;
   private final OfflineAllowanceCommitment allowance;
   private final String spendPublicKey;
   private final byte[] attestationReport;
@@ -20,6 +21,7 @@ public final class OfflineWalletCertificateDraft {
 
   public OfflineWalletCertificateDraft(
       final String controller,
+      final String operator,
       final OfflineAllowanceCommitment allowance,
       final String spendPublicKey,
       final byte[] attestationReport,
@@ -31,6 +33,7 @@ public final class OfflineWalletCertificateDraft {
       final String attestationNonceHex,
       final Long refreshAtMs) {
     this.controller = Objects.requireNonNull(controller, "controller");
+    this.operator = Objects.requireNonNull(operator, "operator");
     this.allowance = Objects.requireNonNull(allowance, "allowance");
     this.spendPublicKey = Objects.requireNonNull(spendPublicKey, "spendPublicKey");
     this.attestationReport = Objects.requireNonNull(attestationReport, "attestationReport").clone();
@@ -45,6 +48,10 @@ public final class OfflineWalletCertificateDraft {
 
   public String controller() {
     return controller;
+  }
+
+  public String operator() {
+    return operator;
   }
 
   public OfflineAllowanceCommitment allowance() {
@@ -90,6 +97,7 @@ public final class OfflineWalletCertificateDraft {
   public Map<String, Object> toJsonMap() {
     final Map<String, Object> map = new LinkedHashMap<>();
     map.put("controller", controller);
+    map.put("operator", operator);
     map.put("allowance", allowance.toJsonMap());
     map.put("spend_public_key", spendPublicKey);
     map.put("attestation_report", OfflineAllowanceCommitment.encodeBytes(attestationReport));

@@ -205,24 +205,27 @@ Commitment-only או split-replica lanes נכשלים ב-admission אם manifest
 
 - `LanePrivacyRegistry` (`crates/iroha_core/src/interlane/mod.rs`) עושה snapshot למבני
   `LaneManifestStatus` מה-manifest loader ומאחסן מפות commitments לכל lane לפי `LaneCommitmentId`.
-  ה-transaction queue מתקין את ה-registry הזה לצד כל manifest reload
-  (`Queue::install_lane_manifests`), כך ש-admission תמיד ניגש ל-commitments הקנוניים.
+  ה-transaction queue ו-`State` מתקינים את ה-registry הזה לצד כל manifest reload
+  (`Queue::install_lane_manifests`, `State::install_lane_manifests`), כך ש-admission ו-consensus
+  validation תמיד ניגשים ל-commitments הקנוניים.
 - `LaneComplianceContext` נושא כעת הפניה אופציונלית `Arc<LanePrivacyRegistry>`
   (`crates/iroha_core/src/compliance/mod.rs`). כאשר `LaneComplianceEngine` בוחן טרנזקציה,
   זרימות programmable-money יכולות לבדוק את אותם commitments per-lane שמפורסמים ב-Torii לפני
   enqueue של ה-payload.
-- Admission מחזיק `Arc<LanePrivacyRegistry>` לצד handle של governance manifest
-  (`crates/iroha_core/src/queue.rs`), ומבטיח שמודולי programmable-money ו-future interlane hosts
-  קוראים תצוגה עקבית של privacy descriptors גם כאשר manifests מתחלפים.
+- Admission ו-core validation מחזיקים `Arc<LanePrivacyRegistry>` לצד handle של governance manifest
+  (`crates/iroha_core/src/queue.rs`, `crates/iroha_core/src/state.rs`), ומבטיחים שמודולי
+  programmable-money ו-future interlane hosts קוראים תצוגה עקבית של privacy descriptors גם כאשר
+  manifests מתחלפים.
 
 ## Runtime Enforcement
 
 Lane privacy proofs כעת נוסעים יחד עם transaction attachments דרך `ProofAttachment.lane_privacy`.
-ה-queue מאמת כל attachment מול registry של ה-lane המנותבת באמצעות `LanePrivacyRegistry::verify`,
-מתעד את proven commitment ids ומעביר אותם ל-compliance engine. כל כלל `privacy_commitments_any_of`
-מעריך ל-`false` אלא אם attachment תואם מאומת בהצלחה, כך ש-programmable-money lanes לא יוכלו
-להיכנס ל-queue בלי ה-witness הנדרש. כיסוי יחידות קיים ב-`interlane::tests` וב-lane compliance tests
-כדי לייצב את path של attachments ואת ה-policy guardrails.
+Torii admission וה-validation ב-`iroha_core` מאמתים כל attachment מול registry של ה-lane המנותבת
+באמצעות `LanePrivacyRegistry::verify`, מתעדים את proven commitment ids ומעבירים אותם ל-compliance
+engine. כל כלל `privacy_commitments_any_of` מעריך ל-`false` אלא אם attachment תואם מאומת בהצלחה,
+כך ש-programmable-money lanes לא יוכלו להיכנס ל-queue או commit בלי ה-witness הנדרש. כיסוי יחידות
+קיים ב-`interlane::tests` וב-lane compliance tests כדי לייצב את path של attachments ואת ה-policy
+guardrails.
 
 לנסיונות מידיים, ראו את בדיקות היחידה ב-
 [`privacy.rs`](../../crates/iroha_crypto/src/privacy.rs) שמדגימות מקרי הצלחה וכשל עבור Merkle ו-

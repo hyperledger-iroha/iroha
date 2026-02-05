@@ -221,6 +221,7 @@ mod tests {
     fn sample_certificate(controller: &AccountId) -> OfflineWalletCertificate {
         OfflineWalletCertificate::new(
             controller.clone(),
+            controller.clone(),
             OfflineAllowanceCommitment::new(
                 sample_asset(controller),
                 Numeric::new(1_000, 0),

@@ -3525,6 +3525,7 @@ mod measured_bytes_impls {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<OfflineWalletCertificate>();
             total = total.saturating_add(self.controller.measured_bytes_extra());
+            total = total.saturating_add(self.operator.measured_bytes_extra());
             total = total.saturating_add(self.allowance.measured_bytes_extra());
             total = total.saturating_add(self.spend_public_key.measured_bytes_extra());
             total = total.saturating_add(self.attestation_report.measured_bytes_extra());

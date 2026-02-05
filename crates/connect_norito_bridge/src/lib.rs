@@ -12144,8 +12144,8 @@ mod sorafs_tests {
 
     #[test]
     fn encode_offline_spend_receipt_payload_matches_native() {
-        use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
         use base64::Engine as _;
+        use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
         use iroha_data_model::offline::{
             AppleAppAttestProof, OfflineAllowanceCommitment, OfflinePlatformProof,
             OfflineSpendReceipt, OfflineWalletCertificate, OfflineWalletPolicy,
@@ -12155,13 +12155,14 @@ mod sorafs_tests {
 
         let sender = test_account_id(1);
         let receiver = test_account_id(2);
-        let asset_def =
-            iroha_data_model::asset::id::AssetDefinitionId::from_str("xor#default").expect("asset def");
+        let asset_def = iroha_data_model::asset::id::AssetDefinitionId::from_str("xor#default")
+            .expect("asset def");
         let asset = AssetId::new(asset_def, sender.clone());
         let challenge_hash = Hash::new(vec![0x33; 32]);
 
         let certificate = OfflineWalletCertificate {
             controller: sender.clone(),
+            operator: sender.clone(),
             allowance: OfflineAllowanceCommitment {
                 asset: asset.clone(),
                 amount: Numeric::from(500_u32),

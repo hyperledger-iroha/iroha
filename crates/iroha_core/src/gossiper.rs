@@ -85,12 +85,10 @@ fn tx_gossip_frame_payload_cap(
     let dummy_keypair = KeyPair::random();
     let dummy_domain = DomainId::from_str("dummy").expect("static domain id should parse");
     let dummy_authority = AccountId::new(dummy_domain, dummy_keypair.public_key().clone());
-    let dummy_signed = iroha_data_model::transaction::TransactionBuilder::new(
-        chain_id.clone(),
-        dummy_authority,
-    )
-    .with_instructions(std::iter::empty::<InstructionBox>())
-    .sign(dummy_keypair.private_key());
+    let dummy_signed =
+        iroha_data_model::transaction::TransactionBuilder::new(chain_id.clone(), dummy_authority)
+            .with_instructions(std::iter::empty::<InstructionBox>())
+            .sign(dummy_keypair.private_key());
     let probe_payload_len = plaintext_cap;
     let payload = Arc::new(vec![0u8; probe_payload_len]);
     let probe_gossip = TransactionGossip {
@@ -1521,7 +1519,9 @@ fn gossip_route_encoded_len() -> Option<usize> {
         lane_id: LaneId::SINGLE,
         dataspace_id: DataSpaceId::GLOBAL,
     };
-    route.encoded_len_exact().or_else(|| route.encoded_len_hint())
+    route
+        .encoded_len_exact()
+        .or_else(|| route.encoded_len_hint())
 }
 
 fn gossip_message_empty_len() -> Option<usize> {

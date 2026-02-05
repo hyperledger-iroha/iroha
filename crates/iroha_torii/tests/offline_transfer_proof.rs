@@ -150,6 +150,7 @@ fn build_transfer(counter: u64) -> OfflineToOnlineTransfer {
 
     let certificate = OfflineWalletCertificate {
         controller: controller.clone(),
+        operator: controller.clone(),
         allowance: OfflineAllowanceCommitment {
             asset: asset.clone(),
             amount: Numeric::new(100, 0),

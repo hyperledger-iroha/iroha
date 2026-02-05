@@ -72,6 +72,7 @@ public struct OfflineWalletPolicy: Codable, Sendable, Equatable {
 
 public struct OfflineWalletCertificateDraft: Codable, Sendable, Equatable {
     public let controller: String
+    public let operatorId: String
     public let allowance: OfflineAllowanceCommitment
     public let spendPublicKey: String
     public let attestationReport: Data
@@ -85,6 +86,7 @@ public struct OfflineWalletCertificateDraft: Codable, Sendable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case controller
+        case operatorId = "operator"
         case allowance
         case spendPublicKey = "spend_public_key"
         case attestationReportB64 = "attestation_report_b64"
@@ -98,6 +100,7 @@ public struct OfflineWalletCertificateDraft: Codable, Sendable, Equatable {
     }
 
     public init(controller: String,
+                operatorId: String,
                 allowance: OfflineAllowanceCommitment,
                 spendPublicKey: String,
                 attestationReport: Data,
@@ -109,6 +112,7 @@ public struct OfflineWalletCertificateDraft: Codable, Sendable, Equatable {
                 attestationNonce: Data? = nil,
                 refreshAtMs: UInt64? = nil) {
         self.controller = controller
+        self.operatorId = operatorId
         self.allowance = allowance
         self.spendPublicKey = spendPublicKey
         self.attestationReport = attestationReport
@@ -124,6 +128,7 @@ public struct OfflineWalletCertificateDraft: Codable, Sendable, Equatable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         controller = try container.decode(String.self, forKey: .controller)
+        operatorId = try container.decode(String.self, forKey: .operatorId)
         allowance = try container.decode(OfflineAllowanceCommitment.self, forKey: .allowance)
         spendPublicKey = try container.decode(String.self, forKey: .spendPublicKey)
         let reportB64 = try container.decode(String.self, forKey: .attestationReportB64)
@@ -143,6 +148,7 @@ public struct OfflineWalletCertificateDraft: Codable, Sendable, Equatable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(controller, forKey: .controller)
+        try container.encode(operatorId, forKey: .operatorId)
         try container.encode(allowance, forKey: .allowance)
         try container.encode(spendPublicKey, forKey: .spendPublicKey)
         try container.encode(attestationReport.base64EncodedString(), forKey: .attestationReportB64)
@@ -169,6 +175,7 @@ public struct OfflineWalletCertificateDraft: Codable, Sendable, Equatable {
 
 public struct OfflineWalletCertificate: Codable, Sendable, Equatable {
     public let controller: String
+    public let operatorId: String
     public let allowance: OfflineAllowanceCommitment
     public let spendPublicKey: String
     public let attestationReport: Data
@@ -183,6 +190,7 @@ public struct OfflineWalletCertificate: Codable, Sendable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case controller
+        case operatorId = "operator"
         case allowance
         case spendPublicKey = "spend_public_key"
         case attestationReportB64 = "attestation_report_b64"
@@ -197,6 +205,7 @@ public struct OfflineWalletCertificate: Codable, Sendable, Equatable {
     }
 
     public init(controller: String,
+                operatorId: String,
                 allowance: OfflineAllowanceCommitment,
                 spendPublicKey: String,
                 attestationReport: Data,
@@ -209,6 +218,7 @@ public struct OfflineWalletCertificate: Codable, Sendable, Equatable {
                 attestationNonce: Data? = nil,
                 refreshAtMs: UInt64? = nil) {
         self.controller = controller
+        self.operatorId = operatorId
         self.allowance = allowance
         self.spendPublicKey = spendPublicKey
         self.attestationReport = attestationReport
@@ -225,6 +235,7 @@ public struct OfflineWalletCertificate: Codable, Sendable, Equatable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         controller = try container.decode(String.self, forKey: .controller)
+        operatorId = try container.decode(String.self, forKey: .operatorId)
         allowance = try container.decode(OfflineAllowanceCommitment.self, forKey: .allowance)
         spendPublicKey = try container.decode(String.self, forKey: .spendPublicKey)
         let reportB64 = try container.decode(String.self, forKey: .attestationReportB64)
@@ -249,6 +260,7 @@ public struct OfflineWalletCertificate: Codable, Sendable, Equatable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(controller, forKey: .controller)
+        try container.encode(operatorId, forKey: .operatorId)
         try container.encode(allowance, forKey: .allowance)
         try container.encode(spendPublicKey, forKey: .spendPublicKey)
         try container.encode(attestationReport.base64EncodedString(), forKey: .attestationReportB64)
@@ -271,6 +283,7 @@ public struct OfflineWalletCertificate: Codable, Sendable, Equatable {
     public func noritoPayload() throws -> Data {
         var writer = OfflineNoritoWriter()
         writer.writeField(try OfflineNorito.encodeAccountId(controller))
+        writer.writeField(try OfflineNorito.encodeAccountId(operatorId))
         writer.writeField(try allowance.noritoPayload())
         writer.writeField(OfflineNorito.encodeString(spendPublicKey))
         writer.writeField(OfflineNorito.encodeBytesVec(attestationReport))
@@ -694,6 +707,7 @@ public struct OfflineToOnlineTransfer: Sendable, Equatable {
 
 struct OfflineWalletCertificatePayload {
     let controller: String
+    let operatorId: String
     let allowance: OfflineAllowanceCommitment
     let spendPublicKey: String
     let attestationReport: Data
@@ -707,6 +721,7 @@ struct OfflineWalletCertificatePayload {
 
     init(certificate: OfflineWalletCertificate) {
         controller = certificate.controller
+        operatorId = certificate.operatorId
         allowance = certificate.allowance
         spendPublicKey = certificate.spendPublicKey
         attestationReport = certificate.attestationReport
@@ -722,6 +737,7 @@ struct OfflineWalletCertificatePayload {
     func noritoPayload() throws -> Data {
         var writer = OfflineNoritoWriter()
         writer.writeField(try OfflineNorito.encodeAccountId(controller))
+        writer.writeField(try OfflineNorito.encodeAccountId(operatorId))
         writer.writeField(try allowance.noritoPayload())
         writer.writeField(OfflineNorito.encodeString(spendPublicKey))
         writer.writeField(OfflineNorito.encodeBytesVec(attestationReport))

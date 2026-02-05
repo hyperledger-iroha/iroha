@@ -20441,6 +20441,10 @@ function normalizeOfflineCertificateDraft(draft, context) {
     record.controller,
     `${context}.controller`,
   );
+  const operator = ToriiClient._normalizeAccountId(
+    record.operator,
+    `${context}.operator`,
+  );
   const allowance = ensureRecord(record.allowance, `${context}.allowance`);
   const asset = requireNonEmptyString(allowance.asset, `${context}.allowance.asset`);
   const amount = normalizeAmountLike(
@@ -20507,6 +20511,7 @@ function normalizeOfflineCertificateDraft(draft, context) {
         );
   return {
     controller,
+    operator,
     allowance: {
       asset,
       amount,

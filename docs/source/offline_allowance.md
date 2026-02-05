@@ -27,11 +27,11 @@ tooling under `scripts/offline_topup/` should be used to mint fixtures.
 |------|--------|-------|
 | `OfflineAllowanceCommitment` | `asset: AssetId`,<br>`amount: Numeric`,<br>`commitment: Vec<u8>` | `commitment` contains the Pedersen digest binding the allowance to its asset owner. |
 | `OfflineWalletPolicy` | `max_balance`, `max_tx_value`, `expires_at_ms` | Policy bounds enforced independently from allowance expiry. |
-| `OfflineWalletCertificate` | `controller`, `allowance`, `spend_public_key`, `attestation_report`, `issued_at_ms`, `expires_at_ms`,<br>`policy`, `operator_signature`, `metadata` | Operators sign the canonical payload returned by `OfflineWalletCertificate::operator_signing_bytes()`. The controller is the on-ledger account that later submits `RegisterOfflineAllowance`. |
+| `OfflineWalletCertificate` | `controller`, `operator`, `allowance`, `spend_public_key`, `attestation_report`, `issued_at_ms`, `expires_at_ms`,<br>`policy`, `operator_signature`, `metadata` | Operators sign the canonical payload returned by `OfflineWalletCertificate::operator_signing_bytes()`. The controller is the on-ledger account that later submits `RegisterOfflineAllowance` and funds the allowance (the allowance asset account must equal `controller`). |
 
 Certificates are uniquely identified by `certificate_id = blake2b32(Norito(certificate))` inside
 `RegisterOfflineAllowance`. The operator signature **must** be produced with the private key of the
-account that controls `allowance.asset.account()` (ledger rejects mismatched key material).
+account identified by `certificate.operator` (ledger rejects mismatched key material).
 
 ### 2.2 Metadata requirements
 
@@ -529,14 +529,15 @@ against duplicate `(certificate_id, counter)` claims.
    - Positive allowance amount.
    - Certificate expiry > issued_at and policy coverage ≥ certificate lifetime.
    - `policy.max_balance >= allowance.amount` and `policy.max_tx_value <= max_balance`.
-   - Operator signature matches the allowance asset owner.
+   - Operator signature matches `certificate.operator`.
+   - `allowance.asset.account()` equals `controller` (non-custodial funding from the user's online balance).
 3. Asset definitions intended for offline allowances must set metadata
    `offline.enabled = true`. On registration, the ledger derives a deterministic escrow account in
    the asset definition’s domain (seeded from `Hash("iroha.offline.escrow.v1|<chain_id>|<asset_def_id>")`)
    and ensures the account exists. The derived binding may be cached in
    `settlement.offline.escrow_accounts`, but the ledger will re-derive it from metadata if the map is empty.
 4. If `settlement.offline.escrow_required=true`, ledger transfers the allowance amount from
-   `allowance.asset.account()` into the escrow account for the asset definition. Missing
+   `allowance.asset.account()` (the controller’s online balance) into the escrow account for the asset definition. Missing
    `offline.enabled` (and no configured binding) rejects the registration.
 5. Ledger stores an `OfflineAllowanceRecord` keyed by `certificate_id` and seeds
    `remaining_amount = allowance.amount`.
@@ -564,8 +565,8 @@ against duplicate `(certificate_id, counter)` claims.
 
 ## 6. Issuer Workflow (OA1)
 
-1. **Select asset & policy.** Choose the operator-owned asset (e.g., `xor#treasury#ih58...`),
-   target controller account, allowance amount, and policy limits (max balance / per-spend cap /
+1. **Select asset & policy.** Choose the controller-owned asset (the allowance asset account must
+   match the controller), allowance amount, and policy limits (max balance / per-spend cap /
    expiry).
 2. **Produce a commitment.** Sample `r_0` (32 random bytes) and compute
    `C_0 = Com(asset, amount, r_0)` using the Pedersen generators from §4.1.
@@ -577,9 +578,9 @@ against duplicate `(certificate_id, counter)` claims.
 4. **Generate the spend key.** Wallets generate the spend keypair locally and store the private
    spend key on-device. Only the `spend_public_key` is sent to the issuer along with the draft
    certificate payload.
-5. **Issue the certificate.** Serialize the `OfflineWalletCertificatePayload` (controller, allowance,
-   spend key, attestation bytes, timestamps, policy, metadata) and sign it with the operator’s
-   private key whose public key controls the allowance asset. This can be done with
+5. **Issue the certificate.** Serialize the `OfflineWalletCertificatePayload` (controller, operator,
+   allowance, spend key, attestation bytes, timestamps, policy, metadata) and sign it with the
+   operator’s private key corresponding to `certificate.operator`. This can be done with
    `POST /v1/offline/certificates/issue` (or the renewal variant) when
    `torii.offline_issuer.operator_private_key` is configured; the endpoint returns the signed
    certificate and its id.
@@ -605,8 +606,8 @@ $ scripts/offline_topup/run.sh \
 
 Key details:
 
-- `--spec` accepts a JSON file with `{ "operator": { "private_key": "ed25519:…" }, "allowances": [...] }`.
-  Each allowance entry supplies `label`, `controller`, `allowance_asset`, and policy fields using the
+- `--spec` accepts a JSON file with `{ "operator": { "account": "<account id>", "private_key": "ed25519:…" }, "allowances": [...] }`.
+  Each allowance entry supplies `label`, `controller`, `operator`, `allowance_asset`, and policy fields using the
   canonical IH58 account syntax (no `@domain`; append `@domain` only as an explicit routing hint). Spend keys can be specified as a multihash (`ed0120…`)
   or as `algo:hex`, metadata can be provided inline or via `metadata_file`, attestation bytes can be
   embedded with `attestation_report_{hex,base64}` (or loaded from `attestation_report_file`), and an

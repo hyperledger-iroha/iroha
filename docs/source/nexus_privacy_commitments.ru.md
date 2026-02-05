@@ -210,26 +210,27 @@ Commitment-only или split-replica lanes теперь проваливают a
 
 - `LanePrivacyRegistry` (`crates/iroha_core/src/interlane/mod.rs`) snapshot'ит структуры
   `LaneManifestStatus` из manifest loader и хранит per-lane maps commitments по ключу
-  `LaneCommitmentId`. Transaction queue устанавливает этот registry при каждой перезагрузке
-  manifests (`Queue::install_lane_manifests`), так что admission всегда имеет доступ к
-  каноническим commitments.
+  `LaneCommitmentId`. Transaction queue и `State` устанавливают этот registry при каждой
+  перезагрузке manifests (`Queue::install_lane_manifests`, `State::install_lane_manifests`),
+  так что admission и consensus validation всегда имеют доступ к каноническим commitments.
 - `LaneComplianceContext` теперь несет опциональную ссылку `Arc<LanePrivacyRegistry>`
   (`crates/iroha_core/src/compliance/mod.rs`). Когда `LaneComplianceEngine` оценивает транзакцию,
   programmable-money flows могут проверять те же commitments на lane, что и Torii, до постановки
   payload в очередь.
-- Admission хранит `Arc<LanePrivacyRegistry>` рядом с handle governance manifest
-  (`crates/iroha_core/src/queue.rs`), гарантируя, что programmable-money модули и будущие interlane
-  hosts читают согласованное представление дескрипторов приватности при ротации manifests.
+- Admission и core validation хранят `Arc<LanePrivacyRegistry>` рядом с handle governance manifest
+  (`crates/iroha_core/src/queue.rs`, `crates/iroha_core/src/state.rs`), гарантируя, что
+  programmable-money модули и будущие interlane hosts читают согласованное представление
+  дескрипторов приватности при ротации manifests.
 
 ## Runtime enforcement
 
 Lane privacy proofs теперь идут вместе с attachments транзакции через `ProofAttachment.lane_privacy`.
-Queue проверяет каждый attachment по registry маршрутизированной lane через `LanePrivacyRegistry::verify`,
-записывает proven commitment ids и передает их в compliance engine. Любое правило
-`privacy_commitments_any_of` теперь возвращает `false`, пока соответствующий attachment не пройдет
-проверку, поэтому programmable-money lanes нельзя поставить в очередь без нужного witness. Юнит
-покрытие находится в `interlane::tests` и тестах lane compliance, чтобы закрепить путь attachments
-и policy guardrails.
+Torii admission и проверка в `iroha_core` валидируют каждый attachment по registry маршрутизированной
+lane через `LanePrivacyRegistry::verify`, записывают proven commitment ids и передают их в compliance
+engine. Любое правило `privacy_commitments_any_of` теперь возвращает `false`, пока соответствующий
+attachment не пройдет проверку, поэтому programmable-money lanes нельзя поставить в очередь или
+коммитить без нужного witness. Юнит покрытие находится в `interlane::tests` и тестах lane
+compliance, чтобы закрепить путь attachments и policy guardrails.
 
 Для быстрого эксперимента см. юнит-тесты в
 [`privacy.rs`](../../crates/iroha_crypto/src/privacy.rs), которые показывают успешные и ошибочные

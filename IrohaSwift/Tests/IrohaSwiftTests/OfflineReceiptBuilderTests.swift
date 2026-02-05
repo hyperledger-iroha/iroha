@@ -88,6 +88,7 @@ final class OfflineReceiptBuilderTests: XCTestCase {
         )
         let certificate = OfflineWalletCertificate(
             controller: base.controller,
+            operatorId: base.operatorId,
             allowance: allowance,
             spendPublicKey: base.spendPublicKey,
             attestationReport: base.attestationReport,
@@ -348,6 +349,7 @@ final class OfflineReceiptBuilderTests: XCTestCase {
         let issuedAtMs = validIssuedAtMs(for: certificate)
         certificate = OfflineWalletCertificate(
             controller: certificate.controller,
+            operatorId: certificate.operatorId,
             allowance: certificate.allowance,
             spendPublicKey: certificate.spendPublicKey,
             attestationReport: certificate.attestationReport,
@@ -889,6 +891,7 @@ final class OfflineReceiptBuilderTests: XCTestCase {
         let spendKey = "ed0120" + (try signingKey.publicKey()).hexUppercased()
         return OfflineWalletCertificate(
             controller: base.controller,
+            operatorId: base.operatorId,
             allowance: base.allowance,
             spendPublicKey: spendKey,
             attestationReport: base.attestationReport,
@@ -1013,6 +1016,7 @@ final class OfflineReceiptBuilderTests: XCTestCase {
         let spendKey = try SigningKey.ed25519(privateKey: Data(repeating: 0x02, count: 32))
         let certificate = OfflineWalletCertificate(
             controller: controller,
+            operatorId: controller,
             allowance: OfflineAllowanceCommitment(
                 assetId: assetId,
                 amount: "1000",

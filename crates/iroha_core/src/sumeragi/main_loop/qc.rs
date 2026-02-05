@@ -283,7 +283,13 @@ impl Actor {
             let Ok(idx) = usize::try_from(stored.signer) else {
                 continue;
             };
-            let key = (stored.phase, stored.height, stored.view, stored.epoch, stored.signer);
+            let key = (
+                stored.phase,
+                stored.height,
+                stored.view,
+                stored.epoch,
+                stored.signer,
+            );
             if self
                 .vote_validation_cache
                 .get(&key)
@@ -295,20 +301,19 @@ impl Actor {
                 topology_for_view(&canonical_topology, height, stored.view, mode_tag, prf_seed)
             });
             let expected_roster_hash = HashOf::new(&view_topology.as_ref().to_vec());
-            let cache_matches = self
-                .vote_validation_cache
-                .get(&key)
-                .is_some_and(|entry| {
-                    entry.membership_hash == membership_hash
-                        && entry.roster_hash == expected_roster_hash
-                });
+            let cache_matches = self.vote_validation_cache.get(&key).is_some_and(|entry| {
+                entry.membership_hash == membership_hash
+                    && entry.roster_hash == expected_roster_hash
+            });
             if !cache_matches && !vote_signature_valid(stored, view_topology, chain_id, mode_tag) {
                 continue;
             }
             let Some(peer) = view_topology.as_ref().get(idx) else {
                 continue;
             };
-            let entry = highest_view_by_signer.entry(peer.clone()).or_insert(stored.view);
+            let entry = highest_view_by_signer
+                .entry(peer.clone())
+                .or_insert(stored.view);
             if stored.view > *entry {
                 *entry = stored.view;
             }
@@ -332,14 +337,10 @@ impl Actor {
                 stats.roster_mismatch = stats.roster_mismatch.saturating_add(1);
                 continue;
             }
-            let cache_matches = self
-                .vote_validation_cache
-                .get(&key)
-                .is_some_and(|entry| {
-                    entry.membership_hash == membership_hash && entry.roster_hash == roster_hash
-                });
-            if !cache_matches
-                && !vote_signature_valid(vote, signature_topology, chain_id, mode_tag)
+            let cache_matches = self.vote_validation_cache.get(&key).is_some_and(|entry| {
+                entry.membership_hash == membership_hash && entry.roster_hash == roster_hash
+            });
+            if !cache_matches && !vote_signature_valid(vote, signature_topology, chain_id, mode_tag)
             {
                 stats.invalid_signature = stats.invalid_signature.saturating_add(1);
                 continue;
@@ -352,8 +353,7 @@ impl Actor {
                         .unwrap_or(vote.view)
                         != view
                     {
-                        stats.higher_view_filtered =
-                            stats.higher_view_filtered.saturating_add(1);
+                        stats.higher_view_filtered = stats.higher_view_filtered.saturating_add(1);
                         continue;
                     }
                 }
@@ -1409,8 +1409,14 @@ impl Actor {
         signature_topology: &super::network_topology::Topology,
         required: usize,
     ) -> QcSignerSnapshot {
-        let (valid_signers, stats) =
-            self.qc_signers_for_votes_with_stats(phase, block_hash, height, view, epoch, signature_topology);
+        let (valid_signers, stats) = self.qc_signers_for_votes_with_stats(
+            phase,
+            block_hash,
+            height,
+            view,
+            epoch,
+            signature_topology,
+        );
         let raw_votes = stats.raw_votes;
         let mut signers = valid_signers.clone();
         let mut root_groups = 0;

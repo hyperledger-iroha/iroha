@@ -4346,7 +4346,9 @@ pub mod message {
             sync::atomic::{AtomicU64, Ordering},
         };
 
-        use iroha_crypto::{Algorithm, Hash, KeyPair, PrivateKey, PublicKey, Signature, SignatureOf};
+        use iroha_crypto::{
+            Algorithm, Hash, KeyPair, PrivateKey, PublicKey, Signature, SignatureOf,
+        };
         use iroha_data_model::{
             block::BlockSignature,
             consensus::{
@@ -5293,8 +5295,7 @@ pub mod message {
 
         #[test]
         fn commit_role_signers_all_keeps_partial_set() {
-            let kp_leader =
-                deterministic_keypair(b"commit-role-all-leader", Algorithm::BlsNormal);
+            let kp_leader = deterministic_keypair(b"commit-role-all-leader", Algorithm::BlsNormal);
             let kp_validator =
                 deterministic_keypair(b"commit-role-all-validator", Algorithm::BlsNormal);
             let topology = Topology::new(vec![
@@ -5322,8 +5323,7 @@ pub mod message {
 
         #[test]
         fn commit_role_signers_accept_set_b_quorum() {
-            let kp_leader =
-                deterministic_keypair(b"commit-role-setb-leader", Algorithm::BlsNormal);
+            let kp_leader = deterministic_keypair(b"commit-role-setb-leader", Algorithm::BlsNormal);
             let kp_validator =
                 deterministic_keypair(b"commit-role-setb-validator", Algorithm::BlsNormal);
             let kp_proxy = deterministic_keypair(b"commit-role-setb-proxy", Algorithm::BlsNormal);
@@ -5372,11 +5372,8 @@ pub mod message {
             assert_ne!(leader.public_key(), validating.public_key());
             assert_ne!(leader.public_key(), set_b.public_key());
             assert_ne!(validating.public_key(), set_b.public_key());
-            block = sign_block_for_topology(
-                block,
-                &signature_topology,
-                &[leader, validating, set_b],
-            );
+            block =
+                sign_block_for_topology(block, &signature_topology, &[leader, validating, set_b]);
 
             let signers = super::Message::commit_role_signers(&block, &signature_topology)
                 .expect("set B quorum should be accepted");
