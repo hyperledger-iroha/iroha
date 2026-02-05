@@ -181,7 +181,8 @@ async fn mint_asset_after_3_sec_scenario(
             Duration::from_millis(200),
             pipeline_time.checked_div(2).unwrap_or(pipeline_time),
         );
-        let schedule = TimeSchedule::starting_at(start_time + gap);
+        let schedule_at = start_time + gap;
+        let schedule = TimeSchedule::starting_at(schedule_at);
         let instruction = Mint::asset_numeric(1_u32, asset_id.clone());
         let register_trigger = Register::trigger(Trigger::new(
             "mint_rose_schedule".parse().expect("Valid"),
@@ -228,6 +229,12 @@ async fn mint_asset_after_3_sec_scenario(
         assert_eq!(init_quantity, after_registration_quantity);
 
         let poll_delay = pipeline_time.checked_div(2).unwrap_or(pipeline_time);
+        // Ensure we create a block after the schedule time; block production can be faster than
+        // pipeline_time, which would otherwise skip the scheduled window entirely.
+        let wait_until = schedule_at.saturating_sub(curr_time());
+        if !wait_until.is_zero() {
+            sleep(wait_until).await;
+        }
         submit_with_context(
             network,
             &test_client,
