@@ -6394,7 +6394,7 @@ async fn block_sync_update_reuses_cached_qc_when_validation_unavailable() {
 
     let roster_cache =
         roster_cache_for_state(actor.state.as_ref(), actor.config.npos.epoch_length_blocks);
-    let mut update = super::block_sync_update_with_roster(
+    let update = super::block_sync_update_with_roster(
         &block,
         actor.state.as_ref(),
         actor.kura.as_ref(),
@@ -40959,7 +40959,6 @@ async fn proposal_gas_budget_limits_fetch() {
 async fn proposal_scan_budget_tracks_multiplier() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da.enabled = false;
     consensus_cfg.block.proposal_queue_scan_multiplier = nonzero!(2_usize);
 
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;

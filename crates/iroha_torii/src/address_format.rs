@@ -39,7 +39,6 @@ impl AddressFormatPreference {
             Self::Compressed => account_id
                 .to_account_address()
                 .and_then(|address| address.to_compressed_sora())
-                .map(|compressed| compressed)
                 .unwrap_or_else(|err| {
                     iroha_logger::error!(
                         %err,

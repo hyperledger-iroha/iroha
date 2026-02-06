@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Data availability + RBC integration scenario exercising large payload distribution.
 
 use std::{

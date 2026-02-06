@@ -94,7 +94,7 @@ impl<C: BlsConfiguration + ?Sized> Clone for ManagedSecretKey<C> {
 }
 
 impl<C: BlsConfiguration + ?Sized> ManagedSecretKey<C> {
-    fn new(secret: W3fSecretKey<C::Engine>) -> Self {
+    fn new(secret: &W3fSecretKey<C::Engine>) -> Self {
         Self {
             bytes: secret.clone().into_vartime().to_bytes(),
             _marker: PhantomData,
@@ -123,7 +123,7 @@ impl<C: BlsConfiguration + ?Sized> ManagedSecretKey<C> {
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ParseError> {
         let secret = W3fSecretKey::<C::Engine>::from_bytes(bytes)
             .map_err(|err| ParseError(err.to_string()))?;
-        Ok(Self::new(secret))
+        Ok(Self::new(&secret))
     }
 
     fn sign_bytes(&self, message: &[u8]) -> Vec<u8> {
@@ -153,6 +153,16 @@ impl<C: BlsConfiguration + ?Sized> zeroize::Zeroize for ManagedSecretKey<C> {
 use crate::rng::os_rng;
 use crate::{Algorithm, Error, KeyGenOption, ParseError};
 
+fn ensure_distinct_messages(messages: &[&[u8]]) -> Result<(), Error> {
+    let mut seen = BTreeSet::new();
+    for &msg in messages {
+        if !seen.insert(msg) {
+            return Err(Error::BadSignature);
+        }
+    }
+    Ok(())
+}
+
 pub trait BlsConfiguration {
     const ALGORITHM: Algorithm;
     type Engine: w3f_bls::EngineBLS;
@@ -172,7 +182,7 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
                 let mut rng = os_rng();
                 let secret_vt = SecretKeyVT::<C::Engine>::generate(&mut rng);
                 let secret = secret_vt.into_split(&mut rng);
-                ManagedSecretKey::new(secret)
+                ManagedSecretKey::new(&secret)
             }
             KeyGenOption::UseSeed(ref mut seed) => {
                 let salt = b"BLS-SIG-KEYGEN-SALT-";
@@ -190,7 +200,7 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
                 let secret =
                     SecretKeyVT::<C::Engine>::from_seed(&okm).into_split(deterministic_rng);
                 okm.zeroize();
-                ManagedSecretKey::new(secret)
+                ManagedSecretKey::new(&secret)
             }
             KeyGenOption::FromPrivateKey(key) => key,
         };
@@ -440,15 +450,7 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
         {
             return Err(Error::BadSignature);
         }
-        {
-            use std::collections::BTreeSet;
-            let mut seen = BTreeSet::new();
-            for &msg in messages {
-                if !seen.insert(msg) {
-                    return Err(Error::BadSignature);
-                }
-            }
-        }
+        ensure_distinct_messages(messages)?;
 
         #[cfg(feature = "bls-multi-pairing")]
         {

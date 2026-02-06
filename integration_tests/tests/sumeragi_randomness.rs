@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests for Sumeragi VRF randomness edge cases.
 //!
 //! These scenarios exercise late reveals and epochs without participation to

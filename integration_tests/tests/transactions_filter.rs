@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! JSON filter DSL server-side predicates test for transactions endpoint.
 
 use eyre::Result;

@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Bridge finality endpoint pairs cleanly with the light-client verifier.
 
 use std::{num::NonZeroU64, sync::Arc};

@@ -1,4 +1,5 @@
 //! Pipeline warning delivery test: inject a mismatching DAG fingerprint sidecar
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! and assert that a Pipeline Warning event is emitted during block processing.
 
 use iroha_config::parameters::actual::LaneConfig;

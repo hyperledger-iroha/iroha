@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! JS host parity helpers (requires `js_host_parity` feature to compile).
 
 #[cfg(feature = "js_host_parity")]

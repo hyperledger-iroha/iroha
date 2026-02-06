@@ -3,6 +3,7 @@
 //! The lexer converts a source string into a sequence of [`Token`]s.
 
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::upper_case_acronyms)]
 pub enum TokenKind {
     Fn,
     Let,

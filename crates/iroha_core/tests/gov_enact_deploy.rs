@@ -1,4 +1,5 @@
 //! Governance enactment wires manifest insertion and status update.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(unused_imports)]
 #![allow(clippy::items_after_statements)]
 

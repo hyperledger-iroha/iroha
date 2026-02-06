@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Kagami localnet bootstrap coverage for permissioned Sumeragi.
 
 use std::{

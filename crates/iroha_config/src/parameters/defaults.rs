@@ -2371,7 +2371,7 @@ pub mod sumeragi {
     /// Default: data availability (RBC + availability QC gating) disabled.
     pub const DA_ENABLED: bool = true;
     /// Multiplier for DA commit-quorum timeout (applied to block_time + 4 * commit_time).
-    pub const DA_QUORUM_TIMEOUT_MULTIPLIER: u32 = 4;
+    pub const DA_QUORUM_TIMEOUT_MULTIPLIER: u32 = 3;
     /// Multiplier for availability timeout in DA mode.
     pub const DA_AVAILABILITY_TIMEOUT_MULTIPLIER: u32 = 2;
     /// Floor (ms) for availability timeouts to avoid churn on tiny pipelines.

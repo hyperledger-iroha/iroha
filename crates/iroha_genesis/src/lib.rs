@@ -3222,10 +3222,7 @@ mod tests2 {
             parameters.set_parameter(DataModelParameter::Sumeragi(
                 SumeragiParameter::RedundantSendR(2),
             ));
-            let npos = SumeragiNposParameters {
-                epoch_seed: [seed_byte; 32],
-                ..SumeragiNposParameters::default()
-            };
+            let npos = SumeragiNposParameters::default().with_epoch_seed([seed_byte; 32]);
             parameters.set_parameter(DataModelParameter::Custom(npos.into()));
 
             RawGenesisTransaction {

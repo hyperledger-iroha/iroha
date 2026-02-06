@@ -1,4 +1,5 @@
 //! Plain ballots opened in the same block should emit `ReferendumOpened` with the correct window.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 use core::num::NonZeroU64;
 

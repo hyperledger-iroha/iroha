@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests for the Nexus lane manifest registry.
 
 use std::{collections::BTreeMap, path::PathBuf, time::Duration};

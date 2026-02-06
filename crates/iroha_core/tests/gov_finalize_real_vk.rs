@@ -1,4 +1,5 @@
 #![doc = "Gated test: `FinalizeElection` verifies tally proof via real VK (tiny-add public input).\nRequires Halo2 dev tests. Skipped by default; run with `IROHA_RUN_IGNORED=1`."]
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(all(feature = "zk-tests", feature = "halo2-dev-tests"))]
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]

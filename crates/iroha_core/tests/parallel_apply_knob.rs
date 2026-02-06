@@ -1,4 +1,5 @@
 //! Verify `pipeline.parallel_apply` knob is honored by the block executor.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //!
 //! We run the same block twice with `parallel_apply=false` and `parallel_apply=true`.
 //! With telemetry enabled, the detached-pipeline counters should remain zero in

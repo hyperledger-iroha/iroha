@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! VRF-backed council derivation tests (feature: `gov_vrf` + `app_api`).
 #![cfg(all(feature = "app_api", feature = "gov_vrf"))]
 

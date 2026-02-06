@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Telemetry JSON endpoints smoke tests (RBC/Pacemaker).
 
 #![cfg(feature = "telemetry")]

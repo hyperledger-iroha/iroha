@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Query error surface regression tests.
 
 use integration_tests::sandbox;

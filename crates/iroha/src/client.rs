@@ -1756,22 +1756,21 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
     let mut consensus_message_handling = Map::new();
     consensus_message_handling.insert("entries".into(), consensus_message_handling_entries);
 
-    let effective_npos_timeouts = wire
-        .effective_npos_timeouts
-        .as_ref()
-        .map(|timeouts| {
-            let mut map = Map::new();
-            map.insert("propose_ms".into(), Value::from(timeouts.propose_ms));
-            map.insert("prevote_ms".into(), Value::from(timeouts.prevote_ms));
-            map.insert("precommit_ms".into(), Value::from(timeouts.precommit_ms));
-            map.insert("commit_ms".into(), Value::from(timeouts.commit_ms));
-            map.insert("da_ms".into(), Value::from(timeouts.da_ms));
-            map.insert("aggregator_ms".into(), Value::from(timeouts.aggregator_ms));
-            map.insert("exec_ms".into(), Value::from(timeouts.exec_ms));
-            map.insert("witness_ms".into(), Value::from(timeouts.witness_ms));
-            Value::Object(map)
-        })
-        .unwrap_or(Value::Null);
+    let effective_npos_timeouts =
+        wire.effective_npos_timeouts
+            .as_ref()
+            .map_or(Value::Null, |timeouts| {
+                let mut map = Map::new();
+                map.insert("propose_ms".into(), Value::from(timeouts.propose_ms));
+                map.insert("prevote_ms".into(), Value::from(timeouts.prevote_ms));
+                map.insert("precommit_ms".into(), Value::from(timeouts.precommit_ms));
+                map.insert("commit_ms".into(), Value::from(timeouts.commit_ms));
+                map.insert("da_ms".into(), Value::from(timeouts.da_ms));
+                map.insert("aggregator_ms".into(), Value::from(timeouts.aggregator_ms));
+                map.insert("exec_ms".into(), Value::from(timeouts.exec_ms));
+                map.insert("witness_ms".into(), Value::from(timeouts.witness_ms));
+                Value::Object(map)
+            });
 
     let mut block_sync_roster = Map::new();
     block_sync_roster.insert(
@@ -4743,7 +4742,7 @@ fn decode_norito_error_body(response: &Response<Vec<u8>>) -> Option<String> {
         .headers()
         .get(http::header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
-        .map_or(true, |ct| ct.starts_with(APPLICATION_NORITO));
+        .is_none_or(|ct| ct.starts_with(APPLICATION_NORITO));
     if !is_norito {
         return None;
     }
@@ -4904,6 +4903,7 @@ impl fmt::Debug for Client {
                 &self.default_anonymity_policy.label(),
             )
             .field("rollout_phase", &self.rollout_phase.label())
+            .field("data_model_compatibility", &"<cached>")
             .finish()
     }
 }

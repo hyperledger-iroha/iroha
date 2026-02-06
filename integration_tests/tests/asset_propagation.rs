@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Ensures that minting an asset on one peer propagates to other peers with the correct quantity.
 
 use std::time::Duration;

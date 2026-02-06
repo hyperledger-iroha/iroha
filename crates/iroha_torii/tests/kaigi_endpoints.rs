@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Telemetry integration tests covering Kaigi relay endpoints.
 #![cfg(feature = "telemetry")]
 

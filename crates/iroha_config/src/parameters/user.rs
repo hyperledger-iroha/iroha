@@ -5875,6 +5875,7 @@ pub struct SumeragiNposTimeouts {
 /// VRF commit/reveal windows for epoch randomness.
 /// Unset values are derived from `epoch_length_blocks`.
 /// User-level configuration container for `SumeragiNposVrf`.
+#[allow(clippy::struct_field_names)]
 #[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
 pub struct SumeragiNposVrf {
     /// Number of blocks allotted for VRF commit submissions.
@@ -6365,14 +6366,14 @@ impl Sumeragi {
         } else {
             true
         };
-        let da_enabled_ok = if !da.enabled {
+        let da_enabled_ok = if da.enabled {
+            true
+        } else {
             emitter.emit(
                 Report::new(ParseError::InvalidSumeragiConfig)
                     .attach("sumeragi.da.enabled must be true for this release"),
             );
             false
-        } else {
-            true
         };
         let da_quorum_multiplier_ok = if da_advanced.quorum_timeout_multiplier == 0 {
             emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
@@ -6737,8 +6738,8 @@ impl Sumeragi {
 }
 
 fn scale_ratio_at_least_one(value: u64, numerator: u64, denominator: u64) -> u64 {
-    let scaled =
-        (value as u128 * numerator as u128 + (denominator as u128 / 2)) / denominator as u128;
+    let scaled = (u128::from(value) * u128::from(numerator) + (u128::from(denominator) / 2))
+        / u128::from(denominator);
     let scaled = u64::try_from(scaled).unwrap_or(u64::MAX);
     scaled.max(1)
 }
@@ -6775,7 +6776,7 @@ impl SumeragiNpos {
             true
         };
 
-        let timeouts_overrides = timeouts.parse_overrides(emitter)?;
+        let timeouts_overrides = timeouts.parse_overrides(emitter);
         let vrf = vrf.parse(epoch_length_blocks, emitter)?;
         let election = election.parse(emitter)?;
         let reconfig = reconfig.parse(emitter)?;
@@ -6799,7 +6800,7 @@ impl SumeragiNposTimeouts {
     fn parse_overrides(
         self,
         _emitter: &mut Emitter<ParseError>,
-    ) -> Option<actual::SumeragiNposTimeoutOverrides> {
+    ) -> actual::SumeragiNposTimeoutOverrides {
         let to_override = |value: Option<u64>| -> Option<Duration> {
             match value {
                 Some(0) | None => None,
@@ -6807,7 +6808,7 @@ impl SumeragiNposTimeouts {
             }
         };
 
-        Some(actual::SumeragiNposTimeoutOverrides {
+        actual::SumeragiNposTimeoutOverrides {
             propose: to_override(self.propose_ms),
             prevote: to_override(self.prevote_ms),
             precommit: to_override(self.precommit_ms),
@@ -6816,7 +6817,7 @@ impl SumeragiNposTimeouts {
             commit: to_override(self.commit_ms),
             da: to_override(self.da_ms),
             aggregator: to_override(self.aggregator_ms),
-        })
+        }
     }
 }
 
@@ -6828,9 +6829,9 @@ impl SumeragiNposVrf {
     ) -> Option<actual::SumeragiNposVrf> {
         let mut valid = true;
 
-        let mut resolve_window = |value: Option<u64>, field: &'static str, derived: u64| -> u64 {
-            match value {
-                Some(value) => {
+        let mut resolve_window =
+            |value: Option<u64>, field: &'static str, derived: u64| -> u64 {
+                value.map_or(derived, |value| {
                     if value == 0 {
                         emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
                             format!("sumeragi.npos.vrf.{field} must be greater than zero"),
@@ -6838,10 +6839,8 @@ impl SumeragiNposVrf {
                         valid = false;
                     }
                     value
-                }
-                None => derived,
-            }
-        };
+                })
+            };
 
         let commit_window_blocks = resolve_window(
             self.commit_window_blocks,
@@ -12836,7 +12835,6 @@ impl Torii {
             (Some(public_key), Some(private_key)) => {
                 let key_pair = KeyPair::new(public_key.clone(), private_key.0.clone())
                     .unwrap_or_else(|err| panic!("invalid torii receipt key pair: {err}"));
-                #[cfg(feature = "bls")]
                 if matches!(
                     key_pair.public_key().algorithm(),
                     Algorithm::BlsNormal | Algorithm::BlsSmall

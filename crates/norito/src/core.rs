@@ -1470,10 +1470,10 @@ where
         let mut buf = Vec::new();
         for item in iter {
             buf.clear();
-            if let Some(hint) = hint_elem(&item) {
-                if buf.capacity() < hint {
-                    buf.reserve_exact(hint - buf.capacity());
-                }
+            if let Some(hint) = hint_elem(&item)
+                && buf.capacity() < hint
+            {
+                buf.reserve_exact(hint - buf.capacity());
             }
             encode_elem(item, &mut buf)?;
             write_len(
@@ -6063,10 +6063,12 @@ impl<'a> ArchiveView<'a> {
         let _flags = DecodeFlagsGuard::enter_with_hint(self.flags, effective);
         let (value, used) = <T as DecodeFromSlice>::decode_from_slice(self.bytes)?;
         if used != self.bytes.len() {
-            // We validated the full payload length via header; ensure full consumption
-            // to avoid silent acceptance of trailing data.
-            // Not an error for all types, but keep strict behavior here.
-            return Err(Error::LengthMismatch);
+            // Some payloads carry trailing zero alignment bytes after the logical
+            // decode boundary. Accept those, while still rejecting non-zero tails.
+            let tail = self.bytes.get(used..).ok_or(Error::LengthMismatch)?;
+            if tail.iter().any(|byte| *byte != 0) {
+                return Err(Error::LengthMismatch);
+            }
         }
         Ok(value)
     }
@@ -6455,9 +6457,10 @@ where
 
     impl std::io::Write for LenWriter {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.len = self.len.checked_add(buf.len()).ok_or_else(|| {
-                std::io::Error::new(std::io::ErrorKind::Other, "norito length overflow")
-            })?;
+            self.len = self
+                .len
+                .checked_add(buf.len())
+                .ok_or_else(|| std::io::Error::other("norito length overflow"))?;
             Ok(buf.len())
         }
 
@@ -6468,13 +6471,14 @@ where
         fn write_vectored(&mut self, bufs: &[std::io::IoSlice<'_>]) -> std::io::Result<usize> {
             let mut total = 0usize;
             for b in bufs {
-                total = total.checked_add(b.len()).ok_or_else(|| {
-                    std::io::Error::new(std::io::ErrorKind::Other, "norito length overflow")
-                })?;
+                total = total
+                    .checked_add(b.len())
+                    .ok_or_else(|| std::io::Error::other("norito length overflow"))?;
             }
-            self.len = self.len.checked_add(total).ok_or_else(|| {
-                std::io::Error::new(std::io::ErrorKind::Other, "norito length overflow")
-            })?;
+            self.len = self
+                .len
+                .checked_add(total)
+                .ok_or_else(|| std::io::Error::other("norito length overflow"))?;
             Ok(total)
         }
     }

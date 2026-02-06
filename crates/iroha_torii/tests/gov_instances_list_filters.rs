@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Torii handler test for instances listing filters and pagination.
 #![allow(clippy::too_many_lines)]
 

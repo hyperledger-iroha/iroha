@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Smoke test that Webhooks endpoints are exposed via the merged sub-router.
 #![cfg(feature = "app_api")]
 

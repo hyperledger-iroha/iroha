@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Roadmap ADDR-5 coverage ensuring Torii surfaces canonical IH58 account IDs.
 
 use std::{

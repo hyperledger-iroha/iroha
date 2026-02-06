@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Tests for notifications emitted after trigger execution.
 
 use std::time::Duration;

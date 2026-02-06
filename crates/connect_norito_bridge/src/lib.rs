@@ -946,6 +946,7 @@ fn compute_offline_receipt_challenge(
     Ok((bytes, iroha_bytes, client_hash))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn encode_offline_spend_receipt_payload(
     tx_id_hex: String,
     from_raw: String,

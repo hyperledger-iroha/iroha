@@ -1,4 +1,5 @@
 #![doc = "End-to-end test for the native STARK (FRI single-fold) verifier."]
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "zk-tests")]
 //! End-to-end test for the native STARK (FRI single-fold) verifier.
 

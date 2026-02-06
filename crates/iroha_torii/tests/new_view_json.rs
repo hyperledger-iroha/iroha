@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Basic shape test for `NEW_VIEW` JSON endpoint
 
 #[tokio::test]

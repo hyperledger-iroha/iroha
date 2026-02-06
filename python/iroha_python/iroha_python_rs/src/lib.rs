@@ -3747,7 +3747,7 @@ mod tests {
             .expect("car build");
         let root_cid = stats
             .root_cids
-            .get(0)
+            .first()
             .cloned()
             .expect("car must have one root");
         let manifest = ManifestBuilder::new()

@@ -1,4 +1,5 @@
 //! Stress tests for the transaction queue to guard against Arc drain panics.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 use std::{borrow::Cow, num::NonZeroUsize, sync::Arc, thread, time::Duration};
 

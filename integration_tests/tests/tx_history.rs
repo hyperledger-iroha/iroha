@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Tests covering Torii transaction history pagination and filters.
 
 use std::time::Duration;

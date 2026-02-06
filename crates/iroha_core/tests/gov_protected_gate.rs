@@ -1,4 +1,5 @@
 //! Protected namespace admission gate test for IVM deploys.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Skipped by default; enable with `IROHA_RUN_IGNORED=1`.
 #![allow(clippy::too_many_lines, clippy::items_after_statements)]
 

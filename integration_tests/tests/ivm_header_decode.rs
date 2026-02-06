@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Decode IVM header fields from a `.to` artifact (ignored by default).
 //!
 //! This test uses the current header layout from `crates/ivm/src/metadata.rs`:

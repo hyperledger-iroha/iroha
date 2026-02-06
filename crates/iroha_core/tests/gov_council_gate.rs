@@ -1,4 +1,5 @@
 //! Council gating for governance proposals: referenda open only after quorum.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 use std::num::NonZeroU64;
 

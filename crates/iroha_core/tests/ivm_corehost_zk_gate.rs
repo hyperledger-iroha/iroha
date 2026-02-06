@@ -1,4 +1,5 @@
 #![doc = "ZK verify gating tests for `CoreHost`"]
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "zk-tests")]
 //! `CoreHost` ZK verify gating tests: ensure Unshield/ZkTransfer are rejected
 //! without a prior successful `ZK_VERIFY_*` syscall.

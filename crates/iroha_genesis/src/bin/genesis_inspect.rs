@@ -1,4 +1,4 @@
-//! Inspect a Norito-framed genesis block for validator and PoP registrations.
+//! Inspect a Norito-framed genesis block for validator and `PoP` registrations.
 
 use std::{collections::BTreeMap, env, fs};
 
@@ -38,7 +38,7 @@ fn main() -> Result<()> {
                 }
                 if let Some(reg) = instr.as_any().downcast_ref::<RegisterPublicLaneValidator>() {
                     validators.push((
-                        reg.lane_id().clone(),
+                        *reg.lane_id(),
                         reg.validator().clone(),
                         reg.stake_account().clone(),
                         reg.initial_stake().clone(),
@@ -46,34 +46,41 @@ fn main() -> Result<()> {
                     continue;
                 }
                 if let Some(act) = instr.as_any().downcast_ref::<ActivatePublicLaneValidator>() {
-                    activations.push((act.lane_id().clone(), act.validator().clone()));
+                    activations.push((*act.lane_id(), act.validator().clone()));
                 }
             }
         }
     }
 
-    println!("event=genesis_inspect peers_with_pop={}", peers.len());
-    for (peer, pop_len, activation_at, expiry_at) in peers.iter() {
+    println!(
+        "event=genesis_inspect peers_with_pop={count}",
+        count = peers.len()
+    );
+    for (peer, pop_len, activation_at, expiry_at) in &peers {
         println!(
-            "peer={} pop_len={} activation_at={:?} expiry_at={:?}",
-            peer, pop_len, activation_at, expiry_at
+            "peer={peer} pop_len={pop_len} activation_at={activation_at:?} expiry_at={expiry_at:?}"
         );
     }
 
-    println!("event=genesis_inspect validators={}", validators.len());
+    println!(
+        "event=genesis_inspect validators={count}",
+        count = validators.len()
+    );
     let mut validator_index = BTreeMap::new();
-    for (lane, validator, stake_account, stake) in validators.iter() {
+    for (lane, validator, stake_account, stake) in &validators {
         println!(
-            "validator={} lane={lane} stake_account={} initial_stake={}",
-            validator, stake_account, stake
+            "validator={validator} lane={lane} stake_account={stake_account} initial_stake={stake}"
         );
         validator_index
-            .entry((lane.clone(), validator.clone()))
-            .or_insert((stake_account.clone(), stake.clone()));
+            .entry((*lane, validator.clone()))
+            .or_insert_with(|| (stake_account.clone(), stake.clone()));
     }
 
-    println!("event=genesis_inspect activations={}", activations.len());
-    for (lane, validator) in activations.iter() {
+    println!(
+        "event=genesis_inspect activations={count}",
+        count = activations.len()
+    );
+    for (lane, validator) in &activations {
         println!("activation lane={lane} validator={validator}");
     }
 

@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Tests covering the `SoraFS` gateway capability refusal fixture bundle.
 
 use std::collections::{HashMap, HashSet};

@@ -271,6 +271,7 @@ impl TransactionGossiper {
     }
 
     /// Construct [`Self`] from configuration
+    #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
     pub fn from_config(
         chain_id: ChainId,
         Config {
@@ -658,6 +659,7 @@ impl TransactionGossiper {
         self.defer_gossip_hashes(sent_hashes);
     }
 
+    #[allow(clippy::too_many_lines)]
     fn gossip_restricted(
         &mut self,
         dataspace_id: DataSpaceId,
@@ -982,7 +984,7 @@ impl TransactionGossiper {
     ) -> RestrictedTargetPlan {
         let fallback_targets: Vec<PeerId> = self.network.online_peers(|online| {
             let mut peers = Vec::with_capacity(online.len());
-            for peer in online.iter() {
+            for peer in online {
                 peers.push(peer.id().clone());
             }
             peers
@@ -1541,6 +1543,7 @@ fn gossip_message_encoded_len(txs_payload_len: usize, routes_payload_len: usize)
     Some(total)
 }
 
+#[allow(single_use_lifetimes)]
 fn gossip_vec_payload_len_exact<'a>(
     items: impl Iterator<Item = &'a GossipTransaction>,
 ) -> Option<usize> {
@@ -1553,6 +1556,7 @@ fn gossip_vec_payload_len_exact<'a>(
     Some(total)
 }
 
+#[allow(single_use_lifetimes)]
 fn gossip_vec_payload_len_cached<'a>(
     items: impl Iterator<Item = &'a GossipTransaction>,
 ) -> Option<usize> {

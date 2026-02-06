@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Bounded-latency localnet smoke and throughput tests for permissioned and `NPoS` Sumeragi.
 
 use std::{

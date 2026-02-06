@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Tests queries for retrieving roles and their identifiers.
 
 use std::collections::HashSet;

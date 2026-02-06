@@ -4257,7 +4257,7 @@ mod tests {
 
     #[test]
     fn account_id_raw_string_parses_as_account_id() {
-        let seed_bytes = Some("localnet-gas-parse".as_bytes());
+        let seed_bytes = Some(b"localnet-gas-parse".as_slice());
         let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED);
         let gas_account_id = localnet_gas_account_id(&genesis_public_key).expect("gas account id");
         let encoded = account_id_raw_string(&gas_account_id);

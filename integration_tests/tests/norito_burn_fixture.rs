@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! JS Norito fixture parity with Rust canonical encoding.
 
 use std::{fs, path::PathBuf, str::FromStr};

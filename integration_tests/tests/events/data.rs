@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Tests for event data produced by instruction and IVM execution.
 use std::collections::BTreeSet;
 

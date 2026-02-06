@@ -4154,7 +4154,7 @@ pub mod codec {
     pub(crate) fn ensure_chroma_even_dimensions(
         dimensions: FrameDimensions,
     ) -> Result<(), CodecError> {
-        if dimensions.width % 2 != 0 || dimensions.height % 2 != 0 {
+        if !dimensions.width.is_multiple_of(2) || !dimensions.height.is_multiple_of(2) {
             return Err(CodecError::ChromaDimensionsNotEven(
                 ChromaDimensionsNotEvenInfo {
                     width: dimensions.width,
@@ -4182,7 +4182,7 @@ pub mod codec {
         /// Build a neutral 4:2:0 chroma frame (U/V filled with 128).
         pub fn neutral(dimensions: FrameDimensions) -> Self {
             debug_assert!(
-                dimensions.width % 2 == 0 && dimensions.height % 2 == 0,
+                dimensions.width.is_multiple_of(2) && dimensions.height.is_multiple_of(2),
                 "4:2:0 chroma requires even dimensions"
             );
             let expected = usize::from(dimensions.width / 2) * usize::from(dimensions.height / 2);

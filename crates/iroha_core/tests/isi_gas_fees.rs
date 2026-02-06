@@ -1,4 +1,5 @@
 //! Integration-style test: non-VM (native ISI) transaction gas metering and fee transfer.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::similar_names)]
 use std::{borrow::Cow, sync::Arc};
 

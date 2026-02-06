@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Peer unregister flows under churn.
 
 use std::time::{Duration, Instant};

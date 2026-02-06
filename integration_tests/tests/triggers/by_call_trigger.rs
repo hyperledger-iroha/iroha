@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Tests for executing triggers directly
 
 use eyre::{Result, WrapErr};

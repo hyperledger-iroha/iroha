@@ -1,4 +1,5 @@
 #![doc = "Governance ZK ballot must fail when referendum is missing or outside window."]
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(all(feature = "zk-tests", feature = "halo2-dev-tests"))]
 
 use iroha_core::{

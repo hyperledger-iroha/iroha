@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Verify that Sumeragi operates correctly in `NPoS` mode when collectors are selected via PRF.
 
 use std::{

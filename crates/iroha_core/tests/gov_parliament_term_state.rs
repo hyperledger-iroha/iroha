@@ -1,4 +1,5 @@
 //! `ParliamentTerm` state shape and defaults.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "bls")]
 
 use iroha_core::governance::state::ParliamentTerm;

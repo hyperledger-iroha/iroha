@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration coverage for staged consensus mode cutovers.
 use std::{convert::TryFrom, fs, path::PathBuf, time::Duration};
 

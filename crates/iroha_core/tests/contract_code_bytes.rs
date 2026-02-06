@@ -1,4 +1,5 @@
 //! Tests for registering on-chain contract code bytes.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 use iroha_core::{
     kura::Kura,

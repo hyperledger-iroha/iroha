@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Persist VRF-derived council into WSV and verify `current` returns it.
 #![cfg(all(feature = "app_api", feature = "gov_vrf"))]
 

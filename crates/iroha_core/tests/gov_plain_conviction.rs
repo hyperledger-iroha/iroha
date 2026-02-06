@@ -1,4 +1,5 @@
 //! Plain ballot conviction factor test.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Skipped by default; enable with `IROHA_RUN_IGNORED=1`.
 
 use iroha_core::{

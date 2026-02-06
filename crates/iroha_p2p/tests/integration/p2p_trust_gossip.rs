@@ -50,6 +50,12 @@ impl ClassifyTopic for TrustTestMessage {
     }
 }
 
+impl<'a> norito::core::DecodeFromSlice<'a> for TrustTestMessage {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        norito::core::decode_field_canonical::<Self>(bytes)
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 fn make_config(addr: &SocketAddr, trust_gossip: bool) -> Config {
     Config {

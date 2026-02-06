@@ -1,10 +1,7 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests of the Iroha Client CLI
 
-use std::{
-    path::PathBuf,
-    sync::Once,
-    time::Duration,
-};
+use std::{path::PathBuf, sync::Once, time::Duration};
 
 use integration_tests::sandbox;
 use iroha::{

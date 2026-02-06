@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Ensure SoraFS reconciliation reports are emitted across peers and surface divergence.
 
 use std::{

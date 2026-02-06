@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Time-based trigger execution paths using bounded async waits.
 
 use std::time::Duration;

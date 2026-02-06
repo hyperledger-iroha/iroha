@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Shared fixtures used across Torii integration/unit tests.
 //!
 //! Some helpers are gated by telemetry and may be unused when those tests are
@@ -32,7 +33,6 @@ pub static TX_QUERY_ACCOUNT: LazyLock<AccountLiterals> = LazyLock::new(|| {
     let compressed = account
         .to_account_address()
         .and_then(|addr| addr.to_compressed_sora())
-        .map(|addr| addr)
         .expect("compressed literal should encode");
     let raw_public_key = format!("{}@{}", account.signatory(), domain_label);
     AccountLiterals {
