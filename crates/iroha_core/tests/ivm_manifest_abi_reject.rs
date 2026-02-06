@@ -1,4 +1,5 @@
 //! Admission-time rejection when on-chain manifest `abi_hash` mismatches node policy.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 use core::str::FromStr;
 use std::borrow::Cow;

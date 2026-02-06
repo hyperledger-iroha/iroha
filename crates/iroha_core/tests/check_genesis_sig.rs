@@ -1,4 +1,5 @@
 //! Verifies that the genesis block signatures match the expected public key.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 use iroha_crypto::{PublicKey, SignatureOf};
 use iroha_data_model::block::{

@@ -1,4 +1,5 @@
 //! IVM gas schedule wiring tests.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 use iroha_core::smartcontracts::limits;
 

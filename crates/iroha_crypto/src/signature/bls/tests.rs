@@ -2,7 +2,7 @@
 use w3f_bls::SerializableToBytes as _;
 
 use super::{
-    implementation::{BlsConfiguration, BlsImpl},
+    implementation::{BlsConfiguration, BlsImpl, PreparedPublicKeyCacheAccess},
     normal::NormalConfiguration,
     small::SmallConfiguration,
 };
@@ -33,7 +33,7 @@ fn test_keypair_generation_from_seed<C: BlsConfiguration>() {
     }
 }
 
-fn test_signature_verification<C: BlsConfiguration>() {
+fn test_signature_verification<C: BlsConfiguration + PreparedPublicKeyCacheAccess>() {
     let (pk, sk) = BlsImpl::<C>::keypair(KeyGenOption::Random);
 
     let signature_1 = BlsImpl::<C>::sign(MESSAGE_1, &sk);
@@ -41,7 +41,9 @@ fn test_signature_verification<C: BlsConfiguration>() {
         .expect("Signature verification should succeed");
 }
 
-fn test_signature_verification_different_messages<C: BlsConfiguration>() {
+fn test_signature_verification_different_messages<
+    C: BlsConfiguration + PreparedPublicKeyCacheAccess,
+>() {
     let (pk, sk) = BlsImpl::<C>::keypair(KeyGenOption::Random);
 
     let signature = BlsImpl::<C>::sign(MESSAGE_1, &sk);
@@ -50,7 +52,9 @@ fn test_signature_verification_different_messages<C: BlsConfiguration>() {
 }
 
 #[allow(clippy::similar_names)]
-fn test_signature_verification_different_keys<C: BlsConfiguration>() {
+fn test_signature_verification_different_keys<
+    C: BlsConfiguration + PreparedPublicKeyCacheAccess,
+>() {
     let (_pk_1, sk_1) = BlsImpl::<C>::keypair(KeyGenOption::Random);
     let (pk_2, _sk_2) = BlsImpl::<C>::keypair(KeyGenOption::Random);
 

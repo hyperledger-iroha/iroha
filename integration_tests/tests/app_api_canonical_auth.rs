@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! App API canonical request auth smoke test: GET + POST endpoints accept
 //! `X-Iroha-Account`/`X-Iroha-Signature` headers signed over the canonical
 //! method/path/query/body envelope.

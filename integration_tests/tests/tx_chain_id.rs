@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Validates that mismatched chain identifiers cause transaction rejection.
 
 use integration_tests::sandbox;

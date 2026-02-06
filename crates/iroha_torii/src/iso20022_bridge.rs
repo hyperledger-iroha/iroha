@@ -432,7 +432,7 @@ fn parse_config_account_id(literal: &str, field: &str) -> eyre::Result<AccountId
     crate::ensure_test_domain_selector_resolver();
 
     AccountId::parse(literal)
-        .map(|parsed| parsed.into_account_id())
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .wrap_err_with(|| format!("{field} must parse as an account identifier"))
 }
 

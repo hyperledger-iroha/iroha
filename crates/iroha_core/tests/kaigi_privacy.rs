@@ -1,4 +1,5 @@
 #![doc = "Integration coverage for Kaigi privacy-mode instruction execution."]
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(all(
     feature = "zk-tests",
     feature = "zk-halo2",

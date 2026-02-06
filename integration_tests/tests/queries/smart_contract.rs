@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Smart contract query behaviour checks.
 
 use eyre::{Result, WrapErr};

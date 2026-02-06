@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests for /v1/zk/proofs and /v1/zk/proofs/count.
 #![cfg(feature = "app_api")]
 #![allow(clippy::too_many_lines)]

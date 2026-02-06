@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Ensures the workspace builds with the `fast_dsl` feature enabled.
 
 use std::{path::Path, process::Command};

@@ -330,11 +330,11 @@ unsafe fn dlopen_metal_helper() -> *mut c_void {
     use std::{env, ffi::CString, os::unix::ffi::OsStrExt, path::PathBuf};
 
     let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Ok(exe) = env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            candidates.push(dir.join("libgpuzstd_metal.dylib"));
-            candidates.push(dir.join("../lib/libgpuzstd_metal.dylib"));
-        }
+    if let Ok(exe) = env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        candidates.push(dir.join("libgpuzstd_metal.dylib"));
+        candidates.push(dir.join("../lib/libgpuzstd_metal.dylib"));
     }
     candidates.push(PathBuf::from("libgpuzstd_metal.dylib"));
 

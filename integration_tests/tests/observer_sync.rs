@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Observer/sync-only node catches up behind a small validator swarm.
 
 use std::collections::{HashMap, HashSet};

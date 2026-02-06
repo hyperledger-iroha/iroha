@@ -403,8 +403,6 @@ pub(crate) fn resolve_npos_timeouts(
     out.propose = clamp(out.propose);
     out.prevote = clamp(out.prevote);
     out.precommit = clamp(out.precommit);
-    out.exec = clamp(out.exec);
-    out.witness = clamp(out.witness);
     out.commit = clamp(out.commit);
     out.da = clamp(out.da);
     out.aggregator = clamp(out.aggregator);
@@ -10295,12 +10293,11 @@ fn drain_mailbox<A: WorkerActor>(
     phase: DrainPhase,
     tick_deadline: Option<Instant>,
 ) {
-    let vote_burst_cap = if mailbox.has_pending(PriorityTier::Blocks) {
-        VOTE_BURST_CAP_WITH_BLOCKS.min(VOTE_BURST_CAP)
+    let vote_burst = if mailbox.has_pending(PriorityTier::Blocks) {
+        VOTE_BURST_CAP_WITH_BLOCKS
     } else {
         VOTE_BURST_CAP
     };
-    let vote_burst = cfg.vote_rx_drain_max_messages.min(vote_burst_cap).max(1);
     // Cap per-iteration draining so ticks cannot be starved by long queue backlogs.
     let drain_budget = cfg
         .time_budget
@@ -10509,6 +10506,11 @@ fn run_worker_iteration<A: WorkerActor>(
     let mut cfg = *cfg;
     let queue_depths = status::worker_queue_depth_snapshot();
     apply_adaptive_drain_caps(&mut cfg, queue_depths);
+    if queue_depths.block_rx > 0 {
+        cfg.vote_rx_drain_max_messages = cfg
+            .vote_rx_drain_max_messages
+            .max(VOTE_BURST_CAP_WITH_BLOCKS);
+    }
     let pre_tick_gap = if has_pending_queue_depths(queue_depths) {
         cfg.tick_busy_gap
     } else {
@@ -10741,9 +10743,6 @@ fn select_next_tier(
     {
         return Some(PriorityTier::Votes);
     }
-    if blocks_pending {
-        return Some(PriorityTier::Blocks);
-    }
     // After the vote burst, rotate to the oldest pending tier while keeping votes ahead of
     // heavy payload drains when block payloads are backlogged.
     if let Some(tier) =
@@ -10942,10 +10941,7 @@ fn spawn_tick_worker<A: WorkerActor + Send + 'static>(
     mut cfg: WorkerLoopConfig,
     wake_rx: mpsc::Receiver<()>,
     shutdown_signal: ShutdownSignal,
-) -> std::thread::JoinHandle<()>
-where
-    A: WorkerActor + Send + 'static,
-{
+) -> std::thread::JoinHandle<()> {
     std::thread::Builder::new()
         .name("sumeragi-tick".to_owned())
         .spawn(move || {

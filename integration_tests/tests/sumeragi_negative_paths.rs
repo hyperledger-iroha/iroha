@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Negative-path integration coverage for Sumeragi evidence and reconfiguration.
 use std::{thread, time::Duration};
 

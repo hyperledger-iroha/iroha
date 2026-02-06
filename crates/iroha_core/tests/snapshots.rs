@@ -1,4 +1,5 @@
 //! Test helpers for fixture-backed event snapshots.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(dead_code)]
 use std::{
     env, fs,

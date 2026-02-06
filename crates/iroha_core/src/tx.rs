@@ -24,7 +24,7 @@ use eyre::Result;
 use hex;
 pub use iroha_data_model::prelude::*;
 use iroha_data_model::{
-    account::address::AccountAddress,
+    account::address::AccountAddress as IrohaAccountAddress,
     fraud::types::FraudAssessment,
     isi::error::Mismatch,
     isi::{
@@ -2096,12 +2096,15 @@ fn collect_manifest_approvals(
             })?
         } else {
             let prefix = iroha_data_model::account::address::chain_discriminant();
-            let (address, _) = AccountAddress::parse_any(trimmed, Some(prefix)).map_err(|err| {
-                reject_lane_policy(
-                    alias,
-                    format!("invalid account id `{trimmed}` in `gov_manifest_approvers`: {err}"),
-                )
-            })?;
+            let (address, _) =
+                IrohaAccountAddress::parse_any(trimmed, Some(prefix)).map_err(|err| {
+                    reject_lane_policy(
+                        alias,
+                        format!(
+                            "invalid account id `{trimmed}` in `gov_manifest_approvers`: {err}"
+                        ),
+                    )
+                })?;
             address.to_ih58(prefix).map_err(|err| {
                 reject_lane_policy(
                     alias,
@@ -6829,9 +6832,12 @@ pub mod tests {
             .with_attachments(ProofAttachmentList(vec![attachment1, attachment2]))
             .sign(keypair.private_key());
 
-        let proofs = super::collect_lane_privacy_proofs(&tx);
-        let ids: BTreeSet<_> = proofs.iter().map(|proof| proof.commitment_id()).collect();
-        assert_eq!(proofs.len(), 2);
+        let collected_proofs = super::collect_lane_privacy_proofs(&tx);
+        let ids: BTreeSet<_> = collected_proofs
+            .iter()
+            .map(|proof| proof.commitment_id())
+            .collect();
+        assert_eq!(collected_proofs.len(), 2);
         assert!(ids.contains(&LaneCommitmentId::new(1)));
         assert!(ids.contains(&LaneCommitmentId::new(2)));
     }
@@ -6843,7 +6849,8 @@ pub mod tests {
         let primary_keypair = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
         let secondary_keypair = KeyPair::from_seed(vec![0x22; 32], Algorithm::Ed25519);
         let primary_id = AccountId::new(domain_id.clone(), primary_keypair.public_key().clone());
-        let secondary_id = AccountId::new(domain_id.clone(), secondary_keypair.public_key().clone());
+        let secondary_id =
+            AccountId::new(domain_id.clone(), secondary_keypair.public_key().clone());
 
         let rules = GovernanceRules {
             validators: vec![primary_id.clone(), secondary_id.clone()],

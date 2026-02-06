@@ -2415,7 +2415,7 @@ mod run {
 
         use bytes::Bytes;
         use iroha_crypto::encryption::ChaCha20Poly1305;
-        use norito::codec::{Decode, Encode};
+        use norito::codec::{Decode, DecodeAll, Encode};
         use tokio::io::{AsyncRead, AsyncWrite};
 
         use crate::Priority;
@@ -2427,6 +2427,24 @@ mod run {
 
         #[derive(Encode, Decode, Clone, Debug)]
         struct Blob(Vec<u8>);
+
+        macro_rules! impl_decode_from_slice_via_codec {
+            ($($ty:ty),+ $(,)?) => {
+                $(
+                    impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
+                        fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+                            let mut slice = bytes;
+                            let value = <Self as DecodeAll>::decode_all(&mut slice).map_err(|error| {
+                                norito::core::Error::Message(format!("codec decode error: {error}"))
+                            })?;
+                            Ok((value, bytes.len() - slice.len()))
+                        }
+                    }
+                )+
+            };
+        }
+
+        impl_decode_from_slice_via_codec!(Dummy, Blob);
 
         #[derive(Default)]
         struct WriteStats {

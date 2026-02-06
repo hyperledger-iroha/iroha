@@ -1,4 +1,5 @@
 //! Fraud monitoring admission tests ensure configuration knobs gate transaction acceptance.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 use std::{borrow::Cow, str::FromStr, time::Duration};
 

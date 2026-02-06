@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration smoke test: submit a proof attachment and query its record via Torii.
 
 use std::{convert::TryFrom as _, str::FromStr as _};

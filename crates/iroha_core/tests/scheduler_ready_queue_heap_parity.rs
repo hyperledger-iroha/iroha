@@ -1,4 +1,5 @@
 //! Ensure scheduler ready-queue heap vs per-wave sort produce identical outcomes.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 use std::borrow::Cow;
 

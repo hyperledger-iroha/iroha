@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Telemetry scheduler TEU integration tests.
 #![cfg(feature = "telemetry")]
 

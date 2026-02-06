@@ -1,4 +1,5 @@
 #![doc = "ZK ballot rejected on Plain-mode referendum (mode mismatch).\nSkipped by default; enable with `IROHA_RUN_IGNORED=1`."]
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "zk-tests")]
 #![cfg(feature = "halo2-dev-tests")]
 #![cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]

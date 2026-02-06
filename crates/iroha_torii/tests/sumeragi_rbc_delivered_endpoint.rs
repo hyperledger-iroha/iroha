@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Router-level test for GET /v1/sumeragi/rbc/delivered/{height}/{view}
 #![cfg(feature = "telemetry")]
 

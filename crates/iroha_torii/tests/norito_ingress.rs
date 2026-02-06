@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Tests covering Norito-RPC ingress policies and Content-Type enforcement.
 
 #[path = "common/norito_rpc_harness.rs"]

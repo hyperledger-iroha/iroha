@@ -1,4 +1,5 @@
 //! Tests covering confidential policy gating for transparent asset instructions.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 use std::num::NonZeroU64;
 

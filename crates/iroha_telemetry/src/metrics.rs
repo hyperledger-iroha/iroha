@@ -17155,9 +17155,9 @@ mod test {
                 .get(),
             1
         );
-        assert_eq!(metrics.torii_sorafs_gc_expired_manifests.get() as u64, 3);
+        assert_eq!(metrics.torii_sorafs_gc_expired_manifests.get(), 3);
         assert_eq!(
-            metrics.torii_sorafs_gc_oldest_expired_age_seconds.get() as u64,
+            metrics.torii_sorafs_gc_oldest_expired_age_seconds.get(),
             120
         );
     }
@@ -17176,7 +17176,7 @@ mod test {
             1
         );
         assert_eq!(
-            metrics.torii_sorafs_reconciliation_divergence_count.get() as u64,
+            metrics.torii_sorafs_reconciliation_divergence_count.get(),
             7
         );
     }
@@ -17205,18 +17205,18 @@ mod test {
             metrics
                 .torii_sorafs_repair_queue_depth
                 .with_label_values(&["provider-a"])
-                .get() as u64,
+                .get(),
             2
         );
         assert_eq!(
             metrics
                 .torii_sorafs_repair_queue_depth
                 .with_label_values(&["provider-b"])
-                .get() as u64,
+                .get(),
             1
         );
         assert_eq!(
-            metrics.torii_sorafs_repair_backlog_oldest_age_seconds.get() as u64,
+            metrics.torii_sorafs_repair_backlog_oldest_age_seconds.get(),
             300
         );
         assert_eq!(

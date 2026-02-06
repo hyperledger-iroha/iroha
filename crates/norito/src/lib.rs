@@ -524,6 +524,7 @@ pub mod codec {
     }
 
     #[cfg(test)]
+    #[allow(clippy::items_after_test_module)]
     mod encode_tests {
         use super::Encode;
         use crate::NoritoSerialize;
@@ -8926,7 +8927,7 @@ thread_local! {
 pub fn decode_panic_suppressed() -> bool {
     #[cfg(feature = "strict-safe")]
     {
-        return DECODE_PANIC_DEPTH.with(|depth| depth.get() > 0);
+        DECODE_PANIC_DEPTH.with(|depth| depth.get() > 0)
     }
     #[cfg(not(feature = "strict-safe"))]
     {

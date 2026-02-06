@@ -1,4 +1,5 @@
 //! Scheduler telemetry smoke tests (telemetry feature only).
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Ensures layer metrics and utilization are populated after block application.
 #![allow(unused_imports)]
 

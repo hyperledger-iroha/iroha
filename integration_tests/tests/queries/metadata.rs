@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Tests querying metadata via `FindAccounts`.
 
 use std::{collections::BTreeMap, str::FromStr};

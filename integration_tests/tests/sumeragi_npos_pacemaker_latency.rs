@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Validate that the pacemaker targets 1s while staying within the commit-quorum envelope
 //! under ~250ms link delays.
 

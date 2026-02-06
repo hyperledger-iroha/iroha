@@ -1,4 +1,5 @@
 #![doc = "FinalizeReferendum rejects when a ZK election exists but the tally is not finalized."]
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! FinalizeReferendum rejects when a ZK election exists but the tally is not finalized.
 
 use core::num::NonZeroU64;

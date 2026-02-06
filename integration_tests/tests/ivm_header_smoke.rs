@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Minimal header smoke test (ignored by default)
 //!
 //! If a `.to` artifact is present at `target/examples/hello.to` (built via the

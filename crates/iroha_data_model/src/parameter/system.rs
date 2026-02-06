@@ -177,7 +177,7 @@ mod model {
         ///
         /// A block is created if this limit or [`BlockParameters::max_transactions`] limit is reached,
         /// whichever comes first. Regardless of the limits, an empty block is never created.
-        /// This value is authoritative for both permissioned and NPoS pacemaker timing.
+        /// This value is authoritative for both permissioned and `NPoS` pacemaker timing.
         #[norito(default = "defaults::sumeragi::block_time_ms")]
         pub block_time_ms: u64,
         /// Time (in milliseconds) a peer will wait for a block to be committed.
@@ -190,7 +190,7 @@ mod model {
         /// All derived timeouts are clamped to be at least this value.
         #[norito(default = "defaults::sumeragi::min_finality_ms")]
         pub min_finality_ms: u64,
-        /// Pacing factor applied to block/commit timing (basis points, 10_000 = 1.0x).
+        /// Pacing factor applied to block/commit timing (basis points, `10_000` = 1.0x).
         #[norito(default = "defaults::sumeragi::pacing_factor_bps")]
         pub pacing_factor_bps: u32,
         /// Maximal allowed random deviation from the nominal rate
@@ -463,7 +463,7 @@ mod model {
         BlockTimeMs(u64),
         CommitTimeMs(u64),
         MinFinalityMs(u64),
-        /// Pacing factor (basis points, 10_000 = 1.0x).
+        /// Pacing factor (basis points, `10_000` = 1.0x).
         PacingFactorBps(u32),
         MaxClockDriftMs(u64),
         /// Number of collectors per height (K). Must be >= 1.
@@ -803,7 +803,7 @@ impl SumeragiParameters {
         self.min_finality_ms
     }
 
-    /// Raw pacing factor in basis points (10_000 = 1.0x).
+    /// Raw pacing factor in basis points (`10_000` = 1.0x).
     #[must_use]
     pub fn pacing_factor_bps(&self) -> u32 {
         self.pacing_factor_bps
@@ -851,7 +851,7 @@ impl SumeragiParameters {
         self.min_finality_ms.max(1)
     }
 
-    /// Effective pacing factor (basis points, clamped to >= 10_000).
+    /// Effective pacing factor (basis points, clamped to >= `10_000`).
     #[must_use]
     pub fn effective_pacing_factor_bps(&self) -> u32 {
         self.pacing_factor_bps.max(10_000)
@@ -876,7 +876,7 @@ impl SumeragiParameters {
     ///
     /// A block is created if this limit or [`BlockParameters::max_transactions`] limit is reached,
     /// whichever comes first. Regardless of the limits, an empty block is never created.
-    /// This value is authoritative for both permissioned and NPoS pacemaker timing.
+    /// This value is authoritative for both permissioned and `NPoS` pacemaker timing.
     pub fn block_time(&self) -> Duration {
         Duration::from_millis(self.block_time_ms)
     }
@@ -918,6 +918,11 @@ impl SumeragiParameters {
     }
 
     /// Validate timing constraints for this parameter set.
+    ///
+    /// # Errors
+    /// Returns an error string when `min_finality_ms`, `pacing_factor_bps`,
+    /// `block_time_ms`, or `commit_time_ms` violate the required ordering
+    /// and lower-bound invariants.
     pub fn validate_timing(&self) -> Result<(), &'static str> {
         if self.min_finality_ms == 0 {
             return Err("min_finality_ms must be greater than zero");
@@ -1147,6 +1152,7 @@ impl JsonSerialize for SumeragiParameters {
 
 #[cfg(feature = "json")]
 impl JsonDeserialize for SumeragiParameters {
+    #[allow(clippy::too_many_lines)]
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let value = json::Value::json_deserialize(parser)?;
         let mut map = json_support::expect_object(value, "SumeragiParameters")?;

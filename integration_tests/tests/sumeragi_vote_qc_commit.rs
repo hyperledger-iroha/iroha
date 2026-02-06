@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Ensure Sumeragi commits blocks end-to-end using the Vote/QC pipeline.
 
 use eyre::Result;

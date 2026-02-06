@@ -1,4 +1,5 @@
 //! `CreateElection` should seed a Zk referendum when none exists, using governance window defaults.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 use iroha_core::{
     kura::Kura,

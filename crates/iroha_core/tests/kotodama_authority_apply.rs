@@ -1,4 +1,5 @@
 //! Verify Kotodama program using `authority()` enqueues expected ISIs via `CoreHost`.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 use iroha_core::smartcontracts::ivm::host::CoreHost;
 use iroha_data_model::prelude::*;

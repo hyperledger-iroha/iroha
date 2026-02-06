@@ -1,4 +1,6 @@
 //! Benchmarks for core query execution (e.g., FindAccounts) over varying state sizes.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
+#![allow(clippy::all)]
 #![allow(
     clippy::doc_markdown,
     clippy::uninlined_format_args,

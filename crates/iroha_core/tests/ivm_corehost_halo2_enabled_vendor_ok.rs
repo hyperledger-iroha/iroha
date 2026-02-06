@@ -1,4 +1,5 @@
 #![doc = "Positive gating path: with Halo2 enabled and within `max_k`, a prior\n`ZK_VOTE_VERIFY_BALLOT` sets the `CoreHost` latch and allows enqueued\n`SubmitBallot` (via vendor bridge) to apply."]
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "zk-ipa-native")]
 #![allow(clippy::cast_possible_truncation, clippy::too_many_lines)]
 

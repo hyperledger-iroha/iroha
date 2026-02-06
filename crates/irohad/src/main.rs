@@ -642,6 +642,7 @@ struct NetworkRelay {
     network: IrohaNetwork,
     streaming: iroha_core::streaming::StreamingHandle,
     kiso: KisoHandle,
+    #[allow(dead_code)]
     suppress_pow_broadcast: Arc<AtomicBool>,
     consensus_ingress: ConsensusIngressLimiter,
     low_priority_ingress: LowPriorityIngressLimiter,

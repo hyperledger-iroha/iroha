@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Telemetry and metrics surface integration tests.
 
 use std::collections::{HashMap, HashSet};

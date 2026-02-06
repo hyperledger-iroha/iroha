@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Kotodama + IVM example runner (ignored by default)
 //!
 //! This integration test attempts to compile and run the example in `examples/hello/hello.ko`

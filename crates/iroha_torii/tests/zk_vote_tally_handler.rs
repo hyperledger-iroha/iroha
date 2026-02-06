@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Torii handler test for zk vote tally convenience endpoint.
 #![cfg(all(
     feature = "halo2-dev-tests",

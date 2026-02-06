@@ -831,6 +831,7 @@ const NEXUS_RECIPES_CHAOS: &[RecipeKind] = &[
 ];
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct NexusStakingSetup {
     stake_asset: AssetDefinitionId,
     fee_asset: AssetDefinitionId,

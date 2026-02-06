@@ -1,4 +1,5 @@
 //! Integration-style unit tests for deterministic collector routing.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 use iroha_config::parameters::actual::ConsensusMode;
 use iroha_core::sumeragi::{

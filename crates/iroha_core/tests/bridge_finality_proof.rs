@@ -1,4 +1,5 @@
 //! Bridge finality proof construction/roundtrip.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::expect_used)]
 
 use std::{

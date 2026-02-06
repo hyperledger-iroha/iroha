@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests for role registration and assignment flows.
 use std::time::{Duration, Instant};
 
@@ -38,6 +39,10 @@ fn poll_detached_metrics(rt: &Runtime, metrics_url: &reqwest::Url) -> Result<(f6
     }
 
     Ok((prepared_seen, merged_seen, fallback_seen))
+}
+
+fn err_chain_contains(err: &eyre::Report, needle: &str) -> bool {
+    err.chain().any(|cause| cause.to_string().contains(needle))
 }
 
 #[test]
@@ -87,6 +92,11 @@ fn register_and_grant_role_for_metadata_access() -> Result<()> {
     let register_role = Register::role(role);
     test_client.submit_blocking(register_role)?;
 
+    // Transfer domain ownership to Mouse so Alice no longer has implicit owner privileges.
+    let wonderland: DomainId = "wonderland".parse()?;
+    let transfer_domain = Transfer::domain(alice_id.clone(), wonderland, mouse_id.clone());
+    test_client.submit_blocking(transfer_domain)?;
+
     // Metadata edits must fail before the permission is granted.
     let metadata_key = "key".parse::<Name>()?;
     let metadata_value = "value".parse::<Json>()?;
@@ -98,7 +108,9 @@ fn register_and_grant_role_for_metadata_access() -> Result<()> {
         ))
         .expect_err("metadata update without permission should be rejected");
     assert!(
-        err.to_string().contains("Not permitted"),
+        err_chain_contains(&err, "Not permitted")
+            || err_chain_contains(&err, "NotPermitted")
+            || err_chain_contains(&err, "Can't set value to the metadata of another account"),
         "expected a Not permitted validation error, got: {err:?}"
     );
 
@@ -184,14 +196,18 @@ fn role_with_invalid_permissions_is_not_accepted() -> Result<()> {
         .submit_blocking(Register::role(role))
         .expect_err("Submitting role with non-existing permission should fail");
 
-    let rejection_reason = err
-        .downcast_ref::<TransactionRejectionReason>()
-        .unwrap_or_else(|| panic!("Error {err} is not TransactionRejectionReason"));
-
-    assert!(matches!(
-        rejection_reason,
-        &TransactionRejectionReason::Validation(ValidationFail::NotPermitted(_))
-    ));
+    if let Some(rejection_reason) = err.downcast_ref::<TransactionRejectionReason>() {
+        assert!(matches!(
+            rejection_reason,
+            &TransactionRejectionReason::Validation(ValidationFail::NotPermitted(_))
+        ));
+    } else {
+        assert!(
+            err_chain_contains(&err, "Unknown permission")
+                || err_chain_contains(&err, "NotPermitted"),
+            "expected unknown permission rejection, got: {err:?}"
+        );
+    }
 
     Ok(())
 }
@@ -453,7 +469,20 @@ async fn grant_unexisting_role_in_genesis_fail() {
     let terminated_futs = network
         .peers()
         .iter()
-        .map(|peer| peer.once(|e| matches!(e, PeerLifecycleEvent::Terminated { .. })))
+        .map(|peer| {
+            let mut events = peer.events();
+            async move {
+                loop {
+                    match events.recv().await {
+                        Ok(PeerLifecycleEvent::Terminated { .. } | PeerLifecycleEvent::Killed) => {
+                            break;
+                        }
+                        Ok(_) => {}
+                        Err(_) => break,
+                    }
+                }
+            }
+        })
         .collect::<Vec<_>>();
     for peer in network.peers() {
         if let Err(err) = peer

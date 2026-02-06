@@ -1,4 +1,5 @@
 //! Validate that by-call trigger execution emits both the trigger event and resulting data events.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 use std::borrow::Cow;
 

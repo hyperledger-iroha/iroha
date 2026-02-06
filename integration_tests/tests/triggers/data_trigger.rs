@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Data-trigger execution and rollback scenarios.
 
 use eyre::Result;

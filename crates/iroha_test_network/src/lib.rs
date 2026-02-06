@@ -1,4 +1,5 @@
 //! Puppeteer for `irohad`, to create test networks
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 mod config;
 pub mod fslock_ports;

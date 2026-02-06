@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Sumeragi Phase 3 integration: Set A window invariants and canonical certificates.
 //!
 //! These tests validate that:

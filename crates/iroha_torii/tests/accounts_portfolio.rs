@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Torii UAID portfolio endpoint tests.
 #![cfg(feature = "app_api")]
 

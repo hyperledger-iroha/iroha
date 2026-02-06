@@ -1,4 +1,5 @@
 //! Ensure structured data events are emitted in the same order as instructions
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! execute within a single transaction (WSV Overlays & Commit ordering).
 
 use std::borrow::Cow;

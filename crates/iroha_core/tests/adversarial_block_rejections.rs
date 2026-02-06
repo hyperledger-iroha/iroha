@@ -1,4 +1,5 @@
 //! Adversarial block validation regressions for forged/invalid transactions.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 use std::{borrow::Cow, num::NonZeroU64, sync::Arc};
 

@@ -1,4 +1,5 @@
 #![doc = "Helpers for generating minimal Halo2 proofs for governance tests."]
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(all(feature = "zk-tests", feature = "halo2-dev-tests"))]
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]

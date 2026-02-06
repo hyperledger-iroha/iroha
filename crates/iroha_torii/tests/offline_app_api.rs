@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests for offline app API write endpoints.
 #![cfg(feature = "app_api")]
 

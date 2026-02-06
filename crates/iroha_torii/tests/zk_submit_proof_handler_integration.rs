@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration test for /v1/zk/submit-proof minimal handler.
 #![allow(clippy::redundant_closure_for_method_calls)]
 #![cfg(feature = "app_api")]

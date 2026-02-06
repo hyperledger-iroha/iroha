@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Tests for the Nexus public-lane REST endpoints.
 #![cfg(feature = "app_api")]
 

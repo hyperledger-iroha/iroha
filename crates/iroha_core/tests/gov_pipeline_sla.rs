@@ -1,4 +1,5 @@
 //! Governance pipeline SLA enforcement tests.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 use iroha_core::{
     kura::Kura,

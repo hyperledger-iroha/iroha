@@ -71,6 +71,10 @@ pub struct PetalStreamGrid {
 
 impl PetalStreamGrid {
     /// Create a grid from raw cells.
+    ///
+    /// # Errors
+    /// Returns an error when `grid_size` is zero or `cells` length does not
+    /// match `grid_size * grid_size`.
     pub fn new(grid_size: u16, cells: Vec<bool>) -> Result<Self, PetalStreamError> {
         let expected = grid_size as usize * grid_size as usize;
         if expected == 0 || cells.len() != expected {
@@ -100,6 +104,10 @@ pub struct PetalStreamSampleGrid {
 
 impl PetalStreamSampleGrid {
     /// Create a sample grid from raw values.
+    ///
+    /// # Errors
+    /// Returns an error when `grid_size` is zero or `samples` length does not
+    /// match `grid_size * grid_size`.
     pub fn new(grid_size: u16, samples: Vec<u8>) -> Result<Self, PetalStreamError> {
         let expected = grid_size as usize * grid_size as usize;
         if expected == 0 || samples.len() != expected {
@@ -125,6 +133,10 @@ pub struct PetalStreamEncoder;
 
 impl PetalStreamEncoder {
     /// Encode payload bytes into a petal stream bit grid.
+    ///
+    /// # Errors
+    /// Returns an error when options are invalid, payload length exceeds
+    /// format limits, or the selected grid capacity cannot fit the payload.
     pub fn encode_grid(
         payload: &[u8],
         options: PetalStreamOptions,
@@ -172,6 +184,10 @@ pub struct PetalStreamDecoder;
 
 impl PetalStreamDecoder {
     /// Decode payload bytes from a petal stream bit grid.
+    ///
+    /// # Errors
+    /// Returns an error when options are invalid, grid geometry is inconsistent,
+    /// or payload/header checks fail.
     pub fn decode_grid(
         grid: &PetalStreamGrid,
         options: PetalStreamOptions,
@@ -184,10 +200,10 @@ impl PetalStreamDecoder {
         let mut bits = Vec::with_capacity(capacity);
         for y in 0..grid_size {
             for x in 0..grid_size {
-                if cell_role(x, y, grid_size, options) == CellRole::Data {
-                    if let Some(bit) = grid.get(x, y) {
-                        bits.push(bit);
-                    }
+                if cell_role(x, y, grid_size, options) == CellRole::Data
+                    && let Some(bit) = grid.get(x, y)
+                {
+                    bits.push(bit);
                 }
             }
         }
@@ -196,6 +212,10 @@ impl PetalStreamDecoder {
     }
 
     /// Decode payload bytes from a sampled luminance grid.
+    ///
+    /// # Errors
+    /// Returns an error when options are invalid, anchor sampling cannot derive
+    /// a valid threshold, or payload/header checks fail.
     pub fn decode_samples(
         samples: &PetalStreamSampleGrid,
         options: PetalStreamOptions,
@@ -216,11 +236,11 @@ impl PetalStreamDecoder {
                 let value = samples.samples[idx];
                 match cell_role(x, y, grid_size, options) {
                     CellRole::AnchorDark => {
-                        dark_sum += value as u64;
+                        dark_sum += u64::from(value);
                         dark_count += 1;
                     }
                     CellRole::AnchorLight => {
-                        light_sum += value as u64;
+                        light_sum += u64::from(value);
                         light_count += 1;
                     }
                     _ => {}
@@ -230,12 +250,12 @@ impl PetalStreamDecoder {
         if dark_count == 0 || light_count == 0 {
             return Err(PetalStreamError::InvalidOptions("anchor sampling failed"));
         }
-        let dark_avg = dark_sum as f64 / dark_count as f64;
-        let light_avg = light_sum as f64 / light_count as f64;
+        let dark_avg = dark_sum / dark_count;
+        let light_avg = light_sum / light_count;
         if dark_avg >= light_avg {
             return Err(PetalStreamError::InvalidOptions("anchor contrast too low"));
         }
-        let threshold = ((dark_avg + light_avg) / 2.0).round() as u8;
+        let threshold = u8::try_from(dark_avg.saturating_add(light_avg) / 2).unwrap_or(u8::MAX);
         let mut cells = vec![false; grid_size as usize * grid_size as usize];
         for (idx, sample) in samples.samples.iter().enumerate() {
             cells[idx] = *sample < threshold;
@@ -269,10 +289,10 @@ fn resolve_grid_size(
         if candidate == 0 {
             continue;
         }
-        if let Ok(capacity) = capacity_bits(candidate, options) {
-            if bits_needed <= capacity {
-                return Ok(candidate);
-            }
+        if let Ok(capacity) = capacity_bits(candidate, options)
+            && bits_needed <= capacity
+        {
+            return Ok(candidate);
         }
     }
     Err(PetalStreamError::CapacityExceeded)
@@ -291,29 +311,31 @@ fn resolve_grid_size_for_decode(
     Ok(grid_size)
 }
 
-fn capacity_bits(grid_size: u16, options: PetalStreamOptions) -> Result<usize, PetalStreamError> {
-    let border = options.border as i32;
-    let anchor = options.anchor_size as i32;
-    let grid = grid_size as i32;
-    if grid <= 0 {
+fn capacity_bits(size_cells: u16, options: PetalStreamOptions) -> Result<usize, PetalStreamError> {
+    let border = i32::from(options.border);
+    let anchor = i32::from(options.anchor_size);
+    let side_len_i32 = i32::from(size_cells);
+    if side_len_i32 <= 0 {
         return Err(PetalStreamError::InvalidOptions("grid size must be > 0"));
     }
     let min_grid = border * 2 + anchor * 2 + 1;
-    if grid < min_grid {
+    if side_len_i32 < min_grid {
         return Err(PetalStreamError::InvalidOptions(
             "grid size too small for anchors",
         ));
     }
-    let total = (grid as usize) * (grid as usize);
-    let border_cells = (grid as usize) * 4 - 4;
-    let anchor_cells = (options.anchor_size as usize) * (options.anchor_size as usize) * 4;
+    let side_len = usize::try_from(side_len_i32).expect("grid validated as positive");
+    let total = side_len * side_len;
+    let border_cells = side_len * 4 - 4;
+    let anchor_size = usize::from(options.anchor_size);
+    let anchor_cells = anchor_size * anchor_size * 4;
     let data_cells = total.saturating_sub(border_cells + anchor_cells);
     Ok(data_cells)
 }
 
 fn cell_role(x: u16, y: u16, grid_size: u16, options: PetalStreamOptions) -> CellRole {
-    let border = options.border as u16;
-    let anchor = options.anchor_size as u16;
+    let border = u16::from(options.border);
+    let anchor = u16::from(options.anchor_size);
     if x < border || y < border || x >= grid_size - border || y >= grid_size - border {
         return CellRole::Border;
     }

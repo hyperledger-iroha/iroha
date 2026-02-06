@@ -1,4 +1,5 @@
 //! Governance threshold tests: ratio and turnout logic.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Skipped by default; enable with `IROHA_RUN_IGNORED=1`.
 
 use core::num::NonZeroU64;

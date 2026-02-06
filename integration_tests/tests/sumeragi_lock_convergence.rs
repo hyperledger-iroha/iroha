@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Regression tests ensuring Sumeragi keeps `locked_qc` in sync during view changes and restarts.
 
 use std::{
