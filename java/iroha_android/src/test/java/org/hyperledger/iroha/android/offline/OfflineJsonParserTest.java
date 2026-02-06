@@ -15,6 +15,8 @@ public final class OfflineJsonParserTest {
     encodesTransferItem();
     extractsReceiptSummary();
     parsesRevocationPayload();
+    parsesCertificateIssueResponse();
+    serializesDraftOperator();
     rejectsFractionalTotals();
     rejectsFractionalOptionalTimestamp();
     System.out.println("[IrohaAndroid] OfflineJsonParserTest passed.");
@@ -241,6 +243,59 @@ public final class OfflineJsonParserTest {
     assert "hardware breach".equals(item.note()) : "note mismatch";
     assert "eu".equals(item.metadataAsMap().get("jurisdiction")) : "metadata mismatch";
     assert item.recordAsMap().containsKey("verdict_id") : "record JSON missing";
+  }
+
+  private static void parsesCertificateIssueResponse() {
+    final String json =
+        """
+        {
+          "certificate_id_hex": "deadbeef",
+          "certificate": {
+            "controller": "alice@wonderland",
+            "operator": "ops@wonderland",
+            "allowance": { "asset": "usd#wonderland", "amount": "10", "commitment": [1, 2, 3] },
+            "spend_public_key": "ed0120deadbeef",
+            "attestation_report": [4, 5, 6],
+            "issued_at_ms": 1700000000000,
+            "expires_at_ms": 1700500000000,
+            "policy": { "max_balance": "10", "max_tx_value": "5", "expires_at_ms": 1700500000000 },
+            "operator_signature": "AA",
+            "metadata": {},
+            "verdict_id": null,
+            "attestation_nonce": null,
+            "refresh_at_ms": null
+          }
+        }
+        """;
+    final OfflineCertificateIssueResponse response =
+        OfflineJsonParser.parseCertificateIssueResponse(json.getBytes(StandardCharsets.UTF_8));
+    assert "deadbeef".equals(response.certificateIdHex()) : "certificate id mismatch";
+    final OfflineWalletCertificate certificate = response.certificate();
+    assert "ops@wonderland".equals(certificate.operator()) : "operator mismatch";
+    assert "ops@wonderland".equals(certificate.toJsonMap().get("operator"))
+        : "operator missing from JSON map";
+  }
+
+  private static void serializesDraftOperator() {
+    final OfflineAllowanceCommitment allowance =
+        new OfflineAllowanceCommitment("usd#wonderland", "10", new byte[] {1, 2, 3});
+    final OfflineWalletPolicy policy = new OfflineWalletPolicy("10", "5", 1700500000000L);
+    final OfflineWalletCertificateDraft draft =
+        new OfflineWalletCertificateDraft(
+            "alice@wonderland",
+            "ops@wonderland",
+            allowance,
+            "ed0120deadbeef",
+            new byte[] {4, 5, 6},
+            1700000000000L,
+            1700500000000L,
+            policy,
+            null,
+            null,
+            null,
+            null);
+    assert "ops@wonderland".equals(draft.toJsonMap().get("operator"))
+        : "draft operator missing from JSON map";
   }
 
   private static void rejectsFractionalTotals() {

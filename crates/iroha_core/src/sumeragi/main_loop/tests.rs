@@ -41355,6 +41355,14 @@ async fn pacemaker_single_validator_seeds_new_view_from_precommit_qc() {
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
 
+    let committed_block = sample_block(1, 0, None);
+    actor
+        .kura
+        .store_block(committed_block.clone())
+        .expect("store committed block");
+    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+    state.push_block_hash_for_testing(committed_block.hash());
+
     let committed = actor.latest_committed_qc().expect("committed QC");
     let prevote_height = committed.height.saturating_add(1);
     let prevote = sample_qc_ref(prevote_height, 0);
@@ -59676,20 +59684,21 @@ async fn pending_rbc_slot_eviction_releases_block_payload_dedup() {
         bytes: vec![0x10, 0x20],
     };
 
-    let mut pending = PendingRbcMessages::new(Instant::now() - Duration::from_millis(10));
+    let stale_time = Instant::now() - Duration::from_millis(10);
+    let mut pending = PendingRbcMessages::new(stale_time);
     let max_bytes = 16 * 1024;
     let max_chunks = 4;
     assert!(
         pending
-            .push_ready_capped(ready.clone(), max_bytes, Instant::now())
+            .push_ready_capped(ready.clone(), max_bytes, stale_time)
             .0
     );
     assert!(
         pending
-            .push_deliver_capped(deliver.clone(), max_bytes, Instant::now())
+            .push_deliver_capped(deliver.clone(), max_bytes, stale_time)
             .0
     );
-    let _ = pending.push_chunk_capped(chunk.clone(), None, max_chunks, max_bytes, Instant::now());
+    let _ = pending.push_chunk_capped(chunk.clone(), None, max_chunks, max_bytes, stale_time);
     assert_eq!(pending.pending_chunks(), 1);
 
     let ready_key = crate::sumeragi::BlockPayloadDedupKey::RbcReady {
