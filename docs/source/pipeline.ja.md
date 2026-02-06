@@ -122,10 +122,10 @@ translator: manual
 
 - Core は署名方式ごとにマイクロバッチ検証を行い、バイセクションで不正署名を特定します。ブロック当たりの作業量を削減しつつ決定論を維持します。
 - 主な設定（パイプライン節。実運用では `iroha_config` を使用）:
-  - `signature_batch_max_ed25519`
-  - `signature_batch_max_secp256k1`
-- `signature_batch_max_pqc`（ML-DSA / Dilithium3）
-- `signature_batch_max_bls`（デフォルト 4）
+  - `signature_batch_max_ed25519`（デフォルト 64）
+  - `signature_batch_max_secp256k1`（デフォルト 16）
+- `signature_batch_max_pqc`（ML-DSA / Dilithium3、デフォルト 8）
+- `signature_batch_max_bls`（デフォルト 16）
 - 従来の `signature_batch_max` は個別設定が 0 のとき Ed25519 に適用。
 - BLS サポートは Core のコンパイルタイムフィーチャ `--features bls` で有効化します。
   - BLS-Normal のバッチ検証を使う場合、各トランザクションのメタデータに `bls_pop` キーで PoP（hex 文字列）を含めてください。BLS-Small の場合は `bls_pop_small`（hex）が必要です。PoP がないトランザクションは個別検証のままです。

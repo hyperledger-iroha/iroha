@@ -20,7 +20,7 @@
 
 use std::{convert::TryFrom, mem, vec::Vec};
 
-use aead::{Aead, AeadCore, KeyInit, Payload};
+use aead::{Aead, AeadCore, AeadInPlace, KeyInit, Payload};
 pub use chacha20poly1305::ChaCha20Poly1305;
 use displaydoc::Display;
 use rand::rngs::OsRng;
@@ -120,6 +120,43 @@ where
         Ok(result)
     }
 
+    /// Encrypt `plaintext` and integrity protect `aad` into the provided buffer.
+    ///
+    /// The output buffer is cleared and reused to store the full envelope:
+    /// `nonce || ciphertext || tag`. This avoids per-message allocations in hot paths
+    /// such as P2P transport.
+    ///
+    /// # Errors
+    /// Returns [`Error::NonceGeneration`] if random nonce generation fails or [`Error::Encryption`]
+    /// if the cipher rejects the payload.
+    pub fn encrypt_easy_into<'a, A: AsRef<[u8]>>(
+        &self,
+        aad: A,
+        plaintext: A,
+        out: &'a mut Vec<u8>,
+    ) -> Result<&'a [u8], Error>
+    where
+        E: AeadInPlace,
+    {
+        let nonce = random_nonce::<E>()?;
+        let nonce_bytes: &[u8] = nonce.as_ref();
+        let nonce_len = nonce_bytes.len();
+
+        out.clear();
+        out.extend_from_slice(plaintext.as_ref());
+        self.encryptor
+            .encrypt_in_place(&nonce, aad.as_ref(), out)
+            .map_err(Error::Encryption)?;
+
+        // Prefix the nonce by shifting ciphertext bytes to the right.
+        let ciphertext_len = out.len();
+        out.reserve(nonce_len);
+        out.resize(ciphertext_len + nonce_len, 0);
+        out.copy_within(0..ciphertext_len, nonce_len);
+        out[..nonce_len].copy_from_slice(nonce_bytes);
+        Ok(out.as_slice())
+    }
+
     /// Encrypt `plaintext` and integrity protect `aad` using the provided `nonce`.
     ///
     /// # Errors
@@ -160,6 +197,39 @@ where
         let (nonce_bytes, ciphertext_bytes) = data.split_at(nonce_len);
         let nonce = nonce_from_slice::<E>(nonce_bytes)?;
         self.decrypt_with_nonce(&nonce, aad.as_ref(), ciphertext_bytes)
+    }
+
+    /// Decrypt `ciphertext` using integrity protected `aad` into the provided buffer.
+    ///
+    /// The output buffer is cleared and reused to store the plaintext to avoid per-message
+    /// allocations in hot paths such as P2P message decode.
+    ///
+    /// # Errors
+    /// Returns [`Error::NotEnoughData`] when the ciphertext does not contain a nonce and tag or
+    /// [`Error::Decryption`] when authentication fails.
+    pub fn decrypt_easy_into<'a, A: AsRef<[u8]>>(
+        &self,
+        aad: A,
+        ciphertext: A,
+        out: &'a mut Vec<u8>,
+    ) -> Result<&'a [u8], Error>
+    where
+        E: AeadInPlace,
+    {
+        let data = ciphertext.as_ref();
+        let nonce_len = mem::size_of::<aead::Nonce<E>>();
+        let tag_len = mem::size_of::<aead::Tag<E>>();
+        if data.len() < nonce_len + tag_len {
+            return Err(Error::NotEnoughData);
+        }
+        let (nonce_bytes, ciphertext_bytes) = data.split_at(nonce_len);
+        let nonce = nonce_from_slice::<E>(nonce_bytes)?;
+        out.clear();
+        out.extend_from_slice(ciphertext_bytes);
+        self.encryptor
+            .decrypt_in_place(&nonce, aad.as_ref(), out)
+            .map_err(Error::Decryption)?;
+        Ok(out.as_slice())
     }
 
     /// Decrypt `ciphertext` using integrity protected `aad` and the provided `nonce`.
@@ -268,5 +338,45 @@ mod tests {
             .decrypt_easy(aad.as_ref(), ciphertext.as_slice())
             .expect("decrypt");
         assert!(plaintext.is_empty());
+    }
+
+    #[test]
+    fn decrypt_easy_into_roundtrip() {
+        let encryptor = encryptor();
+        let aad = b"Iroha2";
+        let message = b"Decrypt into buffer!";
+        let ciphertext = encryptor
+            .encrypt_easy(aad.as_ref(), message.as_ref())
+            .expect("encrypt");
+        let mut out = Vec::new();
+        let plaintext = encryptor
+            .decrypt_easy_into(aad.as_ref(), ciphertext.as_slice(), &mut out)
+            .expect("decrypt");
+        assert_eq!(plaintext, message);
+        // Reuse the buffer for a different message length.
+        let message2 = b"Short";
+        let ciphertext2 = encryptor
+            .encrypt_easy(aad.as_ref(), message2.as_ref())
+            .expect("encrypt");
+        let plaintext2 = encryptor
+            .decrypt_easy_into(aad.as_ref(), ciphertext2.as_slice(), &mut out)
+            .expect("decrypt");
+        assert_eq!(plaintext2, message2);
+    }
+
+    #[test]
+    fn encrypt_easy_into_roundtrip() {
+        let encryptor = encryptor();
+        let aad = b"Iroha2";
+        let message = b"Encrypt into buffer!";
+
+        let mut out = Vec::new();
+        let ciphertext = encryptor
+            .encrypt_easy_into(aad.as_ref(), message.as_ref(), &mut out)
+            .expect("encrypt");
+        let plaintext = encryptor
+            .decrypt_easy(aad.as_ref(), ciphertext)
+            .expect("decrypt");
+        assert_eq!(plaintext.as_slice(), message);
     }
 }

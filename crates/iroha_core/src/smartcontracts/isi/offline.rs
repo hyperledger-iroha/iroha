@@ -287,14 +287,11 @@ fn ensure_operator_signature(
             format!("failed to encode certificate payload: {err}").into(),
         )
     })?;
-    let operator_key = certificate
-        .operator
-        .try_signatory()
-        .ok_or_else(|| {
-            InstructionExecutionError::InvariantViolation(
-                "operator account must be single-signature".into(),
-            )
-        })?;
+    let operator_key = certificate.operator.try_signatory().ok_or_else(|| {
+        InstructionExecutionError::InvariantViolation(
+            "operator account must be single-signature".into(),
+        )
+    })?;
     certificate
         .operator_signature
         .verify(operator_key, &payload)
@@ -6380,7 +6377,10 @@ mod attestation {
                 operator_pair: &iroha_crypto::KeyPair,
             ) -> OfflineWalletCertificate {
                 let controller = test_account_id("sbp", 0xA1);
-                let operator = AccountId::new(controller.domain().clone(), operator_pair.public_key().clone());
+                let operator = AccountId::new(
+                    controller.domain().clone(),
+                    operator_pair.public_key().clone(),
+                );
                 let definition =
                     AssetDefinitionId::from_str("usd#sbp").expect("asset definition id");
                 let asset = AssetId::new(definition, controller.clone());
@@ -6698,7 +6698,10 @@ mod attestation {
             operator_pair: &KeyPair,
         ) -> OfflineWalletCertificate {
             let controller = test_account_id("sbp", 0xC3);
-            let operator = AccountId::new(controller.domain().clone(), operator_pair.public_key().clone());
+            let operator = AccountId::new(
+                controller.domain().clone(),
+                operator_pair.public_key().clone(),
+            );
             let definition = AssetDefinitionId::from_str("usd#sbp").expect("asset definition id");
             let asset = AssetId::new(definition, controller.clone());
             let mut certificate = OfflineWalletCertificate {

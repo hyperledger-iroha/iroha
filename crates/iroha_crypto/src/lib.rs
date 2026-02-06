@@ -460,6 +460,7 @@ impl From<(bls::BlsSmallPublicKey, bls::BlsSmallPrivateKey)> for KeyPair {
 
 /// Decoded version of public key (requires more memory).
 /// Used only for signature verification.
+#[derive(Clone)]
 enum PublicKeyFull {
     Ed25519(ed25519::PublicKey),
     Secp256k1(secp256k1::PublicKey),

@@ -5599,7 +5599,9 @@ mod tests {
     use iroha_primitives::{numeric::Numeric, time::TimeSource, unique_vec::UniqueVec};
     use tempfile::TempDir;
 
-    const COMMIT_WORKER_TIMEOUT: Duration = Duration::from_secs(20);
+    // This suite runs with the default parallel test runner and can be CPU-contended on CI.
+    // Use a conservative timeout to avoid flakiness in wake/result channel assertions.
+    const COMMIT_WORKER_TIMEOUT: Duration = Duration::from_secs(60);
 
     fn signers_from_bitmap(signers_bitmap: &[u8], roster_len: usize) -> Vec<usize> {
         let mut signers = Vec::new();

@@ -437,9 +437,14 @@ fn parse_offline_certificate_fixture(
         norito::json::from_value(metadata_value).map_err(|err| eyre!("metadata parse: {err}"))?;
 
     let verdict_id = parse_optional_hash(obj.get("verdict_id_hex"), path, "verdict_id_hex")?;
-    let attestation_nonce =
-        parse_optional_hash(obj.get("attestation_nonce_hex"), path, "attestation_nonce_hex")?;
-    let refresh_at_ms = obj.get("refresh_at_ms").and_then(norito::json::Value::as_u64);
+    let attestation_nonce = parse_optional_hash(
+        obj.get("attestation_nonce_hex"),
+        path,
+        "attestation_nonce_hex",
+    )?;
+    let refresh_at_ms = obj
+        .get("refresh_at_ms")
+        .and_then(norito::json::Value::as_u64);
 
     Ok(OfflineWalletCertificate {
         controller,
@@ -485,9 +490,12 @@ fn parse_optional_hash(
                     path.display()
                 )
             })?;
-            Hash::from_str(hex)
-                .map(Some)
-                .map_err(|err| eyre!("offline allowance fixture `{}` `{field}`: {err}", path.display()))
+            Hash::from_str(hex).map(Some).map_err(|err| {
+                eyre!(
+                    "offline allowance fixture `{}` `{field}`: {err}",
+                    path.display()
+                )
+            })
         }
     }
 }

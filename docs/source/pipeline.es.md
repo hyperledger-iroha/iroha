@@ -249,10 +249,10 @@ For deeper details, consult the code in:
 Iroha can group signatures by scheme during block validation and verify them in deterministic “micro‑batches” with bisection to pinpoint bad signatures. This reduces repeated work per block while remaining deterministic across peers.
 
 - Configuration (pipeline section; prefer `iroha_config` over envs in production):
-  - `signature_batch_max_ed25519` (usize, default 0 disabled)
-  - `signature_batch_max_secp256k1` (usize, default 0 disabled)
-  - `signature_batch_max_pqc` (usize, default 0 disabled; ML‑DSA/Dilithium3)
-  - `signature_batch_max_bls` (usize, default 4)
+  - `signature_batch_max_ed25519` (usize, default 64)
+  - `signature_batch_max_secp256k1` (usize, default 16)
+  - `signature_batch_max_pqc` (usize, default 8; ML‑DSA/Dilithium3)
+  - `signature_batch_max_bls` (usize, default 16)
   - The historical alias `signature_batch_max` applies to Ed25519 when explicit per‑scheme caps are 0.
 
 - BLS support is behind a compile‑time feature in Core:

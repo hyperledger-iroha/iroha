@@ -78,6 +78,8 @@ class LoadShardResult:
     stderr: str
     elapsed: float
     rate_limit_hits: int
+    submitted: int
+    timed_out: bool
 
 
 def normalize_torii_url(url: str) -> str:
@@ -180,6 +182,15 @@ def main() -> int:
     parser.add_argument("--poll-interval", type=float, default=0.25)
     parser.add_argument("--drain-timeout", type=float, default=120.0)
     parser.add_argument(
+        "--cli-timeout",
+        type=float,
+        default=60.0,
+        help=(
+            "Maximum seconds to wait for each `iroha ledger transaction ping` subprocess "
+            "(0 = wait forever)."
+        ),
+    )
+    parser.add_argument(
         "--queue-soft-limit",
         type=int,
         default=0,
@@ -238,6 +249,8 @@ def main() -> int:
         parser.error("--queue-hard-limit must be >= --queue-soft-limit")
     if args.queue_wait_timeout < 0:
         parser.error("--queue-wait-timeout must be >= 0")
+    if args.cli_timeout < 0:
+        parser.error("--cli-timeout must be >= 0")
 
     peer_urls = []
     if args.peer_urls:
@@ -385,6 +398,12 @@ def main() -> int:
                 status = extract_status_snapshot(status_raw)
                 delta = status["queue_size"] - shard.baseline_queue_size
             except Exception:
+                if deadline is not None and time.monotonic() >= deadline:
+                    print(
+                        f"Shard {shard.torii_url}: failed to fetch /status within "
+                        f"{args.queue_wait_timeout}s; aborting shard."
+                    )
+                    return False
                 time.sleep(args.poll_interval)
                 continue
             if args.queue_hard_limit > 0 and delta > args.queue_hard_limit:
@@ -426,6 +445,8 @@ def main() -> int:
         stderr_chunks = []
         rate_limit_hits = 0
         returncode = 0
+        submitted = 0
+        timed_out = False
         start = time.monotonic()
 
         def run_batch(batch_count: int) -> subprocess.CompletedProcess[str]:
@@ -435,7 +456,32 @@ def main() -> int:
                 "--parallel",
                 str(shard.parallel),
             ]
-            return subprocess.run(cmd, check=False, capture_output=True, text=True)
+            timeout = None if args.cli_timeout <= 0 else args.cli_timeout
+            try:
+                return subprocess.run(
+                    cmd,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                )
+            except subprocess.TimeoutExpired as exc:
+                stdout = exc.stdout or ""
+                stderr = exc.stderr or ""
+                if isinstance(stdout, bytes):
+                    stdout = stdout.decode("utf-8", errors="replace")
+                if isinstance(stderr, bytes):
+                    stderr = stderr.decode("utf-8", errors="replace")
+                stderr = (
+                    stderr
+                    + f"\ncli-timeout after {args.cli_timeout:.2f}s: {' '.join(cmd)}\n"
+                )
+                return subprocess.CompletedProcess(
+                    cmd,
+                    returncode=124,
+                    stdout=stdout,
+                    stderr=stderr,
+                )
 
         if shard.batch_size > 0 and shard.batch_interval > 0:
             remaining = shard.count
@@ -451,8 +497,11 @@ def main() -> int:
                 combined = (result.stdout or "") + (result.stderr or "")
                 rate_limit_hits += count_rate_limit_hits(combined)
                 if result.returncode != 0:
+                    if result.returncode == 124:
+                        timed_out = True
                     returncode = result.returncode
                     break
+                submitted += batch
                 remaining -= batch
                 if remaining <= 0:
                     break
@@ -470,6 +519,10 @@ def main() -> int:
                 combined = (result.stdout or "") + (result.stderr or "")
                 rate_limit_hits += count_rate_limit_hits(combined)
                 returncode = result.returncode
+                if returncode == 0:
+                    submitted = shard.count
+                elif returncode == 124:
+                    timed_out = True
 
         elapsed = time.monotonic() - start
         return LoadShardResult(
@@ -479,6 +532,8 @@ def main() -> int:
             stderr="".join(stderr_chunks),
             elapsed=elapsed,
             rate_limit_hits=rate_limit_hits,
+            submitted=submitted,
+            timed_out=timed_out,
         )
 
     submit_start = time.monotonic()
@@ -532,7 +587,7 @@ def main() -> int:
     admitted = final_status["txs_approved"] - baseline_status["txs_approved"]
     rejected = final_status["txs_rejected"] - baseline_status["txs_rejected"]
     admit_tps = admitted / elapsed
-    submitted_total = sum(result.shard.count for result in results)
+    submitted_total = sum(result.submitted for result in results)
     submit_tps = submitted_total / max(submit_elapsed, 1e-6)
 
     committed = 0
@@ -563,6 +618,7 @@ def main() -> int:
     commit_tps = committed / max(commit_window, 1e-6)
 
     total_rate_limits = sum(result.rate_limit_hits for result in results)
+    total_timeouts = sum(1 for result in results if result.timed_out)
 
     print("Load summary")
     print(f"- submitted: {submitted_total} tx in {submit_elapsed:.2f}s ({submit_tps:.1f} tps)")
@@ -575,6 +631,8 @@ def main() -> int:
     )
     print(f"- queue_size: baseline {baseline_status['queue_size']} -> final {final_status['queue_size']}")
     print(f"- rate_limit_hits (status 429): {total_rate_limits}")
+    if total_timeouts:
+        print(f"- cli_timeouts: {total_timeouts} shard(s)")
     return 1 if submit_failed else 0
 
 

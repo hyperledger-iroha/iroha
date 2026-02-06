@@ -2167,6 +2167,7 @@ mod run {
     struct MessageReader<E: Enc> {
         read: Box<dyn AsyncRead + Send + Unpin>,
         buffer: bytes::BytesMut,
+        decrypted: Vec<u8>,
         cryptographer: Cryptographer<E>,
         max_frame_bytes: usize,
     }
@@ -2179,14 +2180,14 @@ mod run {
             cryptographer: Cryptographer<E>,
             max_frame_bytes: usize,
         ) -> Self {
-            let prealloc = max_frame_bytes
-                .min(DEFAULT_MESSAGE_PREALLOC_CAP)
-                .saturating_add(Self::U32_SIZE);
-            let capacity = DEFAULT_BUFFER_CAPACITY.max(prealloc);
+            let prealloc = max_frame_bytes.min(DEFAULT_MESSAGE_PREALLOC_CAP);
+            let capacity = DEFAULT_BUFFER_CAPACITY.max(prealloc.saturating_add(Self::U32_SIZE));
+            let decrypt_capacity = DEFAULT_BUFFER_CAPACITY.max(prealloc);
             Self {
                 read,
                 cryptographer,
                 buffer: BytesMut::with_capacity(capacity),
+                decrypted: Vec::with_capacity(decrypt_capacity),
                 max_frame_bytes,
             }
         }
@@ -2251,9 +2252,9 @@ mod run {
             }
 
             let data = &buf[..size];
-            let decrypted = self.cryptographer.decrypt(data)?;
+            let decrypted = self.cryptographer.decrypt_into(data, &mut self.decrypted)?;
             let encoded_len = decrypted.len();
-            let decoded = match ncore::decode_from_bytes::<T>(&decrypted) {
+            let decoded = match ncore::decode_from_bytes::<T>(decrypted) {
                 Ok(value) => value,
                 Err(err) => {
                     iroha_logger::warn!(error = ?err, "Failed to decode peer message");
@@ -2272,6 +2273,8 @@ mod run {
         cryptographer: Cryptographer<E>,
         /// Reusable buffer to encode messages
         buffer: Vec<u8>,
+        /// Reusable buffer for encrypted payloads (nonce || ciphertext || tag).
+        encrypted: Vec<u8>,
         /// Reusable buffers for framing outbound messages.
         frame_pool: Vec<BytesMut>,
         /// Queue of encrypted messages waiting to be sent (high priority).
@@ -2298,6 +2301,7 @@ mod run {
                 write,
                 cryptographer,
                 buffer: Vec::with_capacity(DEFAULT_BUFFER_CAPACITY),
+                encrypted: Vec::with_capacity(DEFAULT_BUFFER_CAPACITY),
                 frame_pool: Vec::new(),
                 queue_high: VecDeque::new(),
                 queue_low: VecDeque::new(),
@@ -2313,7 +2317,9 @@ mod run {
         /// - If encryption fail.
         fn prepare_message<T: Pload>(&mut self, msg: &T, priority: Priority) -> Result<(), Error> {
             ncore::to_bytes_in(msg, &mut self.buffer)?;
-            let encrypted = self.cryptographer.encrypt(&self.buffer)?;
+            let encrypted = self
+                .cryptographer
+                .encrypt_into(&self.buffer, &mut self.encrypted)?;
 
             let size = encrypted.len();
             if size > self.max_frame_bytes {
@@ -2327,7 +2333,7 @@ mod run {
             }
             #[allow(clippy::cast_possible_truncation)]
             frame.put_u32(size as u32);
-            frame.put_slice(encrypted.as_slice());
+            frame.put_slice(encrypted);
             match priority {
                 Priority::High => self.queue_high.push_back(frame),
                 Priority::Low => self.queue_low.push_back(frame),
@@ -2425,8 +2431,20 @@ mod run {
         #[derive(Encode, Decode, Clone, Debug)]
         struct Dummy;
 
+        impl<'a> ncore::DecodeFromSlice<'a> for Dummy {
+            fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+                ncore::decode_field_canonical::<Self>(bytes)
+            }
+        }
+
         #[derive(Encode, Decode, Clone, Debug)]
         struct Blob(Vec<u8>);
+
+        impl<'a> ncore::DecodeFromSlice<'a> for Blob {
+            fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+                ncore::decode_field_canonical::<Self>(bytes)
+            }
+        }
 
         #[derive(Default)]
         struct WriteStats {
@@ -2602,10 +2620,12 @@ mod run {
         fn message_decode_from_slice_roundtrip() {
             let message = Message::Data(Blob(vec![1u8, 2, 3]));
             let bytes = ncore::to_bytes(&message).expect("encode message");
+            let view = ncore::from_bytes_view(&bytes).expect("message view");
+            let payload = view.as_bytes();
             let (decoded, used) =
-                <Message<Blob> as ncore::DecodeFromSlice>::decode_from_slice(&bytes)
+                <Message<Blob> as ncore::DecodeFromSlice>::decode_from_slice(payload)
                     .expect("decode from slice");
-            assert_eq!(used, bytes.len());
+            assert_eq!(used, payload.len());
 
             match decoded {
                 Message::Data(blob) => assert_eq!(blob.0, vec![1u8, 2, 3]),
@@ -4894,6 +4914,20 @@ mod cryptographer {
                 .map_err(Into::into)
         }
 
+        /// Decrypt bytes into a reusable buffer.
+        ///
+        /// # Errors
+        /// Forwards [`SymmetricEncryptor::decrypt_easy_into`] error
+        pub fn decrypt_into<'a>(
+            &self,
+            data: &[u8],
+            out: &'a mut Vec<u8>,
+        ) -> Result<&'a [u8], Error> {
+            self.encryptor
+                .decrypt_easy_into(DEFAULT_AAD.as_ref(), data, out)
+                .map_err(Into::into)
+        }
+
         /// Encrypt bytes.
         ///
         /// # Errors
@@ -4901,6 +4935,20 @@ mod cryptographer {
         pub fn encrypt(&self, data: &[u8]) -> Result<Vec<u8>, Error> {
             self.encryptor
                 .encrypt_easy(DEFAULT_AAD.as_ref(), data)
+                .map_err(Into::into)
+        }
+
+        /// Encrypt bytes into a reusable buffer.
+        ///
+        /// # Errors
+        /// Forwards [`SymmetricEncryptor::encrypt_easy_into`] error
+        pub fn encrypt_into<'a>(
+            &self,
+            data: &[u8],
+            out: &'a mut Vec<u8>,
+        ) -> Result<&'a [u8], Error> {
+            self.encryptor
+                .encrypt_easy_into(DEFAULT_AAD.as_ref(), data, out)
                 .map_err(Into::into)
         }
 

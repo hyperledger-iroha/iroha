@@ -34,10 +34,10 @@ use iroha_data_model::{
             RegisterSmartContractCode, RemoveSmartContractBytes,
         },
     },
+    nexus::UniversalAccountId,
     query::error::FindError,
     smart_contract::manifest::{ContractManifest, MANIFEST_METADATA_KEY},
     transaction::{error::TransactionLimitError, signed::TransactionSignatureError},
-    nexus::UniversalAccountId,
 };
 use iroha_logger::{debug, error, warn};
 use iroha_macro::FromVariant;
@@ -6770,7 +6770,7 @@ pub mod tests {
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
 
         let tx = TransactionBuilder::new(chain, authority)
-            .with_instructions([])
+            .with_instructions(std::iter::empty::<iroha_data_model::isi::InstructionBox>())
             .sign(keypair.private_key());
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
 
@@ -6925,7 +6925,8 @@ pub mod tests {
             .sign(keypair.private_key());
 
         let world = World::default();
-        let err = super::enforce_manifest_protected_namespaces("lane-0", &rules, &tx, &world)
+        let world_view = world.view();
+        let err = super::enforce_manifest_protected_namespaces("lane-0", &rules, &tx, &world_view)
             .expect_err("missing governance metadata should reject");
         match err {
             TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg)) => {

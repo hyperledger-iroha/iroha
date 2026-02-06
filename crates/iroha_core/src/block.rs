@@ -1733,6 +1733,8 @@ pub enum SignatureVerificationError {
     UnknownSignatory,
     /// Block signature doesn't correspond to block payload
     UnknownSignature,
+    /// Missing proof-of-possession for validator consensus key
+    MissingPop,
     /// The block doesn't have proxy tail signature
     ProxyTailMissing,
     /// The block doesn't have leader signature
@@ -2401,10 +2403,12 @@ pub(crate) mod valid {
         sumeragi::network_topology::Role,
     };
 
-    /// Block that was validated and accepted
+    /// Block that was validated and accepted.
     #[derive(Debug, Clone)]
-    #[repr(transparent)]
-    pub struct ValidBlock(pub(super) SignedBlock);
+    pub struct ValidBlock {
+        block: SignedBlock,
+        signatures_verified: bool,
+    }
 
     /// Timing breakdown for block validation stages.
     #[derive(Debug, Clone, Copy, Default)]
@@ -3262,6 +3266,39 @@ pub(crate) mod valid {
     }
 
     impl ValidBlock {
+        fn new_unverified(block: SignedBlock) -> Self {
+            Self {
+                block,
+                signatures_verified: false,
+            }
+        }
+
+        #[cfg(test)]
+        pub(crate) fn new_unverified_for_tests(block: SignedBlock) -> Self {
+            Self::new_unverified(block)
+        }
+
+        fn new_signatures_verified(block: SignedBlock) -> Self {
+            Self {
+                block,
+                signatures_verified: true,
+            }
+        }
+
+        #[cfg(test)]
+        fn mark_signatures_verified(&mut self) {
+            self.signatures_verified = true;
+        }
+
+        fn clear_signatures_verified(&mut self) {
+            self.signatures_verified = false;
+        }
+
+        #[cfg(test)]
+        fn signatures_verified_for_tests(&self) -> bool {
+            self.signatures_verified
+        }
+
         fn verify_unique_signers(block: &SignedBlock) -> Result<(), SignatureVerificationError> {
             let mut seen = BTreeSet::new();
             for signature in block.signatures() {
@@ -3404,13 +3441,57 @@ pub(crate) mod valid {
                         if peer.public_key().algorithm() != iroha_crypto::Algorithm::BlsNormal {
                             return Err(SignatureVerificationError::UnknownSignature);
                         }
+                        signature
+                            .signature()
+                            .verify_hash(peer.public_key(), hash)
+                            .map_err(|_| SignatureVerificationError::UnknownSignature)?;
                     }
                     Role::Undefined => return Err(SignatureVerificationError::UnknownSignatory),
                 }
-                signature
-                    .signature()
-                    .verify_hash(peer.public_key(), hash)
-                    .map_err(|_| SignatureVerificationError::UnknownSignature)?;
+            }
+            Ok(())
+        }
+
+        fn verify_signatures_against_topology_with_pops(
+            block: &SignedBlock,
+            topology: &Topology,
+            pops: &BTreeMap<PublicKey, Vec<u8>>,
+        ) -> Result<(), SignatureVerificationError> {
+            let hash = block.hash();
+            let mut bls_normal_signatures: Vec<&[u8]> = Vec::new();
+            let mut bls_normal_public_keys: Vec<&PublicKey> = Vec::new();
+            let mut bls_normal_pops: Vec<&[u8]> = Vec::new();
+            for signature in block.signatures() {
+                let signatory = usize::try_from(signature.index())
+                    .map_err(|_| SignatureVerificationError::UnknownSignatory)?;
+                let peer = topology
+                    .as_ref()
+                    .get(signatory)
+                    .ok_or(SignatureVerificationError::UnknownSignatory)?;
+                let role = topology.role(peer);
+                match role {
+                    Role::Leader | Role::ValidatingPeer | Role::ProxyTail | Role::SetBValidator => {
+                        if peer.public_key().algorithm() != iroha_crypto::Algorithm::BlsNormal {
+                            return Err(SignatureVerificationError::UnknownSignature);
+                        }
+                        let pop = pops
+                            .get(peer.public_key())
+                            .ok_or(SignatureVerificationError::MissingPop)?;
+                        bls_normal_signatures.push(signature.signature().payload());
+                        bls_normal_public_keys.push(peer.public_key());
+                        bls_normal_pops.push(pop.as_slice());
+                    }
+                    Role::Undefined => return Err(SignatureVerificationError::UnknownSignatory),
+                }
+            }
+            if !bls_normal_signatures.is_empty() {
+                iroha_crypto::bls_normal_verify_aggregate_same_message_fast(
+                    hash.as_ref(),
+                    &bls_normal_signatures,
+                    &bls_normal_public_keys,
+                    &bls_normal_pops,
+                )
+                .map_err(|_| SignatureVerificationError::UnknownSignature)?;
             }
             Ok(())
         }
@@ -3429,24 +3510,51 @@ pub(crate) mod valid {
                 return Ok(());
             }
             Self::verify_unique_signers(block)?;
-            Self::verify_signatures_against_topology(block, topology)?;
+            let world = state.world();
+            let params = world.parameters();
+            let sumeragi = params.sumeragi();
+            let height = block.header().height().get();
+            let pops = Self::collect_validator_pops(
+                world,
+                height,
+                sumeragi.key_overlap_grace_blocks,
+                sumeragi.key_expiry_grace_blocks,
+            )?;
+            Self::verify_signatures_against_topology_with_pops(block, topology, &pops)?;
             Self::enforce_consensus_key_lifecycle(block, topology, state)
         }
 
-        /// Validate block signatures against the topology without consulting state.
-        ///
-        /// Use this before calling [`Self::enforce_consensus_key_lifecycle`] to keep state access
-        /// scoped to consensus key checks only.
-        pub(crate) fn validate_signatures_subset_without_state(
-            block: &SignedBlock,
-            topology: &Topology,
-        ) -> Result<(), SignatureVerificationError> {
-            if block.header().is_genesis() {
-                return Ok(());
+        fn collect_validator_pops(
+            world: &impl WorldReadOnly,
+            height: u64,
+            overlap_grace_blocks: u64,
+            expiry_grace_blocks: u64,
+        ) -> Result<BTreeMap<PublicKey, Vec<u8>>, SignatureVerificationError> {
+            let mut pops: BTreeMap<PublicKey, Vec<u8>> = BTreeMap::new();
+            for (id, record) in world.consensus_keys().iter() {
+                if id.role != ConsensusKeyRole::Validator {
+                    continue;
+                }
+                if !record.is_live_at(height, overlap_grace_blocks, expiry_grace_blocks) {
+                    continue;
+                }
+                match record.public_key.algorithm() {
+                    iroha_crypto::Algorithm::BlsNormal => {
+                        let Some(pop) = record.pop.as_ref() else {
+                            return Err(SignatureVerificationError::MissingPop);
+                        };
+                        if let Some(existing) = pops.get(&record.public_key) {
+                            if existing.as_slice() != pop.as_slice() {
+                                return Err(SignatureVerificationError::Other);
+                            }
+                            continue;
+                        }
+                        pops.insert(record.public_key.clone(), pop.clone());
+                    }
+                    _ => {}
+                }
             }
-            Self::verify_unique_signers(block)?;
-            Self::verify_signatures_against_topology(block, topology)?;
-            Ok(())
+            Ok(pops)
         }
 
         pub(crate) fn enforce_consensus_key_lifecycle(
@@ -3575,7 +3683,7 @@ pub(crate) mod valid {
             {
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
-            WithEvents::new(Ok(ValidBlock(block)))
+            WithEvents::new(Ok(ValidBlock::new_signatures_verified(block)))
         }
 
         /// Validate the given block and emit a rejection event on failure using the provided callback.
@@ -3636,7 +3744,7 @@ pub(crate) mod valid {
                 send_events(ev);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
-            WithEvents::new(Ok(ValidBlock(block)))
+            WithEvents::new(Ok(ValidBlock::new_signatures_verified(block)))
         }
 
         /// Same as [`Self::validate`] but:
@@ -3880,7 +3988,10 @@ pub(crate) mod valid {
                 timings.execution_genesis_clean_ms = to_ms(genesis_clean_start.elapsed());
             }
             record_timings(&mut timings, stateless_elapsed, Some(execution_start));
-            WithEvents::new(Ok((ValidBlock(block), state_block)))
+            WithEvents::new(Ok((
+                ValidBlock::new_signatures_verified(block),
+                state_block,
+            )))
         }
 
         /// Like [`Self::validate_keep_voting_block`], but emits a rejection block event on failure.
@@ -3998,7 +4109,10 @@ pub(crate) mod valid {
                 drop(state_block);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
-            WithEvents::new(Ok((ValidBlock(block), state_block)))
+            WithEvents::new(Ok((
+                ValidBlock::new_signatures_verified(block),
+                state_block,
+            )))
         }
 
         /// All static checks that require a state snapshot.
@@ -4121,6 +4235,7 @@ pub(crate) mod valid {
                 // Enforce BLS-normal for validator signatures (Set A + Set B).
                 Self::verify_validator_signatures(block, topology)?;
                 Self::verify_no_undefined_signatures(block, topology)?;
+                Self::verify_unique_signers(block)?;
                 Self::enforce_consensus_key_lifecycle(block, topology, state)?;
             }
 
@@ -8071,7 +8186,7 @@ pub(crate) mod valid {
             }
             state_block.capture_exec_witness();
             drop(exec_witness_guard);
-            WithEvents::new(ValidBlock(block))
+            WithEvents::new(ValidBlock::new_unverified(block))
         }
 
         /// Add additional signature for [`Self`]
@@ -8097,7 +8212,9 @@ pub(crate) mod valid {
                 .verify_hash(signatory.public_key(), self.as_ref().hash())
                 .map_err(|_err| UnknownSignature)?;
 
-            self.0.add_signature(signature).map_err(|_err| Other)
+            self.block.add_signature(signature).map_err(|_err| Other)?;
+            self.clear_signatures_verified();
+            Ok(())
         }
 
         /// Replace block's signatures. Returns previous block signatures
@@ -8127,14 +8244,17 @@ pub(crate) mod valid {
                     }));
                 }
             }
-            let Ok(prev_signatures) = self.0.replace_signatures(signatures) else {
+            let was_verified = self.signatures_verified;
+            let Ok(prev_signatures) = self.block.replace_signatures(signatures) else {
                 return WithEvents::new(Err(SignatureVerificationError::Other));
             };
+            self.clear_signatures_verified();
 
             let result = if let Err(err) = Self::is_commit(self.as_ref(), topology) {
-                self.0
+                self.block
                     .replace_signatures(prev_signatures)
                     .expect("INTERNAL BUG: invalid signatures in block");
+                self.signatures_verified = was_verified;
                 Err(err)
             } else {
                 Ok(prev_signatures)
@@ -8150,10 +8270,12 @@ pub(crate) mod valid {
         /// - Block is missing the leader signature
         /// - Block doesn't have enough valid signatures
         pub fn commit(self, topology: &Topology) -> WithCommittedBlockEvents {
-            WithEvents::new(match Self::is_commit(self.as_ref(), topology) {
-                Err(err) => Err((Box::new(self), Box::new(err.into()))),
-                Ok(()) => Ok(CommittedBlock(self)),
-            })
+            WithEvents::new(
+                match Self::is_commit_internal(self.as_ref(), topology, self.signatures_verified) {
+                    Err(err) => Err((Box::new(self), Box::new(err.into()))),
+                    Ok(()) => Ok(CommittedBlock(self)),
+                },
+            )
         }
 
         /// Commit using a validated commit certificate.
@@ -8180,8 +8302,10 @@ pub(crate) mod valid {
                 // Block signatures can be a trimmed subset when the QC carries the quorum.
                 // Validate all present signatures against the topology and ensure they
                 // don't contradict the QC signer set.
-                Self::verify_unique_signers(self.as_ref())?;
-                Self::verify_signatures_against_topology(self.as_ref(), topology)?;
+                if !self.signatures_verified {
+                    Self::verify_unique_signers(self.as_ref())?;
+                    Self::verify_signatures_against_topology(self.as_ref(), topology)?;
+                }
                 Ok(())
             })();
 
@@ -8263,10 +8387,20 @@ pub(crate) mod valid {
             block: &SignedBlock,
             topology: &Topology,
         ) -> Result<(), SignatureVerificationError> {
+            Self::is_commit_internal(block, topology, false)
+        }
+
+        fn is_commit_internal(
+            block: &SignedBlock,
+            topology: &Topology,
+            signatures_verified: bool,
+        ) -> Result<(), SignatureVerificationError> {
             if !block.header().is_genesis() {
-                Self::verify_unique_signers(block)?;
-                Self::verify_leader_signature(block, topology)?;
-                Self::verify_signatures_against_topology(block, topology)?;
+                if !signatures_verified {
+                    Self::verify_unique_signers(block)?;
+                    Self::verify_leader_signature(block, topology)?;
+                    Self::verify_signatures_against_topology(block, topology)?;
+                }
 
                 let SignatureTally {
                     present: present_signatures,
@@ -8299,7 +8433,8 @@ pub(crate) mod valid {
                 .position(key_pair.public_key())
                 .expect("INTERNAL BUG: Node is not in topology");
 
-            self.0.sign(key_pair.private_key(), signatory_idx);
+            self.block.sign(key_pair.private_key(), signatory_idx);
+            self.clear_signatures_verified();
         }
 
         #[cfg(test)]
@@ -8334,7 +8469,7 @@ pub(crate) mod valid {
                 .sign(leader_private_key)
                 .unpack(|_| {});
 
-            Self(SignedBlock::presigned(
+            Self::new_unverified(SignedBlock::presigned(
                 unverified_block.signature,
                 unverified_block.header,
                 unverified_block
@@ -8348,13 +8483,20 @@ pub(crate) mod valid {
 
     impl From<ValidBlock> for SignedBlock {
         fn from(source: ValidBlock) -> Self {
-            source.0
+            source.block
         }
     }
 
     impl AsRef<SignedBlock> for ValidBlock {
         fn as_ref(&self) -> &SignedBlock {
-            &self.0
+            &self.block
+        }
+    }
+
+    #[cfg(test)]
+    impl AsMut<SignedBlock> for ValidBlock {
+        fn as_mut(&mut self) -> &mut SignedBlock {
+            &mut self.block
         }
     }
 
@@ -8413,7 +8555,7 @@ pub(crate) mod valid {
         fn insert_consensus_key(
             world: &mut World,
             name: &str,
-            public_key: PublicKey,
+            keypair: &KeyPair,
             activation_height: u64,
             expiry_height: Option<u64>,
             status: ConsensusKeyStatus,
@@ -8422,10 +8564,21 @@ pub(crate) mod valid {
                 ConsensusKeyRole::Validator,
                 Ident::from_str(name).expect("consensus key name parses"),
             );
+            let pop = match keypair.public_key().algorithm() {
+                Algorithm::BlsNormal => Some(
+                    iroha_crypto::bls_normal_pop_prove(keypair.private_key())
+                        .expect("pop for consensus key"),
+                ),
+                Algorithm::BlsSmall => Some(
+                    iroha_crypto::bls_small_pop_prove(keypair.private_key())
+                        .expect("pop for consensus key"),
+                ),
+                _ => None,
+            };
             let record = ConsensusKeyRecord {
                 id: id.clone(),
-                public_key,
-                pop: None,
+                public_key: keypair.public_key().clone(),
+                pop,
                 activation_height,
                 expiry_height,
                 hsm: None,
@@ -8438,6 +8591,22 @@ pub(crate) mod valid {
                 .consensus_keys_by_pk
                 .insert(pk_label, vec![id.clone()]);
             id
+        }
+
+        #[test]
+        fn signature_changes_clear_verified_flag() {
+            let key_pairs =
+                core::iter::repeat_with(|| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+                    .take(2)
+                    .collect::<Vec<_>>();
+            let topology = test_topology_with_keys(&key_pairs);
+            let mut block = ValidBlock::new_dummy(key_pairs[0].private_key());
+
+            block.mark_signatures_verified();
+            assert!(block.signatures_verified_for_tests());
+
+            block.sign(&key_pairs[1], &topology);
+            assert!(!block.signatures_verified_for_tests());
         }
 
         fn commit_block_at_height(
@@ -8902,7 +9071,7 @@ pub(crate) mod valid {
             insert_consensus_key(
                 &mut world,
                 "leader",
-                key_pairs[0].public_key().clone(),
+                &key_pairs[0],
                 1,
                 None,
                 ConsensusKeyStatus::Active,
@@ -8910,7 +9079,7 @@ pub(crate) mod valid {
             insert_consensus_key(
                 &mut world,
                 "validator",
-                key_pairs[1].public_key().clone(),
+                &key_pairs[1],
                 1,
                 None,
                 ConsensusKeyStatus::Active,
@@ -8923,6 +9092,44 @@ pub(crate) mod valid {
             let err = ValidBlock::enforce_consensus_key_lifecycle(block.as_ref(), &topology, &view)
                 .expect_err("missing proxy tail consensus key should be rejected");
             assert_eq!(err, SignatureVerificationError::InactiveConsensusKey);
+        }
+
+        #[test]
+        fn validate_signatures_subset_rejects_missing_pop() {
+            let key_pairs =
+                core::iter::repeat_with(|| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+                    .take(2)
+                    .collect::<Vec<_>>();
+            let topology = test_topology_with_keys(&key_pairs);
+            let block = ValidBlock::new_dummy(key_pairs[0].private_key());
+
+            let mut world = World::new();
+            let id = ConsensusKeyId::new(
+                ConsensusKeyRole::Validator,
+                Ident::from_str("leader").expect("consensus key name parses"),
+            );
+            let record = ConsensusKeyRecord {
+                id: id.clone(),
+                public_key: key_pairs[0].public_key().clone(),
+                pop: None,
+                activation_height: 1,
+                expiry_height: None,
+                hsm: None,
+                replaces: None,
+                status: ConsensusKeyStatus::Active,
+            };
+            world.consensus_keys.insert(id.clone(), record.clone());
+            world
+                .consensus_keys_by_pk
+                .insert(record.public_key.to_string(), vec![id.clone()]);
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let state = State::new_for_testing(world, kura, query);
+            let view = state.view();
+
+            let err = ValidBlock::validate_signatures_subset(block.as_ref(), &topology, &view)
+                .expect_err("missing pop should be rejected");
+            assert_eq!(err, SignatureVerificationError::MissingPop);
         }
 
         #[test]
@@ -8941,7 +9148,7 @@ pub(crate) mod valid {
             insert_consensus_key(
                 &mut world,
                 "leader",
-                key_pairs[0].public_key().clone(),
+                &key_pairs[0],
                 2,
                 Some(5),
                 ConsensusKeyStatus::Active,
@@ -8949,7 +9156,7 @@ pub(crate) mod valid {
             insert_consensus_key(
                 &mut world,
                 "validator",
-                key_pairs[1].public_key().clone(),
+                &key_pairs[1],
                 2,
                 Some(5),
                 ConsensusKeyStatus::Active,
@@ -8957,7 +9164,7 @@ pub(crate) mod valid {
             insert_consensus_key(
                 &mut world,
                 "proxy",
-                key_pairs[2].public_key().clone(),
+                &key_pairs[2],
                 2,
                 Some(5),
                 ConsensusKeyStatus::Retiring,
@@ -9008,7 +9215,7 @@ pub(crate) mod valid {
             insert_consensus_key(
                 &mut world,
                 "leader-active",
-                key_pairs[0].public_key().clone(),
+                &key_pairs[0],
                 1,
                 None,
                 ConsensusKeyStatus::Active,
@@ -9016,7 +9223,7 @@ pub(crate) mod valid {
             insert_consensus_key(
                 &mut world,
                 "validator",
-                key_pairs[1].public_key().clone(),
+                &key_pairs[1],
                 1,
                 None,
                 ConsensusKeyStatus::Active,
@@ -9024,7 +9231,7 @@ pub(crate) mod valid {
             insert_consensus_key(
                 &mut world,
                 "proxy",
-                key_pairs[2].public_key().clone(),
+                &key_pairs[2],
                 1,
                 None,
                 ConsensusKeyStatus::Active,
@@ -9068,7 +9275,7 @@ pub(crate) mod valid {
             insert_consensus_key(
                 &mut world,
                 "leader",
-                leader.public_key().clone(),
+                leader,
                 0,
                 None,
                 ConsensusKeyStatus::Active,
@@ -9128,7 +9335,7 @@ pub(crate) mod valid {
             insert_consensus_key(
                 &mut world,
                 "leader",
-                leader.public_key().clone(),
+                leader,
                 0,
                 None,
                 ConsensusKeyStatus::Active,
@@ -9269,7 +9476,7 @@ pub(crate) mod valid {
             insert_consensus_key(
                 &mut world,
                 "validator",
-                leader.public_key().clone(),
+                &leader,
                 0,
                 None,
                 ConsensusKeyStatus::Active,
@@ -9338,7 +9545,7 @@ pub(crate) mod valid {
             insert_consensus_key(
                 &mut world,
                 "validator",
-                leader.public_key().clone(),
+                &leader,
                 0,
                 None,
                 ConsensusKeyStatus::Active,
@@ -9451,7 +9658,7 @@ pub(crate) mod valid {
             insert_consensus_key(
                 &mut world,
                 "leader-expired",
-                leader.public_key().clone(),
+                &leader,
                 0,
                 Some(1),
                 ConsensusKeyStatus::Active,
@@ -9459,7 +9666,7 @@ pub(crate) mod valid {
             insert_consensus_key(
                 &mut world,
                 "proxy-expired",
-                proxy_tail.public_key().clone(),
+                &proxy_tail,
                 0,
                 Some(1),
                 ConsensusKeyStatus::Active,
@@ -9543,7 +9750,7 @@ pub(crate) mod valid {
             insert_consensus_key(
                 &mut world,
                 "leader-overlap",
-                leader.public_key().clone(),
+                &leader,
                 0,
                 Some(2),
                 ConsensusKeyStatus::Active,
@@ -9551,7 +9758,7 @@ pub(crate) mod valid {
             insert_consensus_key(
                 &mut world,
                 "proxy-overlap",
-                proxy_tail.public_key().clone(),
+                &proxy_tail,
                 0,
                 Some(2),
                 ConsensusKeyStatus::Retiring,
@@ -9628,7 +9835,7 @@ pub(crate) mod valid {
             insert_consensus_key(
                 &mut world,
                 "leader-only",
-                leader.public_key().clone(),
+                &leader,
                 0,
                 None,
                 ConsensusKeyStatus::Active,
@@ -9694,6 +9901,10 @@ pub(crate) mod valid {
             );
             assert_eq!(
                 map_sig_err_to_reason(&SignatureVerificationError::UnknownSignature),
+                Reason::InvalidBlockSignature
+            );
+            assert_eq!(
+                map_sig_err_to_reason(&SignatureVerificationError::MissingPop),
                 Reason::InvalidBlockSignature
             );
             assert_eq!(
@@ -9933,7 +10144,7 @@ pub(crate) mod valid {
             insert_consensus_key(
                 &mut world,
                 "validator",
-                leader.public_key().clone(),
+                &leader,
                 0,
                 None,
                 ConsensusKeyStatus::Active,
@@ -10380,26 +10591,26 @@ mod commit {
 
     impl From<CommittedBlock> for ValidBlock {
         fn from(source: CommittedBlock) -> Self {
-            ValidBlock(source.0.into())
+            source.0
         }
     }
 
     impl From<CommittedBlock> for SignedBlock {
         fn from(source: CommittedBlock) -> Self {
-            source.0.0
+            source.0.into()
         }
     }
 
     impl AsRef<SignedBlock> for CommittedBlock {
         fn as_ref(&self) -> &SignedBlock {
-            &self.0.0
+            self.0.as_ref()
         }
     }
 
     #[cfg(test)]
     impl AsMut<SignedBlock> for CommittedBlock {
         fn as_mut(&mut self) -> &mut SignedBlock {
-            &mut self.0.0
+            self.0.as_mut()
         }
     }
 
@@ -11999,7 +12210,8 @@ mod event {
                 Reason::InsufficientBlockSignatures
             }
             SignatureVerificationError::DuplicateSignature { .. }
-            | SignatureVerificationError::UnknownSignature => Reason::InvalidBlockSignature,
+            | SignatureVerificationError::UnknownSignature
+            | SignatureVerificationError::MissingPop => Reason::InvalidBlockSignature,
             SignatureVerificationError::UnknownSignatory => Reason::UnknownBlockSignatory,
             SignatureVerificationError::InactiveConsensusKey => Reason::InactiveConsensusKey,
             SignatureVerificationError::ProxyTailMissing => Reason::ProxyTailSignatureMissing,
@@ -12664,7 +12876,7 @@ mod tests {
             .unpack(|_| {})
             .unwrap();
 
-        assert_eq!(valid_block.0.hash(), committed_block.as_ref().hash())
+        assert_eq!(valid_block.as_ref().hash(), committed_block.as_ref().hash())
     }
 
     #[test]
@@ -13369,7 +13581,7 @@ mod tests {
             .chain(0, None)
             .sign(kp0.private_key())
             .unpack(|_| {});
-        let mut vb = ValidBlock(unverified_block.into());
+        let mut vb = ValidBlock::new_unverified_for_tests(unverified_block.into());
         vb.sign(&kp1, &topology);
         vb.sign(&kp2, &topology);
         // Commit succeeds under BLS-normal uniform validators
@@ -13551,7 +13763,8 @@ mod commit_signature_tally_tests {
             BlockSignature::new(0, SignatureOf::from_hash(kp_proxy.private_key(), hash)),
             BlockSignature::new(1, SignatureOf::from_hash(kp_proxy.private_key(), hash)),
         ]);
-        let block = ValidBlock(DataBlockBuilder::new(header).build(signatures));
+        let block =
+            ValidBlock::new_unverified_for_tests(DataBlockBuilder::new(header).build(signatures));
         let signers = BTreeSet::from([
             ValidatorIndex::try_from(0).expect("validator index parses"),
             ValidatorIndex::try_from(1).expect("validator index parses"),
@@ -13623,7 +13836,8 @@ mod commit_signature_tally_tests {
             3,
             SignatureOf::from_hash(kp_set_b.private_key(), hash),
         ));
-        let block = ValidBlock(DataBlockBuilder::new(header).build(signatures));
+        let block =
+            ValidBlock::new_unverified_for_tests(DataBlockBuilder::new(header).build(signatures));
         let signers = BTreeSet::from([
             ValidatorIndex::try_from(0).expect("validator index parses"),
             ValidatorIndex::try_from(1).expect("validator index parses"),
@@ -13674,7 +13888,8 @@ mod commit_signature_tally_tests {
             3,
             SignatureOf::from_hash(kp_proxy.private_key(), hash),
         ));
-        let block = ValidBlock(DataBlockBuilder::new(header).build(signatures));
+        let block =
+            ValidBlock::new_unverified_for_tests(DataBlockBuilder::new(header).build(signatures));
         let signers = BTreeSet::from([
             ValidatorIndex::try_from(0).expect("validator index parses"),
             ValidatorIndex::try_from(1).expect("validator index parses"),

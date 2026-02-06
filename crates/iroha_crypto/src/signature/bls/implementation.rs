@@ -1,9 +1,14 @@
 use core::marker::PhantomData;
 use std::{
-    borrow::ToOwned as _, cell::RefCell, collections::BTreeSet, string::ToString as _, vec,
+    borrow::ToOwned as _,
+    cell::RefCell,
+    collections::{BTreeSet, HashMap},
+    string::ToString as _,
+    vec,
     vec::Vec,
 };
 
+use blake2::Blake2bVar;
 use sha2::Sha256;
 use w3f_bls::{
     EngineBLS, PublicKey, SecretKey as W3fSecretKey, SecretKeyVT, SerializableToBytes as _,
@@ -16,6 +21,7 @@ use super::{normal::NormalConfiguration, small::SmallConfiguration};
 pub(super) const MESSAGE_CONTEXT: &[u8; 20] = b"for signing messages";
 
 const PREPARED_PK_CACHE_LIMIT: usize = 128;
+const VERIFY_OK_CACHE_LIMIT: usize = 4096;
 
 #[doc(hidden)]
 pub struct PreparedPublicKeyCache<E: EngineBLS> {
@@ -53,8 +59,47 @@ impl<E: EngineBLS> PreparedPublicKeyCache<E> {
 }
 
 #[doc(hidden)]
+pub struct VerifyOkCache {
+    map: HashMap<[u8; 32], ()>,
+}
+
+impl VerifyOkCache {
+    fn new() -> Self {
+        Self {
+            map: HashMap::new(),
+        }
+    }
+
+    fn contains(&self, key: &[u8; 32]) -> bool {
+        self.map.contains_key(key)
+    }
+
+    fn insert(&mut self, key: [u8; 32]) {
+        if self.map.len() >= VERIFY_OK_CACHE_LIMIT {
+            self.map.clear();
+        }
+        self.map.insert(key, ());
+    }
+}
+
+fn verify_ok_cache_key(pk_bytes: &[u8], message: &[u8], signature: &[u8]) -> [u8; 32] {
+    let mut h = <Blake2bVar as blake2::digest::VariableOutput>::new(32)
+        .expect("blake2b init for signature verify cache");
+    blake2::digest::Update::update(&mut h, b"iroha:bls:verify_ok_cache:v1");
+    blake2::digest::Update::update(&mut h, pk_bytes);
+    blake2::digest::Update::update(&mut h, message);
+    blake2::digest::Update::update(&mut h, signature);
+    let mut out = [0u8; 32];
+    blake2::digest::VariableOutput::finalize_variable(h, &mut out)
+        .expect("blake2b output length must match");
+    out
+}
+
+#[doc(hidden)]
 pub trait PreparedPublicKeyCacheAccess: BlsConfiguration {
     fn with_cache<R>(f: impl FnOnce(&mut PreparedPublicKeyCache<Self::Engine>) -> R) -> R;
+
+    fn with_verify_ok_cache<R>(f: impl FnOnce(&mut VerifyOkCache) -> R) -> R;
 }
 
 thread_local! {
@@ -64,17 +109,27 @@ thread_local! {
     static PREPARED_PK_CACHE_SMALL: RefCell<
         PreparedPublicKeyCache<<SmallConfiguration as BlsConfiguration>::Engine>
     > = RefCell::new(PreparedPublicKeyCache::new());
+    static VERIFY_OK_CACHE_NORMAL: RefCell<VerifyOkCache> = RefCell::new(VerifyOkCache::new());
+    static VERIFY_OK_CACHE_SMALL: RefCell<VerifyOkCache> = RefCell::new(VerifyOkCache::new());
 }
 
 impl PreparedPublicKeyCacheAccess for NormalConfiguration {
     fn with_cache<R>(f: impl FnOnce(&mut PreparedPublicKeyCache<Self::Engine>) -> R) -> R {
         PREPARED_PK_CACHE_NORMAL.with(|cache| f(&mut cache.borrow_mut()))
     }
+
+    fn with_verify_ok_cache<R>(f: impl FnOnce(&mut VerifyOkCache) -> R) -> R {
+        VERIFY_OK_CACHE_NORMAL.with(|cache| f(&mut cache.borrow_mut()))
+    }
 }
 
 impl PreparedPublicKeyCacheAccess for SmallConfiguration {
     fn with_cache<R>(f: impl FnOnce(&mut PreparedPublicKeyCache<Self::Engine>) -> R) -> R {
         PREPARED_PK_CACHE_SMALL.with(|cache| f(&mut cache.borrow_mut()))
+    }
+
+    fn with_verify_ok_cache<R>(f: impl FnOnce(&mut VerifyOkCache) -> R) -> R {
+        VERIFY_OK_CACHE_SMALL.with(|cache| f(&mut cache.borrow_mut()))
     }
 }
 
@@ -211,6 +266,10 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
         C: PreparedPublicKeyCacheAccess,
     {
         let pk_bytes = pk.to_bytes();
+        let cache_key = verify_ok_cache_key(&pk_bytes, message, signature_bytes);
+        if C::with_verify_ok_cache(|cache| cache.contains(&cache_key)) {
+            return Ok(());
+        }
         let identity_pk = PublicKey::<C::Engine>(Default::default());
         if pk_bytes == identity_pk.to_bytes() {
             return Err(ParseError("BLS public key is identity".to_string()).into());
@@ -241,6 +300,7 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
             return Err(Error::BadSignature);
         }
 
+        C::with_verify_ok_cache(|cache| cache.insert(cache_key));
         Ok(())
     }
 
