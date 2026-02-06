@@ -2314,12 +2314,6 @@ mod handle_update_tests {
     #[derive(Clone, Debug, Decode, Encode)]
     struct Dummy;
 
-    impl<'a> ncore::DecodeFromSlice<'a> for Dummy {
-        fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
-            ncore::decode_field_canonical::<Self>(bytes)
-        }
-    }
-
     impl message::ClassifyTopic for Dummy {}
 
     impl<'a> norito::core::DecodeFromSlice<'a> for Dummy {
@@ -2464,12 +2458,6 @@ mod accept_stream_tests {
 
     #[derive(Clone, Debug, Decode, Encode)]
     struct Dummy;
-
-    impl<'a> ncore::DecodeFromSlice<'a> for Dummy {
-        fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
-            ncore::decode_field_canonical::<Self>(bytes)
-        }
-    }
 
     impl crate::network::message::ClassifyTopic for Dummy {}
 
@@ -5824,38 +5812,9 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
 
         let deliver_local = matches!(target, RelayTarget::Broadcast)
             || matches!(&target, RelayTarget::Direct(id) if id == &self.self_id);
-        if deliver_local {
-            let origin_peer = self.resolve_origin_peer(&origin, &incoming_peer);
-            let deliver = PeerMessage {
-                peer: origin_peer,
-                payload: payload.clone(),
-                payload_bytes: msg.payload_bytes,
-            };
-            if matches!(
-                topic,
-                message::Topic::TxGossip | message::Topic::TxGossipRestricted
-            ) {
-                iroha_logger::debug!(
-                    peer=%deliver.peer,
-                    size_bytes,
-                    "delivering tx gossip frame to subscribers"
-                );
-            } else if matches!(
-                topic,
-                message::Topic::Consensus
-                    | message::Topic::ConsensusPayload
-                    | message::Topic::ConsensusChunk
-            ) {
-                iroha_logger::debug!(
-                    peer=%deliver.peer,
-                    topic=?topic,
-                    size_bytes,
-                    "delivering consensus frame to subscribers"
-                );
-            }
-            self.dispatch_to_subscribers(deliver);
-        }
 
+        // Forward first (only borrows `payload`) so we can move it into the local-delivery
+        // message without cloning when hub-mode relay is enabled.
         if matches!(self.relay_role, RelayRole::Hub) {
             if let Some(next_ttl) = ttl.checked_sub(1) {
                 match target {
@@ -5884,6 +5843,38 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                     }
                 }
             }
+        }
+
+        if deliver_local {
+            let origin_peer = self.resolve_origin_peer(&origin, &incoming_peer);
+            let deliver = PeerMessage {
+                peer: origin_peer,
+                payload,
+                payload_bytes: msg.payload_bytes,
+            };
+            if matches!(
+                topic,
+                message::Topic::TxGossip | message::Topic::TxGossipRestricted
+            ) {
+                iroha_logger::debug!(
+                    peer=%deliver.peer,
+                    size_bytes,
+                    "delivering tx gossip frame to subscribers"
+                );
+            } else if matches!(
+                topic,
+                message::Topic::Consensus
+                    | message::Topic::ConsensusPayload
+                    | message::Topic::ConsensusChunk
+            ) {
+                iroha_logger::debug!(
+                    peer=%deliver.peer,
+                    topic=?topic,
+                    size_bytes,
+                    "delivering consensus frame to subscribers"
+                );
+            }
+            self.dispatch_to_subscribers(deliver);
         }
     }
 
@@ -6170,22 +6161,10 @@ mod tests {
     #[derive(Clone, Debug, Decode, Encode)]
     struct DummyMsg;
 
-    impl<'a> ncore::DecodeFromSlice<'a> for DummyMsg {
-        fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
-            ncore::decode_field_canonical::<Self>(bytes)
-        }
-    }
-
     impl message::ClassifyTopic for DummyMsg {}
 
     #[derive(Clone, Copy, Debug, Decode, Encode)]
     struct TrustGossipMsg;
-
-    impl<'a> ncore::DecodeFromSlice<'a> for TrustGossipMsg {
-        fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
-            ncore::decode_field_canonical::<Self>(bytes)
-        }
-    }
 
     impl message::ClassifyTopic for TrustGossipMsg {
         fn topic(&self) -> message::Topic {
@@ -6195,12 +6174,6 @@ mod tests {
 
     #[derive(Clone, Copy, Debug, Decode, Encode)]
     struct PeerGossipMsg;
-
-    impl<'a> ncore::DecodeFromSlice<'a> for PeerGossipMsg {
-        fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
-            ncore::decode_field_canonical::<Self>(bytes)
-        }
-    }
 
     impl message::ClassifyTopic for PeerGossipMsg {
         fn topic(&self) -> message::Topic {
@@ -6212,12 +6185,6 @@ mod tests {
     enum TopicMsg {
         Trust,
         Peer,
-    }
-
-    impl<'a> ncore::DecodeFromSlice<'a> for TopicMsg {
-        fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
-            ncore::decode_field_canonical::<Self>(bytes)
-        }
     }
 
     impl message::ClassifyTopic for TopicMsg {

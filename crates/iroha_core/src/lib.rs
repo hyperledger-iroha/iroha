@@ -200,6 +200,7 @@ pub mod test_alias {
 }
 
 use core::time::Duration;
+use std::sync::Arc;
 
 use gossiper::TransactionGossip;
 use iroha_data_model::{events::EventBox, prelude::*};
@@ -249,7 +250,7 @@ pub enum NetworkMessage {
     /// Block sync message.
     BlockSync(Box<BlockSyncMessage>),
     /// Transaction gossiper message.
-    TransactionGossiper(Box<TransactionGossip>),
+    TransactionGossiper(Arc<TransactionGossip>),
     /// Genesis bootstrap request (preflight or payload).
     GenesisRequest(Box<genesis::GenesisRequest>),
     /// Genesis bootstrap response.
@@ -761,7 +762,7 @@ mod tests {
             }],
             plane: GossipPlane::Public,
         };
-        let msg = NetworkMessage::TransactionGossiper(Box::new(gossip));
+        let msg = NetworkMessage::TransactionGossiper(Arc::new(gossip));
 
         let bytes = msg.encode();
         let decoded: NetworkMessage =

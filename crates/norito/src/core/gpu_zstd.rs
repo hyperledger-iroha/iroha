@@ -336,7 +336,6 @@ unsafe fn dlopen_metal_helper() -> *mut c_void {
         candidates.push(dir.join("libgpuzstd_metal.dylib"));
         candidates.push(dir.join("../lib/libgpuzstd_metal.dylib"));
     }
-    candidates.push(PathBuf::from("libgpuzstd_metal.dylib"));
 
     for path in candidates {
         let bytes = path.as_os_str().as_bytes();
@@ -360,14 +359,29 @@ unsafe fn init_backend() -> Option<Backend> {
     }
     #[cfg(unix)]
     {
-        let lib = unsafe {
-            dlopen(
-                CStr::from_bytes_with_nul(b"libgpuzstd_cuda.so\0")
-                    .unwrap()
-                    .as_ptr(),
-                RTLD_LAZY,
-            )
-        };
+        use std::{env, ffi::CString, os::unix::ffi::OsStrExt, path::PathBuf};
+
+        let mut lib = std::ptr::null_mut();
+        let mut candidates: Vec<PathBuf> = Vec::new();
+        if let Ok(exe) = env::current_exe()
+            && let Some(dir) = exe.parent()
+        {
+            candidates.push(dir.join("libgpuzstd_cuda.so"));
+            candidates.push(dir.join("../lib/libgpuzstd_cuda.so"));
+        }
+        for path in candidates {
+            let bytes = path.as_os_str().as_bytes();
+            if bytes.contains(&0) {
+                continue;
+            }
+            if let Ok(cpath) = CString::new(bytes) {
+                let handle = unsafe { dlopen(cpath.as_ptr(), RTLD_LAZY) };
+                if !handle.is_null() {
+                    lib = handle;
+                    break;
+                }
+            }
+        }
         if lib.is_null() {
             return None;
         }

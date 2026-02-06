@@ -104,7 +104,7 @@ fn tx_gossip_frame_payload_cap(
         .encoded_len_exact()
         .or_else(|| probe_gossip.encoded_len_hint())
         .unwrap_or(0);
-    let payload = NetworkMessage::TransactionGossiper(Box::new(probe_gossip));
+    let payload = NetworkMessage::TransactionGossiper(Arc::new(probe_gossip));
     let direct_len = iroha_p2p::network::data_frame_wire_len(
         self_peer_id,
         Some(max_peer_id),
@@ -159,7 +159,7 @@ impl GossipTargetSeed {
 /// [`TransactionGossiper`] actor handle.
 #[derive(Clone)]
 pub struct TransactionGossiperHandle {
-    message_sender: mpsc::Sender<TransactionGossip>,
+    message_sender: mpsc::Sender<Arc<TransactionGossip>>,
 }
 
 impl TransactionGossiperHandle {
@@ -167,7 +167,7 @@ impl TransactionGossiperHandle {
     ///
     /// Messages are best-effort: if the queue is full, the gossip is dropped
     /// to avoid blocking consensus traffic.
-    pub fn gossip(&self, gossip: TransactionGossip) {
+    pub fn gossip(&self, gossip: Arc<TransactionGossip>) {
         let txs = gossip.txs.len();
         let plane = gossip_plane_label(gossip.plane);
         match self.message_sender.try_send(gossip) {
@@ -214,9 +214,9 @@ mod handle_tests {
 
         handle
             .message_sender
-            .try_send(msg1)
+            .try_send(Arc::new(msg1))
             .expect("queue has space");
-        handle.gossip(msg2);
+        handle.gossip(Arc::new(msg2));
 
         let received = message_receiver
             .try_recv()
@@ -323,7 +323,7 @@ impl TransactionGossiper {
 
     async fn run(
         mut self,
-        mut message_receiver: mpsc::Receiver<TransactionGossip>,
+        mut message_receiver: mpsc::Receiver<Arc<TransactionGossip>>,
         shutdown_signal: ShutdownSignal,
     ) {
         let mut gossip_period = tokio::time::interval(self.gossip_period);
@@ -605,7 +605,7 @@ impl TransactionGossiper {
                 dataspace = %dataspace_id,
                 "gossiping public transaction batch to capped target set"
             );
-            let payload = NetworkMessage::TransactionGossiper(Box::new(message));
+            let payload = NetworkMessage::TransactionGossiper(Arc::new(message));
             for peer_id in &targets {
                 self.network.post(Post {
                     data: payload.clone(),
@@ -640,7 +640,7 @@ impl TransactionGossiper {
                 "Gossiping transactions"
             );
             self.network.broadcast(Broadcast {
-                data: NetworkMessage::TransactionGossiper(Box::new(message)),
+                data: NetworkMessage::TransactionGossiper(Arc::new(message)),
                 priority: Priority::Low,
             });
             self.record_sent_metric(
@@ -748,7 +748,8 @@ impl TransactionGossiper {
             }
         };
 
-        let payload = NetworkMessage::TransactionGossiper(Box::new(message.clone()));
+        let message = Arc::new(message);
+        let payload = NetworkMessage::TransactionGossiper(Arc::clone(&message));
         for peer_id in &targets {
             self.network.post(Post {
                 data: payload.clone(),
@@ -1001,8 +1002,15 @@ impl TransactionGossiper {
         )
     }
 
+    fn handle_transaction_gossip(&self, gossip: Arc<TransactionGossip>) {
+        match Arc::try_unwrap(gossip) {
+            Ok(owned) => self.handle_transaction_gossip_owned(owned),
+            Err(shared) => self.handle_transaction_gossip_shared(shared.as_ref()),
+        }
+    }
+
     #[allow(clippy::too_many_lines)]
-    fn handle_transaction_gossip(
+    fn handle_transaction_gossip_owned(
         &self,
         TransactionGossip { txs, routes, plane }: TransactionGossip,
     ) {
@@ -1173,6 +1181,252 @@ impl TransactionGossiper {
             };
 
             let (signed, payload) = tx.into_signed_with_payload();
+            let crypto_cfg = self.state.crypto();
+            match AcceptedTransaction::accept(
+                signed,
+                &self.chain_id,
+                max_clock_drift,
+                tx_limits,
+                crypto_cfg.as_ref(),
+            ) {
+                Ok(tx) => {
+                    let state_view = self.state.view();
+                    let advertised_route = RoutingDecision::new(route.lane_id, route.dataspace_id);
+                    let local_route = self.queue.route_for_gossip(&tx, &state_view);
+                    let tx_hash = tx.as_ref().hash();
+                    if local_route != advertised_route {
+                        iroha_logger::warn!(
+                            %tx_hash,
+                            advertised_lane_id = %route.lane_id,
+                            advertised_dataspace_id = %route.dataspace_id,
+                            expected_lane_id = %local_route.lane_id,
+                            expected_dataspace_id = %local_route.dataspace_id,
+                            "dropping transaction gossip entry due to routing mismatch"
+                        );
+                        self.record_drop_metric(
+                            plane,
+                            local_route.dataspace_id,
+                            &[local_route.lane_id],
+                            DROP_REASON_ROUTE_MISMATCH,
+                            false,
+                            None,
+                            &[],
+                            self.target_cap_for_plane(plane),
+                            1,
+                            0,
+                        );
+                        continue;
+                    }
+                    match self.queue.push_with_gossip_payload(tx, state_view, payload) {
+                        Ok(()) => {
+                            iroha_logger::debug!(%tx_hash, "transaction enqueued from gossip");
+                        }
+                        Err(crate::queue::Failure {
+                            tx,
+                            err: crate::queue::Error::InBlockchain,
+                        }) => {
+                            iroha_logger::debug!(
+                                tx = %tx.as_ref().as_ref().hash(),
+                                "Transaction already in blockchain, ignoring..."
+                            )
+                        }
+                        Err(crate::queue::Failure {
+                            tx,
+                            err: crate::queue::Error::IsInQueue,
+                        }) => {
+                            iroha_logger::trace!(
+                                tx = %tx.as_ref().as_ref().hash(),
+                                "Transaction already in the queue, ignoring..."
+                            )
+                        }
+                        Err(crate::queue::Failure { tx, err }) => {
+                            iroha_logger::error!(
+                                ?err,
+                                tx = %tx.as_ref().as_ref().hash(),
+                                "Failed to enqueue transaction."
+                            )
+                        }
+                    }
+                }
+                Err(err) => iroha_logger::error!(%err, "Transaction rejected"),
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn handle_transaction_gossip_shared(&self, gossip: &TransactionGossip) {
+        let txs = &gossip.txs;
+        let routes = &gossip.routes;
+        let plane = gossip.plane;
+
+        iroha_logger::debug!(size = txs.len(), "received transaction gossip batch");
+        let batch_txs = txs.len();
+
+        if routes.is_empty() {
+            iroha_logger::warn!("dropping transaction gossip without routing metadata");
+            self.record_drop_metric(
+                plane,
+                DataSpaceId::GLOBAL,
+                &[],
+                "missing_routes",
+                false,
+                None,
+                &[],
+                self.target_cap_for_plane(plane),
+                batch_txs,
+                0,
+            );
+            return;
+        }
+
+        if routes.len() != txs.len() {
+            let dataspace = routes
+                .first()
+                .map_or(DataSpaceId::GLOBAL, |route| route.dataspace_id);
+            iroha_logger::warn!(
+                routes = routes.len(),
+                txs = txs.len(),
+                "dropping transaction gossip batch due to route/tx length mismatch"
+            );
+            self.record_drop_metric(
+                plane,
+                dataspace,
+                routes
+                    .first()
+                    .map(|route| vec![route.lane_id])
+                    .unwrap_or_default()
+                    .as_slice(),
+                "route_tx_len_mismatch",
+                false,
+                None,
+                &[],
+                self.target_cap_for_plane(plane),
+                batch_txs,
+                0,
+            );
+            return;
+        }
+
+        let state_view = self.state.view();
+        let lane_catalog = state_view.nexus.lane_catalog.clone();
+        let lane_config = state_view.nexus.lane_config.clone();
+        drop(state_view);
+
+        for (idx, tx) in txs.iter().enumerate() {
+            let Some(route) = routes.get(idx).copied() else {
+                iroha_logger::warn!("route metadata missing for transaction gossip entry");
+                self.record_drop_metric(
+                    plane,
+                    DataSpaceId::GLOBAL,
+                    &[],
+                    "missing_route_entry",
+                    false,
+                    None,
+                    &[],
+                    self.target_cap_for_plane(plane),
+                    1,
+                    0,
+                );
+                continue;
+            };
+            if let Err(reason) = validate_route(&lane_catalog, route) {
+                iroha_logger::warn!(
+                    lane_id = %route.lane_id,
+                    dataspace_id = %route.dataspace_id,
+                    reason,
+                    "dropping transaction gossip entry due to invalid route"
+                );
+                self.record_drop_metric(
+                    plane,
+                    route.dataspace_id,
+                    &[route.lane_id],
+                    reason,
+                    false,
+                    None,
+                    &[],
+                    self.target_cap_for_plane(plane),
+                    1,
+                    0,
+                );
+                continue;
+            }
+            let expected_plane = dataspace_plane(&lane_config, route.dataspace_id).or({
+                if self.dataspace_cfg.drop_unknown_dataspace {
+                    None
+                } else {
+                    Some(GossipPlane::Restricted)
+                }
+            });
+            let Some(expected_plane) = expected_plane else {
+                iroha_logger::warn!(
+                    lane_id = %route.lane_id,
+                    dataspace_id = %route.dataspace_id,
+                    "dropping transaction gossip entry due to unknown dataspace"
+                );
+                self.record_drop_metric(
+                    plane,
+                    route.dataspace_id,
+                    &[route.lane_id],
+                    "unknown_dataspace",
+                    false,
+                    None,
+                    &[],
+                    self.target_cap_for_plane(plane),
+                    1,
+                    0,
+                );
+                continue;
+            };
+            if plane == GossipPlane::Restricted && route.dataspace_id == DataSpaceId::GLOBAL {
+                iroha_logger::warn!(
+                    lane_id = %route.lane_id,
+                    "restricted plane reported global dataspace; dropping entry"
+                );
+                self.record_drop_metric(
+                    plane,
+                    route.dataspace_id,
+                    &[route.lane_id],
+                    "restricted_global_dataspace",
+                    false,
+                    None,
+                    &[],
+                    self.target_cap_for_plane(plane),
+                    1,
+                    0,
+                );
+                continue;
+            }
+            if expected_plane != plane {
+                iroha_logger::warn!(
+                    lane_id = %route.lane_id,
+                    dataspace_id = %route.dataspace_id,
+                    plane = ?plane,
+                    expected_plane = ?expected_plane,
+                    "dropping transaction gossip entry due to plane mismatch"
+                );
+                self.record_drop_metric(
+                    plane,
+                    route.dataspace_id,
+                    &[route.lane_id],
+                    "plane_mismatch",
+                    false,
+                    None,
+                    &[],
+                    self.target_cap_for_plane(plane),
+                    1,
+                    0,
+                );
+                continue;
+            }
+
+            let (max_clock_drift, tx_limits) = {
+                let state_view = self.state.world.view();
+                let params = &state_view.parameters;
+                (params.sumeragi().max_clock_drift(), params.transaction())
+            };
+
+            let signed = (*tx.signed).clone();
+            let payload = tx.encoded.as_ref().map(Arc::clone);
             let crypto_cfg = self.state.crypto();
             match AcceptedTransaction::accept(
                 signed,
@@ -2293,7 +2547,7 @@ mod tests {
             plane: GossipPlane::Public,
         };
 
-        let network = NetworkMessage::TransactionGossiper(Box::new(message));
+        let network = NetworkMessage::TransactionGossiper(Arc::new(message));
         let encoded = network.encode();
         let decoded: NetworkMessage =
             Decode::decode(&mut encoded.as_slice()).expect("decode network gossip");

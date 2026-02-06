@@ -1025,6 +1025,7 @@ fn fetch_cli_can_skip_digest_verification() {
     sorafs_fetch_cmd()
         .arg(format!("--plan={}", plan_path.display()))
         .arg(format!("--provider=alpha={}", payload_path.display()))
+        .arg("--allow-insecure")
         .arg("--no-verify-digest")
         .arg(format!("--output={}", output_path.display()))
         .assert()
@@ -1033,6 +1034,20 @@ fn fetch_cli_can_skip_digest_verification() {
     let assembled = fs::read(&output_path).expect("read assembled payload");
     assert_eq!(assembled, corrupted);
     assert_ne!(assembled, original_payload);
+}
+
+#[test]
+fn fetch_cli_requires_allow_insecure_for_verification_bypass() {
+    let assert = sorafs_fetch_cmd()
+        .arg("--no-verify-digest")
+        .assert()
+        .failure();
+
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).expect("utf8 stderr");
+    assert!(
+        stderr.contains("allow-insecure"),
+        "unexpected stderr: {stderr}"
+    );
 }
 
 #[test]

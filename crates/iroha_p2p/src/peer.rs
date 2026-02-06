@@ -2281,9 +2281,9 @@ mod run {
         queue_high: VecDeque<BytesMut>,
         /// Queue of encrypted messages waiting to be sent (low priority).
         queue_low: VecDeque<BytesMut>,
-        /// In-flight frame currently being written to the socket.
-        inflight: Option<BytesMut>,
-        inflight_offset: usize,
+        /// In-flight coalesced bytes currently being written to the socket.
+        batch: BytesMut,
+        batch_offset: usize,
         /// Maximum payload size accepted per encrypted frame
         max_frame_bytes: usize,
     }
@@ -2291,6 +2291,9 @@ mod run {
     impl<E: Enc> MessageSender<E> {
         const U32_SIZE: usize = core::mem::size_of::<u32>();
         const FRAME_POOL_MAX: usize = 32;
+        const MAX_BATCH_FRAMES: usize = 16;
+        const MAX_BATCH_BYTES: usize = 64 * 1024;
+        const MAX_BATCH_HI_BURST: usize = 4;
 
         fn new(
             write: Box<dyn AsyncWrite + Send + Unpin>,
@@ -2305,8 +2308,8 @@ mod run {
                 frame_pool: Vec::new(),
                 queue_high: VecDeque::new(),
                 queue_low: VecDeque::new(),
-                inflight: None,
-                inflight_offset: 0,
+                batch: BytesMut::with_capacity(DEFAULT_BUFFER_CAPACITY),
+                batch_offset: 0,
                 max_frame_bytes,
             }
         }
@@ -2344,42 +2347,76 @@ mod run {
         /// Send bytes of byte-encoded messages piled up in the message queue so far.
         /// On the other side peer will collect bytes and recreate original messages from them.
         ///
-        /// Sends only as much data as the underlying writer will accept in one `.write` call,
-        /// so must be called in a loop to ensure everything will get sent.
-        ///
         /// # Errors
         /// - If write to `stream` fail.
         async fn send(&mut self) -> Result<(), Error> {
-            if self.inflight.is_none() {
-                self.inflight = self
-                    .queue_high
-                    .pop_front()
-                    .or_else(|| self.queue_low.pop_front());
-                self.inflight_offset = 0;
+            if self.batch_offset >= self.batch.len() {
+                self.fill_batch();
             }
-            let Some(frame) = self.inflight.as_mut() else {
+            if self.batch_offset >= self.batch.len() {
                 return Ok(());
-            };
-            let chunk = &frame[self.inflight_offset..];
+            }
+            let chunk = &self.batch[self.batch_offset..];
             if !chunk.is_empty() {
                 let n = self.write.write(chunk).await?;
-                self.inflight_offset = self.inflight_offset.saturating_add(n);
-                self.write.flush().await?;
+                self.batch_offset = self.batch_offset.saturating_add(n);
             }
-            if self.inflight_offset >= frame.len() {
-                let mut finished = self.inflight.take().expect("inflight present");
-                finished.clear();
-                if self.frame_pool.len() < Self::FRAME_POOL_MAX {
-                    self.frame_pool.push(finished);
-                }
-                self.inflight_offset = 0;
+            if self.batch_offset >= self.batch.len() {
+                self.write.flush().await?;
+                self.batch.clear();
+                self.batch_offset = 0;
             }
             Ok(())
         }
 
         /// Check if message sender has data ready to be sent.
         fn ready(&self) -> bool {
-            self.inflight.is_some() || !self.queue_high.is_empty() || !self.queue_low.is_empty()
+            self.batch_offset < self.batch.len()
+                || !self.queue_high.is_empty()
+                || !self.queue_low.is_empty()
+        }
+
+        fn fill_batch(&mut self) {
+            debug_assert!(self.batch_offset >= self.batch.len());
+            self.batch.clear();
+            self.batch_offset = 0;
+
+            let mut frames_added = 0usize;
+            let mut hi_burst = 0usize;
+
+            while frames_added < Self::MAX_BATCH_FRAMES {
+                let take_low = hi_burst >= Self::MAX_BATCH_HI_BURST && !self.queue_low.is_empty();
+                let take_high = !take_low && !self.queue_high.is_empty();
+                let take_low = !take_high && !self.queue_low.is_empty();
+                if !(take_high || take_low) {
+                    break;
+                }
+
+                let queue = if take_high {
+                    &mut self.queue_high
+                } else {
+                    &mut self.queue_low
+                };
+                let frame_len = queue.front().map(BytesMut::len).unwrap_or(0);
+                if frames_added > 0 && self.batch.len().saturating_add(frame_len) > Self::MAX_BATCH_BYTES
+                {
+                    break;
+                }
+
+                let mut frame = queue.pop_front().expect("queue.front checked");
+                self.batch.extend_from_slice(&frame);
+                frame.clear();
+                if self.frame_pool.len() < Self::FRAME_POOL_MAX {
+                    self.frame_pool.push(frame);
+                }
+
+                frames_added = frames_added.saturating_add(1);
+                if take_high {
+                    hi_burst = hi_burst.saturating_add(1);
+                } else {
+                    hi_burst = 0;
+                }
+            }
         }
     }
 

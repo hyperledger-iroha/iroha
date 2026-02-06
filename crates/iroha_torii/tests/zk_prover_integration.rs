@@ -13,6 +13,7 @@ use axum::{
 use http_body_util::BodyExt as _;
 use iroha_core::zk::test_utils::halo2_fixture_envelope;
 use iroha_data_model::proof::ProofAttachment;
+use iroha_torii::zk_attachments::AttachmentTenant;
 use tower::ServiceExt as _;
 
 fn ensure_quota_config() {
@@ -81,10 +82,13 @@ async fn prover_reports_list_get_delete() {
         );
         h
     };
-    let resp =
-        iroha_torii::zk_attachments::handle_post_attachment(headers, axum::body::Bytes::from(body))
-            .await
-            .into_response();
+    let resp = iroha_torii::zk_attachments::handle_post_attachment(
+        AttachmentTenant::anonymous(),
+        headers,
+        axum::body::Bytes::from(body),
+    )
+    .await
+    .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::CREATED);
     let (_parts, body) = resp.into_parts();
     let bytes = body.collect().await.unwrap().to_bytes();
@@ -182,10 +186,13 @@ async fn prover_reports_zk1_tags_present_for_norito() {
         );
         h
     };
-    let resp =
-        iroha_torii::zk_attachments::handle_post_attachment(headers, axum::body::Bytes::from(body))
-            .await
-            .into_response();
+    let resp = iroha_torii::zk_attachments::handle_post_attachment(
+        AttachmentTenant::anonymous(),
+        headers,
+        axum::body::Bytes::from(body),
+    )
+    .await
+    .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::CREATED);
     let (_parts, body) = resp.into_parts();
     let bytes = body.collect().await.unwrap().to_bytes();
@@ -281,10 +288,13 @@ async fn prover_reports_zk1_tags_order_prof_ipak() {
         );
         h
     };
-    let resp =
-        iroha_torii::zk_attachments::handle_post_attachment(headers, axum::body::Bytes::from(body))
-            .await
-            .into_response();
+    let resp = iroha_torii::zk_attachments::handle_post_attachment(
+        AttachmentTenant::anonymous(),
+        headers,
+        axum::body::Bytes::from(body),
+    )
+    .await
+    .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::CREATED);
     let (_parts, body) = resp.into_parts();
     let bytes = body.collect().await.unwrap().to_bytes();
@@ -388,10 +398,13 @@ async fn prover_reports_error_for_truncated_tlv() {
         );
         h
     };
-    let resp =
-        iroha_torii::zk_attachments::handle_post_attachment(headers, axum::body::Bytes::from(body))
-            .await
-            .into_response();
+    let resp = iroha_torii::zk_attachments::handle_post_attachment(
+        AttachmentTenant::anonymous(),
+        headers,
+        axum::body::Bytes::from(body),
+    )
+    .await
+    .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::CREATED);
     let (_parts, body) = resp.into_parts();
     let bytes = body.collect().await.unwrap().to_bytes();
@@ -515,6 +528,7 @@ async fn prover_reports_server_side_filters() {
     };
     let proof_body = fixture_attachment_bytes();
     let resp = iroha_torii::zk_attachments::handle_post_attachment(
+        AttachmentTenant::anonymous(),
         headers_norito.clone(),
         axum::body::Bytes::from(proof_body),
     )
@@ -526,6 +540,7 @@ async fn prover_reports_server_side_filters() {
     body.extend_from_slice(b"PROF");
     body.extend_from_slice(&0u32.to_le_bytes());
     let resp2 = iroha_torii::zk_attachments::handle_post_attachment(
+        AttachmentTenant::anonymous(),
         headers_zk1,
         axum::body::Bytes::from(body),
     )
@@ -596,7 +611,11 @@ async fn prover_reports_server_side_paging_limit_since() {
         h
     };
     let post = |b: axum::body::Bytes| async {
-        iroha_torii::zk_attachments::handle_post_attachment(headers_json.clone(), b)
+        iroha_torii::zk_attachments::handle_post_attachment(
+            AttachmentTenant::anonymous(),
+            headers_json.clone(),
+            b,
+        )
             .await
             .into_response()
     };
@@ -757,6 +776,7 @@ async fn prover_reports_server_side_count_matches_filtered_list() {
         h
     };
     let _ = iroha_torii::zk_attachments::handle_post_attachment(
+        AttachmentTenant::anonymous(),
         headers_json,
         axum::body::Bytes::from_static(br#"{"a":1}"#),
     )
@@ -776,6 +796,7 @@ async fn prover_reports_server_side_count_matches_filtered_list() {
     body.extend_from_slice(b"PROF");
     body.extend_from_slice(&0u32.to_le_bytes());
     let _ = iroha_torii::zk_attachments::handle_post_attachment(
+        AttachmentTenant::anonymous(),
         headers_zk1.clone(),
         axum::body::Bytes::from(body),
     )
@@ -787,6 +808,7 @@ async fn prover_reports_server_side_count_matches_filtered_list() {
     body2.extend_from_slice(&4u32.to_le_bytes());
     body2.extend_from_slice(&5u32.to_le_bytes());
     let _ = iroha_torii::zk_attachments::handle_post_attachment(
+        AttachmentTenant::anonymous(),
         headers_zk1,
         axum::body::Bytes::from(body2),
     )
@@ -862,6 +884,7 @@ async fn prover_reports_server_side_bulk_delete() {
         h
     };
     let _ = iroha_torii::zk_attachments::handle_post_attachment(
+        AttachmentTenant::anonymous(),
         headers_json,
         axum::body::Bytes::from_static(br#"{"a":1}"#),
     )
@@ -880,6 +903,7 @@ async fn prover_reports_server_side_bulk_delete() {
     body.extend_from_slice(b"PROF");
     body.extend_from_slice(&0u32.to_le_bytes());
     let _ = iroha_torii::zk_attachments::handle_post_attachment(
+        AttachmentTenant::anonymous(),
         headers_zk1,
         axum::body::Bytes::from(body),
     )
@@ -949,10 +973,13 @@ async fn prover_reports_error_for_oversized_tlv() {
         );
         h
     };
-    let resp =
-        iroha_torii::zk_attachments::handle_post_attachment(headers, axum::body::Bytes::from(body))
-            .await
-            .into_response();
+    let resp = iroha_torii::zk_attachments::handle_post_attachment(
+        AttachmentTenant::anonymous(),
+        headers,
+        axum::body::Bytes::from(body),
+    )
+    .await
+    .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::CREATED);
     let (_parts, body) = resp.into_parts();
     let bytes = body.collect().await.unwrap().to_bytes();
@@ -1002,6 +1029,7 @@ async fn prover_reports_ttl_gc_deletes_old_reports() {
         h
     };
     let resp = iroha_torii::zk_attachments::handle_post_attachment(
+        AttachmentTenant::anonymous(),
         headers,
         axum::body::Bytes::from_static(br#"{"a":1}"#),
     )

@@ -34,13 +34,14 @@ async fn attachments_sanitize_via_subprocess() {
     );
     iroha_torii::zk_attachments::init_persistence();
 
+    let tenant = iroha_torii::zk_attachments::AttachmentTenant::anonymous();
     let mut headers = HeaderMap::new();
     headers.insert(
         axum::http::header::CONTENT_TYPE,
         axum::http::HeaderValue::from_static("application/json"),
     );
     let body = axum::body::Bytes::from_static(br#"{"hello":"world"}"#);
-    let response = iroha_torii::zk_attachments::handle_post_attachment(headers, body)
+    let response = iroha_torii::zk_attachments::handle_post_attachment(tenant, headers, body)
         .await
         .into_response();
     assert_eq!(response.status(), StatusCode::CREATED);

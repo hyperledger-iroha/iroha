@@ -1764,7 +1764,7 @@ impl NetworkRelayShared {
                     txs = data.txs.len(),
                     "relay received transaction gossip"
                 );
-                self.tx_gossiper.gossip(*data);
+                self.tx_gossiper.gossip(data);
             }
             PeersGossiper(data) => self.peers_gossiper.gossip(*data, peer),
             PeerTrustGossip(data) => self.peers_gossiper.gossip_trust(*data, peer),

@@ -5516,20 +5516,14 @@ pub mod json {
 
         use super::StructIndex;
 
-        #[cfg(unix)]
-        unsafe extern "C" {
-            fn dlopen(filename: *const c_char, flag: c_int) -> *mut c_void;
-            fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
-            fn dlclose(handle: *mut c_void) -> c_int;
-        }
-        #[cfg(windows)]
-        extern "system" {
-            fn LoadLibraryA(lpLibFileName: *const u8) -> *mut c_void;
-            fn GetProcAddress(hModule: *mut c_void, lpProcName: *const u8) -> *mut c_void;
-            fn FreeLibrary(hLibModule: *mut c_void) -> i32;
-        }
+	        #[cfg(unix)]
+	        unsafe extern "C" {
+	            fn dlopen(filename: *const c_char, flag: c_int) -> *mut c_void;
+	            fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+	            fn dlclose(handle: *mut c_void) -> c_int;
+	        }
 
-        const RTLD_LAZY: c_int = 1;
+	        const RTLD_LAZY: c_int = 1;
 
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         #[link(name = "Metal", kind = "framework")]
@@ -5579,14 +5573,36 @@ pub mod json {
                 let pool = objc_autoreleasePoolPush();
                 let avail = !MTLCreateSystemDefaultDevice().is_null();
                 objc_autoreleasePoolPop(pool);
-                if !avail {
-                    return None;
-                }
+	                if !avail {
+	                    return None;
+	                }
+	
+	                use std::{env, ffi::CString, os::unix::ffi::OsStrExt, path::PathBuf};
 
-                let lib = dlopen(c"libjsonstage1_metal.dylib".as_ptr(), RTLD_LAZY);
-                if lib.is_null() {
-                    return None;
-                }
+	                let mut lib = std::ptr::null_mut();
+	                let mut candidates: Vec<PathBuf> = Vec::new();
+	                if let Ok(exe) = env::current_exe()
+	                    && let Some(dir) = exe.parent()
+	                {
+	                    candidates.push(dir.join("libjsonstage1_metal.dylib"));
+	                    candidates.push(dir.join("../lib/libjsonstage1_metal.dylib"));
+	                }
+	                for path in candidates {
+	                    let bytes = path.as_os_str().as_bytes();
+	                    if bytes.contains(&0) {
+	                        continue;
+	                    }
+	                    if let Ok(cpath) = CString::new(bytes) {
+	                        let handle = dlopen(cpath.as_ptr(), RTLD_LAZY);
+	                        if !handle.is_null() {
+	                            lib = handle;
+	                            break;
+	                        }
+	                    }
+	                }
+	                if lib.is_null() {
+	                    return None;
+	                }
                 let sym = dlsym(lib, c"json_stage1_build_tape".as_ptr());
                 if sym.is_null() {
                     let _ = dlclose(lib);
@@ -5698,16 +5714,74 @@ pub mod json {
             }
         }
 
-        #[cfg(target_os = "macos")]
-        unsafe fn load_cuda_library() -> Option<CudaLib> {
-            let mut h = unsafe { dlopen(c"libjsonstage1_cuda.dylib".as_ptr(), RTLD_LAZY) };
-            if h.is_null() {
-                h = unsafe { dlopen(c"libjsonstage1_cuda.so".as_ptr(), RTLD_LAZY) };
-            }
-            if h.is_null() {
-                return None;
-            }
-            let sym = unsafe { dlsym(h, c"json_stage1_build_tape".as_ptr()) };
+	        #[cfg(target_os = "macos")]
+	        unsafe fn load_cuda_library() -> Option<CudaLib> {
+	            use std::{env, ffi::CString, os::unix::ffi::OsStrExt, path::PathBuf};
+
+	            let mut h = std::ptr::null_mut();
+	            let mut candidates: Vec<PathBuf> = Vec::new();
+	            if let Ok(exe) = env::current_exe()
+	                && let Some(dir) = exe.parent()
+	            {
+	                candidates.push(dir.join("libjsonstage1_cuda.dylib"));
+	                candidates.push(dir.join("../lib/libjsonstage1_cuda.dylib"));
+	                candidates.push(dir.join("libjsonstage1_cuda.so"));
+	                candidates.push(dir.join("../lib/libjsonstage1_cuda.so"));
+	            }
+	            for path in candidates {
+	                let bytes = path.as_os_str().as_bytes();
+	                if bytes.contains(&0) {
+	                    continue;
+	                }
+	                if let Ok(cpath) = CString::new(bytes) {
+	                    let handle = unsafe { dlopen(cpath.as_ptr(), RTLD_LAZY) };
+	                    if !handle.is_null() {
+	                        h = handle;
+	                        break;
+	                    }
+	                }
+	            }
+	            if h.is_null() {
+	                return None;
+	            }
+	            let sym = unsafe { dlsym(h, c"json_stage1_build_tape".as_ptr()) };
+	            if sym.is_null() {
+	                let _ = unsafe { dlclose(h) };
+	                return None;
+	            }
+	            let func: BuildTapeFn = unsafe { std::mem::transmute(sym) };
+	            Some(CudaLib { _handle: h, func })
+	        }
+
+	        #[cfg(all(unix, not(target_os = "macos")))]
+	        unsafe fn load_cuda_library() -> Option<CudaLib> {
+	            use std::{env, ffi::CString, os::unix::ffi::OsStrExt, path::PathBuf};
+
+	            let mut h = std::ptr::null_mut();
+	            let mut candidates: Vec<PathBuf> = Vec::new();
+	            if let Ok(exe) = env::current_exe()
+	                && let Some(dir) = exe.parent()
+	            {
+	                candidates.push(dir.join("libjsonstage1_cuda.so"));
+	                candidates.push(dir.join("../lib/libjsonstage1_cuda.so"));
+	            }
+	            for path in candidates {
+	                let bytes = path.as_os_str().as_bytes();
+	                if bytes.contains(&0) {
+	                    continue;
+	                }
+	                if let Ok(cpath) = CString::new(bytes) {
+	                    let handle = unsafe { dlopen(cpath.as_ptr(), RTLD_LAZY) };
+	                    if !handle.is_null() {
+	                        h = handle;
+	                        break;
+	                    }
+	                }
+	            }
+	            if h.is_null() {
+	                return None;
+	            }
+	            let sym = unsafe { dlsym(h, c"json_stage1_build_tape".as_ptr()) };
             if sym.is_null() {
                 let _ = unsafe { dlclose(h) };
                 return None;
@@ -5716,35 +5790,59 @@ pub mod json {
             Some(CudaLib { _handle: h, func })
         }
 
-        #[cfg(all(unix, not(target_os = "macos")))]
-        unsafe fn load_cuda_library() -> Option<CudaLib> {
-            let h = unsafe { dlopen(c"libjsonstage1_cuda.so".as_ptr(), RTLD_LAZY) };
-            if h.is_null() {
-                return None;
-            }
-            let sym = unsafe { dlsym(h, c"json_stage1_build_tape".as_ptr()) };
-            if sym.is_null() {
-                let _ = unsafe { dlclose(h) };
-                return None;
-            }
-            let func: BuildTapeFn = unsafe { std::mem::transmute(sym) };
-            Some(CudaLib { _handle: h, func })
-        }
+	        #[cfg(windows)]
+	        unsafe fn load_cuda_library() -> Option<CudaLib> {
+	            use std::{env, os::windows::ffi::OsStrExt, path::PathBuf, ptr};
 
-        #[cfg(windows)]
-        unsafe fn load_cuda_library() -> Option<CudaLib> {
-            let h = unsafe { LoadLibraryA(b"jsonstage1_cuda.dll\0".as_ptr()) };
-            if h.is_null() {
-                return None;
-            }
-            let sym = unsafe { GetProcAddress(h, b"json_stage1_build_tape\0".as_ptr()) };
-            if sym.is_null() {
-                let _ = unsafe { FreeLibrary(h) };
-                return None;
-            }
-            let func: BuildTapeFn = unsafe { std::mem::transmute(sym) };
-            Some(CudaLib { _handle: h, func })
-        }
+	            extern "system" {
+	                fn SetDefaultDllDirectories(directory_flags: u32) -> i32;
+	                fn LoadLibraryExW(
+	                    lp_lib_file_name: *const u16,
+	                    h_file: *mut c_void,
+	                    dw_flags: u32,
+	                ) -> *mut c_void;
+	                fn GetProcAddress(h_module: *mut c_void, lp_proc_name: *const u8) -> *mut c_void;
+	                fn FreeLibrary(h_lib_module: *mut c_void) -> i32;
+	            }
+
+	            const LOAD_LIBRARY_SEARCH_DEFAULT_DIRS: u32 = 0x0000_1000;
+	            const LOAD_LIBRARY_SEARCH_SYSTEM32: u32 = 0x0000_0800;
+	            const LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR: u32 = 0x0000_0100;
+
+	            static DLL_DIRECTORY_SETUP: OnceLock<bool> = OnceLock::new();
+	            if !*DLL_DIRECTORY_SETUP.get_or_init(|| unsafe {
+	                let flags = LOAD_LIBRARY_SEARCH_DEFAULT_DIRS | LOAD_LIBRARY_SEARCH_SYSTEM32;
+	                SetDefaultDllDirectories(flags) != 0
+	            }) {
+	                return None;
+	            }
+
+	            let mut candidates: Vec<PathBuf> = Vec::new();
+	            if let Ok(exe) = env::current_exe()
+	                && let Some(dir) = exe.parent()
+	            {
+	                candidates.push(dir.join("jsonstage1_cuda.dll"));
+	                candidates.push(dir.join("../lib").join("jsonstage1_cuda.dll"));
+	            }
+
+	            for path in candidates {
+	                let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+	                let search_flags =
+	                    LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32;
+	                let h = LoadLibraryExW(wide.as_ptr(), ptr::null_mut(), search_flags);
+	                if h.is_null() {
+	                    continue;
+	                }
+	                let sym = GetProcAddress(h, b"json_stage1_build_tape\0".as_ptr());
+	                if sym.is_null() {
+	                    let _ = FreeLibrary(h);
+	                    continue;
+	                }
+	                let func: BuildTapeFn = unsafe { std::mem::transmute(sym) };
+	                return Some(CudaLib { _handle: h, func });
+	            }
+	            None
+	        }
 
         #[cfg(not(any(target_os = "macos", all(unix, not(target_os = "macos")), windows)))]
         unsafe fn load_cuda_library() -> Option<CudaLib> {

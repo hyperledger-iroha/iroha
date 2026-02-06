@@ -194,12 +194,28 @@ unsafe fn load_metal_crc64() -> Option<GpuLib> {
         return None;
     }
 
-    const CANDIDATES: &[&[u8]] = &[
-        b"libnorito_crc64_metal.dylib\0",
-        b"libjsonstage1_metal.dylib\0",
-    ];
-    for candidate in CANDIDATES {
-        let handle = dlopen(candidate.as_ptr() as *const c_char, RTLD_LAZY);
+    use std::{env, ffi::CString, os::unix::ffi::OsStrExt, path::PathBuf};
+
+    const NAMES: &[&str] = &["libnorito_crc64_metal.dylib", "libjsonstage1_metal.dylib"];
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(exe) = env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        for name in NAMES {
+            candidates.push(dir.join(name));
+            candidates.push(dir.join("../lib").join(name));
+        }
+    }
+
+    for path in candidates {
+        let bytes = path.as_os_str().as_bytes();
+        if bytes.contains(&0) {
+            continue;
+        }
+        let Ok(cpath) = CString::new(bytes) else {
+            continue;
+        };
+        let handle = dlopen(cpath.as_ptr(), RTLD_LAZY);
         if handle.is_null() {
             continue;
         }
@@ -217,18 +233,37 @@ unsafe fn load_cuda_crc64() -> Option<GpuLib> {
         fn dlopen(filename: *const c_char, flag: c_int) -> *mut c_void;
     }
 
+    use std::{env, ffi::CString, os::unix::ffi::OsStrExt, path::PathBuf};
+
     #[cfg(target_os = "macos")]
-    const CANDIDATES: &[&[u8]] = &[
-        b"libnorito_crc64_cuda.dylib\0",
-        b"libnorito_crc64_cuda.so\0",
-        b"libjsonstage1_cuda.dylib\0",
-        b"libjsonstage1_cuda.so\0",
+    const NAMES: &[&str] = &[
+        "libnorito_crc64_cuda.dylib",
+        "libnorito_crc64_cuda.so",
+        "libjsonstage1_cuda.dylib",
+        "libjsonstage1_cuda.so",
     ];
     #[cfg(not(target_os = "macos"))]
-    const CANDIDATES: &[&[u8]] = &[b"libnorito_crc64_cuda.so\0", b"libjsonstage1_cuda.so\0"];
+    const NAMES: &[&str] = &["libnorito_crc64_cuda.so", "libjsonstage1_cuda.so"];
 
-    for candidate in CANDIDATES {
-        let handle = dlopen(candidate.as_ptr() as *const c_char, RTLD_LAZY);
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(exe) = env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        for name in NAMES {
+            candidates.push(dir.join(name));
+            candidates.push(dir.join("../lib").join(name));
+        }
+    }
+
+    for path in candidates {
+        let bytes = path.as_os_str().as_bytes();
+        if bytes.contains(&0) {
+            continue;
+        }
+        let Ok(cpath) = CString::new(bytes) else {
+            continue;
+        };
+        let handle = dlopen(cpath.as_ptr(), RTLD_LAZY);
         if handle.is_null() {
             continue;
         }
@@ -241,21 +276,50 @@ unsafe fn load_cuda_crc64() -> Option<GpuLib> {
 
 #[cfg(all(any(feature = "metal-crc64", feature = "cuda-crc64"), windows))]
 unsafe fn load_cuda_crc64() -> Option<GpuLib> {
+    use std::{env, os::windows::ffi::OsStrExt, path::PathBuf, ptr};
+
     extern "system" {
-        fn LoadLibraryA(lpLibFileName: *const u8) -> *mut c_void;
-        fn FreeLibrary(hLibModule: *mut c_void) -> i32;
+        fn SetDefaultDllDirectories(directory_flags: u32) -> i32;
+        fn LoadLibraryExW(
+            lp_lib_file_name: *const u16,
+            h_file: *mut c_void,
+            dw_flags: u32,
+        ) -> *mut c_void;
     }
 
-    const CANDIDATES: &[&[u8]] = &[b"norito_crc64_cuda.dll\0", b"jsonstage1_cuda.dll\0"];
-    for candidate in CANDIDATES {
-        let handle = LoadLibraryA(candidate.as_ptr());
+    const LOAD_LIBRARY_SEARCH_DEFAULT_DIRS: u32 = 0x0000_1000;
+    const LOAD_LIBRARY_SEARCH_SYSTEM32: u32 = 0x0000_0800;
+    const LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR: u32 = 0x0000_0100;
+
+    static DLL_DIRECTORY_SETUP: OnceLock<bool> = OnceLock::new();
+    if !*DLL_DIRECTORY_SETUP.get_or_init(|| unsafe {
+        let flags = LOAD_LIBRARY_SEARCH_DEFAULT_DIRS | LOAD_LIBRARY_SEARCH_SYSTEM32;
+        SetDefaultDllDirectories(flags) != 0
+    }) {
+        return None;
+    }
+
+    const NAMES: &[&str] = &["norito_crc64_cuda.dll", "jsonstage1_cuda.dll"];
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(exe) = env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        for name in NAMES {
+            candidates.push(dir.join(name));
+            candidates.push(dir.join("../lib").join(name));
+        }
+    }
+
+    for path in candidates {
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        let search_flags = LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32;
+        let handle = LoadLibraryExW(wide.as_ptr(), ptr::null_mut(), search_flags);
         if handle.is_null() {
             continue;
         }
         if let Some(func) = resolve_symbol_windows(handle, GPU_SYMBOLS) {
             return Some(GpuLib { handle, func });
         }
-        let _ = FreeLibrary(handle);
     }
     None
 }
@@ -276,11 +340,33 @@ unsafe fn load_library_unix(path: &CStr) -> Option<GpuLib> {
 
 #[cfg(all(any(feature = "metal-crc64", feature = "cuda-crc64"), windows))]
 unsafe fn load_library_windows(path: &CStr) -> Option<GpuLib> {
+    use std::{ffi::OsStr, os::windows::ffi::OsStrExt, ptr};
+
     extern "system" {
-        fn LoadLibraryA(lpLibFileName: *const u8) -> *mut c_void;
-        fn FreeLibrary(hLibModule: *mut c_void) -> i32;
+        fn SetDefaultDllDirectories(directory_flags: u32) -> i32;
+        fn LoadLibraryExW(
+            lp_lib_file_name: *const u16,
+            h_file: *mut c_void,
+            dw_flags: u32,
+        ) -> *mut c_void;
     }
-    let handle = LoadLibraryA(path.as_ptr() as *const u8);
+
+    const LOAD_LIBRARY_SEARCH_DEFAULT_DIRS: u32 = 0x0000_1000;
+    const LOAD_LIBRARY_SEARCH_SYSTEM32: u32 = 0x0000_0800;
+    const LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR: u32 = 0x0000_0100;
+
+    static DLL_DIRECTORY_SETUP: OnceLock<bool> = OnceLock::new();
+    if !*DLL_DIRECTORY_SETUP.get_or_init(|| unsafe {
+        let flags = LOAD_LIBRARY_SEARCH_DEFAULT_DIRS | LOAD_LIBRARY_SEARCH_SYSTEM32;
+        SetDefaultDllDirectories(flags) != 0
+    }) {
+        return None;
+    }
+
+    let path_str = path.to_str().ok()?;
+    let wide: Vec<u16> = OsStr::new(path_str).encode_wide().chain(Some(0)).collect();
+    let search_flags = LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32;
+    let handle = LoadLibraryExW(wide.as_ptr(), ptr::null_mut(), search_flags);
     if handle.is_null() {
         return None;
     }
