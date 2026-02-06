@@ -4843,9 +4843,9 @@ mod evidence_submit_tests {
         let keypair1 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let peer0 = PeerId::new(keypair0.public_key().clone());
         let peer1 = PeerId::new(keypair1.public_key().clone());
-        let mut peers = vec![peer0.clone(), peer1.clone()];
-        peers.sort();
-        let topology = iroha_core::sumeragi::network_topology::Topology::new(peers.clone());
+        let mut peer_list = vec![peer0.clone(), peer1.clone()];
+        peer_list.sort();
+        let topology = iroha_core::sumeragi::network_topology::Topology::new(peer_list.clone());
         let height = 1_u64;
         let view = 0_u64;
         // Find two seeds that map to different leaders for the same (height, view).
@@ -4873,7 +4873,7 @@ mod evidence_submit_tests {
             "seed search must pick distinct leaders"
         );
 
-        let signer_peer = peers
+        let signer_peer = peer_list
             .get(leader_epoch0)
             .expect("leader index should be in range");
         let signer_keypair = if signer_peer == &peer0 {
@@ -4999,7 +4999,6 @@ mod multisig_guard_tests {
     use iroha_core::{
         kura::Kura,
         query::store::LiveQueryStore,
-        role::RoleIdWithOwner,
         state::{State, World},
     };
     use iroha_crypto::KeyPair;
@@ -5057,9 +5056,7 @@ mod multisig_guard_tests {
         let multisig_account = Account::new(multisig_id.clone()).build(&multisig_id);
         let mut world =
             World::with_assets_and_roles([domain], [multisig_account], [], [], [], [role]);
-        world
-            .account_roles
-            .insert(RoleIdWithOwner::new(multisig_id.clone(), role_id), ());
+        world.grant_role_for_tests(multisig_id.clone(), role_id);
 
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -12639,7 +12636,6 @@ fn append_asset_ids_from_instruction(
     }
     if let Some(rewards) = any.downcast_ref::<RecordPublicLaneRewards>() {
         push_asset(out, rewards.reward_asset());
-        return;
     }
 }
 
@@ -29422,7 +29418,7 @@ pub async fn handle_v1_accounts_resolve(
         account_id: canonical,
         domain,
         source: source_label.to_string(),
-        format: format_label.map(|value| value.to_string()),
+        format: format_label.map(str::to_string),
     };
     Ok(JsonBody(response).into_response())
 }
@@ -39409,7 +39405,7 @@ mod adapter_filter_tests {
         let asset_id = AssetId::new(definition, controller.clone());
         OfflineAllowanceRecord {
             certificate: OfflineWalletCertificate {
-                controller,
+                controller: controller.clone(),
                 operator: controller.clone(),
                 allowance: OfflineAllowanceCommitment {
                     asset: asset_id,

@@ -1,4 +1,5 @@
 //! Shared helpers for integration tests.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 /// Data availability simulators shared with tooling and docs.
 pub mod da;

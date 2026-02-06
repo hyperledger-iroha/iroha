@@ -1665,7 +1665,7 @@ pub struct SumeragiQcStatus {
     pub signatures_total: u64,
 }
 
-/// Effective NPoS timeout values (ms) exposed via `/v1/sumeragi/status`.
+/// Effective `NPoS` timeout values (ms) exposed via `/v1/sumeragi/status`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
     feature = "json",
@@ -1756,7 +1756,7 @@ pub struct SumeragiStatusWire {
     /// Effective commit time (ms).
     #[norito(default)]
     pub effective_commit_time_ms: u64,
-    /// Effective pacing factor (basis points, 10_000 = 1.0x).
+    /// Effective pacing factor (basis points, `10_000` = 1.0x).
     #[norito(default)]
     pub effective_pacing_factor_bps: u64,
     /// Effective commit quorum timeout (ms).
@@ -1768,7 +1768,7 @@ pub struct SumeragiStatusWire {
     /// Effective pacemaker interval (ms).
     #[norito(default)]
     pub effective_pacemaker_interval_ms: u64,
-    /// Effective NPoS timeouts (ms) when in NPoS mode.
+    /// Effective `NPoS` timeouts (ms) when in `NPoS` mode.
     #[norito(skip_serializing_if = "Option::is_none")]
     #[norito(default)]
     pub effective_npos_timeouts: Option<SumeragiNposTimeoutsStatus>,

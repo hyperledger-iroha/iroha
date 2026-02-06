@@ -1,4 +1,5 @@
 //! Verifies that ZK asset operations enforce the configured verifying keys.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(all(feature = "zk-tests", feature = "halo2-dev-tests"))]
 
 use iroha_core::{

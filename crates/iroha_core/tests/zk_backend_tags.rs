@@ -1,4 +1,5 @@
 #![doc = "Backend tag acceptance tests for ZK attachments (pre-verify path)."]
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "zk-tests")]
 //! Backend tag acceptance tests for ZK attachments (pre-verify path).
 //! - Unknown families (e.g., `groth16/*`) are rejected as unsupported.

@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Tests that Torii fails to bind to an occupied port and exits with a non-zero status.
 
 use std::{net::TcpListener, time::Duration};

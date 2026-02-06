@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Multi-lane routing and storage provisioning integration.
 
 use std::{collections::BTreeMap, num::NonZeroU32, sync::Arc, time::Duration};

@@ -105,7 +105,7 @@ pub(crate) fn encode_with_table(
     if capacity_bits == 0 {
         capacity_bits = 8;
     }
-    let capacity_bytes = ((capacity_bits + 7) / 8) as usize;
+    let capacity_bytes = capacity_bits.div_ceil(8) as usize;
     let mut writer = ZstdBitWriter::with_capacity(capacity_bytes);
     for &byte in input.iter().rev() {
         let code = table.codes[byte as usize];
@@ -381,8 +381,8 @@ fn select_two_smallest(
 ) -> Result<(usize, usize), HuffmanError> {
     let mut first: Option<usize> = None;
     let mut second: Option<usize> = None;
-    for idx in 0..node_count {
-        if parent[idx] >= 0 {
+    for (idx, parent_idx) in parent.iter().enumerate().take(node_count) {
+        if *parent_idx >= 0 {
             continue;
         }
         match first {

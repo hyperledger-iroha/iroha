@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Cross-crate Merkle compatibility: ensures `ivm` and `iroha_crypto`
 //! produce identical roots and proofs for the same byte data.
 

@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Multilane storage layout smoke test: verifies that a multi-lane config
 //! provisions per-lane Kura segments with deterministic names.
 

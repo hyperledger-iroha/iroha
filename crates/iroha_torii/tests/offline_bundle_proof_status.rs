@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests for the `/v1/offline/bundle/proof_status` endpoint.
 #![cfg(feature = "app_api")]
 

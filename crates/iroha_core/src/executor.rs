@@ -1515,7 +1515,10 @@ impl Executor {
             ));
         }
 
-        if let Some(register_role) = instruction.as_any().downcast_ref::<Register<Role>>() {
+        let is_genesis =
+            state_transaction._curr_block.is_genesis() && state_transaction.block_hashes.is_empty();
+
+        if let Some(register_role) = extract_register_role(&instruction) {
             if let Some(multisig_account) =
                 Self::multisig_account_from(register_role.object().id())?
             {
@@ -1535,6 +1538,33 @@ impl Executor {
                     "reserved multisig role names may not be registered".to_owned(),
                 ));
             }
+
+            let role = register_role.object();
+            let mut normalized_role = Role::new(role.id().clone(), role.grant_to().clone());
+            for permission in role.inner().permissions() {
+                normalized_role = normalized_role.add_permission(
+                    normalize_role_permission_for_initial_executor(state_transaction, permission)?,
+                );
+            }
+
+            if !is_genesis {
+                let can_manage_roles: Permission = executor_permission::role::CanManageRoles.into();
+                let has_manage_roles = authority_has_permission(
+                    &state_transaction.world,
+                    authority,
+                    &can_manage_roles,
+                )?;
+                if !has_manage_roles {
+                    return Err(ValidationFail::NotPermitted(
+                        "Can't register role".to_owned(),
+                    ));
+                }
+            }
+
+            Register::role(normalized_role)
+                .execute(authority, state_transaction)
+                .map_err(ValidationFail::from)?;
+            return Ok(());
         }
 
         // Minimal built-in permission enforcement for critical instructions used in tests.
@@ -1558,9 +1588,6 @@ impl Executor {
             // Allow in genesis, or if tx authority owns the trigger owner's domain,
             // or if tx authority has explicit CanRegisterTrigger { authority: <owner> }.
             let trg_owner = reg_trg.object().action().authority().clone();
-            #[allow(clippy::used_underscore_binding)]
-            let is_genesis = state_transaction._curr_block.is_genesis()
-                && state_transaction.block_hashes.is_empty();
 
             let is_domain_owner = (!is_genesis) && {
                 let domain = trg_owner.domain().clone();
@@ -1588,6 +1615,16 @@ impl Executor {
                 authority,
                 &reg_asset_definition,
             )?;
+        }
+
+        if let Some(account_id) = extract_account_metadata_target(&instruction) {
+            if !is_genesis
+                && !can_modify_account_metadata(&state_transaction.world, authority, &account_id)?
+            {
+                return Err(ValidationFail::NotPermitted(
+                    "Can't set value to the metadata of another account".to_owned(),
+                ));
+            }
         }
 
         fn has_modify_nft_metadata_permission(
@@ -2086,6 +2123,193 @@ fn dispatch_instruction_with_ivm(
             Err(e)
         }
     }
+}
+
+fn extract_register_role(instruction: &InstructionBox) -> Option<Register<Role>> {
+    let instr_any = instruction.as_any();
+    if let Some(reg) = instr_any.downcast_ref::<Register<Role>>() {
+        return Some(reg.clone());
+    }
+    if let Some(reg_box) = instr_any.downcast_ref::<RegisterBox>() {
+        return match reg_box {
+            RegisterBox::Role(reg) => Some(reg.clone()),
+            _ => None,
+        };
+    }
+    None
+}
+
+fn extract_account_metadata_target(instruction: &InstructionBox) -> Option<AccountId> {
+    instruction
+        .as_any()
+        .downcast_ref::<SetKeyValueBox>()
+        .and_then(|set| match set {
+            SetKeyValueBox::Account(set) => Some(set.object.clone()),
+            _ => None,
+        })
+        .or_else(|| {
+            instruction
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::SetKeyValue<iroha_data_model::account::Account>>()
+                .map(|set| set.object.clone())
+        })
+        .or_else(|| {
+            instruction
+                .as_any()
+                .downcast_ref::<RemoveKeyValueBox>()
+                .and_then(|rm| match rm {
+                    RemoveKeyValueBox::Account(rm) => Some(rm.object.clone()),
+                    _ => None,
+                })
+        })
+        .or_else(|| {
+            instruction
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::RemoveKeyValue<iroha_data_model::account::Account>>()
+                .map(|rm| rm.object.clone())
+        })
+}
+
+fn authority_has_permission(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    target: &Permission,
+) -> Result<bool, ValidationFail> {
+    let permissions = world
+        .account_permissions_iter(authority)
+        .map_err(|err| ValidationFail::InstructionFailed(InstructionExecutionError::Find(err)))?;
+    if permissions
+        .into_iter()
+        .any(|permission| permission == target)
+    {
+        return Ok(true);
+    }
+
+    for role_id in world.account_roles_iter(authority) {
+        if let Some(role) = world.roles().get(role_id)
+            && role.permissions.contains(target)
+        {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+fn can_modify_account_metadata(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    account_id: &AccountId,
+) -> Result<bool, ValidationFail> {
+    if authority == account_id {
+        return Ok(true);
+    }
+
+    let domain_owner = world
+        .domain(account_id.domain())
+        .map(|domain| domain.owned_by().clone())
+        .map_err(|err| ValidationFail::InstructionFailed(InstructionExecutionError::Find(err)))?;
+    if &domain_owner == authority {
+        return Ok(true);
+    }
+
+    let required: Permission = executor_permission::account::CanModifyAccountMetadata {
+        account: account_id.clone(),
+    }
+    .into();
+    authority_has_permission(world, authority, &required)
+}
+
+fn normalize_role_permission_for_initial_executor(
+    state_transaction: &StateTransaction<'_, '_>,
+    permission: &Permission,
+) -> Result<Permission, ValidationFail> {
+    let known_permission = state_transaction
+        .world
+        .executor_data_model
+        .get()
+        .permissions()
+        .iter()
+        .any(|known| known.as_str() == permission.name())
+        || is_builtin_initial_permission_name(permission.name());
+    if !known_permission {
+        return Err(ValidationFail::NotPermitted(format!(
+            "{permission:?}: Unknown permission"
+        )));
+    }
+
+    if permission.name() == "CanTransferAsset" {
+        let normalized = executor_permission::asset::CanTransferAsset::try_from(permission)
+            .map_err(|err| {
+                ValidationFail::NotPermitted(format!(
+                    "{permission:?}: Invalid permission payload ({err:?})"
+                ))
+            })?;
+        return Ok(normalized.into());
+    }
+
+    Ok(permission.clone())
+}
+
+fn is_builtin_initial_permission_name(permission_name: &str) -> bool {
+    matches!(
+        permission_name,
+        "CanManagePeers"
+            | "CanRegisterDomain"
+            | "CanUnregisterDomain"
+            | "CanModifyDomainMetadata"
+            | "CanRegisterAssetDefinition"
+            | "CanUnregisterAssetDefinition"
+            | "CanModifyAssetDefinitionMetadata"
+            | "CanRegisterAccount"
+            | "CanUnregisterAccount"
+            | "CanModifyAccountMetadata"
+            | "CanMintAssetWithDefinition"
+            | "CanBurnAssetWithDefinition"
+            | "CanTransferAssetWithDefinition"
+            | "CanMintAsset"
+            | "CanBurnAsset"
+            | "CanTransferAsset"
+            | "CanModifyAssetMetadataWithDefinition"
+            | "CanModifyAssetMetadata"
+            | "CanRegisterNft"
+            | "CanUnregisterNft"
+            | "CanTransferNft"
+            | "CanModifyNftMetadata"
+            | "CanRegisterTrigger"
+            | "CanUnregisterTrigger"
+            | "CanModifyTrigger"
+            | "CanExecuteTrigger"
+            | "CanModifyTriggerMetadata"
+            | "CanSetParameters"
+            | "CanManageRoles"
+            | "CanUpgradeExecutor"
+            | "CanRegisterSmartContractCode"
+            | "CanPublishSpaceDirectoryManifest"
+            | "CanUseFeeSponsor"
+            | "CanProposeContractDeployment"
+            | "CanSubmitGovernanceBallot"
+            | "CanEnactGovernance"
+            | "CanManageParliament"
+            | "CanRecordCitizenService"
+            | "CanSlashGovernanceLock"
+            | "CanRestituteGovernanceLock"
+            | "CanRegisterSorafsPin"
+            | "CanApproveSorafsPin"
+            | "CanRetireSorafsPin"
+            | "CanBindSorafsAlias"
+            | "CanDeclareSorafsCapacity"
+            | "CanSubmitSorafsTelemetry"
+            | "CanFileSorafsCapacityDispute"
+            | "CanIssueSorafsReplicationOrder"
+            | "CanCompleteSorafsReplicationOrder"
+            | "CanSetSorafsPricing"
+            | "CanUpsertSorafsProviderCredit"
+            | "CanOperateSorafsRepair"
+            | "CanRegisterSorafsProviderOwner"
+            | "CanUnregisterSorafsProviderOwner"
+            | "CanIngestSoranetPrivacy"
+    )
 }
 
 /// Parse the WAT-like template used in integration tests to embed a sequence

@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Baseline performance harness for `NPoS` Sumeragi (1 s blocks, k=3 collectors).
 //! The scenario captures telemetry snapshots while producing a fixed number of
 //! blocks, aggregates phase latency EMAs, queue depths, and throughput, then

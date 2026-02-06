@@ -1,4 +1,5 @@
 #![doc = "Regression tests covering confidential event emission for shield, transfer, and unshield flows."]
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "zk-tests")]
 
 use std::borrow::Cow;

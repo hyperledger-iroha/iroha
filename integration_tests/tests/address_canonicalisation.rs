@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Roadmap ADDR-5 coverage ensuring Torii surfaces canonical IH58 account IDs.
 
 use std::{
@@ -220,8 +221,34 @@ impl Drop for DomainSelectorResolverGuard {
 }
 
 fn load_offline_certificate_fixture() -> Result<OfflineWalletCertificate> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../fixtures/offline_allowance/android-demo/register_instruction.json");
+    let domains: Vec<DomainId> = ["wonderland", "treasury"]
+        .into_iter()
+        .map(|label| label.parse())
+        .collect::<Result<_, _>>()
+        .map_err(|err| eyre!("failed to parse fixture domain label: {err}"))?;
+    let _resolver_guard = DomainSelectorResolverGuard::install(&domains)?;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../fixtures/offline_allowance/android-demo");
+
+    let norito_path = root.join("register_instruction.norito");
+    if let Ok(bytes) = fs::read(&norito_path) {
+        if let Ok(instruction) = norito::decode_from_bytes::<RegisterOfflineAllowance>(&bytes) {
+            return Ok(instruction.certificate);
+        }
+        if let Ok(instruction) = norito::decode_from_bytes::<InstructionBox>(&bytes) {
+            if let Some(decoded) = instruction
+                .as_any()
+                .downcast_ref::<RegisterOfflineAllowance>()
+            {
+                return Ok(decoded.certificate.clone());
+            }
+        }
+        if let Ok(certificate) = norito::decode_from_bytes::<OfflineWalletCertificate>(&bytes) {
+            return Ok(certificate);
+        }
+    }
+
+    let path = root.join("register_instruction.json");
     let raw = fs::read_to_string(&path).wrap_err_with(|| {
         format!(
             "failed to read offline allowance fixture `{}`",
@@ -234,12 +261,6 @@ fn load_offline_certificate_fixture() -> Result<OfflineWalletCertificate> {
             path.display()
         )
     })?;
-    let domains: Vec<DomainId> = ["wonderland", "treasury"]
-        .into_iter()
-        .map(|label| label.parse())
-        .collect::<Result<_, _>>()
-        .map_err(|err| eyre!("failed to parse fixture domain label: {err}"))?;
-    let _resolver_guard = DomainSelectorResolverGuard::install(&domains)?;
     let certificate_value = fixture
         .get("certificate")
         .ok_or_else(|| {
@@ -251,6 +272,25 @@ fn load_offline_certificate_fixture() -> Result<OfflineWalletCertificate> {
         .clone();
     // Fixture JSON uses *_hex/*_b64 shorthands instead of the Norito JSON layout.
     parse_offline_certificate_fixture(&certificate_value, &path)
+}
+
+fn with_offline_allowance_genesis(
+    mut builder: NetworkBuilder,
+    certificate: &OfflineWalletCertificate,
+) -> NetworkBuilder {
+    let asset_definition_id = certificate.allowance.asset.definition().clone();
+    let asset_domain = asset_definition_id.domain().clone();
+    let genesis_domain = iroha_genesis::GENESIS_DOMAIN_ID.clone();
+    let wonderland_domain: DomainId = "wonderland"
+        .parse()
+        .expect("default wonderland domain should parse");
+    if asset_domain != genesis_domain && asset_domain != wonderland_domain {
+        builder = builder.with_genesis_instruction(Register::domain(Domain::new(asset_domain)));
+    }
+    let scale = certificate.allowance.amount.scale();
+    let asset_definition =
+        AssetDefinition::new(asset_definition_id, NumericSpec::fractional(scale));
+    builder.with_genesis_instruction(Register::asset_definition(asset_definition))
 }
 
 fn parse_offline_certificate_fixture(
@@ -2332,8 +2372,8 @@ async fn offline_allowances_listing_respects_address_format_hint() -> Result<()>
         .map_err(|err| eyre!("failed to encode fixture controller as compressed literal: {err}"))?;
     let instruction = RegisterOfflineAllowance { certificate };
 
-    let mut builder = NetworkBuilder::new();
-    builder = builder.with_genesis_instruction(instruction);
+    let builder = with_offline_allowance_genesis(NetworkBuilder::new(), &instruction.certificate)
+        .with_genesis_instruction(instruction);
 
     let Some(network) = start_network_async_or_skip(
         builder,
@@ -2355,7 +2395,7 @@ async fn offline_allowances_listing_respects_address_format_hint() -> Result<()>
     let http = http_client();
 
     let default_url = base
-        .join("/v1/offline/allowances?limit=4")
+        .join("/v1/offline/allowances?limit=4&include_expired=true")
         .expect("offline allowances url");
     let resp = http
         .get(default_url)
@@ -2380,7 +2420,7 @@ async fn offline_allowances_listing_respects_address_format_hint() -> Result<()>
     );
 
     let compressed_url = base
-        .join("/v1/offline/allowances?limit=4&address_format=compressed")
+        .join("/v1/offline/allowances?limit=4&address_format=compressed&include_expired=true")
         .expect("offline allowances url");
     let resp = http
         .get(compressed_url)
@@ -2420,8 +2460,8 @@ async fn offline_allowances_query_respects_address_format_hint() -> Result<()> {
         .map_err(|err| eyre!("failed to encode fixture controller as compressed literal: {err}"))?;
     let instruction = RegisterOfflineAllowance { certificate };
 
-    let mut builder = NetworkBuilder::new();
-    builder = builder.with_genesis_instruction(instruction);
+    let builder = with_offline_allowance_genesis(NetworkBuilder::new(), &instruction.certificate)
+        .with_genesis_instruction(instruction);
 
     let Some(network) = start_network_async_or_skip(
         builder,

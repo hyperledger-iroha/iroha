@@ -216,7 +216,7 @@ pub(crate) fn decode_frame(input: &[u8]) -> Result<Vec<u8>, ZstdDecodeError> {
                 }
                 let byte = input[idx];
                 idx += 1;
-                output.extend(std::iter::repeat(byte).take(block_size));
+                output.extend(std::iter::repeat_n(byte, block_size));
             }
             2 => {
                 if idx + block_size > input.len() {
@@ -245,10 +245,10 @@ pub(crate) fn decode_frame(input: &[u8]) -> Result<Vec<u8>, ZstdDecodeError> {
     if idx != input.len() {
         return Err(ZstdDecodeError::InvalidInput);
     }
-    if let Some(expected) = content_size {
-        if output.len() != expected {
-            return Err(ZstdDecodeError::InvalidInput);
-        }
+    if let Some(expected) = content_size
+        && output.len() != expected
+    {
+        return Err(ZstdDecodeError::InvalidInput);
     }
     Ok(output)
 }
@@ -464,7 +464,7 @@ fn decode_huffman_literals(data: &[u8]) -> Result<(Vec<u8>, usize), ZstdDecodeEr
             return Err(ZstdDecodeError::InvalidInput);
         }
         let s3 = encoded.len() - offset - s0 - s1 - s2;
-        let segment_size = (lit_size + 3) / 4;
+        let segment_size = lit_size.div_ceil(4);
         let seg_lens = [
             segment_size,
             segment_size,
@@ -849,7 +849,7 @@ fn huffman_weights_header(table: &HuffmanTable) -> Result<Vec<u8>, ZstdEncodeErr
     for sym in 0..=max_symbol {
         let len = table.lengths[sym] as i16;
         let weight = if len == 0 { 0 } else { table_log + 1 - len };
-        if weight < 0 || weight > 15 {
+        if !(0..=15).contains(&weight) {
             return Err(ZstdEncodeError::InvalidInput);
         }
         weights.push(weight as u8);
@@ -863,7 +863,7 @@ fn huffman_weights_header(table: &HuffmanTable) -> Result<Vec<u8>, ZstdEncodeErr
     let mut idx = 0;
     while idx <= max_symbol {
         let hi = weights[idx];
-        let lo = if idx + 1 <= max_symbol {
+        let lo = if idx < max_symbol {
             weights[idx + 1]
         } else {
             0
@@ -878,7 +878,7 @@ fn encode_huffman_4x(literals: &[u8], table: &HuffmanTable) -> Result<Vec<u8>, Z
     if literals.len() < 12 {
         return Err(ZstdEncodeError::InvalidInput);
     }
-    let segment_size = (literals.len() + 3) / 4;
+    let segment_size = literals.len().div_ceil(4);
     let mut segments = [
         &literals[0..0],
         &literals[0..0],
@@ -886,9 +886,9 @@ fn encode_huffman_4x(literals: &[u8], table: &HuffmanTable) -> Result<Vec<u8>, Z
         &literals[0..0],
     ];
     let mut start = 0;
-    for i in 0..3 {
+    for segment in segments.iter_mut().take(3) {
         let end = (start + segment_size).min(literals.len());
-        segments[i] = &literals[start..end];
+        *segment = &literals[start..end];
         start = end;
     }
     segments[3] = &literals[start..];
@@ -903,8 +903,8 @@ fn encode_huffman_4x(literals: &[u8], table: &HuffmanTable) -> Result<Vec<u8>, Z
     }
 
     let mut out = Vec::with_capacity(6 + streams.iter().map(|s| s.len()).sum::<usize>());
-    for i in 0..3 {
-        let size = streams[i].len() as u16;
+    for stream in streams.iter().take(3) {
+        let size = stream.len() as u16;
         out.extend_from_slice(&size.to_le_bytes());
     }
     for stream in streams {
@@ -1078,7 +1078,7 @@ fn default_ll_table() -> Result<FseCTable, ZstdEncodeError> {
     TABLE
         .get_or_init(|| {
             let (ct, _) = fse::build_tables(&LL_DEFAULT_NORM, MAX_LL, LL_DEFAULT_NORM_LOG)
-                .map_err(|e| ZstdEncodeError::Fse(e))?;
+                .map_err(ZstdEncodeError::Fse)?;
             Ok(ct)
         })
         .clone()
@@ -1089,7 +1089,7 @@ fn default_ml_table() -> Result<FseCTable, ZstdEncodeError> {
     TABLE
         .get_or_init(|| {
             let (ct, _) = fse::build_tables(&ML_DEFAULT_NORM, MAX_ML, ML_DEFAULT_NORM_LOG)
-                .map_err(|e| ZstdEncodeError::Fse(e))?;
+                .map_err(ZstdEncodeError::Fse)?;
             Ok(ct)
         })
         .clone()
@@ -1100,7 +1100,7 @@ fn default_of_table() -> Result<FseCTable, ZstdEncodeError> {
     TABLE
         .get_or_init(|| {
             let (ct, _) = fse::build_tables(&OF_DEFAULT_NORM, DEFAULT_MAX_OFF, OF_DEFAULT_NORM_LOG)
-                .map_err(|e| ZstdEncodeError::Fse(e))?;
+                .map_err(ZstdEncodeError::Fse)?;
             Ok(ct)
         })
         .clone()
@@ -1139,7 +1139,7 @@ fn default_of_dtable() -> Result<FseDTable, ZstdDecodeError> {
 
 fn fse_init_state2(ct: &FseCTable, symbol: u16) -> u32 {
     let tt = ct.symbol_tt[symbol as usize];
-    let nb_bits_out = ((tt.delta_nb_bits + (1 << 15)) >> 16) as u32;
+    let nb_bits_out = (tt.delta_nb_bits + (1 << 15)) >> 16;
     let value = (nb_bits_out << 16).wrapping_sub(tt.delta_nb_bits);
     let idx = ((value >> nb_bits_out) as i32 + tt.delta_find_state) as usize;
     ct.state_table[idx] as u32
@@ -1152,7 +1152,7 @@ fn fse_encode_symbol(
     symbol: u16,
 ) -> Result<(), ZstdEncodeError> {
     let tt = ct.symbol_tt[symbol as usize];
-    let nb_bits_out = ((*state + tt.delta_nb_bits) >> 16) as u32;
+    let nb_bits_out = (*state + tt.delta_nb_bits) >> 16;
     writer.add_bits(*state as u64, nb_bits_out)?;
     let next = ((*state >> nb_bits_out) as i32 + tt.delta_find_state) as usize;
     *state = ct.state_table[next] as u32;

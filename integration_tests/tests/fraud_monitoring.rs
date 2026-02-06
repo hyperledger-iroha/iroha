@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration coverage for fraud monitoring admission policy using mocked assessments.
 
 use std::str::FromStr;

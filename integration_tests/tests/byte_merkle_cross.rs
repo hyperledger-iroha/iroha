@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Cross-check that IVM byte-merkle root matches the canonical
 //! `iroha_crypto::MerkleTree` root for the same input.
 

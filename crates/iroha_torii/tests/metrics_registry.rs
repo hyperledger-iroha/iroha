@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Metrics registry hygiene tests (telemetry feature only).
 #![cfg(feature = "telemetry")]
 

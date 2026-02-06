@@ -1,4 +1,5 @@
 //! Audit coverage for vote tally proofs: ensure the production Halo2/IPA circuit accepts valid envelopes and rejects tampering.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "zk-tests")]
 
 #[cfg(all(

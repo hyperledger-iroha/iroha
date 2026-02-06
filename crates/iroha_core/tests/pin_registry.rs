@@ -1,4 +1,5 @@
 //! Integration tests covering the `SoraFS` pin registry flows.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 use std::{convert::TryInto, fs, num::NonZeroU64, path::PathBuf, str::FromStr};
 

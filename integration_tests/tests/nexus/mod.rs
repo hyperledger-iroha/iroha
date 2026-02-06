@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Nexus-specific integration test modules.
 
 mod cbdc_rollout_bundle;

@@ -73,7 +73,6 @@ pub enum QrPayloadKind {
 impl QrPayloadKind {
     fn from_u16(value: u16) -> Self {
         match value {
-            0 => Self::Unspecified,
             1 => Self::OfflineToOnlineTransfer,
             2 => Self::OfflineSpendReceipt,
             3 => Self::OfflineEnvelope,
@@ -187,6 +186,7 @@ pub struct QrStreamEnvelope {
 
 impl QrStreamEnvelope {
     /// Construct a new envelope and validate the payload hash length.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         flags: u8,
         encoding: u8,
@@ -243,6 +243,10 @@ impl QrStreamEnvelope {
     }
 
     /// Decode envelope bytes.
+    ///
+    /// # Errors
+    /// Returns an error when the envelope is truncated or contains an
+    /// unsupported version.
     pub fn decode(bytes: &[u8]) -> Result<Self, QrStreamError> {
         let min_len = 1 + 1 + 1 + 1 + 2 + 2 + 2 + 2 + 4 + 32;
         if bytes.len() < min_len {
@@ -325,6 +329,10 @@ impl QrStreamFrame {
     }
 
     /// Decode a frame from bytes.
+    ///
+    /// # Errors
+    /// Returns an error when frame headers are malformed, payload boundaries
+    /// are invalid, or CRC validation fails.
     pub fn decode(bytes: &[u8]) -> Result<Self, QrStreamError> {
         let header_len = 2 + 1 + 1 + 16 + 2 + 2 + 2;
         if bytes.len() < header_len + 4 {
@@ -370,32 +378,35 @@ pub struct QrStreamEncoder;
 
 impl QrStreamEncoder {
     /// Encode a payload into a list of frames.
+    ///
+    /// # Errors
+    /// Returns an error when payload/options exceed format limits.
     pub fn encode_frames(
         payload: &[u8],
         options: QrStreamOptions,
     ) -> Result<(QrStreamEnvelope, Vec<QrStreamFrame>), QrStreamError> {
-        if payload.len() > u32::MAX as usize {
-            return Err(QrStreamError::InvalidEnvelope("payload_length"));
-        }
+        let payload_len_u32 = u32::try_from(payload.len())
+            .map_err(|_| QrStreamError::InvalidEnvelope("payload_length"))?;
         if options.chunk_size == 0 {
             return Err(QrStreamError::InvalidEnvelope("chunk_size"));
         }
-        let data_chunks_raw =
-            (payload.len() as u32 + options.chunk_size as u32 - 1) / options.chunk_size as u32;
-        if data_chunks_raw > u16::MAX as u32 {
+        let data_chunks_raw = payload_len_u32.div_ceil(u32::from(options.chunk_size));
+        if data_chunks_raw > u32::from(u16::MAX) {
             return Err(QrStreamError::InvalidEnvelope("data_chunks"));
         }
-        let data_chunks = data_chunks_raw as u16;
-        let parity_group = options.parity_group as u32;
+        let data_chunks = u16::try_from(data_chunks_raw)
+            .map_err(|_| QrStreamError::InvalidEnvelope("data_chunks"))?;
+        let parity_group = u32::from(options.parity_group);
         let parity_chunks_raw = if parity_group > 0 {
-            (data_chunks as u32 + parity_group - 1) / parity_group
+            u32::from(data_chunks).div_ceil(parity_group)
         } else {
             0
         };
-        if parity_chunks_raw > u16::MAX as u32 {
+        if parity_chunks_raw > u32::from(u16::MAX) {
             return Err(QrStreamError::InvalidEnvelope("parity_chunks"));
         }
-        let parity_chunks = parity_chunks_raw as u16;
+        let parity_chunks = u16::try_from(parity_chunks_raw)
+            .map_err(|_| QrStreamError::InvalidEnvelope("parity_chunks"))?;
         let payload_hash = blake2b256(payload);
         let envelope = QrStreamEnvelope::new(
             options.flags,
@@ -405,7 +416,7 @@ impl QrStreamEncoder {
             data_chunks,
             parity_chunks,
             options.payload_kind as u16,
-            payload.len() as u32,
+            payload_len_u32,
             payload_hash,
         );
         let mut frames = Vec::with_capacity(1 + data_chunks as usize + parity_chunks as usize);
@@ -422,10 +433,12 @@ impl QrStreamEncoder {
             let start = idx * chunk_size;
             let end = payload.len().min(start + chunk_size);
             let chunk = payload[start..end].to_vec();
+            let frame_index =
+                u16::try_from(idx).map_err(|_| QrStreamError::InvalidEnvelope("data_chunks"))?;
             frames.push(QrStreamFrame {
                 kind: QrStreamFrameKind::Data,
                 stream_id: envelope.stream_id(),
-                index: idx as u16,
+                index: frame_index,
                 total: data_chunks,
                 payload: chunk,
             });
@@ -439,10 +452,12 @@ impl QrStreamEncoder {
                     group_index,
                     options.parity_group as usize,
                 );
+                let frame_index = u16::try_from(group_index)
+                    .map_err(|_| QrStreamError::InvalidEnvelope("parity_chunks"))?;
                 frames.push(QrStreamFrame {
                     kind: QrStreamFrameKind::Parity,
                     stream_id: envelope.stream_id(),
-                    index: group_index as u16,
+                    index: frame_index,
                     total: parity_chunks,
                     payload: parity,
                 });
@@ -452,6 +467,9 @@ impl QrStreamEncoder {
     }
 
     /// Encode frames directly to bytes.
+    ///
+    /// # Errors
+    /// Returns an error when payload/options exceed format limits.
     pub fn encode_frame_bytes(
         payload: &[u8],
         options: QrStreamOptions,
@@ -490,12 +508,19 @@ impl QrStreamAssembler {
     }
 
     /// Ingest raw frame bytes.
+    ///
+    /// # Errors
+    /// Returns an error when frame decoding fails or assembly validation fails.
     pub fn ingest_bytes(&mut self, bytes: &[u8]) -> Result<QrStreamDecodeResult, QrStreamError> {
         let frame = QrStreamFrame::decode(bytes)?;
         self.ingest_frame(frame)
     }
 
     /// Ingest a decoded frame.
+    ///
+    /// # Errors
+    /// Returns an error when frame validation fails or payload reconstruction
+    /// detects an integrity mismatch.
     pub fn ingest_frame(
         &mut self,
         frame: QrStreamFrame,
@@ -525,12 +550,11 @@ impl QrStreamAssembler {
                 }
             }
             QrStreamFrameKind::Data | QrStreamFrameKind::Parity => {
-                let envelope = match self.envelope.as_ref() {
-                    Some(env) => env.clone(),
-                    None => {
-                        self.pending.push(frame);
-                        return Ok(self.progress());
-                    }
+                let envelope = if let Some(env) = self.envelope.as_ref() {
+                    *env
+                } else {
+                    self.pending.push(frame);
+                    return Ok(self.progress());
                 };
                 if frame.stream_id != envelope.stream_id() {
                     return Ok(self.progress());
@@ -540,7 +564,7 @@ impl QrStreamAssembler {
                     QrStreamFrameKind::Parity => self.store_parity(&frame),
                     QrStreamFrameKind::Header => {}
                 }
-                self.recover_missing(&envelope)?;
+                self.recover_missing(&envelope);
             }
         }
         if let Some(payload) = self.finalize_if_complete()? {
@@ -613,10 +637,10 @@ impl QrStreamAssembler {
         }
     }
 
-    fn recover_missing(&mut self, envelope: &QrStreamEnvelope) -> Result<(), QrStreamError> {
+    fn recover_missing(&mut self, envelope: &QrStreamEnvelope) {
         let group_size = envelope.parity_group as usize;
         if group_size == 0 {
-            return Ok(());
+            return;
         }
         let chunk_size = envelope.chunk_size as usize;
         for group_index in 0..self.parity_chunks.len() {
@@ -658,7 +682,6 @@ impl QrStreamAssembler {
                 self.recovered[missing_index] = true;
             }
         }
-        Ok(())
     }
 
     fn finalize_if_complete(&self) -> Result<Option<Vec<u8>>, QrStreamError> {
@@ -666,7 +689,7 @@ impl QrStreamAssembler {
             Some(env) => env,
             None => return Ok(None),
         };
-        if self.data_chunks.iter().any(|c| c.is_none()) {
+        if self.data_chunks.iter().any(std::option::Option::is_none) {
             return Ok(None);
         }
         let mut payload = Vec::with_capacity(envelope.payload_length as usize);
@@ -727,7 +750,9 @@ impl QrStreamDecodeResult {
         if self.total_chunks == 0 {
             0.0
         } else {
-            self.received_chunks as f64 / self.total_chunks as f64
+            let received = u32::try_from(self.received_chunks).expect("chunk count fits u32");
+            let total = u32::try_from(self.total_chunks).expect("chunk count fits u32");
+            f64::from(received) / f64::from(total)
         }
     }
 }
@@ -852,12 +877,14 @@ mod tests {
         let options_value = value.get("options").expect("options");
         let chunk_size = options_value
             .get("chunk_size")
-            .and_then(|v| v.as_u64())
-            .expect("chunk_size") as u16;
+            .and_then(norito::json::native::Value::as_u64)
+            .and_then(|value| u16::try_from(value).ok())
+            .expect("chunk_size");
         let parity_group = options_value
             .get("parity_group")
-            .and_then(|v| v.as_u64())
-            .expect("parity_group") as u8;
+            .and_then(norito::json::native::Value::as_u64)
+            .and_then(|value| u8::try_from(value).ok())
+            .expect("parity_group");
         let payload_kind = options_value
             .get("payload_kind")
             .and_then(|v| v.as_str())
@@ -915,7 +942,7 @@ mod tests {
         let (envelope, frames) =
             QrStreamEncoder::encode_frames(&fixture.payload, fixture.options).expect("encode");
         assert_eq!(envelope.encode(), fixture.envelope);
-        let encoded: Vec<Vec<u8>> = frames.iter().map(|f| f.encode()).collect();
+        let encoded: Vec<Vec<u8>> = frames.iter().map(super::QrStreamFrame::encode).collect();
         let fixture_bytes: Vec<Vec<u8>> = fixture.frames.iter().map(|f| f.bytes.clone()).collect();
         assert_eq!(encoded, fixture_bytes);
 
@@ -936,7 +963,7 @@ mod tests {
         let mut assembler = QrStreamAssembler::default();
         let mut result = None;
         let mut dropped = false;
-        for frame in fixture.frames.iter() {
+        for frame in &fixture.frames {
             if frame.kind == QrStreamFrameKind::Data && !dropped {
                 dropped = true;
                 continue;

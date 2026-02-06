@@ -1,4 +1,5 @@
 //! Helper test to dump the syscalls touched by executor fixtures.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 use core::num::NonZeroU64;
 use std::{fs, path::PathBuf};
 

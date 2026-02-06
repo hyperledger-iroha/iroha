@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Tests for the pipeline recovery endpoint: `/v1/pipeline/recovery/{height}`.
 
 use axum::{Router, routing::get};

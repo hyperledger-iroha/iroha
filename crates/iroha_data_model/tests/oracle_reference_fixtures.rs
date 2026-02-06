@@ -71,6 +71,24 @@ const FOLLOW_FEED_EVENT_FIXTURE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../fixtures/oracle/feed_event_twitter_follow.json"
 ));
+const DOMAIN_LABEL_CANDIDATES: &[&str] = &[
+    "soracles",
+    "oracle",
+    "oracles",
+    "validators",
+    "sora",
+    "soranet",
+    "treasury",
+    "default",
+    "iroha",
+    "alpha",
+    "omega",
+    "governance",
+    "explorer",
+    "kitsune",
+    "da",
+    "council",
+];
 
 struct DomainSelectorResolverGuard {
     _lock: MutexGuard<'static, ()>,
@@ -228,6 +246,7 @@ fn follow_reference_fixtures_are_canonical() {
 
 #[test]
 #[ignore = "regenerates oracle reference fixtures"]
+#[allow(clippy::too_many_lines)]
 fn regenerate_follow_reference_fixtures() {
     let _guard = guard_domain_selector_resolver();
     let base = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -371,7 +390,7 @@ fn sample_providers() -> Vec<AccountId> {
         "34mSYnLrmfrui7Ba2h9RbAPY1hHNEQje517tbXn44vUUkA7F8361DR6aQeHKSaNSKFruciKzA",
     ]
     .into_iter()
-    .map(|id| parse_fixture_account(id))
+    .map(parse_fixture_account)
     .collect()
 }
 
@@ -394,26 +413,7 @@ fn resolve_fixture_domain(selector: address::AccountDomainSelector) -> Option<Do
         );
     }
 
-    const CANDIDATES: &[&str] = &[
-        "soracles",
-        "oracle",
-        "oracles",
-        "validators",
-        "sora",
-        "soranet",
-        "treasury",
-        "default",
-        "iroha",
-        "alpha",
-        "omega",
-        "governance",
-        "explorer",
-        "kitsune",
-        "da",
-        "council",
-    ];
-
-    for label in CANDIDATES {
+    for label in DOMAIN_LABEL_CANDIDATES {
         let domain: DomainId = (*label).parse().expect("candidate domain parses");
         let Ok(candidate_selector) = address::AccountDomainSelector::from_domain(&domain) else {
             continue;

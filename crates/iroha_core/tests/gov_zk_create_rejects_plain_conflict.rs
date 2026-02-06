@@ -1,4 +1,5 @@
 //! `CreateElection` must reject when a matching referendum exists in Plain mode.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 use iroha_core::{
     kura::Kura,

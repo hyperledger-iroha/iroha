@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Validate that IVM Merkle sibling paths correspond 1:1 with the
 //! canonical `iroha_crypto::MerkleProof` audit path representation.
 

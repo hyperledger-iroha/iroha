@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests for ZK proof events over the Torii event stream.
 use std::time::Duration;
 

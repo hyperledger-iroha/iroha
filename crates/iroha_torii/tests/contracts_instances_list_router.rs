@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Router-level test for /v1/contracts/instances/{ns}
 #![cfg(feature = "app_api")]
 

@@ -1,4 +1,5 @@
 //! Tests for automatic ReferendumOpened/ReferendumClosed events via height triggers.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Skipped by default; enable with `IROHA_RUN_IGNORED=1`.
 #![allow(
     clippy::doc_markdown,

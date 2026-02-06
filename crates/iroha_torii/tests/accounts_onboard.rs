@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Torii account onboarding tests.
 #![cfg(feature = "app_api")]
 

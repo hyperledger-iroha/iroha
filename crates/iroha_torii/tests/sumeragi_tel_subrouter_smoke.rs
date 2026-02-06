@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Smoke test that Torii exposes telemetry-gated Sumeragi routes via the merged sub-router.
 #![cfg(feature = "telemetry")]
 

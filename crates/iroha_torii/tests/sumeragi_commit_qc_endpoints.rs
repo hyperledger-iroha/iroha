@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Router-level tests for Sumeragi commit QC endpoints.
 #![cfg(feature = "telemetry")]
 

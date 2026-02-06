@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Adversarial RBC scenarios exercising debug knobs for chunk drop, reorder, and witness corruption.
 
 use std::{

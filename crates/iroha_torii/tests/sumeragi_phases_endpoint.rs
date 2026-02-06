@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![doc = "Router-level test for GET /v1/sumeragi/phases (compact per-phase latencies)"]
 #![cfg(feature = "telemetry")]
 

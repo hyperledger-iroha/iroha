@@ -2419,10 +2419,10 @@ mod run {
             task::{Context, Poll},
         };
 
-        use bytes::Bytes;
-        use iroha_crypto::encryption::ChaCha20Poly1305;
-        use norito::codec::{Decode, Encode};
-        use tokio::io::{AsyncRead, AsyncWrite};
+	        use bytes::Bytes;
+	        use iroha_crypto::encryption::ChaCha20Poly1305;
+	        use norito::codec::{Decode, Encode};
+	        use tokio::io::{AsyncRead, AsyncWrite};
 
         use crate::Priority;
 
@@ -2437,18 +2437,17 @@ mod run {
             }
         }
 
-        #[derive(Encode, Decode, Clone, Debug)]
-        struct Blob(Vec<u8>);
+	        #[derive(Encode, Decode, Clone, Debug)]
+	        struct Blob(Vec<u8>);
 
-        impl<'a> ncore::DecodeFromSlice<'a> for Blob {
-            fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
-                ncore::decode_field_canonical::<Self>(bytes)
-            }
-        }
-
-        #[derive(Default)]
-        struct WriteStats {
-            writes: usize,
+	        impl<'a> ncore::DecodeFromSlice<'a> for Blob {
+	            fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+	                ncore::decode_field_canonical::<Self>(bytes)
+	            }
+	        }
+	        #[derive(Default)]
+	        struct WriteStats {
+	            writes: usize,
             flushes: usize,
         }
 

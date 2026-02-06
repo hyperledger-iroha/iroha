@@ -1,4 +1,5 @@
 //! Tests covering Nexus configuration helpers.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 use std::num::{NonZeroU16, NonZeroU32};
 

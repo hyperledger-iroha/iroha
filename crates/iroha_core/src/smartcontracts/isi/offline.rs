@@ -361,6 +361,10 @@ fn reserve_offline_allowance(
     let Some(escrow_account) = escrow_account else {
         return Ok(());
     };
+    // Zero-amount allowances should not require a pre-existing asset entry.
+    if amount.is_zero() {
+        return Ok(());
+    }
     let escrow_asset = AssetId::new(asset.definition().clone(), escrow_account);
     state_transaction
         .world
@@ -811,6 +815,7 @@ pub mod isi {
                 AppleAppAttestProof, OFFLINE_ASSET_ENABLED_METADATA_KEY,
                 OfflineVerdictRevocationReason,
             },
+            query::error::FindError,
         };
         use iroha_primitives::{json::Json, numeric::NumericSpec};
         use nonzero_ext::nonzero;
@@ -964,6 +969,196 @@ pub mod isi {
                 .map(|asset| asset.as_ref().clone())
                 .unwrap_or_else(Numeric::zero);
             assert_eq!(escrow_balance, certificate.allowance.amount);
+        }
+
+        #[test]
+        fn register_allowance_zero_amount_does_not_require_prefund() {
+            let mut certificate = sample_certificate();
+            certificate.allowance.amount = Numeric::new(0, 0);
+            let operator_keys = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
+            certificate.operator_signature = Signature::new(
+                operator_keys.private_key(),
+                &certificate
+                    .operator_signing_bytes()
+                    .expect("certificate signing bytes"),
+            );
+
+            let controller = certificate.controller.clone();
+            let escrow = sample_account(0x02, "offline");
+            let definition_id = certificate.allowance.asset.definition().clone();
+            let domain = Domain::new(controller.domain().clone()).build(&controller);
+            let controller_account = Account::new(controller.clone()).build(&controller);
+            let escrow_account = Account::new(escrow.clone()).build(&escrow);
+            let asset_definition =
+                AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
+                    .build(&controller);
+            let world = World::with(
+                [domain],
+                [controller_account, escrow_account],
+                [asset_definition],
+            );
+
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new(world, Arc::clone(&kura), query);
+            state.settlement.offline.escrow_required = true;
+            state
+                .settlement
+                .offline
+                .escrow_accounts
+                .insert(definition_id.clone(), escrow.clone());
+
+            let header = BlockHeader::new(
+                nonzero!(2_u64),
+                None,
+                None,
+                None,
+                certificate.issued_at_ms + 1,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            register_allowance(
+                RegisterOfflineAllowance {
+                    certificate: certificate.clone(),
+                },
+                &controller,
+                &mut transaction,
+            )
+            .expect("register allowance");
+
+            assert!(
+                transaction
+                    .world
+                    .assets
+                    .get(&certificate.allowance.asset)
+                    .is_none(),
+                "controller asset should not be created for zero amount"
+            );
+            let escrow_asset = AssetId::new(definition_id, escrow);
+            assert!(
+                transaction.world.assets.get(&escrow_asset).is_none(),
+                "escrow asset should not be created for zero amount"
+            );
+            let certificate_id = certificate.certificate_id();
+            assert!(
+                transaction
+                    .world
+                    .offline_allowances
+                    .get(&certificate_id)
+                    .is_some(),
+                "allowance record should be created"
+            );
+        }
+
+        #[test]
+        fn register_allowance_nonzero_requires_prefund_when_escrow_required() {
+            let mut certificate = sample_certificate();
+            let operator_keys = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
+            certificate.operator_signature = Signature::new(
+                operator_keys.private_key(),
+                &certificate
+                    .operator_signing_bytes()
+                    .expect("certificate signing bytes"),
+            );
+
+            let controller = certificate.controller.clone();
+            let escrow = sample_account(0x02, "offline");
+            let definition_id = certificate.allowance.asset.definition().clone();
+            let domain = Domain::new(controller.domain().clone()).build(&controller);
+            let controller_account = Account::new(controller.clone()).build(&controller);
+            let escrow_account = Account::new(escrow.clone()).build(&escrow);
+            let asset_definition =
+                AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
+                    .build(&controller);
+            let world = World::with(
+                [domain],
+                [controller_account, escrow_account],
+                [asset_definition],
+            );
+
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new(world, Arc::clone(&kura), query);
+            state.settlement.offline.escrow_required = true;
+            state
+                .settlement
+                .offline
+                .escrow_accounts
+                .insert(definition_id, escrow);
+
+            let header = BlockHeader::new(
+                nonzero!(2_u64),
+                None,
+                None,
+                None,
+                certificate.issued_at_ms + 1,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let err = register_allowance(
+                RegisterOfflineAllowance {
+                    certificate: certificate.clone(),
+                },
+                &controller,
+                &mut transaction,
+            )
+            .expect_err("non-zero allowance without prefund should fail");
+            assert!(
+                matches!(err, Error::Find(FindError::Asset(_))),
+                "unexpected error: {err}"
+            );
+        }
+
+        #[test]
+        fn register_allowance_zero_amount_still_requires_escrow_config_when_required() {
+            let mut certificate = sample_certificate();
+            certificate.allowance.amount = Numeric::new(0, 0);
+            let operator_keys = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
+            certificate.operator_signature = Signature::new(
+                operator_keys.private_key(),
+                &certificate
+                    .operator_signing_bytes()
+                    .expect("certificate signing bytes"),
+            );
+
+            let controller = certificate.controller.clone();
+            let definition_id = certificate.allowance.asset.definition().clone();
+            let domain = Domain::new(controller.domain().clone()).build(&controller);
+            let controller_account = Account::new(controller.clone()).build(&controller);
+            let asset_definition =
+                AssetDefinition::new(definition_id, NumericSpec::integer()).build(&controller);
+            let world = World::with([domain], [controller_account], [asset_definition]);
+
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new(world, Arc::clone(&kura), query);
+            state.settlement.offline.escrow_required = true;
+
+            let header = BlockHeader::new(
+                nonzero!(2_u64),
+                None,
+                None,
+                None,
+                certificate.issued_at_ms + 1,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let err = register_allowance(
+                RegisterOfflineAllowance {
+                    certificate: certificate.clone(),
+                },
+                &controller,
+                &mut transaction,
+            )
+            .expect_err("missing escrow config should be rejected");
+            let expected = format!("{OFFLINE_REJECTION_REASON_PREFIX}escrow_missing");
+            assert!(err.to_string().contains(&expected));
         }
 
         #[test]

@@ -41,6 +41,12 @@ impl ClassifyTopic for EmptyMsg {
     }
 }
 
+impl<'a> norito::core::DecodeFromSlice<'a> for EmptyMsg {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        norito::core::decode_field_canonical::<Self>(bytes)
+    }
+}
+
 fn puzzle_handshake(difficulty: u8, memory_kib: u32) -> ActualSoranetHandshake {
     let mut handshake = ActualSoranetHandshake {
         descriptor_commit: WithOrigin::inline(DEFAULT_DESCRIPTOR_COMMIT.to_vec()),

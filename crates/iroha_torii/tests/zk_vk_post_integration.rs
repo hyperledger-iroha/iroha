@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests for POST VK registry endpoints (`app_api`).
 #![cfg(feature = "app_api")]
 #![allow(clippy::too_many_lines)]

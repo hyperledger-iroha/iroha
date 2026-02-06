@@ -775,7 +775,7 @@ fn bls_collect_pks_with_pop<'a>(
         let cached = pop_cache()
             .lock()
             .ok()
-            .map_or(false, |cache| cache.contains(&cache_key));
+            .is_some_and(|cache| cache.contains(&cache_key));
         if !cached {
             pop_verify(pk, pop)?;
             if let Ok(mut cache) = pop_cache().lock() {
@@ -2478,11 +2478,11 @@ mod tests {
         let sig2 = Signature::new(&sk2, msg);
         let signatures: Vec<&[u8]> = vec![sig1.payload(), sig2.payload()];
         let public_keys: Vec<&PublicKey> = vec![&pk1, &pk2];
-        let pops = vec![
+        let pops = [
             bls_normal_pop_prove(&sk1).expect("pop"),
             bls_normal_pop_prove(&sk2).expect("pop"),
         ];
-        let pop_refs: Vec<&[u8]> = pops.iter().map(|pop| pop.as_slice()).collect();
+        let pop_refs: Vec<&[u8]> = pops.iter().map(Vec::as_slice).collect();
 
         bls_normal_verify_aggregate_same_message_fast(msg, &signatures, &public_keys, &pop_refs)
             .expect("aggregate fast ok");
@@ -2514,11 +2514,11 @@ mod tests {
         let sig2 = Signature::new(&sk2, msg);
         let signatures: Vec<&[u8]> = vec![sig1.payload(), sig2.payload()];
         let public_keys: Vec<&PublicKey> = vec![&pk1, &pk2];
-        let pops = vec![
+        let pops = [
             bls_small_pop_prove(&sk1).expect("pop"),
             bls_small_pop_prove(&sk2).expect("pop"),
         ];
-        let pop_refs: Vec<&[u8]> = pops.iter().map(|pop| pop.as_slice()).collect();
+        let pop_refs: Vec<&[u8]> = pops.iter().map(Vec::as_slice).collect();
 
         bls_small_verify_aggregate_same_message_fast(msg, &signatures, &public_keys, &pop_refs)
             .expect("aggregate fast ok");

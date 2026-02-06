@@ -1,4 +1,5 @@
 //! Parliament body derivation should emit rosters for every governance body.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 use iroha_config::parameters::actual::Governance;
 use iroha_core::governance::{draw::derive_parliament_bodies, state::ParliamentTerm};

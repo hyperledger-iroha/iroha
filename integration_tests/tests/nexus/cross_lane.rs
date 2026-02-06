@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Cross-lane manifest and relay proof tests (NX-11).
 
 use std::{

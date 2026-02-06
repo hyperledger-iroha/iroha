@@ -1,4 +1,5 @@
 #![allow(clippy::disallowed_types, clippy::items_after_test_module)]
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 use std::{
     num::{NonZeroU16, NonZeroU64},

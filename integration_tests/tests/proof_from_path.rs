@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Reconstruct canonical Merkle proofs from IVM sibling paths and
 //! verify them against `iroha_crypto` roots.
 

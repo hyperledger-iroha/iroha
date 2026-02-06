@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Ensure Torii account endpoints accept IH58 (preferred)/sora (second-best) path segments.
 #![cfg(all(feature = "app_api", feature = "telemetry"))]
 

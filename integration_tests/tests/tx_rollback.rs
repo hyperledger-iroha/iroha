@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Ensures invalid instructions are rolled back without side effects.
 
 use eyre::Result;

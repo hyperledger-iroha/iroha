@@ -552,6 +552,7 @@ pub(crate) enum QcValidationError {
     ModeTagMismatch,
     #[error("QC validator set does not match active roster")]
     ValidatorSetMismatch,
+    #[allow(dead_code)]
     #[error("QC view does not match the block view (expected {expected}, got {actual})")]
     ViewMismatch { expected: u64, actual: u64 },
     #[error("QC aggregate does not match subject/bitmap")]
@@ -1878,12 +1879,6 @@ pub(crate) fn validate_block_sync_qc(
     let voting_len = roster_len;
     if qc.mode_tag != mode_tag {
         return Err(QcValidationError::ModeTagMismatch);
-    }
-    if mode_tag == PERMISSIONED_TAG && qc.view != block_view {
-        return Err(QcValidationError::ViewMismatch {
-            expected: block_view,
-            actual: qc.view,
-        });
     }
     if !qc_validator_set_matches_topology(qc, &canonical_topology) {
         return Err(QcValidationError::ValidatorSetMismatch);
@@ -7027,27 +7022,24 @@ impl Actor {
         }
     }
 
-    fn effective_commit_topology_from_view(&self, view: &StateView<'_>) -> Vec<PeerId> {
+    fn active_topology_with_genesis_fallback(
+        &self,
+        view: &StateView<'_>,
+        consensus_mode: ConsensusMode,
+    ) -> Vec<PeerId> {
         let roster = derive_active_topology_for_mode(
             view,
             self.common_config.trusted_peers.value(),
             self.common_config.peer.id(),
-            self.consensus_mode,
+            consensus_mode,
         );
         if !roster.is_empty() {
-            return roster;
-        }
-        if !view.commit_topology().is_empty() || !view.world().peers().is_empty() {
-            return roster;
-        }
-        if self.genesis_block_hash().is_none() || view.height() == 0 {
             return roster;
         }
         let mut genesis_roster = self.genesis_roster_from_genesis_block();
         if genesis_roster.is_empty() {
             return roster;
         }
-        let (consensus_mode, _, _) = self.consensus_context_for_height(1);
         genesis_roster = roster::canonicalize_roster_for_mode(genesis_roster, consensus_mode);
         if genesis_roster.is_empty() {
             return roster;
@@ -7058,6 +7050,10 @@ impl Actor {
             "using genesis roster fallback for empty commit topology"
         );
         genesis_roster
+    }
+
+    fn effective_commit_topology_from_view(&self, view: &StateView<'_>) -> Vec<PeerId> {
+        self.active_topology_with_genesis_fallback(view, self.consensus_mode)
     }
 
     fn effective_commit_topology(&self) -> Vec<PeerId> {
@@ -7667,14 +7663,33 @@ impl Actor {
         let Some(genesis) = self.genesis_network.genesis.as_ref() else {
             return Vec::new();
         };
-        let mut roster = Vec::new();
-        for tx in genesis.0.external_transactions() {
+        let mut roster: Vec<PeerId> = Vec::new();
+        for tx in genesis.0.transactions_vec().iter() {
             let Executable::Instructions(isi) = tx.instructions() else {
                 continue;
             };
             for instruction in isi {
                 if let Some(register) = instruction.as_any().downcast_ref::<RegisterPeerWithPop>() {
                     roster.push(register.peer.clone());
+                    continue;
+                }
+                if let Some(register_box) = instruction
+                    .as_any()
+                    .downcast_ref::<iroha_data_model::isi::register::RegisterBox>(
+                ) && let iroha_data_model::isi::register::RegisterBox::Peer(register) =
+                    register_box
+                {
+                    roster.push(register.peer.clone());
+                    continue;
+                }
+                if instruction.id().contains("RegisterPeerWithPop") {
+                    let decoded: Result<RegisterPeerWithPop, _> =
+                        <RegisterPeerWithPop as norito::codec::Decode>::decode(
+                            &mut &instruction.dyn_encode()[..],
+                        );
+                    if let Ok(register) = decoded {
+                        roster.push(register.peer.clone());
+                    }
                 }
             }
         }

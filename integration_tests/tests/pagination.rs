@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Pagination behaviour integration tests for query iterators.
 
 use eyre::Result;

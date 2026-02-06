@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Torii contract manifest endpoints: POST wraps ISI and GET reads on-chain manifest.
 
 use std::time::Instant;

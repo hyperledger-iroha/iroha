@@ -2306,7 +2306,7 @@ mod handle_update_tests {
 
     use iroha_config::parameters::actual::SoranetHandshake as ActualSoranetHandshake;
     use iroha_crypto::{encryption::ChaCha20Poly1305, kex::X25519Sha256};
-    use norito::codec::{Decode, Encode};
+    use norito::codec::{Decode, DecodeAll, Encode};
     use tokio::sync::{mpsc, watch};
 
     use super::*;
@@ -2321,6 +2321,16 @@ mod handle_update_tests {
     }
 
     impl message::ClassifyTopic for Dummy {}
+
+    impl<'a> norito::core::DecodeFromSlice<'a> for Dummy {
+        fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+            let mut slice = bytes;
+            let value = <Self as DecodeAll>::decode_all(&mut slice).map_err(|error| {
+                norito::core::Error::Message(format!("codec decode error: {error}"))
+            })?;
+            Ok((value, bytes.len() - slice.len()))
+        }
+    }
 
     fn closed_handle() -> NetworkBaseHandle<Dummy, X25519Sha256, ChaCha20Poly1305> {
         let (subscribe_tx, _subscribe_rx) = mpsc::unbounded_channel::<Subscriber<Dummy>>();
@@ -2434,7 +2444,7 @@ mod accept_stream_tests {
         peer::{Peer, PeerId},
     };
     use iroha_primitives::addr::socket_addr;
-    use norito::codec::{Decode, Encode};
+    use norito::codec::{Decode, DecodeAll, Encode};
     #[cfg(feature = "quic")]
     #[allow(unused_imports)]
     use quinn::crypto::rustls::QuicClientConfig;
@@ -2462,6 +2472,57 @@ mod accept_stream_tests {
     }
 
     impl crate::network::message::ClassifyTopic for Dummy {}
+
+    macro_rules! impl_decode_from_slice_via_codec {
+        ($($ty:ty),+ $(,)?) => {
+            $(
+                impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
+                    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+                        let mut slice = bytes;
+                        let value = <Self as DecodeAll>::decode_all(&mut slice).map_err(|error| {
+                            norito::core::Error::Message(format!("codec decode error: {error}"))
+                        })?;
+                        Ok((value, bytes.len() - slice.len()))
+                    }
+                }
+            )+
+        };
+    }
+
+    impl_decode_from_slice_via_codec!(Dummy);
+
+    #[derive(Clone, Debug, Decode, Encode)]
+    struct DummyConsensus;
+
+    impl message::ClassifyTopic for DummyConsensus {
+        fn topic(&self) -> message::Topic {
+            message::Topic::Consensus
+        }
+    }
+
+    impl_decode_from_slice_via_codec!(DummyConsensus);
+
+    #[derive(Clone, Debug, Decode, Encode)]
+    struct DummyConsensusPayload;
+
+    impl message::ClassifyTopic for DummyConsensusPayload {
+        fn topic(&self) -> message::Topic {
+            message::Topic::ConsensusPayload
+        }
+    }
+
+    impl_decode_from_slice_via_codec!(DummyConsensusPayload);
+
+    #[derive(Clone, Debug, Decode, Encode)]
+    struct DummyConsensusChunk;
+
+    impl message::ClassifyTopic for DummyConsensusChunk {
+        fn topic(&self) -> message::Topic {
+            message::Topic::ConsensusChunk
+        }
+    }
+
+    impl_decode_from_slice_via_codec!(DummyConsensusChunk);
 
     #[cfg(any(feature = "p2p_tls", feature = "quic"))]
     use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
@@ -3272,26 +3333,11 @@ mod accept_stream_tests {
 
     #[tokio::test(flavor = "current_thread")]
     #[allow(clippy::too_many_lines)]
-    async fn peer_message_over_cap_increments_violation_counter() {
-        use crate::network::{cap_violations_consensus, message};
-        let _guard = cap_violation_test_guard();
+	    async fn peer_message_over_cap_increments_violation_counter() {
+	        use crate::network::cap_violations_consensus;
+	        let _guard = cap_violation_test_guard();
 
-        #[derive(Clone, Debug, Decode, Encode)]
-        struct DummyConsensus;
-
-        impl<'a> ncore::DecodeFromSlice<'a> for DummyConsensus {
-            fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
-                ncore::decode_field_canonical::<Self>(bytes)
-            }
-        }
-
-        impl message::ClassifyTopic for DummyConsensus {
-            fn topic(&self) -> message::Topic {
-                message::Topic::Consensus
-            }
-        }
-
-        let key_pair = KeyPair::random();
+	        let key_pair = KeyPair::random();
 
         let std_listener = match std::net::TcpListener::bind("127.0.0.1:0") {
             Ok(listener) => listener,
@@ -3470,26 +3516,11 @@ mod accept_stream_tests {
 
     #[tokio::test(flavor = "current_thread")]
     #[allow(clippy::too_many_lines)]
-    async fn peer_message_consensus_payload_uses_block_sync_cap() {
-        use crate::network::{cap_violations_consensus, message};
-        let _guard = cap_violation_test_guard();
+	    async fn peer_message_consensus_payload_uses_block_sync_cap() {
+	        use crate::network::cap_violations_consensus;
+	        let _guard = cap_violation_test_guard();
 
-        #[derive(Clone, Debug, Decode, Encode)]
-        struct DummyPayload;
-
-        impl<'a> ncore::DecodeFromSlice<'a> for DummyPayload {
-            fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
-                ncore::decode_field_canonical::<Self>(bytes)
-            }
-        }
-
-        impl message::ClassifyTopic for DummyPayload {
-            fn topic(&self) -> message::Topic {
-                message::Topic::ConsensusPayload
-            }
-        }
-
-        let key_pair = KeyPair::random();
+	        let key_pair = KeyPair::random();
 
         let std_listener = match std::net::TcpListener::bind("127.0.0.1:0") {
             Ok(listener) => listener,
@@ -3506,7 +3537,7 @@ mod accept_stream_tests {
         };
 
         let (_subscribe_tx, subscribe_rx): (
-            mpsc::UnboundedSender<super::Subscriber<DummyPayload>>,
+            mpsc::UnboundedSender<super::Subscriber<DummyConsensusPayload>>,
             _,
         ) = mpsc::unbounded_channel();
         let (_update_topology_tx, update_topology_rx) =
@@ -3522,118 +3553,119 @@ mod accept_stream_tests {
         let (_update_consensus_caps_tx, update_consensus_caps_receiver) =
             mpsc::unbounded_channel::<super::message::UpdateConsensusCaps>();
         let (peer_message_hi_tx, peer_message_hi_rx) =
-            mpsc::channel::<super::PeerMessage<WireMessage<DummyPayload>>>(1);
+            mpsc::channel::<super::PeerMessage<WireMessage<DummyConsensusPayload>>>(1);
         let (peer_message_lo_tx, peer_message_lo_rx) =
-            mpsc::channel::<super::PeerMessage<WireMessage<DummyPayload>>>(1);
+            mpsc::channel::<super::PeerMessage<WireMessage<DummyConsensusPayload>>>(1);
         let (service_message_tx, service_message_rx) =
-            mpsc::channel::<super::ServiceMessage<WireMessage<DummyPayload>>>(4);
+            mpsc::channel::<super::ServiceMessage<WireMessage<DummyConsensusPayload>>>(4);
         let (_hi_tx, network_message_high_rx) = super::net_channel::channel_with_capacity(1);
         let (_lo_tx, network_message_low_rx) = super::net_channel::channel_with_capacity(1);
         let (online_peers_tx, _online_peers_rx) = watch::channel(HashSet::new());
 
         let soranet = Arc::new(SoranetHandshakeConfig::defaults());
 
-        let mut network = super::NetworkBase::<DummyPayload, X25519Sha256, ChaCha20Poly1305> {
-            listen_addr: listen_addr_std.into(),
-            public_address: listen_addr_std.into(),
-            relay_role: RelayRole::Disabled,
-            relay_mode: iroha_config::parameters::actual::RelayMode::Disabled,
-            relay_hub_address: None,
-            relay_hub_peer: None,
-            relay_ttl: DEFAULT_RELAY_TTL,
-            trust_gossip_config: true,
-            trust_gossip: true,
-            self_id: PeerId::from(key_pair.public_key().clone()),
-            address_book: HashMap::new(),
-            peer_reputations: PeerReputationBook::default(),
-            soranet_handshake: soranet.clone(),
-            peers: HashMap::new(),
-            connecting_peers: HashMap::new(),
-            listener,
-            key_pair: key_pair.clone(),
-            subscribers_to_peers_messages: Vec::new(),
-            subscribe_to_peers_messages_receiver: subscribe_rx,
-            online_peers_sender: online_peers_tx,
-            update_topology_receiver: update_topology_rx,
-            update_peers_receiver: update_peers_rx,
-            update_trusted_peers_receiver,
-            update_acl_receiver: update_acl_rx,
-            network_message_high_receiver: network_message_high_rx,
-            network_message_low_receiver: network_message_low_rx,
-            peer_message_high_receiver: peer_message_hi_rx,
-            peer_message_low_receiver: peer_message_lo_rx,
-            peer_message_high_sender: peer_message_hi_tx,
-            peer_message_low_sender: peer_message_lo_tx,
-            service_message_receiver: service_message_rx,
-            service_message_sender: service_message_tx,
-            update_handshake_receiver: update_handshake_rx,
-            update_consensus_caps_receiver,
-            current_conn_id: 0,
-            current_topology: HashSet::new(),
-            current_peers_addresses: Vec::new(),
-            idle_timeout: Duration::from_millis(50),
-            connect_startup_delay_until: tokio::time::Instant::now(),
-            chain_id: None,
-            consensus_caps: None,
-            confidential_caps: None,
-            crypto_caps: None,
-            post_queue_cap: 4,
-            dns_refresh_interval: None,
-            dns_refresh_ttl: None,
-            dns_last_refresh: HashMap::new(),
-            dns_pending_refresh: HashSet::new(),
-            quic_enabled: false,
-            tls_enabled: false,
-            prefer_ws_fallback: false,
-            allowlist_only: false,
-            allow_keys: HashSet::new(),
-            deny_keys: HashSet::new(),
-            allow_nets: Vec::new(),
-            deny_nets: Vec::new(),
-            retry_backoff: HashMap::new(),
-            pending_connects: Vec::new(),
-            happy_eyeballs_stagger: Duration::from_millis(10),
-            topology_update_interval:
-                iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
-            addr_ipv6_first: false,
-            last_active: HashMap::new(),
-            incoming_pending: HashSet::new(),
-            incoming_active: HashSet::new(),
-            max_incoming: None,
-            max_total_connections: None,
-            accept_params: AcceptThrottleParams::new(
-                None,
-                None,
-                iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V4_BITS,
-                iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V6_BITS,
-                None,
-                None,
-                iroha_config::parameters::defaults::network::MAX_ACCEPT_BUCKETS.get(),
-                iroha_config::parameters::defaults::network::ACCEPT_BUCKET_IDLE,
-            ),
-            accept_prefix_buckets: HashMap::new(),
-            accept_ip_buckets: HashMap::new(),
-            sampler_high_queue_warn: LogSampler::new(),
-            sampler_low_queue_warn: LogSampler::new(),
-            sampler_accept_err: LogSampler::new(),
-            low_rate_per_sec: None,
-            low_burst: None,
-            low_buckets: HashMap::new(),
-            low_bytes_per_sec: None,
-            low_bytes_burst: None,
-            low_bytes_buckets: HashMap::new(),
-            max_frame_bytes: 4096,
-            cap_consensus: 128,
-            cap_control: 128,
-            cap_block_sync: 512,
-            cap_tx_gossip: 128,
-            cap_peer_gossip: 128,
-            cap_health: 128,
-            cap_other: 128,
-            disconnect_on_post_overflow: false,
-            _key_exchange: core::marker::PhantomData,
-            _encryptor: core::marker::PhantomData,
-        };
+        let mut network =
+            super::NetworkBase::<DummyConsensusPayload, X25519Sha256, ChaCha20Poly1305> {
+                listen_addr: listen_addr_std.into(),
+                public_address: listen_addr_std.into(),
+                relay_role: RelayRole::Disabled,
+                relay_mode: iroha_config::parameters::actual::RelayMode::Disabled,
+                relay_hub_address: None,
+                relay_hub_peer: None,
+                relay_ttl: DEFAULT_RELAY_TTL,
+                trust_gossip_config: true,
+                trust_gossip: true,
+                self_id: PeerId::from(key_pair.public_key().clone()),
+                address_book: HashMap::new(),
+                peer_reputations: PeerReputationBook::default(),
+                soranet_handshake: soranet.clone(),
+                peers: HashMap::new(),
+                connecting_peers: HashMap::new(),
+                listener,
+                key_pair: key_pair.clone(),
+                subscribers_to_peers_messages: Vec::new(),
+                subscribe_to_peers_messages_receiver: subscribe_rx,
+                online_peers_sender: online_peers_tx,
+                update_topology_receiver: update_topology_rx,
+                update_peers_receiver: update_peers_rx,
+                update_trusted_peers_receiver,
+                update_acl_receiver: update_acl_rx,
+                network_message_high_receiver: network_message_high_rx,
+                network_message_low_receiver: network_message_low_rx,
+                peer_message_high_receiver: peer_message_hi_rx,
+                peer_message_low_receiver: peer_message_lo_rx,
+                peer_message_high_sender: peer_message_hi_tx,
+                peer_message_low_sender: peer_message_lo_tx,
+                service_message_receiver: service_message_rx,
+                service_message_sender: service_message_tx,
+                update_handshake_receiver: update_handshake_rx,
+                update_consensus_caps_receiver,
+                current_conn_id: 0,
+                current_topology: HashSet::new(),
+                current_peers_addresses: Vec::new(),
+                idle_timeout: Duration::from_millis(50),
+                connect_startup_delay_until: tokio::time::Instant::now(),
+                chain_id: None,
+                consensus_caps: None,
+                confidential_caps: None,
+                crypto_caps: None,
+                post_queue_cap: 4,
+                dns_refresh_interval: None,
+                dns_refresh_ttl: None,
+                dns_last_refresh: HashMap::new(),
+                dns_pending_refresh: HashSet::new(),
+                quic_enabled: false,
+                tls_enabled: false,
+                prefer_ws_fallback: false,
+                allowlist_only: false,
+                allow_keys: HashSet::new(),
+                deny_keys: HashSet::new(),
+                allow_nets: Vec::new(),
+                deny_nets: Vec::new(),
+                retry_backoff: HashMap::new(),
+                pending_connects: Vec::new(),
+                happy_eyeballs_stagger: Duration::from_millis(10),
+                topology_update_interval:
+                    iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
+                addr_ipv6_first: false,
+                last_active: HashMap::new(),
+                incoming_pending: HashSet::new(),
+                incoming_active: HashSet::new(),
+                max_incoming: None,
+                max_total_connections: None,
+                accept_params: AcceptThrottleParams::new(
+                    None,
+                    None,
+                    iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V4_BITS,
+                    iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V6_BITS,
+                    None,
+                    None,
+                    iroha_config::parameters::defaults::network::MAX_ACCEPT_BUCKETS.get(),
+                    iroha_config::parameters::defaults::network::ACCEPT_BUCKET_IDLE,
+                ),
+                accept_prefix_buckets: HashMap::new(),
+                accept_ip_buckets: HashMap::new(),
+                sampler_high_queue_warn: LogSampler::new(),
+                sampler_low_queue_warn: LogSampler::new(),
+                sampler_accept_err: LogSampler::new(),
+                low_rate_per_sec: None,
+                low_burst: None,
+                low_buckets: HashMap::new(),
+                low_bytes_per_sec: None,
+                low_bytes_burst: None,
+                low_bytes_buckets: HashMap::new(),
+                max_frame_bytes: 4096,
+                cap_consensus: 128,
+                cap_control: 128,
+                cap_block_sync: 512,
+                cap_tx_gossip: 128,
+                cap_peer_gossip: 128,
+                cap_health: 128,
+                cap_other: 128,
+                disconnect_on_post_overflow: false,
+                _key_exchange: core::marker::PhantomData,
+                _encryptor: core::marker::PhantomData,
+            };
 
         let before = cap_violations_consensus();
 
@@ -3648,7 +3680,7 @@ mod accept_stream_tests {
                 RelayTarget::Direct(network.self_id.clone()),
                 DEFAULT_RELAY_TTL,
                 Priority::High,
-                DummyPayload,
+                DummyConsensusPayload,
             ),
             payload_bytes: 256,
         };
@@ -3666,7 +3698,7 @@ mod accept_stream_tests {
                 RelayTarget::Direct(network.self_id.clone()),
                 DEFAULT_RELAY_TTL,
                 Priority::High,
-                DummyPayload,
+                DummyConsensusPayload,
             ),
             payload_bytes: 1024,
         };
@@ -3684,26 +3716,11 @@ mod accept_stream_tests {
 
     #[tokio::test(flavor = "current_thread")]
     #[allow(clippy::too_many_lines)]
-    async fn peer_message_consensus_chunk_uses_block_sync_cap() {
-        use crate::network::{cap_violations_block_sync, message};
-        let _guard = cap_violation_test_guard();
+	    async fn peer_message_consensus_chunk_uses_block_sync_cap() {
+	        use crate::network::cap_violations_block_sync;
+	        let _guard = cap_violation_test_guard();
 
-        #[derive(Clone, Debug, Decode, Encode)]
-        struct DummyPayload;
-
-        impl<'a> ncore::DecodeFromSlice<'a> for DummyPayload {
-            fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
-                ncore::decode_field_canonical::<Self>(bytes)
-            }
-        }
-
-        impl message::ClassifyTopic for DummyPayload {
-            fn topic(&self) -> message::Topic {
-                message::Topic::ConsensusChunk
-            }
-        }
-
-        let key_pair = KeyPair::random();
+	        let key_pair = KeyPair::random();
 
         let std_listener = match std::net::TcpListener::bind("127.0.0.1:0") {
             Ok(listener) => listener,
@@ -3720,7 +3737,7 @@ mod accept_stream_tests {
         };
 
         let (_subscribe_tx, subscribe_rx): (
-            mpsc::UnboundedSender<super::Subscriber<DummyPayload>>,
+            mpsc::UnboundedSender<super::Subscriber<DummyConsensusChunk>>,
             _,
         ) = mpsc::unbounded_channel();
         let (_update_topology_tx, update_topology_rx) =
@@ -3736,18 +3753,18 @@ mod accept_stream_tests {
         let (_update_consensus_caps_tx, update_consensus_caps_receiver) =
             mpsc::unbounded_channel::<super::message::UpdateConsensusCaps>();
         let (peer_message_hi_tx, peer_message_hi_rx) =
-            mpsc::channel::<super::PeerMessage<WireMessage<DummyPayload>>>(1);
+            mpsc::channel::<super::PeerMessage<WireMessage<DummyConsensusChunk>>>(1);
         let (peer_message_lo_tx, peer_message_lo_rx) =
-            mpsc::channel::<super::PeerMessage<WireMessage<DummyPayload>>>(1);
+            mpsc::channel::<super::PeerMessage<WireMessage<DummyConsensusChunk>>>(1);
         let (service_message_tx, service_message_rx) =
-            mpsc::channel::<super::ServiceMessage<WireMessage<DummyPayload>>>(4);
+            mpsc::channel::<super::ServiceMessage<WireMessage<DummyConsensusChunk>>>(4);
         let (_hi_tx, network_message_high_rx) = super::net_channel::channel_with_capacity(1);
         let (_lo_tx, network_message_low_rx) = super::net_channel::channel_with_capacity(1);
         let (online_peers_tx, _online_peers_rx) = watch::channel(HashSet::new());
 
         let soranet = Arc::new(SoranetHandshakeConfig::defaults());
 
-        let mut network = super::NetworkBase::<DummyPayload, X25519Sha256, ChaCha20Poly1305> {
+        let mut network = super::NetworkBase::<DummyConsensusChunk, X25519Sha256, ChaCha20Poly1305> {
             listen_addr: listen_addr_std.into(),
             public_address: listen_addr_std.into(),
             relay_role: RelayRole::Disabled,
@@ -3862,7 +3879,7 @@ mod accept_stream_tests {
                 RelayTarget::Direct(network.self_id.clone()),
                 DEFAULT_RELAY_TTL,
                 Priority::High,
-                DummyPayload,
+                DummyConsensusChunk,
             ),
             payload_bytes: 256,
         };
@@ -3880,7 +3897,7 @@ mod accept_stream_tests {
                 RelayTarget::Direct(network.self_id.clone()),
                 DEFAULT_RELAY_TTL,
                 Priority::High,
-                DummyPayload,
+                DummyConsensusChunk,
             ),
             payload_bytes: 1024,
         };
@@ -4571,8 +4588,10 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                         self.peer_message(peer_message).await;
                         high_drained = high_drained.saturating_add(1);
                     }
-                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
-                    Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
+                    Err(
+                        tokio::sync::mpsc::error::TryRecvError::Empty
+                        | tokio::sync::mpsc::error::TryRecvError::Disconnected,
+                    ) => break,
                 }
             }
             tokio::select! {
@@ -6141,6 +6160,7 @@ mod tests {
 
     use iroha_crypto::{KeyPair, encryption::ChaCha20Poly1305, kex::X25519Sha256};
     use iroha_primitives::addr::socket_addr;
+    use norito::codec::DecodeAll;
     use rand::{SeedableRng, rngs::StdRng};
     use soranet_pq::generate_mldsa_keypair;
     use tokio::sync::mpsc::error::TryRecvError;
@@ -6208,6 +6228,24 @@ mod tests {
             }
         }
     }
+
+    macro_rules! impl_decode_from_slice_via_codec {
+        ($($ty:ty),+ $(,)?) => {
+            $(
+                impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
+                    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+                        let mut slice = bytes;
+                        let value = <Self as DecodeAll>::decode_all(&mut slice).map_err(|error| {
+                            norito::core::Error::Message(format!("codec decode error: {error}"))
+                        })?;
+                        Ok((value, bytes.len() - slice.len()))
+                    }
+                }
+            )+
+        };
+    }
+
+    impl_decode_from_slice_via_codec!(DummyMsg, TrustGossipMsg, PeerGossipMsg, TopicMsg);
 
     #[test]
     fn trust_gossip_allowed_blocks_when_disabled() {

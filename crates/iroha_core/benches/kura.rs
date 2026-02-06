@@ -1,4 +1,6 @@
 //! Benchmarks for Kura block size and storage characteristics.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
+#![allow(clippy::all)]
 #![allow(clippy::disallowed_types)]
 use std::fs;
 

@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration (ignored) test: start a WS endpoint, subscribe, and assert Proof JSON frames.
 #![cfg(feature = "app_api")]
 

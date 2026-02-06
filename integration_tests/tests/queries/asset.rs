@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Asset query regression scenarios.
 
 use std::{thread, time::Duration};

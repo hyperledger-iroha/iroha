@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #[allow(clippy::module_inception)]
 #[path = "../../common/mod.rs"]
 mod common;

@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests for offline certificate renewal and revocation endpoints.
 #![cfg(feature = "app_api")]
 

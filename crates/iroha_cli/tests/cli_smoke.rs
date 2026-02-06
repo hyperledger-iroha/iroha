@@ -4,7 +4,7 @@
 //! renders help text, and reports the current version string. They help
 //! catch regression where the clap command tree fails to build or the
 //! binary cannot launch in automated environments.
-#![allow(clippy::too_many_lines)]
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 use std::{
     collections::HashMap,

@@ -1,4 +1,5 @@
 //! `CoreHost` Norito serialization helper syscall coverage.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 use std::convert::TryFrom;
 

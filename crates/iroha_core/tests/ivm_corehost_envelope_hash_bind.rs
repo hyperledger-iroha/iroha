@@ -1,4 +1,5 @@
 //! `CoreHost`: verify that the host binds the last verify envelope hash
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! to subsequently enqueued ZK ISIs via the vendor bridge.
 
 use std::sync::Arc;

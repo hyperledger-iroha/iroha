@@ -1,6 +1,11 @@
 //! SoraFS node scaffolding.
 
 #![deny(missing_docs)]
+#![allow(
+    clippy::clone_on_copy,
+    clippy::collapsible_if,
+    clippy::field_reassign_with_default
+)]
 
 pub mod capacity;
 pub mod config;

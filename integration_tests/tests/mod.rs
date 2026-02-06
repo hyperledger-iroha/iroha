@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration test harness covering cross-cutting Iroha scenarios.
 
 /// Focused genesis encoding diagnostics.

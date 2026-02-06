@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Router-level test for /v1/contracts/instance/activate
 #![allow(clippy::redundant_closure_for_method_calls)]
 #![cfg(feature = "app_api")]

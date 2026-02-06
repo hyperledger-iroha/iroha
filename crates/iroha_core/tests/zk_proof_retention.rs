@@ -1,4 +1,5 @@
 #![doc = "Ensure proof registry retention cap is enforced per backend."]
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "zk-tests")]
 //! Ensure proof registry retention cap is enforced per backend.
 

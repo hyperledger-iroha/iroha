@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Negative-path coverage for the Norito Streaming integration harness.
 
 #[path = "streaming/mod.rs"]

@@ -1,4 +1,5 @@
 //! Ensure `CoreHost` threads `iroha_config.zk.halo2.enabled=false` to the underlying
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! `DefaultHost` and does not set ZK verification latches on verify calls.
 
 #![cfg(feature = "zk-ipa-native")]

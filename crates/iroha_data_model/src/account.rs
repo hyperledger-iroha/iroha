@@ -144,22 +144,21 @@ fn resolve_account_domain_selector(selector: &AccountDomainSelector) -> Option<D
     #[cfg(test)]
     if let Some(resolver) =
         ACCOUNT_DOMAIN_SELECTOR_RESOLVER_OVERRIDE.with(|cell| cell.borrow().clone())
+        && let Some(domain) = resolver(selector)
     {
-        if let Some(domain) = resolver(selector) {
-            return Some(domain);
-        }
+        return Some(domain);
     }
     let guard = ACCOUNT_DOMAIN_SELECTOR_RESOLVER
         .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some(resolver) = guard.as_ref() {
-        if let Some(domain) = resolver(selector) {
-            return Some(domain);
-        }
+    if let Some(resolver) = guard.as_ref()
+        && let Some(domain) = resolver(selector)
+    {
+        return Some(domain);
     }
     #[cfg(test)]
     {
-        if TEST_DOMAIN_SELECTOR_FALLBACK_ENABLED.with(|cell| cell.get()) {
+        if TEST_DOMAIN_SELECTOR_FALLBACK_ENABLED.with(std::cell::Cell::get) {
             return resolve_test_domain_selector(selector);
         }
     }
@@ -351,14 +350,14 @@ mod model {
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for AccountId {
     fn write_json(&self, out: &mut String) {
-        let literal = match self.canonical_ih58() {
-            Ok(ih58) => format!("{ih58}@{}", self.domain()),
-            Err(_) => {
+        let literal = self.canonical_ih58().map_or_else(
+            |_| {
                 let payload = self.encode();
                 let encoded = hex::encode(payload);
                 format!("norito:{encoded}@{}", self.domain())
-            }
-        };
+            },
+            |ih58| format!("{ih58}@{}", self.domain()),
+        );
         norito::json::JsonSerialize::json_serialize(&literal, out);
     }
 }
@@ -372,8 +371,7 @@ impl norito::json::JsonDeserialize for AccountId {
         if let Some(rest) = AccountId::strip_prefix_case_insensitive(&value, "norito:") {
             let (hex_literal, domain_literal) = rest
                 .rsplit_once('@')
-                .map(|(hex, domain)| (hex, Some(domain)))
-                .unwrap_or((rest, None));
+                .map_or((rest, None), |(hex, domain)| (hex, Some(domain)));
             let payload = hex::decode(hex_literal).map_err(|err| {
                 norito::json::Error::Message(format!("invalid norito AccountId hex payload: {err}"))
             })?;

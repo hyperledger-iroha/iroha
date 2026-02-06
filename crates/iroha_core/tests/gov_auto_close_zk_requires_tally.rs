@@ -1,4 +1,5 @@
 //! ZK referenda auto-close should not emit decisions without a finalized tally.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 use core::num::NonZeroU64;
 

@@ -3395,18 +3395,8 @@ mod tests {
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
 
         let genesis_path = temp.path().join("genesis.json");
-        let genesis_contents = fs::read_to_string(&genesis_path).expect("read genesis");
-        let manifest: json::Value = json::from_str(&genesis_contents).expect("parse genesis json");
-        let transactions = manifest
-            .get("transactions")
-            .and_then(json::Value::as_array)
-            .expect("genesis transactions");
-        let params_value = transactions
-            .iter()
-            .find_map(|tx| tx.get("parameters"))
-            .expect("parameters entry");
-        let params: Parameters =
-            json::from_value(params_value.clone()).expect("parse genesis parameters");
+        let manifest = genesis_json_from_path(&genesis_path);
+        let params = genesis_parameters(&manifest);
         assert_eq!(params.sumeragi().block_time_ms(), 1_000);
         assert_eq!(params.sumeragi().commit_time_ms(), 1_000);
     }
@@ -4267,7 +4257,7 @@ mod tests {
 
     #[test]
     fn account_id_raw_string_parses_as_account_id() {
-        let seed_bytes = Some("localnet-gas-parse".as_bytes());
+        let seed_bytes = Some(b"localnet-gas-parse".as_slice());
         let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED);
         let gas_account_id = localnet_gas_account_id(&genesis_public_key).expect("gas account id");
         let encoded = account_id_raw_string(&gas_account_id);

@@ -1,4 +1,5 @@
 //! Puppeteer for `irohad`, to create test networks
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 mod config;
 pub mod fslock_ports;
@@ -2817,18 +2818,21 @@ pub struct NetworkBuilder {
 
 fn bool_env_override(key: &str) -> Option<bool> {
     match std::env::var(key) {
-        Ok(value) => match value.parse::<bool>() {
-            Ok(parsed) => Some(parsed),
-            Err(err) => {
+        Ok(value) => {
+            let trimmed = value.trim();
+            if trimmed.eq_ignore_ascii_case("true") || trimmed == "1" {
+                Some(true)
+            } else if trimmed.eq_ignore_ascii_case("false") || trimmed == "0" {
+                Some(false)
+            } else {
                 warn!(
                     key,
                     value = %value,
-                    ?err,
                     "ignoring invalid boolean environment override"
                 );
                 None
             }
-        },
+        }
         Err(std::env::VarError::NotPresent) => None,
         Err(std::env::VarError::NotUnicode(_)) => {
             warn!(key, "ignoring non-unicode boolean environment override");
@@ -7872,6 +7876,15 @@ exit 0
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
         let _override_guard = EnvVarGuard::cleared("IROHA_TEST_ALLOW_REENTRANT_BUILD");
         set_env_var("IROHA_TEST_ALLOW_REENTRANT_BUILD", "true");
+
+        assert!(allow_reentrant_build(true));
+    }
+
+    #[test]
+    fn reentrant_builds_can_be_enabled_via_numeric_env() {
+        let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
+        let _override_guard = EnvVarGuard::cleared("IROHA_TEST_ALLOW_REENTRANT_BUILD");
+        set_env_var("IROHA_TEST_ALLOW_REENTRANT_BUILD", "1");
 
         assert!(allow_reentrant_build(true));
     }

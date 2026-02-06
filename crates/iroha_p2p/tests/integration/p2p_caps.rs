@@ -45,6 +45,12 @@ impl ClassifyTopic for BigMsg {
     }
 }
 
+impl<'a> norito::core::DecodeFromSlice<'a> for BigMsg {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        norito::core::decode_field_canonical::<Self>(bytes)
+    }
+}
+
 fn default_soranet_handshake() -> ActualSoranetHandshake {
     ActualSoranetHandshake {
         descriptor_commit: WithOrigin::inline(DEFAULT_DESCRIPTOR_COMMIT.to_vec()),

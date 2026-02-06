@@ -1,4 +1,5 @@
 //! Deterministic sortition seed computation for governance draws.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 use iroha_core::governance::sortition::compute_seed;
 use iroha_data_model::ChainId;

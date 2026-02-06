@@ -142,8 +142,7 @@ pub(crate) fn build_tables(
     }
 
     let mut position = 0u32;
-    for symbol in 0..=max_symbol {
-        let count = normalized[symbol];
+    for (symbol, &count) in normalized.iter().enumerate().take(max_symbol + 1) {
         if count <= 0 {
             continue;
         }
@@ -161,8 +160,8 @@ pub(crate) fn build_tables(
 
     let mut state_table = vec![0u16; table_size as usize];
     let mut cumul_pos = cumul.clone();
-    for u in 0..table_size as usize {
-        let symbol = table_symbol[u] as usize;
+    for (u, &symbol) in table_symbol.iter().enumerate().take(table_size as usize) {
+        let symbol = symbol as usize;
         let pos = cumul_pos[symbol] as usize;
         state_table[pos] = (table_size as u16).wrapping_add(u as u16);
         cumul_pos[symbol] += 1;
@@ -243,7 +242,7 @@ pub(crate) fn encode_symbols(symbols: &[u16], ct: &FseCTable) -> Result<Vec<u8>,
     }
     let mut writer = BitWriter::with_capacity(symbols.len().saturating_mul(4).saturating_add(8));
     let mut total_bits: u32 = 0;
-    let mut state = ct.table_size as u32;
+    let mut state = ct.table_size;
     for &symbol in symbols.iter().rev() {
         let sym = symbol as usize;
         if sym >= ct.symbol_tt.len() {

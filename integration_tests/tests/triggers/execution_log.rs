@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Trigger execution log coverage.
 #![cfg(feature = "fault_injection")]
 

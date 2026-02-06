@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration regression tests for Sumeragi PRF-based collector selection.
 
 use std::{collections::HashSet, time::Duration};

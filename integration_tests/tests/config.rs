@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Configuration retrieval and mutation integration tests.
 
 use std::{thread, time::Duration};
