@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Torii handler test for listing contract instances by namespace.
 #![cfg(feature = "app_api")]
 

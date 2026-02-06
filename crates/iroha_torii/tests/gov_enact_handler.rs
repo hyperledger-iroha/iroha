@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Torii handler test for governance enact endpoint.
 #![cfg(feature = "app_api")]
 #![allow(clippy::redundant_closure_for_method_calls)]

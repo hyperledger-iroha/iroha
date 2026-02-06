@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration coverage for commit certificates in permissioned and `NPoS` modes.
 
 use std::time::{Duration, Instant};

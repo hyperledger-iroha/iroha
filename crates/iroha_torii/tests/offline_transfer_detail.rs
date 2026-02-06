@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests for the `/v1/offline/transfers/{bundle_id_hex}` endpoint.
 #![cfg(feature = "app_api")]
 

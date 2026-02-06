@@ -37,6 +37,7 @@ fn escape_json_string(raw: &str) -> String {
 }
 
 type ParseResult<T> = Result<T, ParseError>;
+type ForEachMapBinding = (String, Option<String>, Expr, Option<usize>);
 
 #[derive(Default)]
 struct AccessHints {
@@ -1897,9 +1898,7 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
-    fn parse_for_each_map(
-        &mut self,
-    ) -> ParseResult<Option<(String, Option<String>, Expr, Option<usize>)>> {
+    fn parse_for_each_map(&mut self) -> ParseResult<Option<ForEachMapBinding>> {
         // Patterns: (k, v) in <expr>  OR  k in <expr>
         let save = self.pos;
         if self.peek(TokenKind::LParen) {

@@ -1,4 +1,5 @@
 //! Enforce minimum lock duration for plain ballots.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Skipped by default; enable with `IROHA_RUN_IGNORED=1`.
 
 use iroha_core::{

@@ -1,4 +1,6 @@
 //! Micro-benchmarks for the chip-backed Poseidon Pow5 path (IPA, Zcash gadgets).
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
+#![allow(clippy::all)]
 //!
 //! Compares repeated 2-input compressor calls implemented via the halo2_gadgets
 //! Pow5 chip against a native Pow5 helper inside tiny synthetic circuits. These

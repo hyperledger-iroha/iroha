@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration test scaffold for pipeline `BlockStatus::Rejected` events via Torii.
 //!
 //! This stays `#[ignore]` until a deterministic rejection trigger is wired into the

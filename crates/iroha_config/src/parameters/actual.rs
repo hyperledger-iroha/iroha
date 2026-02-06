@@ -3955,7 +3955,7 @@ impl SumeragiNposTimeoutOverrides {
             self.aggregator,
         ]
         .iter()
-        .any(|value| value.map_or(false, |value| !value.is_zero()))
+        .any(|value| value.is_some_and(|value| !value.is_zero()))
     }
 
     /// Apply overrides on top of the derived timeouts from `block_time`.

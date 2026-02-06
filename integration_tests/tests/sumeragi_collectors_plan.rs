@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Cross-crate regression tests for Sumeragi collector routing fairness.
 
 use iroha_config::parameters::actual::ConsensusMode;

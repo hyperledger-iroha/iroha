@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Validate Torii's account address handling against the shared compliance vectors.
 
 use std::{path::Path, str::FromStr};

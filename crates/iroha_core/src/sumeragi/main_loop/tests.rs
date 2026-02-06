@@ -1666,6 +1666,12 @@ struct TestActorHarness {
     key_pairs: Vec<KeyPair>,
 }
 
+impl Drop for TestActorHarness {
+    fn drop(&mut self) {
+        self.shutdown.send();
+    }
+}
+
 static TEST_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 struct TestTempDir {
@@ -6388,7 +6394,7 @@ async fn block_sync_update_reuses_cached_qc_when_validation_unavailable() {
 
     let roster_cache =
         roster_cache_for_state(actor.state.as_ref(), actor.config.npos.epoch_length_blocks);
-    let mut update = super::block_sync_update_with_roster(
+    let update = super::block_sync_update_with_roster(
         &block,
         actor.state.as_ref(),
         actor.kura.as_ref(),
@@ -40953,7 +40959,6 @@ async fn proposal_gas_budget_limits_fetch() {
 async fn proposal_scan_budget_tracks_multiplier() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da.enabled = false;
     consensus_cfg.block.proposal_queue_scan_multiplier = nonzero!(2_usize);
 
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
@@ -41354,6 +41359,14 @@ async fn on_block_commit_persists_new_epoch_seed_record() {
 async fn pacemaker_single_validator_seeds_new_view_from_precommit_qc() {
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
+
+    let committed_block = sample_block(1, 0, None);
+    actor
+        .kura
+        .store_block(committed_block.clone())
+        .expect("store committed block");
+    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+    state.push_block_hash_for_testing(committed_block.hash());
 
     let committed = actor.latest_committed_qc().expect("committed QC");
     let prevote_height = committed.height.saturating_add(1);
@@ -49880,7 +49893,6 @@ fn validate_block_for_voting_records_timings() {
 
 #[test]
 fn exec_roots_capture_fallback_uses_witness_snapshot() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
     let world = World::default();
     let kura = Arc::new(Kura::blank_kura_for_testing());
     let query = LiveQueryStore::start_test();
@@ -49890,6 +49902,7 @@ fn exec_roots_capture_fallback_uses_witness_snapshot() {
     let header = BlockHeader::new(nonzero!(2_u64), Some(genesis_hash), None, None, 0, 0);
     let block_hash = header.hash();
     let mut state_block = state.block(header);
+    let _guard = crate::sumeragi::witness::exec_witness_guard();
 
     crate::sumeragi::witness::start_block();
     let asset_def: AssetDefinitionId = "rose#wonderland"
@@ -59676,20 +59689,21 @@ async fn pending_rbc_slot_eviction_releases_block_payload_dedup() {
         bytes: vec![0x10, 0x20],
     };
 
-    let mut pending = PendingRbcMessages::new(Instant::now() - Duration::from_millis(10));
+    let stale_time = Instant::now() - Duration::from_millis(10);
+    let mut pending = PendingRbcMessages::new(stale_time);
     let max_bytes = 16 * 1024;
     let max_chunks = 4;
     assert!(
         pending
-            .push_ready_capped(ready.clone(), max_bytes, Instant::now())
+            .push_ready_capped(ready.clone(), max_bytes, stale_time)
             .0
     );
     assert!(
         pending
-            .push_deliver_capped(deliver.clone(), max_bytes, Instant::now())
+            .push_deliver_capped(deliver.clone(), max_bytes, stale_time)
             .0
     );
-    let _ = pending.push_chunk_capped(chunk.clone(), None, max_chunks, max_bytes, Instant::now());
+    let _ = pending.push_chunk_capped(chunk.clone(), None, max_chunks, max_bytes, stale_time);
     assert_eq!(pending.pending_chunks(), 1);
 
     let ready_key = crate::sumeragi::BlockPayloadDedupKey::RbcReady {

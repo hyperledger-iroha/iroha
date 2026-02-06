@@ -787,7 +787,7 @@ pub(crate) fn parse_account_literal_with_world(
 
     if let Some(rest) = strip_prefix_case_insensitive(trimmed, "opaque:") {
         let opaque = OpaqueAccountId::from_str(rest).ok()?;
-        let uaid = world.opaque_uaids().get(&opaque)?.clone();
+        let uaid = *world.opaque_uaids().get(&opaque)?;
         return world.uaid_accounts().get(&uaid).cloned();
     }
 
@@ -2412,7 +2412,8 @@ pub(crate) mod valid {
 
     /// Timing breakdown for block validation stages.
     #[derive(Debug, Clone, Copy, Default)]
-    pub(crate) struct ValidationTimings {
+    #[allow(clippy::struct_field_names)]
+    pub struct ValidationTimings {
         /// Elapsed milliseconds for stateless checks.
         pub(crate) stateless_ms: u64,
         /// Elapsed milliseconds spent in state-dependent stateless checks.
@@ -3801,7 +3802,7 @@ pub(crate) mod valid {
             )
         }
 
-        #[allow(clippy::too_many_arguments)]
+        #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
         fn validate_keep_voting_block_inner<'state>(
             mut block: SignedBlock,
             topology: &Topology,
@@ -3825,9 +3826,8 @@ pub(crate) mod valid {
                  execution_start: Option<Instant>| {
                     if let Some(timings) = timings.as_deref_mut() {
                         timings.stateless_ms = to_ms(stateless_elapsed);
-                        timings.execution_ms = execution_start
-                            .map(|start| to_ms(start.elapsed()))
-                            .unwrap_or(0);
+                        timings.execution_ms =
+                            execution_start.map_or(0, |start| to_ms(start.elapsed()));
                         timings.total_ms = to_ms(total_start.elapsed());
                     }
                 };
@@ -4258,7 +4258,10 @@ pub(crate) mod valid {
             clippy::too_many_arguments,
             clippy::too_many_lines,
             clippy::explicit_iter_loop,
-            clippy::collapsible_else_if
+            clippy::collapsible_else_if,
+            clippy::items_after_statements,
+            clippy::option_if_let_else,
+            clippy::manual_flatten
         )]
         fn validate_static_with_snapshot(
             block: &SignedBlock,
@@ -5200,7 +5203,14 @@ pub(crate) mod valid {
         /// Must be called with a **block that is _assumed_ to be valid**.
         /// When `skip_stateless_checks` is true, signature/limit validation is skipped under the
         /// assumption that the static snapshot validation already passed.
-        #[allow(clippy::too_many_lines, clippy::explicit_iter_loop)]
+        #[allow(
+            clippy::too_many_lines,
+            clippy::explicit_iter_loop,
+            clippy::option_if_let_else,
+            clippy::manual_flatten,
+            clippy::option_as_ref_cloned,
+            clippy::needless_option_as_deref
+        )]
         fn validate_and_record_transactions(
             block: &mut SignedBlock,
             state_block: &mut StateBlock<'_>,
@@ -7289,6 +7299,40 @@ pub(crate) mod valid {
                                     .map(|rm| rm.object.clone())
                             })
                     };
+                    let account_metadata_target = |instruction: &InstructionBox| {
+                        instruction
+                            .as_any()
+                            .downcast_ref::<SetKeyValueBox>()
+                            .and_then(|kv| match kv {
+                                SetKeyValueBox::Account(set) => Some(set.object.clone()),
+                                _ => None,
+                            })
+                            .or_else(|| {
+                                instruction
+                                    .as_any()
+                                    .downcast_ref::<iroha_data_model::isi::SetKeyValue<
+                                        iroha_data_model::account::Account,
+                                    >>()
+                                    .map(|set| set.object.clone())
+                            })
+                            .or_else(|| {
+                                instruction
+                                    .as_any()
+                                    .downcast_ref::<RemoveKeyValueBox>()
+                                    .and_then(|rm| match rm {
+                                        RemoveKeyValueBox::Account(rm) => Some(rm.object.clone()),
+                                        _ => None,
+                                    })
+                            })
+                            .or_else(|| {
+                                instruction
+                                    .as_any()
+                                    .downcast_ref::<iroha_data_model::isi::RemoveKeyValue<
+                                        iroha_data_model::account::Account,
+                                    >>()
+                                    .map(|rm| rm.object.clone())
+                            })
+                    };
                     let eval_detached = |p: &PreparedEntry| {
                         if let Some(Ok(ovl)) = overlays.get(p.idx) {
                             let mut delta = DetachedStateTransactionDelta::default();
@@ -7308,6 +7352,32 @@ pub(crate) mod valid {
                                                     TransactionRejectionReason::Validation(
                                                         iroha_data_model::ValidationFail::NotPermitted(
                                                             "Can't modify NFT from domain owned by another account"
+                                                                .to_owned(),
+                                                        ),
+                                                    ),
+                                                );
+                                                break;
+                                            }
+                                            Err(err) => {
+                                                reject = Some(
+                                                    TransactionRejectionReason::Validation(err),
+                                                );
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    if let Some(account_id) = account_metadata_target(instr) {
+                                        match delta.can_modify_account_metadata(
+                                            &state_block.world,
+                                            &p.authority,
+                                            &account_id,
+                                        ) {
+                                            Ok(true) => {}
+                                            Ok(false) => {
+                                                reject = Some(
+                                                    TransactionRejectionReason::Validation(
+                                                        iroha_data_model::ValidationFail::NotPermitted(
+                                                            "Can't set value to the metadata of another account"
                                                                 .to_owned(),
                                                         ),
                                                     ),
@@ -10070,48 +10140,52 @@ pub(crate) mod valid {
             };
 
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
-            let mut state_block = state.block(candidate_block.header());
-            let validate_result = ValidBlock::validate(
-                candidate_block.clone(),
-                &topology,
-                &state.chain_id.clone(),
-                &ALICE_ID,
-                &time_source,
-                &mut state_block,
-            )
-            .unpack(|_| {});
-            let err = match validate_result {
-                Ok(_) => panic!("empty block should be rejected"),
-                Err(err) => err,
-            };
-            assert!(matches!(err.1.as_ref(), BlockValidationError::EmptyBlock));
-
-            let mut state_block = state.block(candidate_block.header());
-            let events = std::cell::RefCell::new(Vec::new());
-            let validate_result = ValidBlock::validate_with_events(
-                candidate_block.clone(),
-                &topology,
-                &state.chain_id.clone(),
-                &ALICE_ID,
-                &time_source,
-                &mut state_block,
-                |event| {
-                    events.borrow_mut().push(event);
-                },
-            )
-            .unpack(|_| {});
-            let err = match validate_result {
-                Ok(_) => panic!("empty block should be rejected"),
-                Err(err) => err,
-            };
-            assert!(matches!(err.1.as_ref(), BlockValidationError::EmptyBlock));
-            assert!(events.borrow().iter().any(|event| {
-                matches!(
-                    event,
-                    PipelineEventBox::Block(block_event)
-                        if matches!(block_event.status, BlockStatus::Rejected(Reason::EmptyBlock))
+            {
+                let mut state_block = state.block(candidate_block.header());
+                let validate_result = ValidBlock::validate(
+                    candidate_block.clone(),
+                    &topology,
+                    &state.chain_id.clone(),
+                    &ALICE_ID,
+                    &time_source,
+                    &mut state_block,
                 )
-            }));
+                .unpack(|_| {});
+                let err = match validate_result {
+                    Ok(_) => panic!("empty block should be rejected"),
+                    Err(err) => err,
+                };
+                assert!(matches!(err.1.as_ref(), BlockValidationError::EmptyBlock));
+            }
+
+            {
+                let mut state_block = state.block(candidate_block.header());
+                let events = std::cell::RefCell::new(Vec::new());
+                let validate_result = ValidBlock::validate_with_events(
+                    candidate_block.clone(),
+                    &topology,
+                    &state.chain_id.clone(),
+                    &ALICE_ID,
+                    &time_source,
+                    &mut state_block,
+                    |event| {
+                        events.borrow_mut().push(event);
+                    },
+                )
+                .unpack(|_| {});
+                let err = match validate_result {
+                    Ok(_) => panic!("empty block should be rejected"),
+                    Err(err) => err,
+                };
+                assert!(matches!(err.1.as_ref(), BlockValidationError::EmptyBlock));
+                assert!(events.borrow().iter().any(|event| {
+                    matches!(
+                        event,
+                        PipelineEventBox::Block(block_event)
+                            if matches!(block_event.status, BlockStatus::Rejected(Reason::EmptyBlock))
+                    )
+                }));
+            }
 
             let mut voting_block: Option<super::super::VotingBlock> = None;
             let result = ValidBlock::validate_keep_voting_block(
@@ -10183,52 +10257,58 @@ pub(crate) mod valid {
             let (_validation_handle, validation_time_source) =
                 TimeSource::new_mock(signed_block.header().creation_time());
 
-            let mut state_block = state.block(signed_block.header());
-            let validate_result = ValidBlock::validate(
-                signed_block.clone(),
-                &topology,
-                &state.chain_id.clone(),
-                &ALICE_ID,
-                &validation_time_source,
-                &mut state_block,
-            )
-            .unpack(|_| {});
-            assert!(validate_result.is_ok(), "DA-only block should be accepted");
+            {
+                let mut state_block = state.block(signed_block.header());
+                ValidBlock::validate(
+                    signed_block.clone(),
+                    &topology,
+                    &state.chain_id.clone(),
+                    &ALICE_ID,
+                    &validation_time_source,
+                    &mut state_block,
+                )
+                .unpack(|_| {})
+                .expect("DA-only block should be accepted");
+            }
 
-            let mut state_block = state.block(signed_block.header());
-            let events = std::cell::RefCell::new(Vec::new());
-            let validate_result = ValidBlock::validate_with_events(
-                signed_block.clone(),
-                &topology,
-                &state.chain_id.clone(),
-                &ALICE_ID,
-                &validation_time_source,
-                &mut state_block,
-                |event| {
-                    events.borrow_mut().push(event);
-                },
-            )
-            .unpack(|_| {});
-            assert!(validate_result.is_ok(), "DA-only block should be accepted");
-            assert!(events.borrow().is_empty(), "no rejection events expected");
+            {
+                let mut state_block = state.block(signed_block.header());
+                let events = std::cell::RefCell::new(Vec::new());
+                ValidBlock::validate_with_events(
+                    signed_block.clone(),
+                    &topology,
+                    &state.chain_id.clone(),
+                    &ALICE_ID,
+                    &validation_time_source,
+                    &mut state_block,
+                    |event| {
+                        events.borrow_mut().push(event);
+                    },
+                )
+                .unpack(|_| {})
+                .expect("DA-only block should be accepted");
+                assert!(events.borrow().is_empty(), "no rejection events expected");
+            }
 
-            let mut voting_block: Option<super::super::VotingBlock> = None;
-            let result = ValidBlock::validate_keep_voting_block(
-                signed_block.clone(),
-                &topology,
-                &state.chain_id.clone(),
-                &ALICE_ID,
-                &validation_time_source,
-                &state,
-                &mut voting_block,
-                false,
-            )
-            .unpack(|_| {});
-            assert!(result.is_ok(), "DA-only block should be accepted");
+            {
+                let mut voting_block: Option<super::super::VotingBlock> = None;
+                ValidBlock::validate_keep_voting_block(
+                    signed_block.clone(),
+                    &topology,
+                    &state.chain_id.clone(),
+                    &ALICE_ID,
+                    &validation_time_source,
+                    &state,
+                    &mut voting_block,
+                    false,
+                )
+                .unpack(|_| {})
+                .expect("DA-only block should be accepted");
+            }
 
             let mut voting_block: Option<super::super::VotingBlock> = None;
             let mut events = Vec::new();
-            let result = ValidBlock::validate_keep_voting_block_with_events(
+            ValidBlock::validate_keep_voting_block_with_events(
                 signed_block,
                 &topology,
                 &state.chain_id.clone(),
@@ -10239,8 +10319,8 @@ pub(crate) mod valid {
                 false,
                 |event| events.push(event),
             )
-            .unpack(|_| {});
-            assert!(result.is_ok(), "DA-only block should be accepted");
+            .unpack(|_| {})
+            .expect("DA-only block should be accepted");
             assert!(events.is_empty(), "no rejection events expected");
         }
 

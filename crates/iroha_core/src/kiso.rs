@@ -293,6 +293,7 @@ impl Actor {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn apply_config_update(&mut self, dto: ConfigUpdateDTO) -> Result<(), Error> {
         let ConfigUpdateDTO {
             logger,

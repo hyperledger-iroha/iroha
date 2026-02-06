@@ -1,4 +1,5 @@
 //! Tests that ZK ISIs write metadata with a `proof_hash` field for auditability.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(all(feature = "zk-tests", feature = "halo2-dev-tests"))]
 
 use iroha_core::{

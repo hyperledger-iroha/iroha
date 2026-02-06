@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Verify that all peers in a seven-peer network maintain consistent asset balances with DA enabled.
 
 use std::{

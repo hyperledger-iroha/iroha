@@ -2833,6 +2833,11 @@ impl Kura {
     ///
     /// This updates the in-memory block list and prunes persisted storage when available.
     /// Heights are 1-based (genesis is height 1).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if height conversion fails, persisted block storage pruning fails, or
+    /// truncating the merge log fails.
     pub fn prune_to_height(&self, height: u64) -> Result<()> {
         let keep = usize::try_from(height)?;
         {
@@ -7048,7 +7053,7 @@ mod tests {
         assert!(index.is_evicted());
         assert!(da_path.exists(), "expected DA payload for block1");
         let da_path2 = {
-            let mut store = kura.block_store.lock();
+            let store = kura.block_store.lock();
             store.da_block_path(2)
         };
         assert!(da_path2.exists(), "expected DA payload for block2");

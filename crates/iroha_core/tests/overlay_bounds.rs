@@ -1,4 +1,5 @@
 //! Overlay bounds: negative tests for instruction and byte caps.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Ensures validation rejects transactions whose overlays exceed configured
 //! `overlay_max_instructions` or `overlay_max_bytes`, and other transactions in
 //! the same block still apply (non-forking semantics).

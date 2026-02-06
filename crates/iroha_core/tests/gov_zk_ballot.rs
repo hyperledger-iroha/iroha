@@ -1,4 +1,5 @@
 #![doc = "Governance ZK ballot basic test (requires explicit election creation)."]
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(all(feature = "zk-tests", feature = "halo2-dev-tests"))]
 #![cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 //! Governance ZK ballot basic test (requires explicit election creation).

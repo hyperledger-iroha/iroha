@@ -621,12 +621,12 @@ fn ensure_account_literal(literal: &str, field: &str, prefix: &str, errors: &mut
             "{prefix}: {field} `{literal}` must not contain whitespace"
         ));
     }
-    if let Some((head, tail)) = trimmed.split_once('@') {
-        if head.is_empty() || tail.is_empty() || trimmed.matches('@').count() != 1 {
-            errors.push(format!(
-                "{prefix}: {field} `{literal}` must be IH58/uaid/opaque or `<alias|public_key>@domain`"
-            ));
-        }
+    if let Some((head, tail)) = trimmed.split_once('@')
+        && (head.is_empty() || tail.is_empty() || trimmed.matches('@').count() != 1)
+    {
+        errors.push(format!(
+            "{prefix}: {field} `{literal}` must be IH58/uaid/opaque or `<alias|public_key>@domain`"
+        ));
     }
 }
 

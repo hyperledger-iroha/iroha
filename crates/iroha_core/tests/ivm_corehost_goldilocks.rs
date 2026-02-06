@@ -1,4 +1,5 @@
 //! Core host Halo2 verification tests covering the Goldilocks backend.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 #[cfg(feature = "goldilocks_backend")]
 mod goldilocks {

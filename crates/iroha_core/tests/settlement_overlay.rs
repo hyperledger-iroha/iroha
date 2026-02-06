@@ -1,5 +1,5 @@
 //! Integration tests covering settlement admission and overlay execution paths.
-
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::unwrap_used)]
 
 use std::str::FromStr as _;

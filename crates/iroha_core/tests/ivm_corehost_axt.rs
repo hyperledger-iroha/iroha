@@ -1,4 +1,5 @@
 //! Regression tests for mapping IVM core host APIs to AXT bindings.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::similar_names)]
 #![allow(clippy::too_many_lines)]
 

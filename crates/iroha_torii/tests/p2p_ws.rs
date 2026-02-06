@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Torii-level E2E test for the P2P WebSocket fallback route `/p2p`.
 //! Requires building with `--features iroha_p2p/p2p_ws`.
 

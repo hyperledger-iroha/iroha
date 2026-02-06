@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![doc = "Governance mode-mismatch and auto-close tests hosted in Torii crate (app-level).\nSkipped by default; enable with `IROHA_RUN_IGNORED=1`."]
 #![cfg(all(
     feature = "halo2-dev-tests",

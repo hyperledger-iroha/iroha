@@ -1,4 +1,5 @@
 //! Governance instruction validation tests.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::items_after_statements)]
 
 use core::convert::TryInto;

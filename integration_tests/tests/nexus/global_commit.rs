@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Regression tests for Nexus lane commitment fixtures.
 
 use std::{fs, path::PathBuf};

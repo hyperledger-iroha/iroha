@@ -343,6 +343,7 @@ public final class OfflineToriiClientTests {
     final OfflineWalletCertificateDraft draft =
         new OfflineWalletCertificateDraft(
             "alice@wonderland",
+            "alice@wonderland",
             allowance,
             "ed0120deadbeef",
             new byte[] {3, 4},

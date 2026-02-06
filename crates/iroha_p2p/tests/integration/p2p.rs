@@ -75,6 +75,20 @@ impl iroha_p2p::network::message::ClassifyTopic for ConsensusMessage {
     }
 }
 
+macro_rules! impl_decode_from_slice_via_canonical {
+    ($($ty:ty),+ $(,)?) => {
+        $(
+            impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
+                fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+                    norito::core::decode_field_canonical::<Self>(bytes)
+                }
+            }
+        )+
+    };
+}
+
+impl_decode_from_slice_via_canonical!(TestMessage, MultiTopic, ConsensusMessage);
+
 fn setup_logger() {
     test_logger();
 }

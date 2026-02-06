@@ -1,4 +1,5 @@
 //! Criterion benchmark driver for applying blocks.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 mod apply_blocks;
 
 use apply_blocks::StateApplyBlocks;

@@ -1,4 +1,6 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! `NPoS` election respects staking constraints and delays activation by finality margin.
+#![allow(clippy::too_many_lines)]
 
 use std::{
     str::FromStr,

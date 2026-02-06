@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Offline balance proof test utilities.
 #![allow(dead_code)]
 

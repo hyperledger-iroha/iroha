@@ -1,4 +1,5 @@
 #![doc = "ZK ballot lock creation with verified proofs (commit/root public inputs) and lock hints.\nSkipped by default; run with `IROHA_RUN_IGNORED=1`. Requires Halo2 dev tests."]
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "zk-tests")]
 #![cfg(feature = "halo2-dev-tests")]
 

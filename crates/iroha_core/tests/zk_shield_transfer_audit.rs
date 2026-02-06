@@ -1,4 +1,5 @@
 //! Tests audit metadata for Shield and `ZkTransfer` include roots and commitments.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(all(feature = "zk-tests", feature = "halo2-dev-tests"))]
 
 use std::str::FromStr;

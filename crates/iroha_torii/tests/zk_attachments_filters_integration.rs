@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests for /v1/zk/attachments filters and count.
 #![cfg(all(feature = "app_api", feature = "ws_integration_tests"))]
 #![allow(

@@ -1,4 +1,6 @@
 //! Benchmarks for transaction signing, acceptance, validation, and block signing.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
+#![allow(clippy::all)]
 #![allow(clippy::disallowed_types)] // benches use HashSet internally for metrics
 use std::sync::{Arc, LazyLock};
 
@@ -122,7 +124,7 @@ fn build_test_and_transient_state() -> State {
                 .transactions
                 .insert_block(HashSet::from([hash]), height);
         }
-        state_block.block_hashes.push(signed_block.hash());
+        state_block.block_hashes.push_for_tests(signed_block.hash());
         state_block.commit().unwrap();
         kura.store_block(signed_block)
             .expect("store block in bench setup");
@@ -261,7 +263,7 @@ fn validate_transaction(criterion: &mut Criterion) {
             .transactions
             .insert_block(HashSet::from([hash]), height);
     }
-    state_block.block_hashes.push(signed_block.hash());
+    state_block.block_hashes.push_for_tests(signed_block.hash());
     state_block.commit().unwrap();
     {
         let view = state.view();

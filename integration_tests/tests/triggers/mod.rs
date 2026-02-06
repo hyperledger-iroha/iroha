@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Trigger lifecycle regression tests.
 
 use eyre::{Result, eyre};

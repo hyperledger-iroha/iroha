@@ -1,4 +1,5 @@
 //! Enforce that provided `root_hint` values reference a recent Merkle root within
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! the configured window; reject stale/unknown roots.
 #![cfg(all(feature = "zk-tests", feature = "halo2-dev-tests"))]
 

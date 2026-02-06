@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Basic shape test for `/v1/sumeragi/status/sse`
 #![cfg(feature = "telemetry")]
 #![allow(unexpected_cfgs)]

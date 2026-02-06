@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Smoke tests for Torii NFT endpoints.
 #![cfg(feature = "app_api")]
 

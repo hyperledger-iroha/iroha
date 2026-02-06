@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests for the `/v1/offline/revocations{,/query}` endpoints.
 #![cfg(feature = "app_api")]
 
@@ -408,7 +409,7 @@ fn compressed_literal(account_id: &AccountId) -> String {
     account_id
         .to_account_address()
         .and_then(|address| address.to_compressed_sora())
-        .map_or_else(|_| account_id.to_string(), |compressed| compressed)
+        .unwrap_or_else(|_| account_id.to_string())
 }
 
 fn exists_filter(field: &str) -> Value {

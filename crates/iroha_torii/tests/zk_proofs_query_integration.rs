@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration test for /v1/proofs/query (signed core query wrapper).
 #![cfg(feature = "app_api")]
 

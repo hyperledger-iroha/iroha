@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Roadmap SN13-D coverage for Taikai DA ingest validation.
 
 use std::path::Path;

@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests for executor upgrade workflows and permissions.
 
 use executor_custom_data_model::{complex_isi::NumericQuery, permissions::CanControlDomainLives};

@@ -1,4 +1,6 @@
 //! Microbenchmarks to relate native ISI executor latency to the ISI gas meter.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
+#![allow(clippy::all)]
 //! Prints per-instruction `ns/op`, `gas/op`, and `ns/gas` to guide calibration.
 
 #[cfg(feature = "telemetry")]

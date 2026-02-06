@@ -61,6 +61,7 @@ unsafe extern "C" {
         seq_capacity: u32,
     ) -> i32;
 
+    #[cfg(test)]
     fn gpuzstd_metal_huff_encode(
         input: *const u8,
         input_len: usize,
@@ -71,6 +72,7 @@ unsafe extern "C" {
         lengths_len: usize,
     ) -> i32;
 
+    #[cfg(test)]
     fn gpuzstd_metal_huff_decode(
         encoded: *const u8,
         encoded_len: usize,
@@ -80,6 +82,7 @@ unsafe extern "C" {
         out_len: usize,
     ) -> i32;
 
+    #[cfg(test)]
     fn gpuzstd_metal_fse_encode(
         symbols: *const u16,
         symbols_len: usize,
@@ -92,6 +95,7 @@ unsafe extern "C" {
         out_len: *mut usize,
     ) -> i32;
 
+    #[cfg(test)]
     fn gpuzstd_metal_fse_decode(
         encoded: *const u8,
         encoded_len: usize,
@@ -109,7 +113,7 @@ fn gpu_sequences(input: &[u8]) -> Result<GpuSequences, i32> {
     if input.is_empty() {
         return Ok(GpuSequences::default());
     }
-    let chunk_count = (input.len() + CHUNK_SIZE as usize - 1) / CHUNK_SIZE as usize;
+    let chunk_count = input.len().div_ceil(CHUNK_SIZE as usize);
     if chunk_count == 0 {
         return Ok(GpuSequences::default());
     }
@@ -195,6 +199,11 @@ struct GpuSequences {
 }
 
 #[unsafe(no_mangle)]
+/// Compress `src` into `dst` using the Metal-assisted zstd path.
+///
+/// # Safety
+/// `src` must point to `src_len` readable bytes. `dst` must point to a writable buffer whose
+/// capacity is provided via `*dst_len`. `dst_len` must be non-null and writable.
 pub unsafe extern "C" fn gpu_zstd_compress(
     src: *const u8,
     src_len: usize,
@@ -237,6 +246,11 @@ pub unsafe extern "C" fn gpu_zstd_compress(
 }
 
 #[unsafe(no_mangle)]
+/// Decompress `src` into `dst` using the Metal-assisted zstd path.
+///
+/// # Safety
+/// `src` must point to `src_len` readable bytes. `dst` must point to a writable buffer whose
+/// capacity is provided via `*dst_len`. `dst_len` must be non-null and writable.
 pub unsafe extern "C" fn gpu_zstd_decompress(
     src: *const u8,
     src_len: usize,

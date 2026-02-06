@@ -1,4 +1,5 @@
 //! End-to-end regressions for domain-scoped implicit account receive.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 use std::{collections::BTreeMap, num::NonZeroU64};
 

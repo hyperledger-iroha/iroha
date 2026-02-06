@@ -1,4 +1,5 @@
 #![doc = "Gated test: `CastZkBallot` verifies via real VK path (tiny-add2inst public inputs) with dev toggle OFF.\nRequires Halo2 dev tests. Skipped by default; run with `IROHA_RUN_IGNORED=1`."]
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "zk-tests")]
 #![cfg(feature = "halo2-dev-tests")]
 

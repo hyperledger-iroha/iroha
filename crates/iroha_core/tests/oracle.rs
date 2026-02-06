@@ -1,4 +1,5 @@
 //! Oracle ISI integration tests.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 use std::{num::NonZeroU64, str::FromStr, sync::Arc};
 

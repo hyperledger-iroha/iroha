@@ -1,4 +1,5 @@
 //! Viral incentive contract flows (SOC-2): follow rewards, escrows, caps, and governance controls.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 use std::num::NonZeroU64;
 

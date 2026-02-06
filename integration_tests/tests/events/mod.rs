@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Event subsystem integration tests.
 
 /// Data event smoke tests.

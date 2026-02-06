@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Sumeragi telemetry soak exercising long-running epochs with adversarial collectors.
 //!
 //! This integration test spins up an `NPoS` network with redundant collector fan-out,

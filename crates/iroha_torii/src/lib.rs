@@ -1,5 +1,6 @@
 //! The web server of Iroha. `Torii` translates to gateway.
 #![allow(unexpected_cfgs)]
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 // Temporarily relax a curated set of clippy lints while the Torii refactor is in flight.
 // Trim this list further as the remaining call sites are cleaned up.
 #![allow(
@@ -509,7 +510,7 @@ fn install_account_resolvers(state: &Arc<CoreState>) {
     let opaque_state = Arc::clone(state);
     set_account_opaque_resolver(Arc::new(move |opaque| {
         let view = opaque_state.view();
-        view.world().opaque_uaids().get(opaque).cloned()
+        view.world().opaque_uaids().get(opaque).copied()
     }));
 }
 

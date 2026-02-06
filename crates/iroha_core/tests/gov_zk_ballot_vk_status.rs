@@ -1,4 +1,5 @@
 #![doc = "ZK ballot should reject when the configured verifying key is not Active."]
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "zk-tests")]
 //! ZK ballot should reject when the configured verifying key is not Active.
 

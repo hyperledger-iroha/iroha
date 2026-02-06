@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Verify that when `connect.enabled=false`, Torii hides WS/relay endpoints.
 
 use std::{collections::BTreeSet, path::PathBuf, sync::Arc};

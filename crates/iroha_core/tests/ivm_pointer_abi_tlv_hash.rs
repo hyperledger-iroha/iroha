@@ -1,4 +1,5 @@
 //! Validate TLV hash verification for pointer-ABI values (single ABI).
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 use iroha_core::smartcontracts::ivm::host::CoreHost;
 use iroha_data_model::prelude::*;

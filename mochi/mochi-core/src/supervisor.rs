@@ -5124,15 +5124,15 @@ JSON
         let log = fs::read_to_string(stub.log_path()).expect("read kagami log");
         let lines: Vec<_> = log.lines().collect();
         assert!(
-            lines.iter().any(|line| *line == "genesis"),
+            lines.contains(&"genesis"),
             "expected kagami genesis invocation, got `{log}`"
         );
         assert!(
-            lines.iter().any(|line| *line == "generate"),
+            lines.contains(&"generate"),
             "expected kagami generate invocation, got `{log}`"
         );
         assert!(
-            lines.iter().any(|line| *line == "verify"),
+            lines.contains(&"verify"),
             "expected kagami verify invocation, got `{log}`"
         );
     }

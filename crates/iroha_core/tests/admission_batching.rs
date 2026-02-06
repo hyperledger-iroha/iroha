@@ -1,4 +1,5 @@
 //! Admission-time deterministic batching tests for signature schemes.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::cast_possible_truncation)]
 //! These exercise grouping + bisection in `ValidBlock::validate_static` using
 //! one intentionally bad signature per batch.

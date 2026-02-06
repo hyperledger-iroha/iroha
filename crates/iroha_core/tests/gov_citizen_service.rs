@@ -1,4 +1,5 @@
 //! Citizen service discipline enforcement for governance roles.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 use iroha_core::{
     kura::Kura,

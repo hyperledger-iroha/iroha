@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Concurrency integration tests: verify that configured scheduler limits are applied.
 
 use std::fs;

@@ -1,4 +1,5 @@
 //! Governance VRF draw test: members + alternates ordering.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "bls")]
 
 use iroha_core::governance::{

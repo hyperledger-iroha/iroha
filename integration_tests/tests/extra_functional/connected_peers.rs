@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Connected peers count and reconfiguration under register/unregister.
 
 use std::{fmt::Write as _, time::Duration};

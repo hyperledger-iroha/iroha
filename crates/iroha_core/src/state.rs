@@ -650,6 +650,11 @@ impl<'a> BlockHashesBlock<'a> {
         self.pending.push(hash);
     }
 
+    /// Stage a new hash in tests/benches without exposing internals broadly.
+    pub fn push_for_tests(&mut self, hash: HashOf<BlockHeader>) {
+        self.push(hash);
+    }
+
     /// Commit all mutations performed in this block scope.
     pub(crate) fn commit(mut self) {
         let pending = std::mem::take(&mut self.pending);
@@ -7644,6 +7649,88 @@ impl DetachedStateTransactionDelta {
 
         Ok(false)
     }
+
+    /// Check whether `authority` may modify metadata for `account_id` under the current delta.
+    pub(crate) fn can_modify_account_metadata(
+        &self,
+        world: &impl WorldReadOnly,
+        authority: &AccountId,
+        account_id: &AccountId,
+    ) -> Result<bool, ValidationFail> {
+        if authority == account_id {
+            return Ok(true);
+        }
+
+        let domain_owner = match self.domain_owner_transfer.get(account_id.domain()) {
+            Some((_, to)) => to.clone(),
+            None => world
+                .domain(account_id.domain())
+                .map(|domain| domain.owned_by().clone())
+                .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?,
+        };
+
+        if &domain_owner == authority {
+            return Ok(true);
+        }
+
+        let target_perm: Permission =
+            iroha_executor_data_model::permission::account::CanModifyAccountMetadata {
+                account: account_id.clone(),
+            }
+            .into();
+        let direct_op = self
+            .perm_ops
+            .get(&(authority.clone(), target_perm.clone()))
+            .copied();
+
+        match direct_op {
+            Some(PermissionDeltaOp::Grant) => return Ok(true),
+            Some(PermissionDeltaOp::Revoke) => {}
+            None => {
+                let permissions = world
+                    .account_permissions_iter(authority)
+                    .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?;
+                if permissions.into_iter().any(|perm| perm == &target_perm) {
+                    return Ok(true);
+                }
+            }
+        }
+
+        let mut roles: BTreeSet<RoleId> = world.account_roles_iter(authority).cloned().collect();
+        for ((acc, role), op) in &self.role_ops {
+            if acc != authority {
+                continue;
+            }
+            match op {
+                RoleDeltaOp::Grant => {
+                    roles.insert(role.clone());
+                }
+                RoleDeltaOp::Revoke => {
+                    roles.remove(role);
+                }
+            }
+        }
+
+        for role in roles {
+            match self
+                .role_perm_ops
+                .get(&(role.clone(), target_perm.clone()))
+                .copied()
+            {
+                Some(PermissionDeltaOp::Grant) => return Ok(true),
+                Some(PermissionDeltaOp::Revoke) => continue,
+                None => {}
+            }
+            if let Some(role_def) = world.roles().get(&role) {
+                if role_def.permissions.iter().any(|perm| perm == &target_perm) {
+                    return Ok(true);
+                }
+            }
+        }
+
+        Ok(false)
+    }
+
     /// Record a parameter update to be applied at merge.
     pub fn set_parameter(&mut self, param: iroha_data_model::parameter::Parameter) {
         self.param_updates.push(param);
@@ -8555,6 +8642,14 @@ impl World {
             world.roles.insert(role.id.clone(), role);
         }
         world
+    }
+
+    /// Grant a role to an account in test/bench setup code.
+    ///
+    /// This directly mutates role assignments without emitting events.
+    pub fn grant_role_for_tests(&mut self, account: AccountId, role: RoleId) {
+        self.account_roles
+            .insert(RoleIdWithOwner::new(account, role), ());
     }
 
     fn rebuild_uaid_account_index(&mut self) -> Result<(), String> {
@@ -16533,11 +16628,8 @@ impl<'state> StateBlock<'state> {
                 zk_dedup: _,
             ..
         } = self;
-        let use_background = state_ref.tiered_snapshot_worker.enabled() && {
-            let backend = tiered_backend.lock();
-            backend.enabled() && backend.has_entries()
-        };
-        let (tiered_payload, tiered_diff) = if use_background {
+        let background_enabled = state_ref.tiered_snapshot_worker.enabled();
+        let (tiered_payload, tiered_diff) = if background_enabled {
             let payload = world.tiered_snapshot_payload();
             let diff = TieredSnapshotDiff::from(&payload);
             (Some(payload), Some(diff))
@@ -16627,6 +16719,10 @@ impl<'state> StateBlock<'state> {
         }
         // Snapshot after releasing the view lock to avoid lock-order inversion
         // between `view_lock` and `tiered_backend`.
+        let use_background = background_enabled && {
+            let backend = tiered_backend.lock();
+            backend.enabled() && backend.has_entries()
+        };
         #[cfg(feature = "telemetry")]
         let mut snapshot_recorded = false;
         let snapshot_err = if use_background {
@@ -23013,7 +23109,7 @@ mod tests {
     fn apply_lane_lifecycle_aborts_on_storage_error() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+        let state = State::new_for_testing(World::default(), kura, query_handle);
         state.nexus.write().enabled = true;
 
         let temp_dir = tempfile::tempdir().expect("temp dir");
@@ -29380,6 +29476,85 @@ mod tests {
     }
 
     #[test]
+    fn detached_can_modify_account_metadata_allows_domain_owner() {
+        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain = Domain::new(domain_id).build(&ALICE_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let bob_account = Account::new(BOB_ID.clone()).build(&BOB_ID);
+
+        let world = World::with([domain], [alice_account, bob_account], []);
+        let view = world.view();
+        let delta = DetachedStateTransactionDelta::default();
+
+        assert!(
+            delta
+                .can_modify_account_metadata(&view, &ALICE_ID, &BOB_ID)
+                .expect("permission check"),
+            "domain owner must be allowed to modify account metadata"
+        );
+    }
+
+    #[test]
+    fn detached_can_modify_account_metadata_respects_role_permission_ops() {
+        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain = Domain::new(domain_id).build(&BOB_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let bob_account = Account::new(BOB_ID.clone()).build(&BOB_ID);
+        let role_id: RoleId = "account_editor_perm".parse().expect("role id");
+        let role = Role::new(role_id.clone(), BOB_ID.clone()).build(&BOB_ID);
+
+        let mut world = World::with_assets_and_roles(
+            [domain],
+            [alice_account, bob_account],
+            [],
+            [],
+            [],
+            [role],
+        );
+        world
+            .account_roles
+            .insert(RoleIdWithOwner::new(ALICE_ID.clone(), role_id.clone()), ());
+        let view = world.view();
+        let perm: Permission =
+            iroha_executor_data_model::permission::account::CanModifyAccountMetadata {
+                account: BOB_ID.clone(),
+            }
+            .into();
+
+        let mut delta = DetachedStateTransactionDelta::default();
+        assert!(
+            !delta
+                .can_modify_account_metadata(&view, &ALICE_ID, &BOB_ID)
+                .expect("permission check"),
+            "role without permissions should deny account metadata edits"
+        );
+
+        delta.grant_role_permission(role_id.clone(), perm.clone());
+        assert!(
+            delta
+                .can_modify_account_metadata(&view, &ALICE_ID, &BOB_ID)
+                .expect("permission check"),
+            "role permission grant should allow account metadata edits"
+        );
+
+        delta.revoke_role_permission(role_id.clone(), perm.clone());
+        assert!(
+            !delta
+                .can_modify_account_metadata(&view, &ALICE_ID, &BOB_ID)
+                .expect("permission check"),
+            "role permission revoke should remove account metadata permission"
+        );
+
+        delta.grant_role_permission(role_id, perm);
+        assert!(
+            delta
+                .can_modify_account_metadata(&view, &ALICE_ID, &BOB_ID)
+                .expect("permission check"),
+            "last role permission grant should win over earlier revoke"
+        );
+    }
+
+    #[test]
     fn detached_can_modify_nft_metadata_respects_role_grant_order() {
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
         let domain = Domain::new(domain_id).build(&BOB_ID);
@@ -29502,8 +29677,6 @@ mod tests {
 
     #[test]
     fn detached_merge_rejects_permission_revoke_without_grant() {
-        use iroha_executor_data_model::permission::account::CanModifyAccountMetadata;
-
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
@@ -29515,10 +29688,11 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut state_block = state.block(header);
 
-        let perm: Permission = CanModifyAccountMetadata {
-            account: ALICE_ID.clone(),
-        }
-        .into();
+        let perm: Permission =
+            iroha_executor_data_model::permission::account::CanModifyAccountMetadata {
+                account: ALICE_ID.clone(),
+            }
+            .into();
         let mut delta = DetachedStateTransactionDelta::default();
         delta.revoke_permission(ALICE_ID.clone(), perm.clone());
         delta.grant_permission(ALICE_ID.clone(), perm);
@@ -31957,9 +32131,12 @@ mod tests {
         let _ = state_block3.apply_without_execution(&block3, Vec::new());
         state_block3.commit().unwrap();
 
-        let stats = state.trigger_ivm_cache.lock().stats();
-        assert!(stats.metadata_hits > 0, "expected metadata cache hits");
-        assert!(stats.runtime_hits > 0, "expected runtime cache hits");
+        let cache_stats = state.trigger_ivm_cache.lock().stats();
+        assert!(
+            cache_stats.metadata_hits > 0,
+            "expected metadata cache hits"
+        );
+        assert!(cache_stats.runtime_hits > 0, "expected runtime cache hits");
     }
 
     #[test]

@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Router-level tests for `GET /v1/sumeragi/vrf/penalties/{epoch}`.
 #![cfg(feature = "telemetry")]
 

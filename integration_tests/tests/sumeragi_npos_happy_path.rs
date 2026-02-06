@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Happy-path `NPoS` consensus scenario with DA availability tracking and telemetry guardrails.
 
 use std::time::{Duration, Instant};

@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Regression test ensuring `Torii::start` waits for shutdown.
 
 use std::{sync::Arc, time::Duration};

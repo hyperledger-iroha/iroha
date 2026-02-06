@@ -1,4 +1,5 @@
 #![doc = "ZK ballot nullifier derivation from (`chain_id`, `election_id`, commit).\nVerifies duplicate detection when the same proof is reused."]
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(all(feature = "zk-tests", feature = "halo2-dev-tests"))]
 #![cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #![allow(clippy::too_many_lines, clippy::collapsible_match)]

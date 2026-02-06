@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Tests that a restarted peer restores its state.
 use std::time::{Duration, Instant};
 

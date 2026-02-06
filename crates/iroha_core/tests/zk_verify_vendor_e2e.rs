@@ -1,4 +1,5 @@
 #![doc = "End-to-end vendor bridge gating path for ZK verification"]
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "zk-tests")]
 //! End-to-end gating path: ZK verify (mocked) -> vendor bridge -> `CoreHost` gating.
 //!

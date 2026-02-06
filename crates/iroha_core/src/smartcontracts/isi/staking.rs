@@ -2549,7 +2549,7 @@ mod tests {
 
     #[test]
     fn genesis_activation_allows_same_block() {
-        let mut state = setup_state();
+        let state = setup_state();
 
         let mut state_block = state.block(block_header_with_height(1));
         let mut stx = state_block.transaction();

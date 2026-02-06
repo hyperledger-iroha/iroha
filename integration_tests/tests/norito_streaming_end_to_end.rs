@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! End-to-end Norito Streaming harness covering manifest + chunk delivery.
 
 use std::{

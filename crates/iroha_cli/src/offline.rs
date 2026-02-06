@@ -1842,7 +1842,7 @@ mod tests {
         let asset = AssetId::new(definition, controller.clone());
         OfflineAllowanceRecord {
             certificate: OfflineWalletCertificate {
-                controller,
+                controller: controller.clone(),
                 operator: controller.clone(),
                 allowance: OfflineAllowanceCommitment {
                     asset,

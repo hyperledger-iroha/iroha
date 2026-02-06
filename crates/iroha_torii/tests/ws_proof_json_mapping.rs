@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Verify Proof events map to the expected JSON object (WS/SSE share mapper).
 #![cfg(feature = "app_api")]
 

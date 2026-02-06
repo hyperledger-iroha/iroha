@@ -1,4 +1,5 @@
 //! Auto-close approval test: decision at `h_end` without explicit finalize.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::too_many_lines, clippy::items_after_statements)]
 //! Skipped by default; enable with `IROHA_RUN_IGNORED=1`.
 

@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Adversarial relay and partition scenarios for unstable networks.
 
 use std::{

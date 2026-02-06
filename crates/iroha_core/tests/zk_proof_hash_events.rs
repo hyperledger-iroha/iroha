@@ -1,4 +1,5 @@
 //! Assert that `MetadataInserted` events for ZK ISIs carry the same JSON (including `proof_hash`).
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "zk-tests")]
 
 use std::borrow::Cow;

@@ -494,12 +494,8 @@ impl Actor {
                     || vote.epoch == committed_epoch;
                 if epoch_matches {
                     let view = self.state.view();
-                    let fallback = super::roster::derive_active_topology_for_mode(
-                        &view,
-                        self.common_config.trusted_peers.value(),
-                        self.common_config.peer.id(),
-                        consensus_mode,
-                    );
+                    let fallback =
+                        self.active_topology_with_genesis_fallback(&view, consensus_mode);
                     drop(view);
                     if !fallback.is_empty() {
                         topology_peers =
@@ -2112,12 +2108,7 @@ impl Actor {
         // For the active height, prefer the live roster derived from world keys so
         // membership changes (register/unregister) take effect immediately.
         let active_roster = if height <= committed_height.saturating_add(1) {
-            let active = super::roster::derive_active_topology_for_mode(
-                &view,
-                self.common_config.trusted_peers.value(),
-                self.common_config.peer.id(),
-                consensus_mode,
-            );
+            let active = self.active_topology_with_genesis_fallback(&view, consensus_mode);
             if active.is_empty() {
                 None
             } else {
@@ -2234,12 +2225,7 @@ impl Actor {
             return Vec::new();
         }
         let view = self.state.view();
-        let roster = super::roster::derive_active_topology_for_mode(
-            &view,
-            self.common_config.trusted_peers.value(),
-            self.common_config.peer.id(),
-            consensus_mode,
-        );
+        let roster = self.active_topology_with_genesis_fallback(&view, consensus_mode);
         drop(view);
         roster
     }
@@ -2308,12 +2294,7 @@ impl Actor {
             }
         }
         let view = self.state.view();
-        let active = super::roster::derive_active_topology_for_mode(
-            &view,
-            self.common_config.trusted_peers.value(),
-            self.common_config.peer.id(),
-            consensus_mode,
-        );
+        let active = self.active_topology_with_genesis_fallback(&view, consensus_mode);
         drop(view);
         if height <= committed_height.saturating_add(1) && !active.is_empty() {
             if let Some(selection) = roster_selection() {

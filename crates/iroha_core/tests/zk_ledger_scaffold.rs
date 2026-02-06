@@ -1,4 +1,5 @@
 //! Scaffold tests for zk asset handlers: `RegisterZkAsset`, Shield, `ZkTransfer`, Unshield.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(all(feature = "zk-tests", feature = "halo2-dev-tests"))]
 
 use std::{num::NonZeroU64, str::FromStr, sync::LazyLock};

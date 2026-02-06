@@ -1,4 +1,5 @@
 #![doc = "ZK lane reporting: background verification emits a non-forking pipeline warning."]
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(all(feature = "zk-tests", feature = "halo2-dev-tests"))]
 //! ZK lane reporting: background verification emits a non-forking pipeline warning.
 

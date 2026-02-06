@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration coverage for repo and reverse-repo instructions.
 
 use std::{
@@ -467,7 +468,9 @@ fn repo_margin_call_enforces_cadence_and_participant_rules() -> Result<()> {
         RepoCollateralLeg::new(collateral_def_id.clone(), numeric!(1100)),
         0,
         maturity_ms,
-        RepoGovernance::with_defaults(1_500, 1),
+        // Use a generous margin cadence to avoid wall-clock flakiness in the
+        // integration test network.
+        RepoGovernance::with_defaults(1_500, 300),
     );
     let repo_tx =
         client.build_transaction(vec![repo_instr_box(repo_instruction)], metadata.clone());

@@ -51,7 +51,7 @@ impl Error for BytecodeAnalysisError {
 pub fn analyze_bytecode(bytes: &[u8]) -> Result<BytecodeAnalysis, BytecodeAnalysisError> {
     let parsed = ProgramMetadata::parse(bytes).map_err(BytecodeAnalysisError::Metadata)?;
     let code = &bytes[parsed.code_offset..];
-    if code.len() % 4 != 0 {
+    if !code.len().is_multiple_of(4) {
         return Err(BytecodeAnalysisError::Decode(VMError::DecodeError));
     }
     let mut findings = Vec::new();

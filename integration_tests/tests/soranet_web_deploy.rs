@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Deploy a static HTML page to `SoraFS` storage, verify fetch, and derive public
 //! DNS settings (including delegation placeholders) for a regular internet zone
 //! pointing at the `SoraDNS` gateway.

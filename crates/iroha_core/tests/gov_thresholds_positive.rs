@@ -1,4 +1,5 @@
 //! Positive-path threshold test: approvals meet ratio and turnout.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Skipped by default; enable with `IROHA_RUN_IGNORED=1`.
 #![allow(clippy::items_after_statements)]
 

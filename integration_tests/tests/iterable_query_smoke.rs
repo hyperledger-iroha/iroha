@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Torii iterable queries smoke test: ensure genesis assets are discoverable
 //! and batching works end-to-end via the HTTP `/query` path.
 

@@ -1,4 +1,5 @@
 #![doc = "Native IPA verifier (no external halo2) end-to-end tests."]
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "zk-tests")]
 //! Native IPA verifier (no external halo2) end-to-end tests.
 

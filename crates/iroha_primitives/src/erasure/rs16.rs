@@ -468,7 +468,7 @@ mod neon {
 
     use super::gf_mul;
 
-    /// NEON path that vectorizes the XOR accumulation and gf_mul operations.
+    /// NEON path that vectorizes the XOR accumulation and `gf_mul` operations.
     #[allow(unsafe_code)]
     #[target_feature(enable = "neon")]
     pub(super) unsafe fn mul_add_row_neon(coef: u16, data_row: &[u16], out: &mut [u16]) {

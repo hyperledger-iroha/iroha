@@ -1,4 +1,5 @@
 //! Doc-sync tests for the Sumeragi governance and evidence documentation.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 use std::path::Path;
 

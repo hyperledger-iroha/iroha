@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Router-level test for GET /v1/sumeragi/qc
 #![allow(clippy::redundant_closure_for_method_calls)]
 #![cfg(feature = "telemetry")]
