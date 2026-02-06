@@ -1666,6 +1666,12 @@ struct TestActorHarness {
     key_pairs: Vec<KeyPair>,
 }
 
+impl Drop for TestActorHarness {
+    fn drop(&mut self) {
+        self.shutdown.send();
+    }
+}
+
 static TEST_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 struct TestTempDir {
