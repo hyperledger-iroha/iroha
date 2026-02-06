@@ -4,6 +4,7 @@
 //! - Stores attachments (proof envelopes or JSON DTOs) under `./storage/torii/zk_attachments/`.
 //!   Base directory is configured via `torii.data_dir`; tests may use `data_dir::OverrideGuard`.
 //! - Deterministic id: Blake2b-32 of the sanitized request bytes (lowercase hex).
+//! - Multi-tenant: attachments are isolated per tenant (API token when enforced, otherwise remote IP).
 //! - Endpoints:
 //!   - POST `/v1/zk/attachments` – store attachment, returns metadata `{ id, size, content_type, created_ms }`.
 //!   - GET  `/v1/zk/attachments` – list metadata for stored attachments.
@@ -15,6 +16,7 @@
 use std::{
     env, fs,
     io::{Read as _, Write as _},
+    net::IpAddr,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{OnceLock, mpsc},
@@ -36,8 +38,8 @@ use crate::{NoritoQuery, routing::MaybeTelemetry, utils::NORITO_MIME_TYPE};
 const MAX_ATTACHMENT_BYTES_FALLBACK: usize = 4 * 1024 * 1024; // fallback 4 MiB
 const ATTACHMENT_TTL_SECS_FALLBACK: u64 = 7 * 24 * 60 * 60; // fallback 7 days
 const GC_INTERVAL_SECS: u64 = 60; // run every minute
-const DEFAULT_TENANT: &str = "anon";
 const ATTACHMENT_ID_HEX_LEN: usize = 64;
+const TENANT_KEY_HEX_LEN: usize = 64;
 const ZK1_MIME_TYPE: &str = "application/x-zk1";
 const OCTET_STREAM_MIME_TYPE: &str = "application/octet-stream";
 const JSON_MIME_TYPE: &str = "application/json";
@@ -45,6 +47,36 @@ const TEXT_JSON_MIME_TYPE: &str = "text/json";
 const ATTACHMENT_SANITIZER_ENV: &str = "IROHA_ATTACHMENT_SANITIZER";
 const ATTACHMENT_SANITIZER_MAX_INPUT_ENV: &str = "IROHA_ATTACHMENT_SANITIZER_MAX_INPUT_BYTES";
 const SANITIZER_POLL_INTERVAL_MS: u64 = 5;
+
+/// Tenant namespace for the attachments store.
+///
+/// This is a stable, opaque identifier (64-hex) derived from either:
+/// - the validated API token (when `torii.require_api_token` is enabled), or
+/// - the trusted remote IP injected by middleware (`x-iroha-remote-addr`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttachmentTenant(String);
+
+impl AttachmentTenant {
+    /// Derive a tenant key from a validated API token.
+    pub fn from_api_token(token: &str) -> Self {
+        Self(hash_identity_hex("token", token))
+    }
+
+    /// Derive a tenant key from a trusted remote IP address.
+    pub fn from_remote_ip(ip: IpAddr) -> Self {
+        Self(hash_identity_hex("ip", &ip.to_string()))
+    }
+
+    /// Tenant used when neither token nor remote address is available.
+    pub fn anonymous() -> Self {
+        Self(hash_identity_hex("anon", "anon"))
+    }
+
+    /// Return the stable tenant key (lowercase 64-hex).
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+}
 
 #[derive(
     Debug,
@@ -142,32 +174,67 @@ pub(crate) fn base_dir() -> PathBuf {
     crate::data_dir::base_dir()
 }
 
-fn attachments_dir() -> PathBuf {
+fn attachments_root_dir() -> PathBuf {
     base_dir().join("zk_attachments")
 }
 
-fn ensure_dirs() {
+fn attachments_dir(tenant: &AttachmentTenant) -> PathBuf {
+    attachments_root_dir().join(tenant.as_str())
+}
+
+fn ensure_root_dir() {
     if cfg!(test) {
-        let _ = fs::create_dir_all(attachments_dir());
+        let _ = fs::create_dir_all(attachments_root_dir());
         return;
     }
     static INIT: OnceLock<()> = OnceLock::new();
     INIT.get_or_init(|| {
-        let _ = fs::create_dir_all(attachments_dir());
+        let _ = fs::create_dir_all(attachments_root_dir());
     });
 }
 
-fn meta_path(id: &str) -> PathBuf {
-    attachments_dir().join(format!("{}.json", id))
+fn ensure_dirs(tenant: &AttachmentTenant) {
+    ensure_root_dir();
+    let _ = fs::create_dir_all(attachments_dir(tenant));
 }
 
-fn bin_path(id: &str) -> PathBuf {
-    attachments_dir().join(format!("{}.bin", id))
+fn meta_path(tenant: &AttachmentTenant, id: &str) -> PathBuf {
+    attachments_dir(tenant).join(format!("{}.json", id))
+}
+
+fn bin_path(tenant: &AttachmentTenant, id: &str) -> PathBuf {
+    attachments_dir(tenant).join(format!("{}.bin", id))
+}
+
+// Legacy flat layout (pre multi-tenant): `<root>/<id>.{json,bin}`.
+fn meta_path_legacy(id: &str) -> PathBuf {
+    attachments_root_dir().join(format!("{}.json", id))
+}
+
+fn bin_path_legacy(id: &str) -> PathBuf {
+    attachments_root_dir().join(format!("{}.bin", id))
+}
+
+fn load_meta_legacy(id: &str) -> Option<AttachmentMeta> {
+    let id = sanitize_attachment_id(id)?;
+    let path = meta_path_legacy(&id);
+    let mut f = fs::File::open(path).ok()?;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).ok()?;
+    let s = std::str::from_utf8(&buf).ok()?;
+    json::from_json(s).ok()
+}
+
+fn delete_attachment_files_legacy(id: &str) {
+    if let Some(clean) = sanitize_attachment_id(id) {
+        let _ = fs::remove_file(meta_path_legacy(&clean));
+        let _ = fs::remove_file(bin_path_legacy(&clean));
+    }
 }
 
 /// Initialize on-disk directories for attachments storage.
 pub fn init_persistence() {
-    ensure_dirs();
+    ensure_root_dir();
 }
 
 fn now_ms() -> u64 {
@@ -177,9 +244,9 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-fn list_all_ids() -> Vec<String> {
+fn list_all_ids(tenant: &AttachmentTenant) -> Vec<String> {
     let mut ids = Vec::new();
-    if let Ok(rd) = fs::read_dir(attachments_dir()) {
+    if let Ok(rd) = fs::read_dir(attachments_dir(tenant)) {
         for e in rd.flatten() {
             if let Some(name) = e.file_name().to_str() {
                 if let Some(id) = name.strip_suffix(".json") {
@@ -193,9 +260,9 @@ fn list_all_ids() -> Vec<String> {
     ids
 }
 
-fn load_meta(id: &str) -> Option<AttachmentMeta> {
+fn load_meta(tenant: &AttachmentTenant, id: &str) -> Option<AttachmentMeta> {
     let id = sanitize_attachment_id(id)?;
-    let path = meta_path(&id);
+    let path = meta_path(tenant, &id);
     let mut f = fs::File::open(path).ok()?;
     let mut buf = Vec::new();
     f.read_to_end(&mut buf).ok()?;
@@ -203,9 +270,9 @@ fn load_meta(id: &str) -> Option<AttachmentMeta> {
     json::from_json(s).ok()
 }
 
-fn save_meta(meta: &AttachmentMeta) -> std::io::Result<()> {
-    let path = meta_path(&meta.id);
-    ensure_dirs();
+fn save_meta(tenant: &AttachmentTenant, meta: &AttachmentMeta) -> std::io::Result<()> {
+    let path = meta_path(tenant, &meta.id);
+    ensure_dirs(tenant);
     let tmp_dir = path.parent().unwrap_or_else(|| Path::new("."));
     let mut tmp = tempfile::NamedTempFile::new_in(tmp_dir)?;
     let body = json::to_json_pretty(meta).unwrap_or_else(|_| "{}".into());
@@ -214,9 +281,9 @@ fn save_meta(meta: &AttachmentMeta) -> std::io::Result<()> {
     tmp.persist(&path).map(|_| ()).map_err(|e| e.error)
 }
 
-fn persist_body(id: &str, body: &[u8]) -> std::io::Result<()> {
-    let path = bin_path(id);
-    ensure_dirs();
+fn persist_body(tenant: &AttachmentTenant, id: &str, body: &[u8]) -> std::io::Result<()> {
+    let path = bin_path(tenant, id);
+    ensure_dirs(tenant);
     let tmp_dir = path.parent().unwrap_or_else(|| Path::new("."));
     let mut tmp = tempfile::NamedTempFile::new_in(tmp_dir)?;
     tmp.write_all(body)?;
@@ -224,38 +291,32 @@ fn persist_body(id: &str, body: &[u8]) -> std::io::Result<()> {
     tmp.persist(&path).map(|_| ()).map_err(|e| e.error)
 }
 
-fn delete_attachment_files(id: &str) {
+fn delete_attachment_files(tenant: &AttachmentTenant, id: &str) {
     if let Some(clean) = sanitize_attachment_id(id) {
-        let _ = fs::remove_file(meta_path(&clean));
-        let _ = fs::remove_file(bin_path(&clean));
+        let _ = fs::remove_file(meta_path(tenant, &clean));
+        let _ = fs::remove_file(bin_path(tenant, &clean));
     }
 }
 
-fn tenant_key_from_headers(headers: &axum::http::HeaderMap) -> String {
-    if let Some(token) = headers.get("x-api-token").and_then(|v| v.to_str().ok()) {
-        return hash_identity("token", token);
-    }
-    if let Some(auth) = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-    {
-        return hash_identity("auth", auth);
-    }
-    DEFAULT_TENANT.to_string()
-}
-
-fn hash_identity(label: &str, value: &str) -> String {
+fn hash_identity_hex(label: &str, value: &str) -> String {
     let mut buf = Vec::with_capacity(label.len() + 1 + value.len());
     buf.extend_from_slice(label.as_bytes());
     buf.push(b'|');
     buf.extend_from_slice(value.as_bytes());
     let hash = iroha_crypto::Hash::new(&buf);
     let digest: [u8; 32] = hash.into();
-    format!("{label}:{}", hex::encode::<[u8; 32]>(digest))
+    hex::encode::<[u8; 32]>(digest)
 }
 
-fn meta_tenant(meta: &AttachmentMeta) -> &str {
-    meta.tenant.as_deref().unwrap_or(DEFAULT_TENANT)
+fn sanitize_tenant_key(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.len() != TENANT_KEY_HEX_LEN {
+        return None;
+    }
+    if trimmed.bytes().any(|b| !b.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(trimmed.to_ascii_lowercase())
 }
 
 fn sanitize_attachment_id(raw: &str) -> Option<String> {
@@ -717,109 +778,120 @@ fn run_sanitizer_subprocess(
             format!("attachment sanitizer spawn failed: {err}"),
         )
     })?;
-    {
-        let mut stdin = child.stdin.take().ok_or_else(|| {
+    let result = (|| -> Result<SanitizerOutcome, SanitizeError> {
+        {
+            let mut stdin = child.stdin.take().ok_or_else(|| {
+                SanitizeError::new(
+                    SanitizeRejectReason::Sandbox,
+                    "attachment sanitizer stdin unavailable",
+                )
+            })?;
+            stdin.write_all(&request_bytes).map_err(|err| {
+                SanitizeError::new(
+                    SanitizeRejectReason::Sandbox,
+                    format!("attachment sanitizer write failed: {err}"),
+                )
+            })?;
+        }
+        let mut stdout = child.stdout.take().ok_or_else(|| {
             SanitizeError::new(
                 SanitizeRejectReason::Sandbox,
-                "attachment sanitizer stdin unavailable",
+                "attachment sanitizer stdout unavailable",
             )
         })?;
-        stdin.write_all(&request_bytes).map_err(|err| {
-            SanitizeError::new(
-                SanitizeRejectReason::Sandbox,
-                format!("attachment sanitizer write failed: {err}"),
-            )
-        })?;
-    }
-    let mut stdout = child.stdout.take().ok_or_else(|| {
-        SanitizeError::new(
-            SanitizeRejectReason::Sandbox,
-            "attachment sanitizer stdout unavailable",
-        )
-    })?;
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        let mut buf = Vec::new();
-        let result = stdout.read_to_end(&mut buf).map(|_| buf);
-        let _ = tx.send(result);
-    });
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let mut buf = Vec::new();
+            let result = stdout.read_to_end(&mut buf).map(|_| buf);
+            let _ = tx.send(result);
+        });
 
-    let deadline = Instant::now() + timeout;
-    loop {
-        let Some(status) = child.try_wait().map_err(|err| {
-            SanitizeError::new(
-                SanitizeRejectReason::Sandbox,
-                format!("attachment sanitizer wait failed: {err}"),
-            )
-        })?
-        else {
-            if Instant::now() >= deadline {
-                let _ = child.kill();
+        let deadline = Instant::now() + timeout;
+        loop {
+            let Some(status) = child.try_wait().map_err(|err| {
+                SanitizeError::new(
+                    SanitizeRejectReason::Sandbox,
+                    format!("attachment sanitizer wait failed: {err}"),
+                )
+            })?
+            else {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    return Err(SanitizeError::new(
+                        SanitizeRejectReason::Sandbox,
+                        "attachment sanitize timeout exceeded",
+                    ));
+                }
+                thread::sleep(Duration::from_millis(SANITIZER_POLL_INTERVAL_MS));
+                continue;
+            };
+            if !status.success() {
                 return Err(SanitizeError::new(
                     SanitizeRejectReason::Sandbox,
-                    "attachment sanitize timeout exceeded",
+                    format!("attachment sanitizer exited with {status}"),
                 ));
             }
-            thread::sleep(Duration::from_millis(SANITIZER_POLL_INTERVAL_MS));
-            continue;
-        };
-        if !status.success() {
-            return Err(SanitizeError::new(
-                SanitizeRejectReason::Sandbox,
-                format!("attachment sanitizer exited with {status}"),
-            ));
+            break;
         }
-        break;
+
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let stdout_bytes = rx
+            .recv_timeout(remaining)
+            .map_err(|_| {
+                SanitizeError::new(
+                    SanitizeRejectReason::Sandbox,
+                    "attachment sanitizer output timeout exceeded",
+                )
+            })?
+            .map_err(|err| {
+                SanitizeError::new(
+                    SanitizeRejectReason::Sandbox,
+                    format!("attachment sanitizer stdout read failed: {err}"),
+                )
+            })?;
+        let archived = norito::from_bytes::<SanitizerResponse>(&stdout_bytes).map_err(|err| {
+            SanitizeError::new(
+                SanitizeRejectReason::Sandbox,
+                format!("attachment sanitizer response decode failed: {err}"),
+            )
+        })?;
+        let response: SanitizerResponse = norito_core::NoritoDeserialize::deserialize(archived);
+        if response.ok {
+            let summary = response.summary.ok_or_else(|| {
+                SanitizeError::new(
+                    SanitizeRejectReason::Sandbox,
+                    "attachment sanitizer response missing summary",
+                )
+            })?;
+            let sanitized_body = response.sanitized_body.ok_or_else(|| {
+                SanitizeError::new(
+                    SanitizeRejectReason::Sandbox,
+                    "attachment sanitizer response missing body",
+                )
+            })?;
+            Ok(SanitizerOutcome {
+                summary,
+                sanitized_body,
+            })
+        } else {
+            let wire = response.error.ok_or_else(|| {
+                SanitizeError::new(
+                    SanitizeRejectReason::Sandbox,
+                    "attachment sanitizer response missing error",
+                )
+            })?;
+            Err(SanitizeError::from_wire(wire))
+        }
+    })();
+
+    if result.is_err() {
+        // Best-effort cleanup. If the sanitizer is still running (e.g. timeout),
+        // ensure we kill and reap it to avoid leaking a zombie process.
+        let _ = child.kill();
+        let _ = child.wait();
     }
 
-    let remaining = deadline.saturating_duration_since(Instant::now());
-    let stdout_bytes = rx
-        .recv_timeout(remaining)
-        .map_err(|_| {
-            SanitizeError::new(
-                SanitizeRejectReason::Sandbox,
-                "attachment sanitizer output timeout exceeded",
-            )
-        })?
-        .map_err(|err| {
-            SanitizeError::new(
-                SanitizeRejectReason::Sandbox,
-                format!("attachment sanitizer stdout read failed: {err}"),
-            )
-        })?;
-    let archived = norito::from_bytes::<SanitizerResponse>(&stdout_bytes).map_err(|err| {
-        SanitizeError::new(
-            SanitizeRejectReason::Sandbox,
-            format!("attachment sanitizer response decode failed: {err}"),
-        )
-    })?;
-    let response: SanitizerResponse = norito_core::NoritoDeserialize::deserialize(archived);
-    if response.ok {
-        let summary = response.summary.ok_or_else(|| {
-            SanitizeError::new(
-                SanitizeRejectReason::Sandbox,
-                "attachment sanitizer response missing summary",
-            )
-        })?;
-        let sanitized_body = response.sanitized_body.ok_or_else(|| {
-            SanitizeError::new(
-                SanitizeRejectReason::Sandbox,
-                "attachment sanitizer response missing body",
-            )
-        })?;
-        Ok(SanitizerOutcome {
-            summary,
-            sanitized_body,
-        })
-    } else {
-        let wire = response.error.ok_or_else(|| {
-            SanitizeError::new(
-                SanitizeRejectReason::Sandbox,
-                "attachment sanitizer response missing error",
-            )
-        })?;
-        Err(SanitizeError::from_wire(wire))
-    }
+    result
 }
 
 fn sanitizer_executable() -> Result<PathBuf, SanitizeError> {
@@ -843,17 +915,16 @@ fn sanitizer_executable_with_override(
     })
 }
 
-fn enforce_per_tenant_quota(tenant: &str, incoming_size: u64) -> bool {
+fn enforce_per_tenant_quota(tenant: &AttachmentTenant, incoming_size: u64) -> bool {
     let max_count_raw = per_tenant_max_count_cfg();
     let max_bytes_raw = per_tenant_max_bytes_cfg();
     if max_count_raw == 0 && max_bytes_raw == 0 {
         return true;
     }
 
-    let mut metas: Vec<AttachmentMeta> = list_all_ids()
+    let mut metas: Vec<AttachmentMeta> = list_all_ids(tenant)
         .into_iter()
-        .filter_map(|id| load_meta(&id))
-        .filter(|meta| meta_tenant(meta) == tenant)
+        .filter_map(|id| load_meta(tenant, &id))
         .collect();
     metas.sort_by(|a, b| {
         a.created_ms
@@ -888,7 +959,7 @@ fn enforce_per_tenant_quota(tenant: &str, incoming_size: u64) -> bool {
 
     if count_after_add > max_count || total_bytes.saturating_add(incoming_size) > max_bytes {
         warn!(
-            %tenant,
+            tenant = tenant.as_str(),
             max_count,
             max_bytes,
             current_count = metas.len(),
@@ -900,11 +971,11 @@ fn enforce_per_tenant_quota(tenant: &str, incoming_size: u64) -> bool {
     }
 
     for id in removed_ids.iter() {
-        delete_attachment_files(id);
+        delete_attachment_files(tenant, id);
     }
     if !removed_ids.is_empty() {
         info!(
-            %tenant,
+            tenant = tenant.as_str(),
             removed = removed_ids.len(),
             max_count,
             max_bytes,
@@ -919,6 +990,7 @@ fn enforce_per_tenant_quota(tenant: &str, incoming_size: u64) -> bool {
 
 /// POST /v1/zk/attachments — store an attachment and return its metadata.
 pub async fn handle_post_attachment(
+    tenant: AttachmentTenant,
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
@@ -930,7 +1002,6 @@ pub async fn handle_post_attachment(
         )
             .into_response();
     }
-    let tenant_key = tenant_key_from_headers(&headers);
     let raw_hash = {
         let h = iroha_crypto::Hash::new(&body);
         hex::encode::<[u8; 32]>(h.into())
@@ -969,7 +1040,7 @@ pub async fn handle_post_attachment(
     let per_tenant_max_bytes = per_tenant_max_bytes_cfg();
     if per_tenant_max_bytes > 0 && stored_size > per_tenant_max_bytes {
         warn!(
-            tenant = %tenant_key,
+            tenant = tenant.as_str(),
             limit_bytes = per_tenant_max_bytes,
             body_bytes = stored_size,
             "rejecting attachment: exceeds per-tenant byte cap"
@@ -988,9 +1059,9 @@ pub async fn handle_post_attachment(
         hex::encode::<[u8; 32]>(h.into())
     };
     let _guard = quota_lock().lock().await;
-    if !enforce_per_tenant_quota(&tenant_key, stored_size) {
+    if !enforce_per_tenant_quota(&tenant, stored_size) {
         warn!(
-            tenant = %tenant_key,
+            tenant = tenant.as_str(),
             body_bytes = stored_size,
             "rejecting attachment: per-tenant quota exceeded"
         );
@@ -1010,7 +1081,7 @@ pub async fn handle_post_attachment(
         content_type: sanitized_summary.sniffed_type.clone(),
         size: stored_size,
         created_ms: now_ms(),
-        tenant: Some(tenant_key),
+        tenant: Some(tenant.as_str().to_string()),
         provenance: Some(AttachmentProvenance {
             declared_type,
             sniffed_type: sanitized_summary.sniffed_type,
@@ -1023,16 +1094,16 @@ pub async fn handle_post_attachment(
             },
         }),
     };
-    if let Err(e) = persist_body(&id, &sanitized_body) {
+    if let Err(e) = persist_body(&tenant, &id, &sanitized_body) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("failed to persist body: {e}"),
         )
             .into_response();
     }
-    if let Err(e) = save_meta(&meta) {
+    if let Err(e) = save_meta(&tenant, &meta) {
         // Rollback body if meta fails
-        delete_attachment_files(&id);
+        delete_attachment_files(&tenant, &id);
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("failed to persist metadata: {e}"),
@@ -1049,9 +1120,8 @@ pub async fn handle_post_attachment(
 }
 
 /// GET /v1/zk/attachments — list stored attachments metadata.
-pub async fn handle_list_attachments() -> impl IntoResponse {
-    // Unfiltered list for the default endpoint.
-    handle_list_attachments_filtered(NoritoQuery(AttachmentListQuery::default())).await
+pub async fn handle_list_attachments(tenant: AttachmentTenant) -> impl IntoResponse {
+    handle_list_attachments_filtered(tenant, NoritoQuery(AttachmentListQuery::default())).await
 }
 
 #[derive(
@@ -1081,6 +1151,7 @@ pub struct AttachmentListQuery {
 
 /// GET /v1/zk/attachments with filters
 pub async fn handle_list_attachments_filtered(
+    tenant: AttachmentTenant,
     NoritoQuery(q): NoritoQuery<AttachmentListQuery>,
 ) -> impl IntoResponse {
     let mut metas: Vec<AttachmentMeta> = Vec::new();
@@ -1092,12 +1163,12 @@ pub async fn handle_list_attachments_filtered(
             )
                 .into_response();
         };
-        if let Some(m) = load_meta(&clean) {
+        if let Some(m) = load_meta(&tenant, &clean) {
             metas.push(m);
         }
     } else {
-        for id in list_all_ids() {
-            if let Some(m) = load_meta(&id) {
+        for id in list_all_ids(&tenant) {
+            if let Some(m) = load_meta(&tenant, &id) {
                 metas.push(m);
             }
         }
@@ -1114,7 +1185,7 @@ pub async fn handle_list_attachments_filtered(
     }
     // Optional ZK1 tag filter: requires scanning bodies and parsing TLVs for candidates
     if let Some(ref tag) = q.has_tag {
-        metas.retain(|m| zk1_attachment_has_tag(&m.id, tag));
+        metas.retain(|m| zk1_attachment_has_tag(&tenant, &m.id, tag));
     }
     // Sort by created_ms asc (default)
     metas.sort_by_key(|m| m.created_ms);
@@ -1144,6 +1215,7 @@ pub async fn handle_list_attachments_filtered(
 
 /// GET /v1/zk/attachments/count — return number of attachments matching filters
 pub async fn handle_count_attachments(
+    tenant: AttachmentTenant,
     NoritoQuery(q): NoritoQuery<AttachmentListQuery>,
 ) -> impl IntoResponse {
     // Reuse listing path but early-count
@@ -1156,12 +1228,12 @@ pub async fn handle_count_attachments(
             )
                 .into_response();
         };
-        if let Some(m) = load_meta(&clean) {
+        if let Some(m) = load_meta(&tenant, &clean) {
             metas.push(m);
         }
     } else {
-        for id in list_all_ids() {
-            if let Some(m) = load_meta(&id) {
+        for id in list_all_ids(&tenant) {
+            if let Some(m) = load_meta(&tenant, &id) {
                 metas.push(m);
             }
         }
@@ -1176,7 +1248,7 @@ pub async fn handle_count_attachments(
         metas.retain(|m| m.created_ms <= before);
     }
     if let Some(ref tag) = q.has_tag {
-        metas.retain(|m| zk1_attachment_has_tag(&m.id, tag));
+        metas.retain(|m| zk1_attachment_has_tag(&tenant, &m.id, tag));
     }
     let count = metas.len() as u64;
     let s = norito::json::to_json_pretty(&crate::json_object(vec![("count", count)]))
@@ -1189,11 +1261,11 @@ pub async fn handle_count_attachments(
 
 // Minimal ZK1 tag scan for an attachment id. Returns true if the attachment
 // body starts with ZK1 magic and contains a TLV with the given ASCII tag.
-fn zk1_attachment_has_tag(id: &str, tag: &str) -> bool {
+fn zk1_attachment_has_tag(tenant: &AttachmentTenant, id: &str, tag: &str) -> bool {
     let Some(clean) = sanitize_attachment_id(id) else {
         return false;
     };
-    let Ok(bytes) = std::fs::read(bin_path(&clean)) else {
+    let Ok(bytes) = std::fs::read(bin_path(tenant, &clean)) else {
         return false;
     };
     zk1_bytes_has_tag(&bytes, tag)
@@ -1237,7 +1309,10 @@ fn needs_export_sanitization(meta: &AttachmentMeta) -> bool {
 }
 
 /// GET /v1/zk/attachments/{id} — return the stored attachment bytes.
-pub async fn handle_get_attachment(AxumPath(id): AxumPath<String>) -> impl IntoResponse {
+pub async fn handle_get_attachment(
+    tenant: AttachmentTenant,
+    AxumPath(id): AxumPath<String>,
+) -> impl IntoResponse {
     let Some(clean) = sanitize_attachment_id(&id) else {
         return (
             StatusCode::BAD_REQUEST,
@@ -1245,10 +1320,10 @@ pub async fn handle_get_attachment(AxumPath(id): AxumPath<String>) -> impl IntoR
         )
             .into_response();
     };
-    let Some(meta) = load_meta(&clean) else {
+    let Some(meta) = load_meta(&tenant, &clean) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let Ok(bytes) = fs::read(bin_path(&clean)) else {
+    let Ok(bytes) = fs::read(bin_path(&tenant, &clean)) else {
         return StatusCode::NOT_FOUND.into_response();
     };
     if !needs_export_sanitization(&meta) {
@@ -1293,7 +1368,10 @@ pub async fn handle_get_attachment(AxumPath(id): AxumPath<String>) -> impl IntoR
 }
 
 /// DELETE /v1/zk/attachments/{id} — delete an attachment and its metadata.
-pub async fn handle_delete_attachment(AxumPath(id): AxumPath<String>) -> impl IntoResponse {
+pub async fn handle_delete_attachment(
+    tenant: AttachmentTenant,
+    AxumPath(id): AxumPath<String>,
+) -> impl IntoResponse {
     let Some(clean) = sanitize_attachment_id(&id) else {
         return (
             StatusCode::BAD_REQUEST,
@@ -1301,8 +1379,8 @@ pub async fn handle_delete_attachment(AxumPath(id): AxumPath<String>) -> impl In
         )
             .into_response();
     };
-    let existed = meta_path(&clean).exists() || bin_path(&clean).exists();
-    delete_attachment_files(&clean);
+    let existed = meta_path(&tenant, &clean).exists() || bin_path(&tenant, &clean).exists();
+    delete_attachment_files(&tenant, &clean);
     if existed {
         StatusCode::NO_CONTENT.into_response()
     } else {
@@ -1312,23 +1390,52 @@ pub async fn handle_delete_attachment(AxumPath(id): AxumPath<String>) -> impl In
 
 /// Start a background GC worker that removes expired attachments.
 pub fn start_gc_worker() {
-    ensure_dirs();
+    ensure_root_dir();
     tokio::spawn(async move {
         let ttl = Duration::from_secs(ttl_secs_cfg());
         let interval = Duration::from_secs(GC_INTERVAL_SECS);
         loop {
             let now = SystemTime::now();
-            if let Ok(rd) = fs::read_dir(attachments_dir()) {
+            if let Ok(rd) = fs::read_dir(attachments_root_dir()) {
                 for e in rd.flatten() {
-                    if let Some(name) = e.file_name().to_str() {
-                        if let Some(id) = name.strip_suffix(".json") {
-                            if let Some(meta) = load_meta(id) {
+                    let Ok(file_type) = e.file_type() else { continue };
+                    let file_name = e.file_name();
+                    let Some(name) = file_name.to_str() else { continue };
+                    if file_type.is_dir() {
+                        let Some(tenant_key) = sanitize_tenant_key(name) else {
+                            continue;
+                        };
+                        let tenant = AttachmentTenant(tenant_key);
+                        if let Ok(trd) = fs::read_dir(attachments_dir(&tenant)) {
+                            for te in trd.flatten() {
+                                let te_file_name = te.file_name();
+                                let Some(tname) = te_file_name.to_str() else { continue };
+                                let Some(id) = tname.strip_suffix(".json") else { continue };
+                                let Some(meta) = load_meta(&tenant, id) else { continue };
                                 let meta_time = UNIX_EPOCH + Duration::from_millis(meta.created_ms);
                                 if now.duration_since(meta_time).unwrap_or_default() > ttl {
-                                    delete_attachment_files(id);
+                                    delete_attachment_files(&tenant, id);
                                 }
                             }
                         }
+                        continue;
+                    }
+                    if !file_type.is_file() {
+                        continue;
+                    }
+                    // Legacy layout cleanup: `<id>.{json,bin}` stored directly under `zk_attachments`.
+                    let Some(id) = name.strip_suffix(".json") else {
+                        continue;
+                    };
+                    let Some(clean) = sanitize_attachment_id(id) else {
+                        continue;
+                    };
+                    let Some(meta) = load_meta_legacy(&clean) else {
+                        continue;
+                    };
+                    let meta_time = UNIX_EPOCH + Duration::from_millis(meta.created_ms);
+                    if now.duration_since(meta_time).unwrap_or_default() > ttl {
+                        delete_attachment_files_legacy(&clean);
                     }
                 }
             }
@@ -1729,7 +1836,7 @@ mod tests {
             content_type: "application/json".to_string(),
             size: 512,
             created_ms: 1_700_000_000_000,
-            tenant: Some("auth:tenant".to_string()),
+            tenant: Some("a".repeat(64)),
             provenance: None,
         };
 
@@ -1753,9 +1860,12 @@ mod tests {
 
     #[tokio::test]
     async fn get_attachment_rejects_invalid_id() {
-        let response = super::handle_get_attachment(axum::extract::Path("../bad".to_string()))
-            .await
-            .into_response();
+        let response = super::handle_get_attachment(
+            super::AttachmentTenant::anonymous(),
+            axum::extract::Path("../bad".to_string()),
+        )
+        .await
+        .into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
@@ -1896,7 +2006,8 @@ mod tests {
             axum::http::HeaderValue::from_static("text/json"),
         );
         let body = axum::body::Bytes::from_static(br#"{"hello":"world"}"#);
-        let response = super::handle_post_attachment(headers, body)
+        let response =
+            super::handle_post_attachment(super::AttachmentTenant::anonymous(), headers, body)
             .await
             .into_response();
         assert_eq!(response.status(), StatusCode::CREATED);
@@ -1933,9 +2044,13 @@ mod tests {
             axum::http::header::CONTENT_TYPE,
             axum::http::HeaderValue::from_static("application/json"),
         );
-        let response = super::handle_post_attachment(headers, axum::body::Bytes::from(compressed))
-            .await
-            .into_response();
+        let response = super::handle_post_attachment(
+            super::AttachmentTenant::anonymous(),
+            headers,
+            axum::body::Bytes::from(compressed),
+        )
+        .await
+        .into_response();
         assert_eq!(response.status(), StatusCode::CREATED);
         let meta_bytes = response
             .into_body()
@@ -1951,9 +2066,12 @@ mod tests {
         let provenance = meta.provenance.expect("provenance");
         assert!(provenance.sanitizer.archive_depth > 0);
 
-        let response = super::handle_get_attachment(axum::extract::Path(meta.id.clone()))
-            .await
-            .into_response();
+        let response = super::handle_get_attachment(
+            super::AttachmentTenant::anonymous(),
+            axum::extract::Path(meta.id.clone()),
+        )
+        .await
+        .into_response();
         assert_eq!(response.status(), StatusCode::OK);
         let body_bytes = response
             .into_body()

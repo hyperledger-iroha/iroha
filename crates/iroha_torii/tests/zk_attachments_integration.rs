@@ -44,14 +44,11 @@ async fn attachments_post_get_list_delete_roundtrip() {
     iroha_torii::zk_attachments::init_persistence();
 
     // Token-specific uploads should hash tenant identity and remain distinct
+    let tenant_token_a = iroha_torii::zk_attachments::AttachmentTenant::from_api_token("tenant-A");
     let meta_token_a: norito::json::Value = {
-        let mut headers = axum::http::HeaderMap::new();
-        headers.insert(
-            "x-api-token",
-            axum::http::HeaderValue::from_static("tenant-A"),
-        );
         let resp = iroha_torii::zk_attachments::handle_post_attachment(
-            headers,
+            tenant_token_a.clone(),
+            axum::http::HeaderMap::new(),
             axum::body::Bytes::from_static(b"token-a"),
         )
         .await
@@ -60,14 +57,11 @@ async fn attachments_post_get_list_delete_roundtrip() {
         let bytes = resp.into_body().collect().await.unwrap().to_bytes();
         norito::json::from_slice(&bytes).unwrap()
     };
+    let tenant_token_b = iroha_torii::zk_attachments::AttachmentTenant::from_api_token("tenant-B");
     let meta_token_b: norito::json::Value = {
-        let mut headers = axum::http::HeaderMap::new();
-        headers.insert(
-            "x-api-token",
-            axum::http::HeaderValue::from_static("tenant-B"),
-        );
         let resp = iroha_torii::zk_attachments::handle_post_attachment(
-            headers,
+            tenant_token_b.clone(),
+            axum::http::HeaderMap::new(),
             axum::body::Bytes::from_static(b"token-b"),
         )
         .await
@@ -84,8 +78,8 @@ async fn attachments_post_get_list_delete_roundtrip() {
         .get("tenant")
         .and_then(norito::json::Value::as_str)
         .expect("tenant field present");
-    assert_ne!(tenant_a, "anon");
-    assert_ne!(tenant_b, "anon");
+    assert_eq!(tenant_a, tenant_token_a.as_str());
+    assert_eq!(tenant_b, tenant_token_b.as_str());
     assert_ne!(tenant_a, tenant_b);
     // Cleanup token-scoped attachments so quota tests operate on a clean slate
     let id_a = meta_token_a
@@ -98,41 +92,87 @@ async fn attachments_post_get_list_delete_roundtrip() {
         .and_then(|v| v.as_str())
         .unwrap()
         .to_string();
-    let _ = iroha_torii::zk_attachments::handle_delete_attachment(axum::extract::Path(id_a))
-        .await
-        .into_response();
-    let _ = iroha_torii::zk_attachments::handle_delete_attachment(axum::extract::Path(id_b))
-        .await
-        .into_response();
+
+    // Cross-tenant access should be denied by storage isolation.
+    let wrong_get = iroha_torii::zk_attachments::handle_get_attachment(
+        tenant_token_b.clone(),
+        axum::extract::Path(id_a.clone()),
+    )
+    .await
+    .into_response();
+    assert_eq!(wrong_get.status(), http::StatusCode::NOT_FOUND);
+    let wrong_del = iroha_torii::zk_attachments::handle_delete_attachment(
+        tenant_token_b.clone(),
+        axum::extract::Path(id_a.clone()),
+    )
+    .await
+    .into_response();
+    assert_eq!(wrong_del.status(), http::StatusCode::NOT_FOUND);
+
+    let _ = iroha_torii::zk_attachments::handle_delete_attachment(
+        tenant_token_a.clone(),
+        axum::extract::Path(id_a),
+    )
+    .await
+    .into_response();
+    let _ = iroha_torii::zk_attachments::handle_delete_attachment(
+        tenant_token_b.clone(),
+        axum::extract::Path(id_b),
+    )
+    .await
+    .into_response();
 
     // Router with attachments handlers
+    let anon_tenant = iroha_torii::zk_attachments::AttachmentTenant::anonymous();
     let app = Router::new()
         .route(
             "/v1/zk/attachments",
             post(
-                |headers: axum::http::HeaderMap, body: axum::body::Bytes| async move {
-                    Ok::<_, iroha_torii::Error>(
-                        iroha_torii::zk_attachments::handle_post_attachment(headers, body).await,
-                    )
+                {
+                    let anon_tenant = anon_tenant.clone();
+                    move |headers: axum::http::HeaderMap, body: axum::body::Bytes| async move {
+                        let tenant = anon_tenant.clone();
+                        Ok::<_, iroha_torii::Error>(
+                            iroha_torii::zk_attachments::handle_post_attachment(
+                                tenant, headers, body,
+                            )
+                            .await,
+                        )
+                    }
                 },
             )
-            .get(|| async move {
-                Ok::<_, iroha_torii::Error>(
-                    iroha_torii::zk_attachments::handle_list_attachments().await,
-                )
+            .get({
+                let anon_tenant = anon_tenant.clone();
+                move || async move {
+                    Ok::<_, iroha_torii::Error>(
+                        iroha_torii::zk_attachments::handle_list_attachments(anon_tenant.clone())
+                            .await,
+                    )
+                }
             }),
         )
         .route(
             "/v1/zk/attachments/{id}",
-            get(|id: axum::extract::Path<String>| async move {
-                Ok::<_, iroha_torii::Error>(
-                    iroha_torii::zk_attachments::handle_get_attachment(id).await,
-                )
+            get({
+                let anon_tenant = anon_tenant.clone();
+                move |id: axum::extract::Path<String>| async move {
+                    Ok::<_, iroha_torii::Error>(
+                        iroha_torii::zk_attachments::handle_get_attachment(anon_tenant.clone(), id)
+                            .await,
+                    )
+                },
             })
-            .delete(|id: axum::extract::Path<String>| async move {
-                Ok::<_, iroha_torii::Error>(
-                    iroha_torii::zk_attachments::handle_delete_attachment(id).await,
-                )
+            .delete({
+                let anon_tenant = anon_tenant.clone();
+                move |id: axum::extract::Path<String>| async move {
+                    Ok::<_, iroha_torii::Error>(
+                        iroha_torii::zk_attachments::handle_delete_attachment(
+                            anon_tenant.clone(),
+                            id,
+                        )
+                        .await,
+                    )
+                }
             }),
         );
 
@@ -220,6 +260,7 @@ async fn attachments_enforce_per_tenant_quota() {
     let mut ids = Vec::new();
     for i in 0..130u32 {
         let resp = iroha_torii::zk_attachments::handle_post_attachment(
+            iroha_torii::zk_attachments::AttachmentTenant::anonymous(),
             {
                 let mut h = axum::http::HeaderMap::new();
                 h.insert(
@@ -240,9 +281,11 @@ async fn attachments_enforce_per_tenant_quota() {
     }
 
     // Oldest entries should have been evicted (count capped at 128)
-    let list_resp = iroha_torii::zk_attachments::handle_list_attachments()
-        .await
-        .into_response();
+    let list_resp = iroha_torii::zk_attachments::handle_list_attachments(
+        iroha_torii::zk_attachments::AttachmentTenant::anonymous(),
+    )
+    .await
+    .into_response();
     let metas_bytes = list_resp.into_body().collect().await.unwrap().to_bytes();
     let metas: Vec<iroha_torii::zk_attachments::AttachmentMeta> =
         norito::json::from_slice(&metas_bytes).unwrap();
@@ -256,6 +299,7 @@ async fn attachments_enforce_per_tenant_quota() {
     let mut large_ids = Vec::new();
     for i in 0..10u32 {
         let resp = iroha_torii::zk_attachments::handle_post_attachment(
+            iroha_torii::zk_attachments::AttachmentTenant::anonymous(),
             axum::http::HeaderMap::new(),
             axum::body::Bytes::from(vec![
                 u8::try_from(i).expect("attachment byte fits");
@@ -270,7 +314,9 @@ async fn attachments_enforce_per_tenant_quota() {
         large_ids.push(meta.get("id").and_then(|v| v.as_str()).unwrap().to_string());
     }
 
-    let metas_bytes = iroha_torii::zk_attachments::handle_list_attachments()
+    let metas_bytes = iroha_torii::zk_attachments::handle_list_attachments(
+        iroha_torii::zk_attachments::AttachmentTenant::anonymous(),
+    )
         .await
         .into_response()
         .into_body()

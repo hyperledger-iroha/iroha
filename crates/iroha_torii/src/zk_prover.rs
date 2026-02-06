@@ -12,6 +12,7 @@
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::{
+    collections::HashSet,
     fs,
     io::Read as _,
     path::{Path, PathBuf},
@@ -276,46 +277,147 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-fn attachments_dir() -> PathBuf {
+const ATTACHMENT_ID_HEX_LEN: usize = 64;
+const TENANT_KEY_HEX_LEN: usize = 64;
+
+#[derive(Debug, Clone)]
+struct AttachmentLocation {
+    tenant_key: Option<String>,
+    id: String,
+}
+
+fn sanitize_attachment_id(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.len() != ATTACHMENT_ID_HEX_LEN {
+        return None;
+    }
+    if trimmed.bytes().any(|b| !b.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(trimmed.to_ascii_lowercase())
+}
+
+fn sanitize_tenant_key(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.len() != TENANT_KEY_HEX_LEN {
+        return None;
+    }
+    if trimmed.bytes().any(|b| !b.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(trimmed.to_ascii_lowercase())
+}
+
+fn attachments_root_dir() -> PathBuf {
     super::zk_attachments::base_dir().join("zk_attachments")
 }
 
-fn attachment_meta_path(id: &str) -> PathBuf {
-    attachments_dir().join(format!("{}.json", id))
+fn attachment_meta_path(tenant_key: Option<&str>, id: &str) -> PathBuf {
+    match tenant_key {
+        Some(key) => attachments_root_dir().join(key).join(format!("{}.json", id)),
+        None => attachments_root_dir().join(format!("{}.json", id)),
+    }
 }
 
-fn attachment_bin_path(id: &str) -> PathBuf {
-    attachments_dir().join(format!("{}.bin", id))
+fn attachment_bin_path(tenant_key: Option<&str>, id: &str) -> PathBuf {
+    match tenant_key {
+        Some(key) => attachments_root_dir().join(key).join(format!("{}.bin", id)),
+        None => attachments_root_dir().join(format!("{}.bin", id)),
+    }
 }
 
 fn report_path(id: &str) -> PathBuf {
     reports_dir().join(format!("{}.json", id))
 }
 
-fn list_attachment_ids() -> Vec<String> {
-    let mut ids = Vec::new();
-    if let Ok(rd) = fs::read_dir(attachments_dir()) {
+fn list_attachment_locations() -> Vec<AttachmentLocation> {
+    let mut locs = Vec::new();
+    if let Ok(rd) = fs::read_dir(attachments_root_dir()) {
         for e in rd.flatten() {
-            if let Some(name) = e.file_name().to_str() {
-                if let Some(id) = name.strip_suffix(".json") {
-                    ids.push(id.to_string());
+            let Ok(ft) = e.file_type() else { continue };
+            let file_name = e.file_name();
+            let Some(name) = file_name.to_str() else { continue };
+            if ft.is_dir() {
+                let Some(tenant_key) = sanitize_tenant_key(name) else {
+                    continue;
+                };
+                if let Ok(trd) = fs::read_dir(attachments_root_dir().join(&tenant_key)) {
+                    for te in trd.flatten() {
+                        let file_name = te.file_name();
+                        let Some(tname) = file_name.to_str() else { continue };
+                        let Some(id) = tname.strip_suffix(".json") else {
+                            continue;
+                        };
+                        let Some(clean) = sanitize_attachment_id(id) else {
+                            continue;
+                        };
+                        locs.push(AttachmentLocation {
+                            tenant_key: Some(tenant_key.clone()),
+                            id: clean,
+                        });
+                    }
+                }
+                continue;
+            }
+            if !ft.is_file() {
+                continue;
+            }
+            // Legacy layout: `<root>/<id>.json`
+            if let Some(id) = name.strip_suffix(".json") {
+                if let Some(clean) = sanitize_attachment_id(id) {
+                    locs.push(AttachmentLocation {
+                        tenant_key: None,
+                        id: clean,
+                    });
                 }
             }
         }
     }
-    ids
+    locs
 }
 
-fn load_attachment_meta(id: &str) -> Option<super::zk_attachments::AttachmentMeta> {
-    let mut f = fs::File::open(attachment_meta_path(id)).ok()?;
+fn find_attachment_location(id: &str) -> Option<AttachmentLocation> {
+    let clean = sanitize_attachment_id(id)?;
+    // Legacy layout first.
+    if attachment_meta_path(None, &clean).exists() {
+        return Some(AttachmentLocation {
+            tenant_key: None,
+            id: clean,
+        });
+    }
+    // Tenant layout.
+    if let Ok(rd) = fs::read_dir(attachments_root_dir()) {
+        for e in rd.flatten() {
+            let Ok(ft) = e.file_type() else { continue };
+            if !ft.is_dir() {
+                continue;
+            }
+            let file_name = e.file_name();
+            let Some(name) = file_name.to_str() else { continue };
+            let Some(tenant_key) = sanitize_tenant_key(name) else {
+                continue;
+            };
+            if attachment_meta_path(Some(&tenant_key), &clean).exists() {
+                return Some(AttachmentLocation {
+                    tenant_key: Some(tenant_key),
+                    id: clean,
+                });
+            }
+        }
+    }
+    None
+}
+
+fn load_attachment_meta(loc: &AttachmentLocation) -> Option<super::zk_attachments::AttachmentMeta> {
+    let mut f = fs::File::open(attachment_meta_path(loc.tenant_key.as_deref(), &loc.id)).ok()?;
     let mut buf = Vec::new();
     f.read_to_end(&mut buf).ok()?;
     let s = std::str::from_utf8(&buf).ok()?;
     norito::json::from_json::<super::zk_attachments::AttachmentMeta>(s).ok()
 }
 
-fn load_attachment_body(id: &str) -> Option<Vec<u8>> {
-    fs::read(attachment_bin_path(id)).ok()
+fn load_attachment_body(loc: &AttachmentLocation) -> Option<Vec<u8>> {
+    fs::read(attachment_bin_path(loc.tenant_key.as_deref(), &loc.id)).ok()
 }
 
 fn save_report(rep: &ProverReport) -> std::io::Result<()> {
@@ -774,12 +876,18 @@ fn zk1_extract_tags(bytes: &[u8]) -> Vec<String> {
 
 /// Process a single attachment id, emitting a report if not present yet.
 pub fn process_attachment_once(id: &str) -> Option<ProverReport> {
+    let clean = sanitize_attachment_id(id)?;
+    let loc = find_attachment_location(&clean)?;
+    process_attachment_once_at(&loc)
+}
+
+fn process_attachment_once_at(loc: &AttachmentLocation) -> Option<ProverReport> {
     // Skip if report already exists
-    if report_path(id).exists() {
-        return load_report(id);
+    if report_path(&loc.id).exists() {
+        return load_report(&loc.id);
     }
-    let meta = load_attachment_meta(id)?;
-    let body = load_attachment_body(id)?;
+    let meta = load_attachment_meta(loc)?;
+    let body = load_attachment_body(loc)?;
     let zk1_tags = if body.len() >= 4 && &body[..4] == b"ZK1\0" {
         zk1_minimal_validate(&body)
             .ok()
@@ -889,12 +997,18 @@ struct ScanStats {
 async fn run_budgeted_scan() -> ScanStats {
     ensure_dirs();
     let telemetry = telemetry_handle();
-    let pending_ids: Vec<_> = list_attachment_ids()
-        .into_iter()
-        .filter(|id| !report_path(id).exists())
-        .collect();
+    let mut pending: Vec<AttachmentLocation> = Vec::new();
+    let mut seen_ids: HashSet<String> = HashSet::new();
+    for loc in list_attachment_locations() {
+        if report_path(&loc.id).exists() {
+            continue;
+        }
+        if seen_ids.insert(loc.id.clone()) {
+            pending.push(loc);
+        }
+    }
 
-    let mut remaining = pending_ids.len() as u64;
+    let mut remaining = pending.len() as u64;
     telemetry.with_metrics(|tel| tel.set_torii_zk_prover_pending(remaining));
 
     let max_bytes = cfg_max_scan_bytes();
@@ -909,13 +1023,13 @@ async fn run_budgeted_scan() -> ScanStats {
     let mut processed_reports = 0usize;
     let mut join_set = JoinSet::new();
 
-    for id in pending_ids {
+    for loc in pending {
         if start.elapsed().as_millis() as u64 >= max_millis {
             budget_reason = Some("time");
             break;
         }
 
-        let Some(meta) = load_attachment_meta(&id) else {
+        let Some(meta) = load_attachment_meta(&loc) else {
             remaining = remaining.saturating_sub(1);
             telemetry.with_metrics(|tel| tel.set_torii_zk_prover_pending(remaining));
             continue;
@@ -933,7 +1047,7 @@ async fn run_budgeted_scan() -> ScanStats {
         let semaphore = semaphore.clone();
         let inflight = inflight.clone();
         let telemetry_clone = telemetry.clone();
-        let id_owned = id;
+        let loc_owned = loc;
         join_set.spawn(async move {
             let permit = semaphore.acquire_owned().await.expect("semaphore closed");
             let prev = inflight.fetch_add(1, Ordering::SeqCst) + 1;
@@ -942,7 +1056,7 @@ async fn run_budgeted_scan() -> ScanStats {
             {
                 MAX_INFLIGHT_OBSERVED.fetch_max(prev as usize, AtomicOrdering::SeqCst);
             }
-            let result = task::spawn_blocking(move || process_attachment_once(&id_owned))
+            let result = task::spawn_blocking(move || process_attachment_once_at(&loc_owned))
                 .await
                 .map_err(|err| err.to_string())?;
             drop(permit);
@@ -1345,25 +1459,36 @@ mod tests {
         norito::to_bytes(&attachment).expect("proof attachment bytes")
     }
 
+    fn anon_tenant_key() -> String {
+        super::super::zk_attachments::AttachmentTenant::anonymous()
+            .as_str()
+            .to_string()
+    }
+
+    fn ensure_tenant_dir(tenant_key: &str) {
+        fs::create_dir_all(attachments_root_dir().join(tenant_key)).expect("attachments tenant dir");
+    }
+
     #[test]
     fn scan_and_report_single_attachment() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
         // Create an attachment manually
-        let id = "deadbeef".repeat(4).chars().take(64).collect::<String>();
+        let id = "deadbeef".repeat(8);
         let body = fixture_attachment_bytes();
+        let tenant_key = anon_tenant_key();
         let meta = super::super::zk_attachments::AttachmentMeta {
             id: id.clone(),
             content_type: "application/x-norito".to_string(),
             size: body.len() as u64,
             created_ms: now_ms(),
-            tenant: Some("anon".to_string()),
+            tenant: Some(tenant_key.clone()),
             provenance: None,
         };
-        fs::create_dir_all(attachments_dir()).unwrap();
-        fs::write(attachment_bin_path(&id), &body).unwrap();
+        ensure_tenant_dir(&tenant_key);
+        fs::write(attachment_bin_path(Some(&tenant_key), &id), &body).unwrap();
         fs::write(
-            attachment_meta_path(&id),
+            attachment_meta_path(Some(&tenant_key), &id),
             norito::json::to_json_pretty(&meta).unwrap(),
         )
         .unwrap();
@@ -1392,6 +1517,8 @@ mod tests {
         let budget = usize::try_from(budget).unwrap_or(usize::MAX);
         let first_size = budget.saturating_sub(1).max(1);
         let sizes = [first_size, 2usize];
+        let tenant_key = anon_tenant_key();
+        ensure_tenant_dir(&tenant_key);
         // Create two attachments totalling more than the configured byte budget.
         for (idx, size) in sizes.into_iter().enumerate() {
             let id = format!("{:064x}", idx + 1);
@@ -1400,13 +1527,12 @@ mod tests {
                 content_type: "application/json".to_string(),
                 size: size as u64,
                 created_ms: now_ms(),
-                tenant: None,
+                tenant: Some(tenant_key.clone()),
                 provenance: None,
             };
-            fs::create_dir_all(attachments_dir()).unwrap();
-            fs::write(attachment_bin_path(&id), vec![b'A'; size]).unwrap();
+            fs::write(attachment_bin_path(Some(&tenant_key), &id), vec![b'A'; size]).unwrap();
             fs::write(
-                attachment_meta_path(&id),
+                attachment_meta_path(Some(&tenant_key), &id),
                 norito::json::to_json_pretty(&meta).unwrap(),
             )
             .unwrap();
@@ -1426,6 +1552,8 @@ mod tests {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
         super::TEST_PROCESSING_DELAY_MS.store(50, AtomicOrdering::SeqCst);
+        let tenant_key = anon_tenant_key();
+        ensure_tenant_dir(&tenant_key);
         // Create four small attachments to trigger overlapping work.
         for idx in 0..4 {
             let id = format!("{:064x}", idx + 10);
@@ -1434,13 +1562,12 @@ mod tests {
                 content_type: "application/json".to_string(),
                 size: 16,
                 created_ms: now_ms(),
-                tenant: None,
+                tenant: Some(tenant_key.clone()),
                 provenance: None,
             };
-            fs::create_dir_all(attachments_dir()).unwrap();
-            fs::write(attachment_bin_path(&id), vec![b'B'; 16]).unwrap();
+            fs::write(attachment_bin_path(Some(&tenant_key), &id), vec![b'B'; 16]).unwrap();
             fs::write(
-                attachment_meta_path(&id),
+                attachment_meta_path(Some(&tenant_key), &id),
                 norito::json::to_json_pretty(&meta).unwrap(),
             )
             .unwrap();
@@ -1484,21 +1611,22 @@ mod tests {
         let _env = TestDataDirGuard::new();
 
         // Prepare attachment directory with one valid proof attachment and one malformed ZK1 payload.
-        fs::create_dir_all(super::attachments_dir()).expect("attachments dir");
+        let tenant_key = anon_tenant_key();
+        ensure_tenant_dir(&tenant_key);
 
         let ok_body = fixture_attachment_bytes();
         let ok_id = format!("{:064x}", 0x42u64);
-        fs::write(super::attachment_bin_path(&ok_id), &ok_body).expect("write ok body");
+        fs::write(attachment_bin_path(Some(&tenant_key), &ok_id), &ok_body).expect("write ok body");
         let ok_meta = super::super::zk_attachments::AttachmentMeta {
             id: ok_id.clone(),
             content_type: "application/x-norito".to_string(),
             size: ok_body.len() as u64,
             created_ms: super::now_ms(),
-            tenant: None,
+            tenant: Some(tenant_key.clone()),
             provenance: None,
         };
         fs::write(
-            super::attachment_meta_path(&ok_id),
+            attachment_meta_path(Some(&tenant_key), &ok_id),
             norito::json::to_json_pretty(&ok_meta).expect("ok meta json"),
         )
         .expect("write ok meta");
@@ -1507,17 +1635,18 @@ mod tests {
         err_body.extend_from_slice(b"PROF");
         err_body.extend_from_slice(&10u32.to_le_bytes());
         let err_id = format!("{:064x}", 0x43u64);
-        fs::write(super::attachment_bin_path(&err_id), &err_body).expect("write err body");
+        fs::write(attachment_bin_path(Some(&tenant_key), &err_id), &err_body)
+            .expect("write err body");
         let err_meta = super::super::zk_attachments::AttachmentMeta {
             id: err_id.clone(),
             content_type: "application/x-norito".to_string(),
             size: err_body.len() as u64,
             created_ms: super::now_ms(),
-            tenant: None,
+            tenant: Some(tenant_key.clone()),
             provenance: None,
         };
         fs::write(
-            super::attachment_meta_path(&err_id),
+            attachment_meta_path(Some(&tenant_key), &err_id),
             norito::json::to_json_pretty(&err_meta).expect("err meta json"),
         )
         .expect("write err meta");

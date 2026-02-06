@@ -43,26 +43,41 @@ async fn attachments_list_filters_and_count() {
     ensure_quota_config();
     iroha_torii::zk_attachments::init_persistence();
 
+    let tenant = iroha_torii::zk_attachments::AttachmentTenant::anonymous();
     let app =
         Router::new()
             .route(
                 "/v1/zk/attachments",
                 get(
-                    |_headers: axum::http::HeaderMap,
+                    {
+                        let tenant = tenant.clone();
+                        move |_headers: axum::http::HeaderMap,
                      q: iroha_torii::NoritoQuery<
                         iroha_torii::zk_attachments::AttachmentListQuery,
                     >| async move {
-                        iroha_torii::zk_attachments::handle_list_attachments_filtered(q).await
+                            iroha_torii::zk_attachments::handle_list_attachments_filtered(
+                                tenant.clone(),
+                                q,
+                            )
+                            .await
+                        }
                     },
                 ),
             )
             .route(
                 "/v1/zk/attachments/count",
                 get(
-                    |q: iroha_torii::NoritoQuery<
+                    {
+                        let tenant = tenant.clone();
+                        move |q: iroha_torii::NoritoQuery<
                         iroha_torii::zk_attachments::AttachmentListQuery,
                     >| async move {
-                        iroha_torii::zk_attachments::handle_count_attachments(q).await
+                            iroha_torii::zk_attachments::handle_count_attachments(
+                                tenant.clone(),
+                                q,
+                            )
+                            .await
+                        }
                     },
                 ),
             );
@@ -72,6 +87,7 @@ async fn attachments_list_filters_and_count() {
         let body_value = iroha_torii::json_object(vec![("k", 1u64)]);
         let body = norito::json::to_string(&body_value).expect("serialize attachment seed");
         let resp = iroha_torii::zk_attachments::handle_post_attachment(
+            tenant.clone(),
             {
                 let mut h = axum::http::HeaderMap::new();
                 h.insert(
@@ -91,6 +107,7 @@ async fn attachments_list_filters_and_count() {
     let id2 = {
         let body = vec![0u8, 1, 2, 3];
         let resp = iroha_torii::zk_attachments::handle_post_attachment(
+            tenant.clone(),
             {
                 let mut h = axum::http::HeaderMap::new();
                 h.insert(
@@ -117,6 +134,7 @@ async fn attachments_list_filters_and_count() {
         env.extend_from_slice(&(3u32).to_le_bytes());
         env.extend_from_slice(&[7u8, 7, 7]);
         let resp = iroha_torii::zk_attachments::handle_post_attachment(
+            tenant.clone(),
             {
                 let mut h = axum::http::HeaderMap::new();
                 h.insert(

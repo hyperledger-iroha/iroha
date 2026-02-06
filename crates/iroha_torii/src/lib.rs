@@ -5881,13 +5881,33 @@ async fn handler_zk_submit_proof(
     routing::handle_v1_zk_submit_proof(headers, body).await
 }
 
+fn zk_attachments_tenant(
+    app: &SharedAppState,
+    headers: &axum::http::HeaderMap,
+) -> crate::zk_attachments::AttachmentTenant {
+    if let Some(token) = headers.get("x-api-token").and_then(|v| v.to_str().ok()) {
+        if app.api_tokens_set.contains(token) {
+            return crate::zk_attachments::AttachmentTenant::from_api_token(token);
+        }
+    }
+    if let Some(ip) = headers
+        .get(limits::REMOTE_ADDR_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse().ok())
+    {
+        return crate::zk_attachments::AttachmentTenant::from_remote_ip(ip);
+    }
+    crate::zk_attachments::AttachmentTenant::anonymous()
+}
+
 async fn handler_zk_attachments_create(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<impl IntoResponse, Error> {
     check_access_enforced(&app, &headers, None, "v1/zk/attachments", true).await?;
-    Ok(crate::zk_attachments::handle_post_attachment(headers, body).await)
+    let tenant = zk_attachments_tenant(&app, &headers);
+    Ok(crate::zk_attachments::handle_post_attachment(tenant, headers, body).await)
 }
 
 async fn handler_zk_attachments_list(
@@ -5895,7 +5915,8 @@ async fn handler_zk_attachments_list(
     headers: axum::http::HeaderMap,
 ) -> Result<impl IntoResponse, Error> {
     check_access_enforced(&app, &headers, None, "v1/zk/attachments", true).await?;
-    Ok(crate::zk_attachments::handle_list_attachments().await)
+    let tenant = zk_attachments_tenant(&app, &headers);
+    Ok(crate::zk_attachments::handle_list_attachments(tenant).await)
 }
 
 async fn handler_zk_attachments_filtered(
@@ -5904,7 +5925,8 @@ async fn handler_zk_attachments_filtered(
     AxQuery(q): AxQuery<crate::zk_attachments::AttachmentListQuery>,
 ) -> Result<impl IntoResponse, Error> {
     check_access_enforced(&app, &headers, None, "v1/zk/attachments", true).await?;
-    Ok(crate::zk_attachments::handle_list_attachments_filtered(AxQuery(q)).await)
+    let tenant = zk_attachments_tenant(&app, &headers);
+    Ok(crate::zk_attachments::handle_list_attachments_filtered(tenant, AxQuery(q)).await)
 }
 
 async fn handler_zk_attachments_count(
@@ -5913,7 +5935,8 @@ async fn handler_zk_attachments_count(
     AxQuery(q): AxQuery<crate::zk_attachments::AttachmentListQuery>,
 ) -> Result<impl IntoResponse, Error> {
     check_access_enforced(&app, &headers, None, "v1/zk/attachments/count", true).await?;
-    Ok(crate::zk_attachments::handle_count_attachments(AxQuery(q)).await)
+    let tenant = zk_attachments_tenant(&app, &headers);
+    Ok(crate::zk_attachments::handle_count_attachments(tenant, AxQuery(q)).await)
 }
 
 async fn handler_zk_attachment_get(
@@ -5922,7 +5945,8 @@ async fn handler_zk_attachment_get(
     id: axum::extract::Path<String>,
 ) -> Result<impl IntoResponse, Error> {
     check_access_enforced(&app, &headers, None, "v1/zk/attachments/{id}", true).await?;
-    Ok(crate::zk_attachments::handle_get_attachment(id).await)
+    let tenant = zk_attachments_tenant(&app, &headers);
+    Ok(crate::zk_attachments::handle_get_attachment(tenant, id).await)
 }
 
 async fn handler_zk_attachment_delete(
@@ -5931,7 +5955,8 @@ async fn handler_zk_attachment_delete(
     id: axum::extract::Path<String>,
 ) -> Result<impl IntoResponse, Error> {
     check_access_enforced(&app, &headers, None, "v1/zk/attachments/{id}", true).await?;
-    Ok(crate::zk_attachments::handle_delete_attachment(id).await)
+    let tenant = zk_attachments_tenant(&app, &headers);
+    Ok(crate::zk_attachments::handle_delete_attachment(tenant, id).await)
 }
 
 async fn handler_zk_vote_tally(
