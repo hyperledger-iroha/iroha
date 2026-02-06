@@ -16533,11 +16533,8 @@ impl<'state> StateBlock<'state> {
                 zk_dedup: _,
             ..
         } = self;
-        let use_background = state_ref.tiered_snapshot_worker.enabled() && {
-            let backend = tiered_backend.lock();
-            backend.enabled() && backend.has_entries()
-        };
-        let (tiered_payload, tiered_diff) = if use_background {
+        let background_enabled = state_ref.tiered_snapshot_worker.enabled();
+        let (tiered_payload, tiered_diff) = if background_enabled {
             let payload = world.tiered_snapshot_payload();
             let diff = TieredSnapshotDiff::from(&payload);
             (Some(payload), Some(diff))
@@ -16627,6 +16624,10 @@ impl<'state> StateBlock<'state> {
         }
         // Snapshot after releasing the view lock to avoid lock-order inversion
         // between `view_lock` and `tiered_backend`.
+        let use_background = background_enabled && {
+            let backend = tiered_backend.lock();
+            backend.enabled() && backend.has_entries()
+        };
         #[cfg(feature = "telemetry")]
         let mut snapshot_recorded = false;
         let snapshot_err = if use_background {
