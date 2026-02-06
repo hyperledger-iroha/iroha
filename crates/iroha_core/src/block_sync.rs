@@ -889,9 +889,8 @@ impl BlockSynchronizer {
         topology: &Topology,
         state: &State,
     ) -> Result<(), crate::block::SignatureVerificationError> {
-        crate::block::ValidBlock::validate_signatures_subset_without_state(block, topology)?;
         let state_view = state.view();
-        crate::block::ValidBlock::enforce_consensus_key_lifecycle(block, topology, &state_view)
+        crate::block::ValidBlock::validate_signatures_subset(block, topology, &state_view)
     }
 }
 
@@ -4382,7 +4381,7 @@ pub mod message {
         }
 
         fn state_with_consensus_keys(
-            peers: &[(PublicKey, &str)],
+            peers: &[(&KeyPair, &str)],
             activation_height: u64,
             expiry_height: Option<u64>,
             status: ConsensusKeyStatus,
@@ -4394,7 +4393,10 @@ pub mod message {
             params.sumeragi.key_overlap_grace_blocks = overlap_grace;
             params.sumeragi.key_expiry_grace_blocks = expiry_grace;
             world.parameters = mv::cell::Cell::new(params);
-            for (pk, name) in peers {
+            for (keypair, name) in peers {
+                let pk = keypair.public_key();
+                let pop = iroha_crypto::bls_normal_pop_prove(keypair.private_key())
+                    .expect("pop for consensus key");
                 let id = ConsensusKeyId::new(
                     ConsensusKeyRole::Validator,
                     Ident::from_str(name).expect("consensus key name parses"),
@@ -4402,7 +4404,7 @@ pub mod message {
                 let record = ConsensusKeyRecord {
                     id: id.clone(),
                     public_key: pk.clone(),
-                    pop: None,
+                    pop: Some(pop),
                     activation_height,
                     expiry_height,
                     hsm: None,
@@ -4872,10 +4874,12 @@ pub mod message {
         }
 
         #[test]
-        fn validate_signatures_subset_without_state_rejects_invalid_signatures() {
+        fn validate_signatures_subset_rejects_invalid_signatures() {
             let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
             let kp_wrong = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
             let topology = Topology::new(vec![PeerId::new(kp_leader.public_key().clone())]);
+            let state = state_with_consensus_key_pops(&[&kp_leader]);
+            let state_view = state.view();
 
             let valid_block: SignedBlock = unique_dummy_block(kp_leader.private_key(), |header| {
                 header.set_height(nonzero_ext::nonzero!(2_u64));
@@ -4893,11 +4897,11 @@ pub mod message {
                 .expect("signature replacement succeeds");
 
             assert!(
-                ValidBlock::validate_signatures_subset_without_state(&valid_block, &topology)
+                ValidBlock::validate_signatures_subset(&valid_block, &topology, &state_view)
                     .is_ok()
             );
             assert!(
-                ValidBlock::validate_signatures_subset_without_state(&invalid_block, &topology)
+                ValidBlock::validate_signatures_subset(&invalid_block, &topology, &state_view)
                     .is_err()
             );
         }
@@ -5220,9 +5224,9 @@ pub mod message {
 
             let state = state_with_consensus_keys(
                 &[
-                    (leader.public_key().clone(), "leader"),
-                    (validator.public_key().clone(), "validator"),
-                    (proxy.public_key().clone(), "proxy"),
+                    (&leader, "leader"),
+                    (&validator, "validator"),
+                    (&proxy, "proxy"),
                 ],
                 1,
                 Some(3),

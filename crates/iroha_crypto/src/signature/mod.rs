@@ -17,7 +17,7 @@ pub(crate) mod gost;
 pub(crate) mod sm;
 
 use core::marker::PhantomData;
-use std::{format, string::String, vec, vec::Vec};
+use std::{cell::RefCell, format, string::String, vec, vec::Vec};
 
 use derive_more::{Deref, DerefMut};
 use iroha_primitives::const_vec::ConstVec;
@@ -46,6 +46,47 @@ ffi::ffi_item! {
     pub struct Signature {
         payload: ConstVec<u8>
     }
+}
+
+const PUBLIC_KEY_FULL_CACHE_LIMIT: usize = 128;
+
+struct PublicKeyFullCacheEntry {
+    algorithm: u8,
+    payload: Vec<u8>,
+    full: PublicKeyFull,
+}
+
+thread_local! {
+    static PUBLIC_KEY_FULL_CACHE: RefCell<Vec<PublicKeyFullCacheEntry>> =
+        RefCell::new(Vec::new());
+}
+
+fn public_key_full_cached(public_key: &PublicKey) -> PublicKeyFull {
+    let (algorithm, payload) = public_key.to_bytes();
+    let algorithm = algorithm as u8;
+    PUBLIC_KEY_FULL_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some(pos) = cache
+            .iter()
+            .position(|entry| entry.algorithm == algorithm && entry.payload.as_slice() == payload)
+        {
+            let entry = cache.remove(pos);
+            let full = entry.full.clone();
+            cache.push(entry);
+            return full;
+        }
+        let full: PublicKeyFull = (&public_key.0).into();
+        cache.push(PublicKeyFullCacheEntry {
+            algorithm,
+            payload: payload.to_vec(),
+            full: full.clone(),
+        });
+        if cache.len() > PUBLIC_KEY_FULL_CACHE_LIMIT {
+            let drain = cache.len() - PUBLIC_KEY_FULL_CACHE_LIMIT;
+            cache.drain(0..drain);
+        }
+        full
+    })
 }
 
 impl Signature {
@@ -108,7 +149,7 @@ impl Signature {
     /// # Errors
     /// Fails if the message doesn't pass verification
     pub fn verify(&self, public_key: &PublicKey, payload: &[u8]) -> Result<(), Error> {
-        let public_key_full: PublicKeyFull = (&public_key.0).into();
+        let public_key_full = public_key_full_cached(public_key);
         match &public_key_full {
             PublicKeyFull::Ed25519(pk) => {
                 ed25519::Ed25519Sha512::verify(payload, &self.payload, pk)
@@ -438,6 +479,22 @@ mod tests {
         let message = b"Test message to sign.";
         let signature = Signature::new(key_pair.private_key(), message);
         signature.verify(key_pair.public_key(), message).unwrap();
+    }
+
+    #[test]
+    #[cfg(feature = "rand")]
+    fn signature_verify_cache_separates_keys() {
+        let key_one = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let key_two = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let message = b"Signature verify cache test";
+        let signature = Signature::new(key_one.private_key(), message);
+
+        signature.verify(key_one.public_key(), message).unwrap();
+        assert!(
+            signature.verify(key_two.public_key(), message).is_err(),
+            "cache must not mix distinct public keys"
+        );
+        signature.verify(key_one.public_key(), message).unwrap();
     }
 
     #[test]

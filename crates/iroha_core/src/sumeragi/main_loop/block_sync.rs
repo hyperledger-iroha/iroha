@@ -1101,6 +1101,7 @@ impl Actor {
                     err,
                     crate::block::SignatureVerificationError::UnknownSignature
                         | crate::block::SignatureVerificationError::UnknownSignatory
+                        | crate::block::SignatureVerificationError::MissingPop
                 );
                 if parent_missing && ahead && defer_signatures {
                     let expected_height = local_height.saturating_add(1);

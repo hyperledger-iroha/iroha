@@ -1,5 +1,6 @@
 use core::convert::{Infallible, TryFrom};
 
+use blake2::Blake2bVar;
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use ed25519_dalek::Signature;
 use sha2::{Digest, Sha256};
@@ -13,7 +14,51 @@ use crate::{Error, KeyGenOption, ParseError};
 pub type PublicKey = ed25519_dalek::VerifyingKey;
 pub type PrivateKey = ed25519_dalek::SigningKey;
 
-use std::{format, string::ToString as _, vec::Vec};
+use std::{cell::RefCell, collections::HashMap, format, string::ToString as _, vec::Vec};
+
+const VERIFY_OK_CACHE_LIMIT: usize = 4096;
+
+struct VerifyOkCache {
+    map: HashMap<[u8; 32], ()>,
+}
+
+impl VerifyOkCache {
+    fn new() -> Self {
+        Self {
+            map: HashMap::new(),
+        }
+    }
+
+    fn contains(&self, key: &[u8; 32]) -> bool {
+        self.map.contains_key(key)
+    }
+
+    fn insert(&mut self, key: [u8; 32]) {
+        if self.map.len() >= VERIFY_OK_CACHE_LIMIT {
+            // Simple bounded cache: clear rather than paying LRU bookkeeping cost.
+            self.map.clear();
+        }
+        self.map.insert(key, ());
+    }
+}
+
+thread_local! {
+    static VERIFY_OK_CACHE: RefCell<VerifyOkCache> = RefCell::new(VerifyOkCache::new());
+}
+
+fn verify_ok_cache_key(pk: &PublicKey, message: &[u8], signature: &[u8]) -> [u8; 32] {
+    let pk_bytes = pk.to_bytes();
+    let mut h = <Blake2bVar as blake2::digest::VariableOutput>::new(32)
+        .expect("blake2b init for signature verify cache");
+    blake2::digest::Update::update(&mut h, b"iroha:ed25519:verify_ok_cache:v1");
+    blake2::digest::Update::update(&mut h, &pk_bytes);
+    blake2::digest::Update::update(&mut h, message);
+    blake2::digest::Update::update(&mut h, signature);
+    let mut out = [0u8; 32];
+    blake2::digest::VariableOutput::finalize_variable(h, &mut out)
+        .expect("blake2b output length must match");
+    out
+}
 
 fn parse_fixed_size<T, E, F, const SIZE: usize>(
     payload: &[u8],
@@ -128,6 +173,18 @@ impl Ed25519Sha512 {
     }
 
     pub fn verify(message: &[u8], signature: &[u8], pk: &PublicKey) -> Result<(), Error> {
+        if signature.len() == ed25519_dalek::SIGNATURE_LENGTH {
+            let key = verify_ok_cache_key(pk, message, signature);
+            if VERIFY_OK_CACHE.with(|cache| cache.borrow().contains(&key)) {
+                return Ok(());
+            }
+            // `Signature::try_from` only checks length for Ed25519; we already know it's correct.
+            let s = Signature::try_from(signature).map_err(|e| ParseError(e.to_string()))?;
+            pk.verify_strict(message, &s)
+                .map_err(|_| Error::BadSignature)?;
+            VERIFY_OK_CACHE.with(|cache| cache.borrow_mut().insert(key));
+            return Ok(());
+        }
         let s = Signature::try_from(signature).map_err(|e| ParseError(e.to_string()))?;
         pk.verify_strict(message, &s)
             .map_err(|_| Error::BadSignature)
@@ -250,6 +307,29 @@ mod test {
             )
         };
         assert_eq!(res, 0);
+    }
+
+    #[test]
+    fn ed25519_verify_ok_cache_separates_message_and_signature() {
+        let (pk, sk) = Ed25519Sha512::keypair(KeyGenOption::Random);
+        let msg1 = b"ed25519 verify-ok-cache msg1";
+        let msg2 = b"ed25519 verify-ok-cache msg2";
+        let sig1 = Ed25519Sha512::sign(msg1, &sk);
+        let sig2 = Ed25519Sha512::sign(msg2, &sk);
+
+        Ed25519Sha512::verify(msg1, &sig1, &pk).expect("valid signature 1");
+        assert!(
+            Ed25519Sha512::verify(msg1, &sig2, &pk).is_err(),
+            "cache must not mix distinct signatures"
+        );
+        Ed25519Sha512::verify(msg2, &sig2, &pk).expect("valid signature 2");
+        assert!(
+            Ed25519Sha512::verify(msg2, &sig1, &pk).is_err(),
+            "cache must not mix distinct messages"
+        );
+
+        // Exercise cached hit path.
+        Ed25519Sha512::verify(msg1, &sig1, &pk).expect("cached signature 1");
     }
 
     #[cfg(feature = "ecc-batch")]

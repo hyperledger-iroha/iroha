@@ -2097,13 +2097,13 @@ pub mod pipeline {
     /// Historical aggregate signature batch size (0 disables batching).
     pub const SIGNATURE_BATCH_MAX: usize = 0;
     /// Ed25519-specific batch size (0 disables batching).
-    pub const SIGNATURE_BATCH_MAX_ED25519: usize = 0;
+    pub const SIGNATURE_BATCH_MAX_ED25519: usize = 64;
     /// Secp256k1-specific batch size (0 disables batching).
-    pub const SIGNATURE_BATCH_MAX_SECP256K1: usize = 0;
+    pub const SIGNATURE_BATCH_MAX_SECP256K1: usize = 16;
     /// PQC-specific batch size (0 disables batching).
-    pub const SIGNATURE_BATCH_MAX_PQC: usize = 0;
+    pub const SIGNATURE_BATCH_MAX_PQC: usize = 8;
     /// BLS-specific batch size (0 disables batching).
-    pub const SIGNATURE_BATCH_MAX_BLS: usize = 4;
+    pub const SIGNATURE_BATCH_MAX_BLS: usize = 16;
     /// Default gas-collection technical account identifier.
     pub const GAS_TECH_ACCOUNT_ID: &str = "gas@ivm";
     /// Admission-time upper bound for `max_cycles` embedded in IVM bytecode headers.

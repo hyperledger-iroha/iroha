@@ -1,7 +1,8 @@
 //! Gossiper actor responsible for transaction gossiping.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet, HashMap},
     io::Write,
     num::{NonZeroU32, NonZeroUsize},
     str::FromStr,
@@ -13,7 +14,7 @@ use iroha_config::parameters::actual::{
     DataspaceGossip, DataspaceGossipFallback, LaneConfig as LaneGeometry, Network as NetworkConfig,
     RestrictedPublicPayload, TransactionGossiper as Config,
 };
-use iroha_crypto::{HashOf, KeyPair};
+use iroha_crypto::{Hash, HashOf, KeyPair};
 use iroha_data_model::{
     ChainId, DataSpaceId,
     account::AccountId,
@@ -1404,6 +1405,72 @@ pub struct GossipTransaction {
     encoded: Option<Arc<Vec<u8>>>,
 }
 
+const GOSSIP_TX_DECODE_CACHE_LIMIT: usize = 2048;
+
+struct GossipTxDecodeCacheEntry {
+    signed: Arc<SignedTransaction>,
+    encoded: Arc<Vec<u8>>,
+    consumed: usize,
+}
+
+struct GossipTxDecodeCache {
+    map: HashMap<Hash, GossipTxDecodeCacheEntry>,
+}
+
+impl GossipTxDecodeCache {
+    fn new() -> Self {
+        Self {
+            map: HashMap::new(),
+        }
+    }
+
+    fn get(&self, key: &Hash) -> Option<&GossipTxDecodeCacheEntry> {
+        self.map.get(key)
+    }
+
+    fn insert(&mut self, key: Hash, entry: GossipTxDecodeCacheEntry) {
+        if self.map.len() >= GOSSIP_TX_DECODE_CACHE_LIMIT {
+            // Simple bounded cache: clear rather than paying LRU bookkeeping cost.
+            self.map.clear();
+        }
+        self.map.insert(key, entry);
+    }
+}
+
+thread_local! {
+    static GOSSIP_TX_DECODE_CACHE: RefCell<GossipTxDecodeCache> =
+        RefCell::new(GossipTxDecodeCache::new());
+}
+
+fn decode_gossip_transaction_payload(
+    bytes: &[u8],
+) -> Result<(Arc<SignedTransaction>, Arc<Vec<u8>>, usize), ncore::Error> {
+    let key = Hash::new(bytes);
+    if let Some(hit) = GOSSIP_TX_DECODE_CACHE.with(|cache| {
+        let cache = cache.borrow();
+        cache.get(&key).map(|entry| {
+            (
+                Arc::clone(&entry.signed),
+                Arc::clone(&entry.encoded),
+                entry.consumed,
+            )
+        })
+    }) {
+        return Ok(hit);
+    }
+
+    let (signed, consumed) = ncore::decode_field_canonical_slice::<SignedTransaction>(bytes)?;
+    let signed = Arc::new(signed);
+    let encoded = Arc::new(bytes[..consumed].to_vec());
+    let entry = GossipTxDecodeCacheEntry {
+        signed: signed.clone(),
+        encoded: encoded.clone(),
+        consumed,
+    };
+    GOSSIP_TX_DECODE_CACHE.with(|cache| cache.borrow_mut().insert(key, entry));
+    Ok((signed, encoded, consumed))
+}
+
 impl GossipTransaction {
     /// Wrap an accepted transaction, dropping acceptance metadata for gossip.
     pub fn new(tx: AcceptedTransaction<'static>) -> Self {
@@ -1479,10 +1546,9 @@ impl<'a> NoritoDeserialize<'a> for GossipTransaction {
     fn try_deserialize(archived: &'a ncore::Archived<Self>) -> Result<Self, ncore::Error> {
         let ptr = core::ptr::from_ref(archived).cast::<u8>();
         let bytes = ncore::payload_slice_from_ptr(ptr)?;
-        let (signed, consumed) = ncore::decode_field_canonical_slice::<SignedTransaction>(bytes)?;
-        let encoded = Arc::new(bytes[..consumed].to_vec());
+        let (signed, encoded, _) = decode_gossip_transaction_payload(bytes)?;
         Ok(Self {
-            signed: Arc::new(signed),
+            signed,
             encoded: Some(encoded),
         })
     }
@@ -1490,11 +1556,10 @@ impl<'a> NoritoDeserialize<'a> for GossipTransaction {
 
 impl<'a> ncore::DecodeFromSlice<'a> for GossipTransaction {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
-        let (signed, consumed) = ncore::decode_field_canonical_slice::<SignedTransaction>(bytes)?;
-        let encoded = Arc::new(bytes[..consumed].to_vec());
+        let (signed, encoded, consumed) = decode_gossip_transaction_payload(bytes)?;
         Ok((
             Self {
-                signed: Arc::new(signed),
+                signed,
                 encoded: Some(encoded),
             },
             consumed,
@@ -1741,6 +1806,39 @@ mod tests {
 
     fn payload_for(tx: &SignedTransaction) -> Arc<Vec<u8>> {
         Arc::new(norito::codec::Encode::encode(tx))
+    }
+
+    #[test]
+    fn gossip_transaction_decode_cache_reuses_arcs() {
+        let (signed, _accepted) = build_transaction("gossip-decode-cache-test");
+        let payload = payload_for(&signed);
+        let bytes = payload.as_ref().as_slice();
+
+        let (first, used1) =
+            <GossipTransaction as ncore::DecodeFromSlice>::decode_from_slice(bytes)
+                .expect("decode first gossip transaction");
+        let (second, used2) =
+            <GossipTransaction as ncore::DecodeFromSlice>::decode_from_slice(bytes)
+                .expect("decode second gossip transaction");
+
+        assert_eq!(used1, bytes.len());
+        assert_eq!(used2, bytes.len());
+        assert!(
+            Arc::ptr_eq(&first.signed, &second.signed),
+            "signed transaction must be reused from cache"
+        );
+        let first_encoded = first
+            .encoded
+            .as_ref()
+            .expect("encoded bytes must be cached");
+        let second_encoded = second
+            .encoded
+            .as_ref()
+            .expect("encoded bytes must be cached");
+        assert!(
+            Arc::ptr_eq(first_encoded, second_encoded),
+            "encoded bytes must be reused from cache"
+        );
     }
 
     fn test_network_config(addr: iroha_primitives::addr::SocketAddr) -> NetworkConfig {

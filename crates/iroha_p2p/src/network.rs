@@ -2314,6 +2314,12 @@ mod handle_update_tests {
     #[derive(Clone, Debug, Decode, Encode)]
     struct Dummy;
 
+    impl<'a> ncore::DecodeFromSlice<'a> for Dummy {
+        fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+            ncore::decode_field_canonical::<Self>(bytes)
+        }
+    }
+
     impl message::ClassifyTopic for Dummy {}
 
     fn closed_handle() -> NetworkBaseHandle<Dummy, X25519Sha256, ChaCha20Poly1305> {
@@ -2448,6 +2454,12 @@ mod accept_stream_tests {
 
     #[derive(Clone, Debug, Decode, Encode)]
     struct Dummy;
+
+    impl<'a> ncore::DecodeFromSlice<'a> for Dummy {
+        fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+            ncore::decode_field_canonical::<Self>(bytes)
+        }
+    }
 
     impl crate::network::message::ClassifyTopic for Dummy {}
 
@@ -3267,6 +3279,12 @@ mod accept_stream_tests {
         #[derive(Clone, Debug, Decode, Encode)]
         struct DummyConsensus;
 
+        impl<'a> ncore::DecodeFromSlice<'a> for DummyConsensus {
+            fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+                ncore::decode_field_canonical::<Self>(bytes)
+            }
+        }
+
         impl message::ClassifyTopic for DummyConsensus {
             fn topic(&self) -> message::Topic {
                 message::Topic::Consensus
@@ -3419,7 +3437,7 @@ mod accept_stream_tests {
             _encryptor: core::marker::PhantomData,
         };
 
-        let before = cap_violations_block_sync();
+        let before = cap_violations_consensus();
 
         let peer = Peer::new(
             listen_addr_std.into(),
@@ -3458,6 +3476,12 @@ mod accept_stream_tests {
 
         #[derive(Clone, Debug, Decode, Encode)]
         struct DummyPayload;
+
+        impl<'a> ncore::DecodeFromSlice<'a> for DummyPayload {
+            fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+                ncore::decode_field_canonical::<Self>(bytes)
+            }
+        }
 
         impl message::ClassifyTopic for DummyPayload {
             fn topic(&self) -> message::Topic {
@@ -3611,7 +3635,7 @@ mod accept_stream_tests {
             _encryptor: core::marker::PhantomData,
         };
 
-        let before = cap_violations_block_sync();
+        let before = cap_violations_consensus();
 
         let peer = Peer::new(
             listen_addr_std.into(),
@@ -3666,6 +3690,12 @@ mod accept_stream_tests {
 
         #[derive(Clone, Debug, Decode, Encode)]
         struct DummyPayload;
+
+        impl<'a> ncore::DecodeFromSlice<'a> for DummyPayload {
+            fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+                ncore::decode_field_canonical::<Self>(bytes)
+            }
+        }
 
         impl message::ClassifyTopic for DummyPayload {
             fn topic(&self) -> message::Topic {
@@ -4153,6 +4183,12 @@ mod quic_tests {
 
     #[derive(Clone, Debug, Decode, Encode)]
     struct Dummy;
+
+    impl<'a> ncore::DecodeFromSlice<'a> for Dummy {
+        fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+            ncore::decode_field_canonical::<Self>(bytes)
+        }
+    }
 
     impl crate::network::message::ClassifyTopic for Dummy {}
 
@@ -6114,10 +6150,22 @@ mod tests {
     #[derive(Clone, Debug, Decode, Encode)]
     struct DummyMsg;
 
+    impl<'a> ncore::DecodeFromSlice<'a> for DummyMsg {
+        fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+            ncore::decode_field_canonical::<Self>(bytes)
+        }
+    }
+
     impl message::ClassifyTopic for DummyMsg {}
 
     #[derive(Clone, Copy, Debug, Decode, Encode)]
     struct TrustGossipMsg;
+
+    impl<'a> ncore::DecodeFromSlice<'a> for TrustGossipMsg {
+        fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+            ncore::decode_field_canonical::<Self>(bytes)
+        }
+    }
 
     impl message::ClassifyTopic for TrustGossipMsg {
         fn topic(&self) -> message::Topic {
@@ -6127,6 +6175,12 @@ mod tests {
 
     #[derive(Clone, Copy, Debug, Decode, Encode)]
     struct PeerGossipMsg;
+
+    impl<'a> ncore::DecodeFromSlice<'a> for PeerGossipMsg {
+        fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+            ncore::decode_field_canonical::<Self>(bytes)
+        }
+    }
 
     impl message::ClassifyTopic for PeerGossipMsg {
         fn topic(&self) -> message::Topic {
@@ -6138,6 +6192,12 @@ mod tests {
     enum TopicMsg {
         Trust,
         Peer,
+    }
+
+    impl<'a> ncore::DecodeFromSlice<'a> for TopicMsg {
+        fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+            ncore::decode_field_canonical::<Self>(bytes)
+        }
     }
 
     impl message::ClassifyTopic for TopicMsg {
