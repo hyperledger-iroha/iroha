@@ -5269,7 +5269,9 @@ mod tests {
     fn run_worker_iteration_limits_vote_burst_when_blocks_pending() {
         status::reset_worker_loop_snapshot_for_tests();
 
-        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let vote_total = VOTE_BURST_CAP_WITH_BLOCKS + 1;
+        let vote_cap = vote_total.saturating_add(1);
+        let (vote_tx, vote_rx) = mpsc::sync_channel(vote_cap);
         let (_block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (_rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -5278,7 +5280,6 @@ mod tests {
         let (_background_tx, background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
 
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block"));
-        let vote_total = VOTE_BURST_CAP_WITH_BLOCKS + 1;
         for _ in 0..vote_total {
             let vote = Vote {
                 phase: Phase::Prepare,
@@ -5371,7 +5372,9 @@ mod tests {
     fn run_worker_iteration_prioritizes_votes_over_block_payload_backlog() {
         status::reset_worker_loop_snapshot_for_tests();
 
-        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let vote_total = VOTE_BURST_CAP + 1;
+        let vote_cap = vote_total.saturating_add(1);
+        let (vote_tx, vote_rx) = mpsc::sync_channel(vote_cap);
         let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (_rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (_block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -5380,7 +5383,6 @@ mod tests {
         let (_background_tx, background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
 
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block"));
-        let vote_total = VOTE_BURST_CAP + 1;
         for _ in 0..vote_total {
             let vote = Vote {
                 phase: Phase::Prepare,

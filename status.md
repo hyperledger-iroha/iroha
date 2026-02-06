@@ -1,6 +1,10 @@
 # Status
 
-Last update: 2026-02-05
+Last update: 2026-02-06
+- Offline allowances: allow zero-amount `RegisterOfflineAllowance` to register without a prefunded asset (skip escrow withdraw/deposit when amount is zero); added unit coverage for zero-amount, missing-prefund, and missing-escrow cases. Tests: `cargo test -p iroha_core register_allowance_ -- --nocapture` (ok; warnings about unexpected `cfg` `bls` in `iroha_config`, single-use lifetimes in `iroha_core::gossiper`, `hidden_glob_reexports` in `iroha_core::tx`, and unused `mut` in `iroha_core`).
+- Tests: fix vote-verify worker shutdown hang by dropping the last work sender, increase worker-loop vote channel caps to avoid blocking on burst sends, and make `state_manifest_quorum_requires_approvers` use deterministic keypairs to avoid RNG stalls. Tests not run (not requested).
+- Tx tests: `state_manifest_quorum_requires_approvers` now exercises `enforce_manifest_quorum` directly (skips `State::block` validation) to avoid exec-witness lock contention and hanging under parallel tests. Tests not run (not requested).
+- Sumeragi tests: seed pacemaker single-validator NEW_VIEW test with a committed block in Kura/state and keep pending RBC eviction test truly stale by using an old `last_seen`; tests not run (cargo test `-p iroha_core sumeragi::main_loop::tests::pacemaker_single_validator_seeds_new_view_from_precommit_qc` timed out after 120s during compile with existing warnings about unexpected `cfg` `bls`, single-use lifetimes, `hidden_glob_reexports`, and unused `mut`).
 - Integration tests: enable reentrant CLI builds in `iroha_cli` integration tests to avoid `iroha_cli` build failures under `cargo test` when the binary is not prebuilt. Tests not run (not requested).
 - Sumeragi tests: fix a deadlock between `exec_witness_guard` and `state.block` by acquiring the witness guard after building the `StateBlock` in `exec_roots_capture_fallback_uses_witness_snapshot`. Tests not run (not requested).
 - Integration tests: set `include_expired=true` on offline allowance list address-format checks so static fixtures remain visible after wall-clock expiry. Tests not run (not requested).

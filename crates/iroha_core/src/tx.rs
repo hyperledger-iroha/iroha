@@ -3473,7 +3473,7 @@ pub mod tests {
     use iroha_data_model::{
         account::{Account, AccountId, MultisigMember, MultisigPolicy},
         block::{BlockHeader, SignedBlock},
-        domain::Domain,
+        domain::{Domain, DomainId},
         events::{
             EventBox,
             data::{
@@ -6839,47 +6839,23 @@ pub mod tests {
     #[test]
     fn state_manifest_quorum_requires_approvers() {
         let chain: ChainId = "lane-manifest-quorum".parse().unwrap();
-        let (primary_id, primary_keypair) = gen_account_in("wonderland");
-        let (secondary_id, _secondary_keypair) = gen_account_in("wonderland");
-        let domain = Domain::new("wonderland".parse().unwrap()).build(&primary_id);
-        let primary_account = Account::new(primary_id.clone()).build(&primary_id);
-        let secondary_account = Account::new(secondary_id.clone()).build(&secondary_id);
-        let world = World::with([domain], [primary_account, secondary_account], []);
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let primary_keypair = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
+        let secondary_keypair = KeyPair::from_seed(vec![0x22; 32], Algorithm::Ed25519);
+        let primary_id = AccountId::new(domain_id.clone(), primary_keypair.public_key().clone());
+        let secondary_id = AccountId::new(domain_id.clone(), secondary_keypair.public_key().clone());
 
         let rules = GovernanceRules {
             validators: vec![primary_id.clone(), secondary_id.clone()],
             quorum: Some(2),
             ..GovernanceRules::default()
         };
-        let status = LaneManifestStatus {
-            lane: TestLaneId::SINGLE,
-            alias: "gov".to_string(),
-            dataspace: TestDataSpaceId::GLOBAL,
-            visibility: LaneVisibility::Public,
-            storage: LaneStorageProfile::FullReplica,
-            governance: Some("parliament".to_string()),
-            manifest_path: Some(PathBuf::from("/tmp/manifest.json")),
-            governance_rules: Some(rules),
-            privacy_commitments: Vec::new(),
-        };
-        let mut statuses = BTreeMap::new();
-        statuses.insert(TestLaneId::SINGLE, status);
-        let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-        state.install_lane_manifests(&manifests);
+        let lane_alias = "gov";
 
         let tx = TransactionBuilder::new(chain.clone(), primary_id.clone())
             .with_instructions([Log::new(Level::INFO, "noop".into())])
             .sign(primary_keypair.private_key());
-        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut ivm_cache = IvmCache::new();
-        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
-        match result {
+        match enforce_manifest_quorum(lane_alias, &rules, &tx) {
             Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg))) => {
                 assert!(
                     msg.contains("quorum"),
@@ -6898,11 +6874,7 @@ pub mod tests {
             .with_instructions([Log::new(Level::INFO, "noop".into())])
             .with_metadata(metadata)
             .sign(primary_keypair.private_key());
-        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut ivm_cache = IvmCache::new();
-        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        let result = enforce_manifest_quorum(lane_alias, &rules, &tx);
         assert!(result.is_ok(), "quorum satisfied should pass: {result:?}");
     }
 

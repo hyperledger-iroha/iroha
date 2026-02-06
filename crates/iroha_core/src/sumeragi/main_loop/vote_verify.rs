@@ -677,6 +677,7 @@ mod tests {
             for work in works {
                 work_tx.send(work).expect("send vote verify work");
             }
+            drop(work_tx);
 
             for _ in 0..4 {
                 handle
