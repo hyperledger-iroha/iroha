@@ -12176,10 +12176,6 @@ impl Torii {
                 operator_signatures::enforce_operator_access,
             );
             let operator_router = Router::new()
-                .route(
-                    &format!("{}/{{*tail}}", uri::STATUS),
-                    get(handler_status_tail),
-                )
                 // Telemetry-gated Sumeragi endpoints (runtime gate inside handlers)
                 .route("/v1/sumeragi/rbc", get(handler_rbc_status))
                 .route(
@@ -12190,8 +12186,6 @@ impl Torii {
                 .route("/v1/sumeragi/phases", get(handler_sumeragi_phases))
                 .route("/v1/debug/axt/cache", get(handler_debug_axt_cache))
                 .route("/v1/debug/witness", get(handler_debug_witness))
-                .route(uri::STATUS, get(handler_status_root))
-                .route(uri::METRICS, get(handler_metrics))
                 .route_layer(operator_layer);
 
             let public_router = Router::new()
@@ -12210,7 +12204,15 @@ impl Torii {
                 .route(
                     "/v1/assets/{definition_id}/holders/query",
                     post(handler_asset_holders_query),
-                );
+                )
+                // `/status` and `/metrics` are used by localnet/perf harnesses and typical
+                // monitoring setups; keep them outside of operator signature middleware.
+                .route(uri::STATUS, get(handler_status_root))
+                .route(
+                    &format!("{}/{{*tail}}", uri::STATUS),
+                    get(handler_status_tail),
+                )
+                .route(uri::METRICS, get(handler_metrics));
 
             router.merge(operator_router).merge(public_router)
         });
@@ -12555,13 +12557,11 @@ impl Torii {
     #[allow(clippy::unused_self)]
     fn add_profiling_routes(&self, builder: &mut RouterBuilder) {
         builder.apply_with_state(|router, state| {
-            let operator_layer = axum::middleware::from_fn_with_state(
-                state.clone(),
-                operator_signatures::enforce_operator_access,
-            );
-            let profiling = Router::new()
-                .route(uri::PROFILE, get(handler_profile))
-                .route_layer(operator_layer);
+            let _ = state;
+            // Profiling endpoints are feature-gated (`profiling-endpoint`) and used for local
+            // debugging/perf runs. Keep them reachable without operator auth so localnet harnesses
+            // can reliably collect profiles.
+            let profiling = Router::new().route(uri::PROFILE, get(handler_profile));
             router.merge(profiling)
         });
     }
@@ -19399,6 +19399,7 @@ mod tests {
     #[tokio::test]
     async fn sorafs_repair_worker_auth_accepts_signed_worker() {
         let app = mk_app_state_for_tests();
+        let _guard = guard_account_resolvers(&app);
         let report = repair_report("REP-900", [0x11; 32], [0x22; 32], 1_701_000_000);
         app.sorafs_node
             .enqueue_repair_report(&report)
@@ -19408,6 +19409,7 @@ mod tests {
         let worker_id: AccountId = format!("{}@sora", worker_key.public_key())
             .parse()
             .expect("valid worker id");
+        let worker_id_literal = format!("{worker_id}@{}", worker_id.domain());
         grant_repair_worker_permission(&app, &worker_id, report.evidence.provider_id);
 
         let claimed_at = report.submitted_at_unix + 10;
@@ -19417,7 +19419,7 @@ mod tests {
             ticket_id: report.ticket_id.clone(),
             manifest_digest: report.evidence.manifest_digest,
             provider_id: report.evidence.provider_id,
-            worker_id: worker_id.to_string(),
+            worker_id: worker_id_literal.clone(),
             idempotency_key: idempotency_key.to_string(),
             action: RepairWorkerActionV1::Claim {
                 claimed_at_unix: claimed_at,
@@ -19429,7 +19431,7 @@ mod tests {
             &app,
             &report.ticket_id,
             &hex::encode(report.evidence.manifest_digest),
-            &worker_id.to_string(),
+            &worker_id_literal,
             idempotency_key,
             RepairWorkerActionV1::Claim {
                 claimed_at_unix: claimed_at,
@@ -19443,6 +19445,7 @@ mod tests {
     #[tokio::test]
     async fn sorafs_repair_worker_auth_rejects_missing_permission() {
         let app = mk_app_state_for_tests();
+        let _guard = guard_account_resolvers(&app);
         let report = repair_report("REP-901", [0x33; 32], [0x44; 32], 1_701_000_100);
         app.sorafs_node
             .enqueue_repair_report(&report)
@@ -19452,6 +19455,7 @@ mod tests {
         let worker_id: AccountId = format!("{}@sora", worker_key.public_key())
             .parse()
             .expect("valid worker id");
+        let worker_id_literal = format!("{worker_id}@{}", worker_id.domain());
 
         let failed_at = report.submitted_at_unix + 20;
         let idempotency_key = "fail-901";
@@ -19460,7 +19464,7 @@ mod tests {
             ticket_id: report.ticket_id.clone(),
             manifest_digest: report.evidence.manifest_digest,
             provider_id: report.evidence.provider_id,
-            worker_id: worker_id.to_string(),
+            worker_id: worker_id_literal.clone(),
             idempotency_key: idempotency_key.to_string(),
             action: RepairWorkerActionV1::Fail {
                 failed_at_unix: failed_at,
@@ -19473,7 +19477,7 @@ mod tests {
             &app,
             &report.ticket_id,
             &hex::encode(report.evidence.manifest_digest),
-            &worker_id.to_string(),
+            &worker_id_literal,
             idempotency_key,
             RepairWorkerActionV1::Fail {
                 failed_at_unix: failed_at,
@@ -19491,6 +19495,7 @@ mod tests {
     #[tokio::test]
     async fn sorafs_repair_worker_auth_rejects_manifest_digest_mismatch() {
         let app = mk_app_state_for_tests();
+        let _guard = guard_account_resolvers(&app);
         let report = repair_report("REP-902", [0x55; 32], [0x66; 32], 1_701_000_200);
         app.sorafs_node
             .enqueue_repair_report(&report)
@@ -19500,6 +19505,7 @@ mod tests {
         let worker_id: AccountId = format!("{}@sora", worker_key.public_key())
             .parse()
             .expect("valid worker id");
+        let worker_id_literal = format!("{worker_id}@{}", worker_id.domain());
         grant_repair_worker_permission(&app, &worker_id, report.evidence.provider_id);
 
         let claimed_at = report.submitted_at_unix + 10;
@@ -19509,7 +19515,7 @@ mod tests {
             ticket_id: report.ticket_id.clone(),
             manifest_digest: report.evidence.manifest_digest,
             provider_id: report.evidence.provider_id,
-            worker_id: worker_id.to_string(),
+            worker_id: worker_id_literal.clone(),
             idempotency_key: idempotency_key.to_string(),
             action: RepairWorkerActionV1::Claim {
                 claimed_at_unix: claimed_at,
@@ -19521,7 +19527,7 @@ mod tests {
             &app,
             &report.ticket_id,
             &hex::encode([0x77u8; 32]),
-            &worker_id.to_string(),
+            &worker_id_literal,
             idempotency_key,
             RepairWorkerActionV1::Claim {
                 claimed_at_unix: claimed_at,

@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Submit transaction pings in parallel (optionally sharded) and estimate TPS from /status + /metrics."""
+"""Submit transaction pings in parallel (optionally sharded).
+
+The script prefers to estimate admitted/committed throughput using `/status` and `/metrics`, but those
+endpoints may be operator-protected. When they are unavailable (for example HTTP 401/403), the script
+still drives load and prints a "submitted" throughput summary from CLI results.
+"""
 
 from __future__ import annotations
 
@@ -158,8 +163,8 @@ def parse_ping_submitted(output: str) -> Optional[tuple[int, int]]:
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Drive transaction ping load via iroha CLI and estimate throughput from /status and "
-            "/metrics."
+            "Drive transaction ping load via iroha CLI. When available, estimate admitted/committed "
+            "throughput from /status and /metrics; otherwise fall back to submission stats."
         )
     )
     parser.add_argument("--iroha-bin", default="target/release/iroha")
@@ -332,10 +337,6 @@ def main() -> int:
         print(f"Sharding load across {len(shard_specs)} peers (counts: {shard_counts})")
         print(f"Parallel per shard: {shard_parallel}")
 
-    snapshots = []
-    lock = threading.Lock()
-    stop_event = threading.Event()
-
     def fetch_json(url: str) -> dict:
         with urllib.request.urlopen(url, timeout=5) as resp:
             return json.loads(resp.read().decode("utf-8"))
@@ -344,16 +345,42 @@ def main() -> int:
         with urllib.request.urlopen(url, timeout=5) as resp:
             return resp.read().decode("utf-8")
 
+    snapshots = []
+    lock = threading.Lock()
+    stop_event = threading.Event()
+
+    try:
+        baseline = fetch_json(args.status_url)
+        baseline_status = extract_status_snapshot(baseline)
+    except Exception as exc:
+        baseline_status = None
+        if args.queue_soft_limit > 0 or args.queue_hard_limit > 0:
+            print(
+                f"Warning: failed to read baseline status ({args.status_url}): {exc}; "
+                "disabling queue limits."
+            )
+        else:
+            print(
+                f"Warning: failed to read baseline status ({args.status_url}): {exc}; "
+                "status-based throughput estimates disabled."
+            )
+
+    status_enabled = baseline_status is not None
+
     def poller() -> None:
         while not stop_event.is_set():
             try:
                 status_raw = fetch_json(args.status_url)
-                metrics_raw = fetch_text(args.metrics_url)
                 status = extract_status_snapshot(status_raw)
-                dag_vertices = parse_metric_value(metrics_raw, "pipeline_dag_vertices")
             except Exception:
                 time.sleep(args.poll_interval)
                 continue
+            dag_vertices = None
+            try:
+                metrics_raw = fetch_text(args.metrics_url)
+                dag_vertices = parse_metric_value(metrics_raw, "pipeline_dag_vertices")
+            except Exception:
+                pass
             with lock:
                 snapshots.append(
                     {
@@ -364,26 +391,22 @@ def main() -> int:
                 )
             time.sleep(args.poll_interval)
 
-    thread = threading.Thread(target=poller, name="status-poller", daemon=True)
-    thread.start()
-
-    try:
-        baseline = fetch_json(args.status_url)
-        baseline_status = extract_status_snapshot(baseline)
-    except Exception as exc:
-        print(f"Failed to read baseline status: {exc}")
-        stop_event.set()
-        thread.join(timeout=2)
-        return 1
+    thread = None
+    if status_enabled:
+        thread = threading.Thread(target=poller, name="status-poller", daemon=True)
+        thread.start()
 
     baseline_queue_by_peer: dict[str, int] = {}
-    for torii_url in peer_urls:
-        status_url = urllib.parse.urljoin(torii_url, "status")
-        try:
-            status_raw = fetch_json(status_url)
-            baseline_queue_by_peer[torii_url] = int(status_raw.get("queue_size", 0) or 0)
-        except Exception:
-            baseline_queue_by_peer[torii_url] = baseline_status["queue_size"]
+    if status_enabled:
+        for torii_url in peer_urls:
+            status_url = urllib.parse.urljoin(torii_url, "status")
+            try:
+                status_raw = fetch_json(status_url)
+                baseline_queue_by_peer[torii_url] = int(status_raw.get("queue_size", 0) or 0)
+            except Exception:
+                baseline_queue_by_peer[torii_url] = baseline_status["queue_size"]
+    else:
+        baseline_queue_by_peer = {torii_url: 0 for torii_url in peer_urls}
 
     base_config_text = Path(args.client_config).read_text(encoding="utf-8")
     temp_configs: list[Path] = []
@@ -404,12 +427,15 @@ def main() -> int:
                 batch_interval=args.batch_interval,
                 client_config=temp_path,
                 baseline_queue_size=baseline_queue_by_peer.get(
-                    torii_url, baseline_status["queue_size"]
+                    torii_url,
+                    baseline_status["queue_size"] if baseline_status is not None else 0,
                 ),
             )
         )
 
     def wait_for_queue(shard: LoadShard) -> bool:
+        if not status_enabled:
+            return True
         if args.queue_soft_limit <= 0 and args.queue_hard_limit <= 0:
             return True
         deadline = None
@@ -653,28 +679,44 @@ def main() -> int:
 
     if submit_failed and not args.continue_on_failure:
         stop_event.set()
-        thread.join(timeout=2)
+        if thread is not None:
+            thread.join(timeout=2)
         print("load submission failed")
         return 1
 
-    drain_deadline = time.monotonic() + args.drain_timeout
-    while time.monotonic() < drain_deadline:
-        with lock:
-            if snapshots:
-                last = snapshots[-1]["status"]
-                if last["queue_size"] <= baseline_status["queue_size"]:
-                    break
-        time.sleep(args.poll_interval)
+    if status_enabled:
+        drain_deadline = time.monotonic() + args.drain_timeout
+        while time.monotonic() < drain_deadline:
+            with lock:
+                if snapshots:
+                    last = snapshots[-1]["status"]
+                    if last["queue_size"] <= baseline_status["queue_size"]:
+                        break
+            time.sleep(args.poll_interval)
 
     stop_event.set()
-    thread.join(timeout=2)
+    if thread is not None:
+        thread.join(timeout=2)
 
     with lock:
         samples = list(snapshots)
 
-    if not samples:
-        print("No status samples captured; cannot compute throughput.")
-        return 1
+    submitted_total = sum(result.submitted for result in results)
+    submit_tps = submitted_total / max(submit_elapsed, 1e-6)
+    total_rate_limits = sum(result.rate_limit_hits for result in results)
+    total_timeouts = sum(1 for result in results if result.timed_out)
+
+    if not status_enabled or not samples:
+        print("Load summary")
+        print(f"- submitted: {submitted_total} tx in {submit_elapsed:.2f}s ({submit_tps:.1f} tps)")
+        print(f"- rate_limit_hits (status 429): {total_rate_limits}")
+        if total_timeouts:
+            print(f"- cli_timeouts: {total_timeouts} shard(s)")
+        if not status_enabled:
+            print("- status: unavailable (skipping admitted/committed estimates)")
+        else:
+            print("- status: sampling failed (skipping admitted/committed estimates)")
+        return 1 if submit_failed else 0
 
     start_ts = samples[0]["ts"]
     end_ts = samples[-1]["ts"]
@@ -684,8 +726,6 @@ def main() -> int:
     admitted = final_status["txs_approved"] - baseline_status["txs_approved"]
     rejected = final_status["txs_rejected"] - baseline_status["txs_rejected"]
     admit_tps = admitted / elapsed
-    submitted_total = sum(result.submitted for result in results)
-    submit_tps = submitted_total / max(submit_elapsed, 1e-6)
 
     committed = 0
     last_block = baseline_status["blocks_non_empty"]
@@ -713,9 +753,6 @@ def main() -> int:
     else:
         commit_window = last_block_ts - first_block_ts
     commit_tps = committed / max(commit_window, 1e-6)
-
-    total_rate_limits = sum(result.rate_limit_hits for result in results)
-    total_timeouts = sum(1 for result in results if result.timed_out)
 
     print("Load summary")
     print(f"- submitted: {submitted_total} tx in {submit_elapsed:.2f}s ({submit_tps:.1f} tps)")

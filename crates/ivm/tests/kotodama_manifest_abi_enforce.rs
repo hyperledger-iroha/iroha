@@ -26,10 +26,13 @@ fn compile_source_with_manifest_rejects_non_v1_abi() {
         "unexpected error: {err}"
     );
 
-    // As a sanity check, compiling without manifest still succeeds even if a
-    // non-1 `abi_version` is requested. This is used by internal tests that
-    // exercise header parsing paths; policy is enforced at manifest/admission.
-    let _bytes = compiler
+    // Compiling without a manifest must also reject non-v1 ABI, because the
+    // bytecode header is part of the on-chain safety surface.
+    let err = compiler
         .compile_source(src)
-        .expect("compile without manifest should succeed");
+        .expect_err("expected rejection for abi_version != 1");
+    assert!(
+        err.contains("unsupported abi_version 2") && err.contains("expected 1"),
+        "unexpected error: {err}"
+    );
 }

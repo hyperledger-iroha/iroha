@@ -22,9 +22,10 @@ use iroha_core::{
 use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
 use iroha_data_model::{
     ChainId,
-    account::AccountId,
-    asset::{AssetDefinitionId, AssetId},
+    account::{Account, AccountId},
+    asset::{AssetDefinition, AssetDefinitionId, AssetId},
     block::BlockHeader,
+    domain::Domain,
     isi::offline::RegisterOfflineAllowance,
     metadata::Metadata,
     name::Name,
@@ -33,7 +34,7 @@ use iroha_data_model::{
         OfflineWalletPolicy,
     },
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::{Numeric, NumericSpec};
 use iroha_torii::{
     MaybeTelemetry, OnlinePeersProvider, Torii,
     filter::{Pagination, QueryEnvelope},
@@ -299,11 +300,8 @@ fn build_cert_harness() -> CertHarness {
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(
-        World::default(),
-        Arc::clone(&kura),
-        query,
-    ));
+    let world = world_from_cert_fixtures(&fixtures);
+    let state = Arc::new(State::new_for_testing(world, Arc::clone(&kura), query));
 
     seed_allowance(&state, &fixtures.certificate);
 
@@ -396,6 +394,36 @@ fn certificate_draft_json(certificate: &OfflineWalletCertificate) -> Value {
         _ => panic!("certificate json must be object"),
     }
     value
+}
+
+fn world_from_cert_fixtures(fixtures: &CertFixtures) -> World {
+    let domain = Domain {
+        id: fixtures.controller.domain().clone(),
+        logo: None,
+        metadata: Metadata::default(),
+        owned_by: fixtures.controller.clone(),
+    };
+    let controller = Account {
+        id: fixtures.controller.clone(),
+        metadata: Metadata::default(),
+        label: None,
+        uaid: None,
+        opaque_ids: Vec::new(),
+    };
+    let asset_definition = AssetDefinition {
+        id: fixtures.certificate.allowance.asset.definition().clone(),
+        spec: NumericSpec::integer(),
+        mintable: Default::default(),
+        logo: None,
+        metadata: Metadata::default(),
+        owned_by: fixtures.controller.clone(),
+        total_quantity: Numeric::zero(),
+        confidential_policy: Default::default(),
+    };
+
+    // `RegisterOfflineAllowance` seeding resolves the definition in order to evaluate
+    // offline escrow requirements, so the harness must include it.
+    World::with([domain], [controller], [asset_definition])
 }
 
 fn seed_allowance(state: &Arc<State>, certificate: &OfflineWalletCertificate) {

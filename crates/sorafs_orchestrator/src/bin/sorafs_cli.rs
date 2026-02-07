@@ -4274,6 +4274,9 @@ fn norito_build(raw_args: Vec<String>) -> Result<(), String> {
         "missing required `--bytecode-out=PATH` for `sorafs_cli norito build`".to_string()
     })?;
     let abi_version = abi_version.unwrap_or(1);
+    if abi_version != 1 {
+        return Err(format!("unsupported abi_version {abi_version}; expected 1"));
+    }
 
     let (source_text, source_path) = if source_spec == "-" {
         let mut buf = String::new();

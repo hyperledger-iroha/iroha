@@ -4181,7 +4181,7 @@ mod state {
                             tokio::pin!(quic_fut);
 
                             // Phase 1: give QUIC a head start, but don't stall on blocked UDP.
-                            let mut stagger = tokio::time::sleep(happy_eyeballs_stagger);
+                            let stagger = tokio::time::sleep(happy_eyeballs_stagger);
                             tokio::pin!(stagger);
                             tokio::select! {
                                 res = &mut quic_fut => match res {

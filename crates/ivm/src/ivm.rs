@@ -1339,6 +1339,7 @@ impl IVM {
             .set_forced_simd(config.acceleration().forced_simd());
         vm.set_hardware_capabilities(config.capabilities());
         vm.set_acceleration_policy(config.acceleration());
+        vm.core_count = vm.scheduler.thread_count();
         vm
     }
 

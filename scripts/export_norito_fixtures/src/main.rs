@@ -1077,6 +1077,265 @@ fn optional_u64_value(value: Option<u64>) -> Value {
     }
 }
 
+fn optional_u32_value(value: Option<u32>) -> Value {
+    match value {
+        Some(v) => Value::Number(Number::U64(v as u64)),
+        None => Value::Null,
+    }
+}
+
+fn value_to_string(value: &Value) -> String {
+    match value {
+        Value::Null => "null".to_owned(),
+        Value::Bool(true) => "true".to_owned(),
+        Value::Bool(false) => "false".to_owned(),
+        Value::Number(number) => match number {
+            Number::I64(v) => v.to_string(),
+            Number::U64(v) => v.to_string(),
+            Number::F64(v) => v.to_string(),
+        },
+        Value::String(s) => s.clone(),
+        Value::Array(_) | Value::Object(_) => json::to_json(value).unwrap_or_else(|_| {
+            // Fall back to a debug representation when serialization fails.
+            format!("{value:?}")
+        }),
+    }
+}
+
+fn expect_string<'a>(obj: &'a Map, key: &str) -> Result<&'a str> {
+    obj.get(key)
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing '{key}' string"))
+}
+
+fn expect_u64(obj: &Map, key: &str) -> Result<u64> {
+    obj.get(key)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| anyhow::anyhow!("missing '{key}' integer"))
+}
+
+fn parse_optional_u64(obj: &Map, key: &str) -> Result<Option<u64>> {
+    match obj.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(number)) => number
+            .as_u64()
+            .ok_or_else(|| anyhow::anyhow!("'{key}' must be an integer or null"))
+            .map(Some),
+        Some(other) => bail!("'{key}' must be an integer or null, got {}", value_to_string(other)),
+    }
+}
+
+fn parse_optional_u32(obj: &Map, key: &str) -> Result<Option<u32>> {
+    match obj.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(number)) => {
+            let value = number
+                .as_u64()
+                .ok_or_else(|| anyhow::anyhow!("'{key}' must be an integer or null"))?;
+            let value_u32 = u32::try_from(value)
+                .with_context(|| format!("'{key}' must fit in u32 (got {value})"))?;
+            Ok(Some(value_u32))
+        }
+        Some(other) => bail!("'{key}' must be an integer or null, got {}", value_to_string(other)),
+    }
+}
+
+fn build_manifest(fixtures: &[Fixture]) -> Value {
+    let entries = fixtures.iter().map(manifest_entry).collect::<Vec<_>>();
+    let mut obj = Map::new();
+    obj.insert("fixtures".to_owned(), Value::Array(entries));
+    Value::Object(obj)
+}
+
+fn manifest_entry(fixture: &Fixture) -> Value {
+    let mut obj = Map::new();
+    obj.insert("name".to_owned(), Value::String(fixture.name.clone()));
+    obj.insert(
+        "authority".to_owned(),
+        Value::String(fixture.summary.authority.clone()),
+    );
+    obj.insert("chain".to_owned(), Value::String(fixture.summary.chain.clone()));
+    obj.insert(
+        "creation_time_ms".to_owned(),
+        Value::Number(Number::U64(fixture.summary.creation_time_ms)),
+    );
+    obj.insert(
+        "encoded_file".to_owned(),
+        Value::String(format!("{}.norito", fixture.name)),
+    );
+    obj.insert(
+        "encoded_len".to_owned(),
+        Value::Number(Number::U64(fixture.encoded.len() as u64)),
+    );
+    obj.insert(
+        "signed_len".to_owned(),
+        Value::Number(Number::U64(fixture.signed_bytes.len() as u64)),
+    );
+    obj.insert(
+        "payload_base64".to_owned(),
+        Value::String(fixture.summary.payload_base64.clone()),
+    );
+    obj.insert(
+        "payload_hash".to_owned(),
+        Value::String(fixture.summary.payload_hash_hex.clone()),
+    );
+    obj.insert(
+        "signed_base64".to_owned(),
+        Value::String(fixture.summary.signed_base64.clone()),
+    );
+    obj.insert(
+        "signed_hash".to_owned(),
+        Value::String(fixture.summary.signed_hash_hex.clone()),
+    );
+    obj.insert("nonce".to_owned(), optional_u32_value(fixture.summary.nonce));
+    obj.insert(
+        "time_to_live_ms".to_owned(),
+        optional_u64_value(fixture.summary.ttl_ms),
+    );
+    Value::Object(obj)
+}
+
+fn wire_payloads_from_encoded(encoded: &[u8]) -> Result<Vec<WireInstructionPayload>> {
+    let mut cursor = encoded;
+    let payload = TransactionPayload::decode(&mut cursor).context("decode TransactionPayload")?;
+    if !cursor.is_empty() {
+        bail!("payload contains trailing bytes");
+    }
+    let Executable::Instructions(instructions) = &payload.instructions else {
+        return Ok(Vec::new());
+    };
+
+    let registry = iroha_data_model::instruction_registry::default();
+    let mut out = Vec::with_capacity(instructions.len());
+    for instruction in instructions.iter() {
+        let type_name = Instruction::id(&**instruction);
+        let wire_name = registry.wire_id(type_name).unwrap_or(type_name);
+        let payload = Instruction::dyn_encode(&**instruction);
+        let framed = frame_instruction_payload(type_name, &payload)
+            .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+        out.push(WireInstructionPayload {
+            wire_name: wire_name.to_owned(),
+            payload_base64: BASE64.encode(framed),
+        });
+    }
+    Ok(out)
+}
+
+fn build_fixtures_json(raw_fixtures: &[RawFixture], fixtures: &[Fixture]) -> Result<Value> {
+    let fixtures_by_name: std::collections::BTreeMap<&str, &Fixture> = fixtures
+        .iter()
+        .map(|fixture| (fixture.name.as_str(), fixture))
+        .collect();
+
+    let mut out = Vec::with_capacity(raw_fixtures.len());
+    for raw in raw_fixtures {
+        let fixture = fixtures_by_name
+            .get(raw.name.as_str())
+            .copied()
+            .ok_or_else(|| anyhow::anyhow!("fixture '{}' missing generated payload", raw.name))?;
+
+        let mut entry = Map::new();
+        entry.insert("name".to_owned(), Value::String(fixture.name.clone()));
+        entry.insert("chain".to_owned(), Value::String(fixture.summary.chain.clone()));
+        entry.insert(
+            "authority".to_owned(),
+            Value::String(fixture.summary.authority.clone()),
+        );
+        entry.insert(
+            "creation_time_ms".to_owned(),
+            Value::Number(Number::U64(fixture.summary.creation_time_ms)),
+        );
+        entry.insert(
+            "time_to_live_ms".to_owned(),
+            optional_u64_value(fixture.summary.ttl_ms),
+        );
+        entry.insert("nonce".to_owned(), optional_u32_value(fixture.summary.nonce));
+        entry.insert(
+            "payload_base64".to_owned(),
+            Value::String(fixture.summary.payload_base64.clone()),
+        );
+        entry.insert(
+            "signed_base64".to_owned(),
+            Value::String(fixture.summary.signed_base64.clone()),
+        );
+        entry.insert(
+            "payload_hash".to_owned(),
+            Value::String(fixture.summary.payload_hash_hex.clone()),
+        );
+        entry.insert(
+            "signed_hash".to_owned(),
+            Value::String(fixture.summary.signed_hash_hex.clone()),
+        );
+        // Keep `encoded` for Android tests; it must equal `payload_base64`.
+        entry.insert(
+            "encoded".to_owned(),
+            Value::String(fixture.summary.payload_base64.clone()),
+        );
+
+        if let Some(mut payload) = raw.payload_json.clone() {
+            let wire_payloads = wire_payloads_from_encoded(&fixture.encoded)?;
+            if !wire_payloads.is_empty() {
+                apply_wire_payloads_to_payload_json(&mut payload, &wire_payloads)?;
+            }
+            entry.insert("payload".to_owned(), payload);
+        } else if let Some(payload) = raw.payload.as_ref() {
+            let mut payload_obj = Map::new();
+            payload_obj.insert("chain".to_owned(), Value::String(payload.chain.clone()));
+            payload_obj.insert(
+                "authority".to_owned(),
+                Value::String(payload.authority.clone()),
+            );
+            payload_obj.insert(
+                "creation_time_ms".to_owned(),
+                Value::Number(Number::U64(payload.creation_time_ms)),
+            );
+            payload_obj.insert(
+                "time_to_live_ms".to_owned(),
+                optional_u64_value(payload.ttl_ms),
+            );
+            payload_obj.insert("nonce".to_owned(), optional_u32_value(payload.nonce));
+
+            let mut executable_obj = Map::new();
+            match &payload.executable {
+                RawExecutable::Ivm(bytes) => {
+                    executable_obj.insert("Ivm".to_owned(), Value::String(BASE64.encode(bytes)));
+                }
+                RawExecutable::Instructions(instructions) => {
+                    let mut values = Vec::with_capacity(instructions.len());
+                    for raw_instruction in instructions {
+                        let mut inst_obj = Map::new();
+                        inst_obj.insert(
+                            "wire_name".to_owned(),
+                            Value::String(raw_instruction.wire_name.clone()),
+                        );
+                        inst_obj.insert(
+                            "payload_base64".to_owned(),
+                            Value::String(raw_instruction.payload_base64.clone()),
+                        );
+                        values.push(Value::Object(inst_obj));
+                    }
+                    executable_obj.insert("Instructions".to_owned(), Value::Array(values));
+                }
+            }
+            payload_obj.insert("executable".to_owned(), Value::Object(executable_obj));
+
+            let mut metadata_obj = Map::new();
+            for (key, value) in &payload.metadata {
+                let parsed =
+                    json::parse_value(value.get()).map_err(|err| anyhow::anyhow!(err.to_string()))?;
+                metadata_obj.insert(key.to_string(), parsed);
+            }
+            payload_obj.insert("metadata".to_owned(), Value::Object(metadata_obj));
+
+            entry.insert("payload".to_owned(), Value::Object(payload_obj));
+        }
+
+        out.push(Value::Object(entry));
+    }
+
+    Ok(Value::Array(out))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

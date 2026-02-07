@@ -20,7 +20,8 @@ pub fn gas_schedule_entries() -> Vec<GasScheduleEntry> {
         .iter()
         .map(|&opcode| GasScheduleEntry {
             opcode,
-            cost: gas::cost_of((opcode as u32) << 24),
+            cost: gas::cost_of((opcode as u32) << 24)
+                .expect("scheduled opcode must have gas cost"),
         })
         .collect()
 }
@@ -41,7 +42,8 @@ mod tests {
         assert_eq!(entries.len(), gas::SCHEDULE_OPCODES.len());
         for (entry, &opcode) in entries.iter().zip(gas::SCHEDULE_OPCODES) {
             assert_eq!(entry.opcode, opcode);
-            let expected = gas::cost_of((opcode as u32) << 24);
+            let expected =
+                gas::cost_of((opcode as u32) << 24).expect("scheduled opcode must have gas cost");
             assert_eq!(entry.cost, expected);
         }
     }
