@@ -117,7 +117,7 @@ pub fn operator_signed_request(
         .unwrap_or(u64::MAX);
 
     let mut nonce_bytes = [0u8; 12];
-    rand::thread_rng().fill_bytes(&mut nonce_bytes);
+    rand::rng().fill_bytes(&mut nonce_bytes);
     let nonce = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(nonce_bytes);
 
     let mut msg =

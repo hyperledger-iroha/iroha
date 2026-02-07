@@ -165,13 +165,10 @@ impl SharedHost {
 
 impl IVMHost for SharedHost {
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
-        let mut guard = self
-            .inner
-            .lock()
-            .expect("shared host mutex poisoned during syscall");
-        let host = guard
-            .as_mut()
-            .expect("shared host missing during syscall execution");
+        let mut guard = self.inner.lock().unwrap_or_else(|err| err.into_inner());
+        let Some(host) = guard.as_mut() else {
+            return Err(VMError::HostUnavailable);
+        };
         host.syscall(number, vm)
     }
 
@@ -183,10 +180,7 @@ impl IVMHost for SharedHost {
     }
 
     fn supports_concurrent_blocks(&self) -> bool {
-        let guard = self
-            .inner
-            .lock()
-            .expect("shared host mutex poisoned during capability check");
+        let guard = self.inner.lock().unwrap_or_else(|err| err.into_inner());
         guard
             .as_ref()
             .map(|h| h.supports_concurrent_blocks())
@@ -194,26 +188,17 @@ impl IVMHost for SharedHost {
     }
 
     fn checkpoint(&self) -> Option<Box<dyn Any + Send>> {
-        let guard = self
-            .inner
-            .lock()
-            .expect("shared host mutex poisoned during checkpoint");
+        let guard = self.inner.lock().unwrap_or_else(|err| err.into_inner());
         guard.as_ref().and_then(|h| h.checkpoint())
     }
 
     fn restore(&mut self, snapshot: &dyn Any) -> bool {
-        let mut guard = self
-            .inner
-            .lock()
-            .expect("shared host mutex poisoned during restore");
+        let mut guard = self.inner.lock().unwrap_or_else(|err| err.into_inner());
         guard.as_mut().map(|h| h.restore(snapshot)).unwrap_or(false)
     }
 
     fn begin_tx(&mut self, declared: &crate::parallel::StateAccessSet) -> Result<(), VMError> {
-        let mut guard = self
-            .inner
-            .lock()
-            .expect("shared host mutex poisoned during begin_tx");
+        let mut guard = self.inner.lock().unwrap_or_else(|err| err.into_inner());
         guard
             .as_mut()
             .map(|h| h.begin_tx(declared))
@@ -221,10 +206,7 @@ impl IVMHost for SharedHost {
     }
 
     fn finish_tx(&mut self) -> Result<crate::host::AccessLog, VMError> {
-        let mut guard = self
-            .inner
-            .lock()
-            .expect("shared host mutex poisoned during finish_tx");
+        let mut guard = self.inner.lock().unwrap_or_else(|err| err.into_inner());
         guard
             .as_mut()
             .map(|h| h.finish_tx())

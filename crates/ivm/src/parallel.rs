@@ -490,7 +490,7 @@ pub fn set_thread_stack_size(bytes: usize) {
 }
 
 pub struct Scheduler {
-    pool: RwLock<ThreadPool>,
+    pool: RwLock<Option<ThreadPool>>,
     min_threads: usize,
     max_threads: usize,
     current_threads: AtomicUsize,
@@ -544,22 +544,55 @@ impl Scheduler {
 
     /// Create a scheduler with dynamic limits and explicit HTM flag.
     pub fn new_dynamic_with_htm_flag(min_threads: usize, max_threads: usize, htm: bool) -> Self {
-        let min = if min_threads == 0 {
-            num_cpus::get_physical()
-        } else {
-            min_threads
-        };
-        let max = if max_threads == 0 {
-            num_cpus::get_physical()
-        } else {
-            max_threads
-        };
-        assert!(max >= min && min > 0);
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(min)
-            .stack_size(thread_stack_size())
-            .build()
-            .expect("failed to build thread pool");
+        let phys = num_cpus::get_physical().max(1);
+        let mut min = if min_threads == 0 { phys } else { min_threads };
+        let mut max = if max_threads == 0 { phys } else { max_threads };
+        min = min.max(1);
+        max = max.max(1);
+        if max < min {
+            // Respect the configured max bound; clamp the minimum down.
+            min = max;
+        }
+
+        let stack = thread_stack_size();
+        let mut built_threads = min;
+        let mut pool: Option<ThreadPool> = None;
+        // Try progressively smaller pools to avoid crashing on misconfiguration
+        // (e.g., huge thread counts or stack sizes that cannot be allocated).
+        while built_threads > 1 {
+            if let Ok(p) = rayon::ThreadPoolBuilder::new()
+                .num_threads(built_threads)
+                .stack_size(stack)
+                .build()
+            {
+                pool = Some(p);
+                break;
+            }
+            if let Ok(p) = rayon::ThreadPoolBuilder::new().num_threads(built_threads).build() {
+                pool = Some(p);
+                break;
+            }
+            built_threads = (built_threads / 2).max(1);
+        }
+        if pool.is_none() {
+            pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(1)
+                .stack_size(stack)
+                .build()
+                .or_else(|_| rayon::ThreadPoolBuilder::new().num_threads(1).build())
+                .ok();
+        }
+        if pool.is_none() {
+            // If we cannot spawn even a single worker thread, fall back to
+            // deterministic sequential execution.
+            min = 1;
+            max = 1;
+        } else if built_threads < min {
+            // If we couldn't satisfy the requested min due to resource limits,
+            // disable growth to avoid repeated failed rebuild attempts.
+            min = built_threads;
+            max = built_threads;
+        }
         Self {
             pool: RwLock::new(pool),
             min_threads: min,
@@ -679,20 +712,28 @@ impl Scheduler {
                 }
             } else {
                 let result_buf_for_scope = Arc::clone(&result_buf);
-                self.pool.read().scope(|s| {
+                if let Some(pool) = self.pool.read().as_ref() {
+                    pool.scope(|s| {
+                        for &idx in &ready {
+                            let tx = txs[idx].clone();
+                            let buf = Arc::clone(&result_buf_for_scope);
+                            let exec_fn = exec;
+                            let scheduler = self;
+                            s.spawn(move |_| {
+                                let r = scheduler.execute_tx(move || exec_fn(tx));
+                                buf.store(idx, r);
+                            });
+                        }
+                    });
+                } else {
+                    // Deterministic sequential fallback if no worker pool is available.
                     for &idx in &ready {
                         let tx = txs[idx].clone();
-                        let buf = Arc::clone(&result_buf_for_scope);
                         let exec_fn = exec;
-                        let forced = self.forced_simd.load(Ordering::SeqCst);
-                        s.spawn(move |_| {
-                            let prev = set_thread_forced_simd(Self::decode_simd(forced));
-                            let r = exec_fn(tx.clone());
-                            set_thread_forced_simd(prev);
-                            buf.store(idx, r);
-                        });
+                        let res = self.execute_tx(move || exec_fn(tx));
+                        result_buf_for_scope.store(idx, res);
                     }
-                });
+                }
 
                 let mut step_results = Vec::with_capacity(ready.len());
                 for _ in 0..ready.len() {
@@ -749,19 +790,26 @@ impl Scheduler {
 
         let result_buf = Arc::new(ResultBuffer::new(tx_count));
         let result_buf_for_scope = Arc::clone(&result_buf);
-        self.pool.read().scope(|s| {
+        if let Some(pool) = self.pool.read().as_ref() {
+            pool.scope(|s| {
+                for (idx, tx) in txs.into_iter().enumerate() {
+                    let exec_fn = exec;
+                    let buf = Arc::clone(&result_buf_for_scope);
+                    let scheduler = self;
+                    s.spawn(move |_| {
+                        let r = scheduler.execute_tx(move || exec_fn(tx));
+                        buf.store(idx, r);
+                    });
+                }
+            });
+        } else {
+            // Deterministic sequential fallback if no worker pool is available.
             for (idx, tx) in txs.into_iter().enumerate() {
                 let exec_fn = exec;
-                let buf = Arc::clone(&result_buf_for_scope);
-                let forced = self.forced_simd.load(Ordering::SeqCst);
-                s.spawn(move |_| {
-                    let prev = set_thread_forced_simd(Self::decode_simd(forced));
-                    let r = exec_fn(tx);
-                    set_thread_forced_simd(prev);
-                    buf.store(idx, r);
-                });
+                let r = self.execute_tx(move || exec_fn(tx));
+                result_buf_for_scope.store(idx, r);
             }
-        });
+        }
 
         // All tasks posted to the scope have completed here; drain results.
         let mut results = vec![TxResult::default(); tx_count];
@@ -812,7 +860,7 @@ impl Scheduler {
                 .stack_size(thread_stack_size())
                 .build()
         {
-            *self.pool.write() = pool;
+            *self.pool.write() = Some(pool);
             self.current_threads.store(new_size, Ordering::SeqCst);
         }
     }
@@ -826,7 +874,7 @@ static DEFAULT_SCHED_MAX: AtomicUsize = AtomicUsize::new(0);
 /// Set global default scheduler thread limits used by [`IVM::new`].
 ///
 /// - Pass `None` to keep "auto" for that bound (uses physical cores).
-/// - Bounds are clamped to at least 1 and `max >= min` is enforced.
+/// - Bounds are clamped to at least 1 and `min <= max` is enforced by clamping `min` down.
 pub fn set_default_scheduler_limits(min_threads: Option<usize>, max_threads: Option<usize>) {
     let min = min_threads.unwrap_or(0);
     let max = max_threads.unwrap_or(0);
@@ -848,10 +896,13 @@ pub fn default_scheduler_limits() -> (usize, usize) {
     if max == 0 {
         max = phys;
     }
+    min = min.max(1);
+    max = max.max(1);
     if max < min {
-        max = min;
+        // Respect the configured max bound; clamp the minimum down.
+        min = max;
     }
-    (min.max(1), max.max(1))
+    (min, max)
 }
 
 /// Read and write sets associated with a transaction for conflict detection.
@@ -1100,7 +1151,11 @@ mod tests {
     #[test]
     fn scheduler_threads_have_sufficient_stack() {
         let scheduler = Scheduler::new_with_htm_flag(1, false);
-        scheduler.pool.read().install(|| deep_recurse(4096));
+        let pool_guard = scheduler.pool.read();
+        let pool = pool_guard
+            .as_ref()
+            .expect("scheduler should build a thread pool in tests");
+        pool.install(|| deep_recurse(4096));
     }
 
     #[test]

@@ -496,7 +496,7 @@ mod tests {
         let body = b"{\"foo\":1}";
         let ts = OperatorSignatures::now_unix_ms();
         let mut nonce_bytes = [0u8; 12];
-        rand::thread_rng().fill_bytes(&mut nonce_bytes);
+        rand::rng().fill_bytes(&mut nonce_bytes);
         let nonce = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(nonce_bytes);
         let headers = signed_headers(&key_pair, &crate::Method::POST, &uri, body, ts, &nonce);
 

@@ -830,9 +830,11 @@ mod tests {
         ManifestAnnounceFrame, ManifestV1, ProfileId, ReceiverReport, Resolution, StreamMetadata,
         TransportCapabilities,
     };
-    use tokio::time::{Duration as TokioDuration, sleep};
+    use tokio::time::{Duration as TokioDuration, sleep, timeout};
 
     use super::*;
+
+    const TEST_TIMEOUT: TokioDuration = TokioDuration::from_secs(10);
 
     fn hash(byte: u8) -> Hash {
         [byte; 32]
@@ -1013,8 +1015,9 @@ mod tests {
             client.close().await;
         };
 
-        tokio::join!(server_task, viewer_task);
+        let res = timeout(TEST_TIMEOUT, async { tokio::join!(server_task, viewer_task) }).await;
         server.shutdown().await;
+        res.expect("capability_negotiation_and_datagram_roundtrip timed out");
     }
 
     #[tokio::test]
@@ -1161,8 +1164,9 @@ mod tests {
             client.close().await;
         };
 
-        tokio::join!(server_task, viewer_task);
+        let res = timeout(TEST_TIMEOUT, async { tokio::join!(server_task, viewer_task) }).await;
         server.shutdown().await;
+        res.expect("feedback_frames_roundtrip_over_quic timed out");
     }
 
     #[tokio::test]
@@ -1269,8 +1273,10 @@ mod tests {
             client.close().await;
         };
 
-        tokio::join!(server_task, viewer_task);
+        let res =
+            timeout(TEST_TIMEOUT, async { tokio::join!(server_task, viewer_task) }).await;
         server.shutdown().await;
+        res.expect("mtu_negotiation_clamps_to_smallest_limit timed out");
     }
 
     #[tokio::test]
@@ -1375,7 +1381,8 @@ mod tests {
             client.close().await;
         };
 
-        tokio::join!(server_task, viewer_task);
+        let res = timeout(TEST_TIMEOUT, async { tokio::join!(server_task, viewer_task) }).await;
         server.shutdown().await;
+        res.expect("datagram_disabled_sets_zero_limit timed out");
     }
 }

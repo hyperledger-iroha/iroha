@@ -7,6 +7,10 @@
 //! interpreter’s runtime accounting across scalar, memory, and vector-heavy
 //! programs.
 
+fn cost_of(word: u32) -> u64 {
+    ivm::cost_of(word).expect("valid opcode must have gas cost")
+}
+
 #[test]
 fn gas_matches_sum_for_simple_arith_sequence() {
     // Build a tiny program: header + 4x ADDI + HALT.
@@ -33,7 +37,7 @@ fn gas_matches_sum_for_simple_arith_sequence() {
     }
 
     // Expected gas is the sum of static costs for the words (vector_len = 1)
-    let expected: u64 = [a1, a2, a3, a4, halt].into_iter().map(ivm::cost_of).sum();
+    let expected: u64 = [a1, a2, a3, a4, halt].into_iter().map(cost_of).sum();
 
     let gas_limit = 10_000;
     let mut vm = ivm::IVM::new(gas_limit);
@@ -68,7 +72,7 @@ fn gas_matches_sum_for_mixed_scalar_sequence() {
         prog.extend_from_slice(&word.to_le_bytes());
     }
 
-    let expected: u64 = words.iter().map(|&word| ivm::cost_of(word)).sum();
+    let expected: u64 = words.iter().map(|&word| cost_of(word)).sum();
 
     let gas_limit = 10_000;
     let mut vm = ivm::IVM::new(gas_limit);
@@ -130,7 +134,7 @@ fn gas_scales_with_vector_length_for_vadd32() {
     let vl = 2usize;
     let expected: u64 = [v1, v2, v3, halt]
         .into_iter()
-        .map(|w| ivm::cost_of_with_params(w, vl, 0))
+        .map(|w| ivm::cost_of_with_params(w, vl, 0).expect("valid opcode must have gas cost"))
         .sum();
 
     let gas_limit = 10_000;

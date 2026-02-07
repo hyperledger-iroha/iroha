@@ -22,9 +22,10 @@ use iroha_core::{
 use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
 use iroha_data_model::{
     ChainId,
-    account::AccountId,
-    asset::{AssetDefinitionId, AssetId},
+    account::{Account, AccountId},
+    asset::{AssetDefinition, AssetDefinitionId, AssetId},
     block::BlockHeader,
+    domain::Domain,
     isi::offline::{RegisterOfflineAllowance, RegisterOfflineVerdictRevocation},
     metadata::Metadata,
     name::Name,
@@ -33,7 +34,10 @@ use iroha_data_model::{
         OfflineWalletCertificate, OfflineWalletPolicy,
     },
 };
-use iroha_primitives::{json::Json, numeric::Numeric};
+use iroha_primitives::{
+    json::Json,
+    numeric::{Numeric, NumericSpec},
+};
 use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii, test_utils};
 use nonzero_ext::nonzero;
 use norito::json::{self, Map, Value};
@@ -194,13 +198,15 @@ fn build_revocation_harness() -> RevocationTestHarness {
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
+    let seeds = build_revocation_seeds();
+    let world = world_from_revocation_seeds(&seeds);
     let state = Arc::new(State::new_for_testing(
-        World::default(),
+        world,
         Arc::clone(&kura),
         query,
     ));
 
-    let fixtures = seed_offline_revocations(&state);
+    let fixtures = seed_offline_revocations(&state, &seeds);
 
     let queue_cfg = QueueConfig::default();
     let (events_sender, _) = broadcast::channel(64);
@@ -229,15 +235,13 @@ fn build_revocation_harness() -> RevocationTestHarness {
     }
 }
 
-fn seed_offline_revocations(state: &Arc<State>) -> Vec<SeededRevocation> {
-    let seeds = build_revocation_seeds();
-
+fn seed_offline_revocations(state: &Arc<State>, seeds: &[RevocationSeed]) -> Vec<SeededRevocation> {
     // Register all allowances and the first revocation.
     let header_one = BlockHeader::new(nonzero!(1_u64), None, None, None, 1_700_000_321, 0);
     {
         let mut block = state.block(header_one);
         let mut tx = block.transaction();
-        for seed in &seeds {
+        for seed in seeds {
             RegisterOfflineAllowance {
                 certificate: seed.certificate.clone(),
             }
@@ -272,6 +276,53 @@ fn seed_offline_revocations(state: &Arc<State>) -> Vec<SeededRevocation> {
     }
     fixtures.push(make_seeded(&seeds[1], 1_700_000_654));
     fixtures
+}
+
+fn world_from_revocation_seeds(seeds: &[RevocationSeed]) -> World {
+    let first = seeds.first().expect("revocation seeds");
+    let domain_id = first.certificate.controller.domain().clone();
+
+    let domain = Domain {
+        id: domain_id,
+        logo: None,
+        metadata: Metadata::default(),
+        owned_by: first.certificate.controller.clone(),
+    };
+
+    let mut accounts: Vec<Account> = Vec::new();
+    for seed in seeds {
+        accounts.push(Account {
+            id: seed.certificate.controller.clone(),
+            metadata: Metadata::default(),
+            label: None,
+            uaid: None,
+            opaque_ids: Vec::new(),
+        });
+        accounts.push(Account {
+            id: seed.certificate.operator.clone(),
+            metadata: Metadata::default(),
+            label: None,
+            uaid: None,
+            opaque_ids: Vec::new(),
+        });
+    }
+    accounts.sort_by(|a, b| a.id.cmp(&b.id));
+    accounts.dedup_by(|a, b| a.id == b.id);
+
+    let asset_definition = AssetDefinition {
+        id: first.certificate.allowance.asset.definition().clone(),
+        spec: NumericSpec::integer(),
+        mintable: Default::default(),
+        logo: None,
+        metadata: Metadata::default(),
+        owned_by: first.certificate.controller.clone(),
+        total_quantity: Numeric::zero(),
+        confidential_policy: Default::default(),
+    };
+
+    // `RegisterOfflineAllowance` seeding resolves the definition in order to evaluate
+    // offline escrow requirements, so the harness must include it.
+    World::with([domain], accounts, [asset_definition])
 }
 
 #[allow(clippy::too_many_lines)]

@@ -263,7 +263,7 @@ run_mode() {
 
   local pprof_out="${artifact_dir}/pprof_peer0.pb.gz"
   echo "Capturing CPU profile (${PPROF_SECONDS}s) ..."
-  if curl -sS -m "$((PPROF_SECONDS + 60))" "$pprof_url" >"$pprof_out"; then
+  if curl -fsS -m "$((PPROF_SECONDS + 60))" "$pprof_url" >"$pprof_out"; then
     echo "Saved profile: ${pprof_out}"
   else
     echo "Warning: failed to capture pprof profile from ${pprof_url}" >&2

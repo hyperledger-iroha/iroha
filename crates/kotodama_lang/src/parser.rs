@@ -897,6 +897,16 @@ impl<'a> Parser<'a> {
                                     snippet: String::new(),
                                 });
                             }
+                            if value != 1 {
+                                return Err(ParseError {
+                                    message: format!(
+                                        "meta key '{key}' value {value} is not supported in the first release (expected 1)"
+                                    ),
+                                    line: value_tok.line,
+                                    column: value_tok.column,
+                                    snippet: String::new(),
+                                });
+                            }
                             meta.abi_version = Some(value as u8);
                         }
                         "vector_length" | "vl" => {
@@ -2199,14 +2209,25 @@ mod tests {
     }
 
     #[test]
-    fn parse_contract_meta_rejects_out_of_range_values() {
+    fn parse_contract_meta_rejects_unsupported_abi_version() {
         let src = r#"
         seiyaku C {
-            meta { abi_version: 999; }
+            meta { abi_version: 2; }
         }
         "#;
         let err = parse(src).unwrap_err();
-        assert!(err.contains("out of range"));
+        assert!(err.contains("expected 1"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn parse_contract_meta_rejects_out_of_range_values() {
+        let src = r#"
+        seiyaku C {
+            meta { vl: 999; }
+        }
+        "#;
+        let err = parse(src).unwrap_err();
+        assert!(err.contains("out of range"), "unexpected error: {err}");
     }
 
     #[test]

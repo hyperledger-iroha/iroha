@@ -262,7 +262,7 @@ fn ivm_syscall_charges_fees() {
     let isi = SetKeyValue::account(alice_id.clone(), "cursor".parse().unwrap(), Json::new(fc));
     let expected_extra =
         isi_gas::meter_instruction(&InstructionBox::from(SetKeyValueBox::from(isi)));
-    let scall_cost = ivm::gas::cost_of(scall);
+    let scall_cost = ivm::gas::cost_of(scall).expect("SCALL must have gas cost");
     let expected_used = scall_cost.saturating_add(expected_extra);
     assert_eq!(state_tx.last_tx_gas_used, expected_used);
 
