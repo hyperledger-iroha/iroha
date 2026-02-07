@@ -574,6 +574,46 @@ impl CustomInstruction {
     }
 }
 
+isi! {
+    /// Placeholder instruction used when decoding an ISI payload fails.
+    ///
+    /// Nodes may choose to decode malformed instruction payloads into this
+    /// sentinel value instead of panicking. The runtime executor must reject
+    /// it deterministically.
+    ///
+    /// Dev note: This instruction is not intended to be submitted by clients.
+    #[derive(Display)]
+    #[display("INVALID_INSTRUCTION({wire_id}, {payload_hash:?}): {message}")]
+    pub struct InvalidInstruction {
+        /// Wire identifier of the instruction that failed to decode.
+        pub wire_id: String,
+        /// Hash of the raw instruction payload bytes.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub payload_hash: [u8; 32],
+        /// Human-readable decode failure message (best-effort).
+        pub message: String,
+    }
+}
+
+impl InvalidInstruction {
+    /// Stable wire identifier for invalid instruction placeholders.
+    pub const WIRE_ID: &'static str = "iroha.invalid_instruction";
+
+    /// Construct a new invalid instruction placeholder.
+    #[must_use]
+    pub fn new(
+        wire_id: impl Into<String>,
+        payload_hash: [u8; 32],
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            wire_id: wire_id.into(),
+            payload_hash,
+            message: message.into(),
+        }
+    }
+}
+
 // Seal implementations
 impl crate::seal::Instruction for SetParameter {}
 impl crate::seal::Instruction for SetKeyValueBox {}
@@ -581,6 +621,7 @@ impl crate::seal::Instruction for RemoveKeyValueBox {}
 impl crate::seal::Instruction for GrantBox {}
 impl crate::seal::Instruction for RevokeBox {}
 impl crate::seal::Instruction for CustomInstruction {}
+impl crate::seal::Instruction for InvalidInstruction {}
 impl crate::seal::Instruction for SetKeyValue<Domain> {}
 impl crate::seal::Instruction for SetKeyValue<AssetDefinition> {}
 impl crate::seal::Instruction for SetKeyValue<Account> {}
@@ -761,6 +802,12 @@ impl From<Upgrade> for super::InstructionBox {
 
 impl From<CustomInstruction> for super::InstructionBox {
     fn from(instruction: CustomInstruction) -> Self {
+        super::Instruction::into_instruction_box(Box::new(instruction))
+    }
+}
+
+impl From<InvalidInstruction> for super::InstructionBox {
+    fn from(instruction: InvalidInstruction) -> Self {
         super::Instruction::into_instruction_box(Box::new(instruction))
     }
 }

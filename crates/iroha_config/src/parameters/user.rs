@@ -7920,9 +7920,17 @@ pub struct Network {
     /// Delay outbound peer dials after startup (milliseconds).
     #[config(default = "defaults::network::CONNECT_STARTUP_DELAY.into()")]
     pub connect_startup_delay_ms: DurationMs,
+    /// Timeout applied to an individual outbound dial attempt (milliseconds, clamped to >= 100ms).
+    #[config(default = "defaults::network::DIAL_TIMEOUT.into()")]
+    pub dial_timeout_ms: DurationMs,
     /// Enable QUIC transport (feature-gated).
     #[config(env = "P2P_QUIC", default)]
     pub quic_enabled: bool,
+    /// Optional HTTP CONNECT proxy URL for outbound TCP dials (e.g., `http://user:pass@host:port`).
+    pub p2p_proxy: Option<String>,
+    /// Proxy bypass list (suffix match, similar to `NO_PROXY` semantics).
+    #[config(default)]
+    pub p2p_no_proxy: Vec<String>,
     /// Enable TLS-over-TCP transport (feature-gated).
     /// When enabled and built with the `iroha_p2p/p2p_tls` feature, the dialer
     /// wraps the TCP stream in TLS 1.3. Peer identity remains authenticated by
@@ -8131,9 +8139,12 @@ impl Network {
             transaction_gossip_restricted_public_payload,
             idle_timeout_ms: idle_timeout,
             connect_startup_delay_ms: connect_startup_delay,
+            dial_timeout_ms: dial_timeout,
             dns_refresh_interval_ms: dns_refresh_interval,
             dns_refresh_ttl_ms: dns_refresh_ttl,
             quic_enabled,
+            p2p_proxy,
+            p2p_no_proxy,
             tls_enabled,
             tls_listen_address,
             p2p_queue_cap_high,
@@ -8268,6 +8279,7 @@ impl Network {
         };
         let min_interval = MIN_TIMER_INTERVAL;
         let idle_timeout = idle_timeout.get().max(min_interval);
+        let dial_timeout = dial_timeout.get().max(min_interval);
         let peer_gossip_period = peer_gossip_period.get().max(min_interval);
         let peer_gossip_max_period = peer_gossip_max_period.get().max(peer_gossip_period);
         let block_gossip_period = block_gossip_period.get().max(min_interval);
@@ -8300,6 +8312,7 @@ impl Network {
                 relay_ttl,
                 idle_timeout,
                 connect_startup_delay: connect_startup_delay.get(),
+                dial_timeout,
                 peer_gossip_period,
                 peer_gossip_max_period,
                 trust_gossip,
@@ -8310,6 +8323,8 @@ impl Network {
                 dns_refresh_interval: dns_refresh_interval
                     .map(iroha_config_base::util::DurationMs::get),
                 dns_refresh_ttl: dns_refresh_ttl.map(iroha_config_base::util::DurationMs::get),
+                p2p_proxy,
+                p2p_no_proxy,
                 quic_enabled,
                 tls_enabled,
                 tls_listen_address,
@@ -12492,6 +12507,9 @@ pub struct Torii {
     /// Operator authentication policy for operator-facing endpoints.
     #[config(nested)]
     pub operator_auth: ToriiOperatorAuth,
+    /// Operator request-signature authentication policy for operator-facing endpoints.
+    #[config(nested)]
+    pub operator_signatures: ToriiOperatorSignatures,
     /// Maximum concurrent pre-auth connections across all clients.
     pub preauth_max_connections: Option<NonZeroUsize>,
     /// Maximum concurrent pre-auth connections per IP.
@@ -12624,6 +12642,9 @@ pub struct Torii {
     /// Webhook delivery/backpressure configuration.
     #[config(nested)]
     pub webhook: Webhook,
+    /// Webhook destination security configuration (SSRF guard rails).
+    #[config(nested)]
+    pub webhook_security: WebhookSecurity,
     /// Optional UAID onboarding authority wiring for app API endpoints.
     pub onboarding: Option<ToriiOnboarding>,
     /// Optional offline certificate issuer configuration for app API endpoints.
@@ -12912,6 +12933,7 @@ impl Torii {
             std::num::NonZeroU32::new(self.app_api_rate_limit_cost_per_row.max(1))
                 .unwrap_or(nonzero!(1_u32));
         let webhook = self.webhook.parse();
+        let webhook_security = self.webhook_security.parse();
         let push = self.push.parse();
         let (
             sorafs_storage,
@@ -12997,6 +13019,7 @@ impl Torii {
             soranet_privacy_ingest: self.soranet_privacy_ingest.parse(),
             debug_match_filters: self.debug_match_filters,
             operator_auth: self.operator_auth.parse(),
+            operator_signatures: self.operator_signatures.parse(),
             preauth_max_connections: self
                 .preauth_max_connections
                 .or(super::defaults::torii::PREAUTH_MAX_CONNECTIONS),
@@ -13063,6 +13086,7 @@ impl Torii {
             sorafs_por,
             transport: self.transport.into(),
             webhook,
+            webhook_security,
             push,
             onboarding: self.onboarding.and_then(ToriiOnboarding::parse),
             offline_issuer: self.offline_issuer.and_then(ToriiOfflineIssuer::parse),
@@ -13094,6 +13118,43 @@ impl Torii {
                 .rate_per_minute
                 .or(super::defaults::torii::RBC_SAMPLING_RATE_PER_MIN)
                 .and_then(std::num::NonZeroU32::new),
+        }
+    }
+}
+
+/// Operator request-signature authentication configuration for Torii operator endpoints.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct ToriiOperatorSignatures {
+    /// Master enable switch for operator signature authentication.
+    #[config(default = "defaults::torii::operator_signatures::ENABLED")]
+    pub enabled: bool,
+    /// Allow the node identity key (from `[common]`) to authenticate operator endpoints.
+    #[config(default = "defaults::torii::operator_signatures::ALLOW_NODE_KEY")]
+    pub allow_node_key: bool,
+    /// Additional allow-listed operator public keys.
+    #[config(default = "defaults::torii::operator_signatures::allowed_public_keys()")]
+    pub allowed_public_keys: Vec<PublicKey>,
+    /// Maximum allowed clock skew for signed operator requests (seconds).
+    #[config(default = "defaults::torii::operator_signatures::MAX_CLOCK_SKEW_SECS")]
+    pub max_clock_skew_secs: u64,
+    /// TTL for operator nonces retained for replay detection (seconds).
+    #[config(default = "defaults::torii::operator_signatures::NONCE_TTL_SECS")]
+    pub nonce_ttl_secs: u64,
+    /// Maximum number of nonces retained for replay detection.
+    #[config(default = "defaults::torii::operator_signatures::REPLAY_CACHE_CAPACITY")]
+    pub replay_cache_capacity: usize,
+}
+
+impl ToriiOperatorSignatures {
+    fn parse(self) -> actual::ToriiOperatorSignatures {
+        actual::ToriiOperatorSignatures {
+            enabled: self.enabled,
+            allow_node_key: self.allow_node_key,
+            allowed_public_keys: self.allowed_public_keys,
+            max_clock_skew: Duration::from_secs(self.max_clock_skew_secs),
+            nonce_ttl: Duration::from_secs(self.nonce_ttl_secs.max(1)),
+            replay_cache_capacity: std::num::NonZeroUsize::new(self.replay_cache_capacity.max(1))
+                .expect("operator signatures replay cache must be non-zero"),
         }
     }
 }
@@ -13472,6 +13533,26 @@ impl Webhook {
             connect_timeout: self.connect_timeout_ms.get(),
             write_timeout: self.write_timeout_ms.get(),
             read_timeout: self.read_timeout_ms.get(),
+        }
+    }
+}
+
+/// Webhook destination security configuration (SSRF guard rails).
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct WebhookSecurity {
+    /// Master enable switch for webhook destination guard rails.
+    #[config(default = "defaults::torii::webhook_security::ENABLED")]
+    pub enabled: bool,
+    /// CIDR allow-list for webhook destinations (empty => only public IPs are allowed).
+    #[config(default = "defaults::torii::webhook_security::allow_cidrs()")]
+    pub allow_cidrs: Vec<String>,
+}
+
+impl WebhookSecurity {
+    fn parse(self) -> actual::WebhookSecurity {
+        actual::WebhookSecurity {
+            enabled: self.enabled,
+            allow_cidrs: self.allow_cidrs,
         }
     }
 }

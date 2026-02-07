@@ -25,6 +25,7 @@ use std::{
     collections::HashMap,
     fs,
     io::{Read as _, Write as _},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     num::{NonZeroU32, NonZeroUsize},
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
@@ -41,6 +42,7 @@ use iroha_data_model::{
 };
 use sha2::{Digest, Sha256};
 use tokio::fs as tokio_fs;
+use url::{Host, Url};
 
 use crate::filter::filter_expr_to_value;
 
@@ -274,6 +276,42 @@ pub fn set_webhook_policy(policy: WebhookPolicy) {
     });
 }
 
+/// Webhook destination security policy (SSRF guard rails).
+#[derive(Clone, Debug)]
+pub struct WebhookSecurityPolicy {
+    /// Enable webhook destination guard rails.
+    pub enabled: bool,
+    /// CIDR allow-list for webhook destination IPs.
+    pub allow_nets: Vec<crate::limits::IpNet>,
+}
+
+impl Default for WebhookSecurityPolicy {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            allow_nets: Vec::new(),
+        }
+    }
+}
+
+fn webhook_security_policy_state() -> &'static Mutex<WebhookSecurityPolicy> {
+    static STATE: OnceLock<Mutex<WebhookSecurityPolicy>> = OnceLock::new();
+    STATE.get_or_init(|| Mutex::new(WebhookSecurityPolicy::default()))
+}
+
+fn webhook_security_policy() -> WebhookSecurityPolicy {
+    webhook_security_policy_state()
+        .lock()
+        .expect("webhook security policy lock")
+        .clone()
+}
+
+pub fn set_webhook_security_policy(policy: WebhookSecurityPolicy) {
+    *webhook_security_policy_state()
+        .lock()
+        .expect("webhook security policy lock") = policy;
+}
+
 #[cfg(test)]
 type HttpPostOverrideFn =
     dyn Fn(&str, &[(&str, String)], &[u8]) -> std::io::Result<u16> + Send + Sync;
@@ -435,6 +473,138 @@ fn webhook_entry_to_public_json(entry: &WebhookEntry) -> norito::json::Value {
     norito::json::Value::Object(m)
 }
 
+fn is_public_ipv4(v4: Ipv4Addr) -> bool {
+    if v4.is_private()
+        || v4.is_loopback()
+        || v4.is_link_local()
+        || v4.is_multicast()
+        || v4.is_broadcast()
+        || v4.is_documentation()
+        || v4.is_unspecified()
+    {
+        return false;
+    }
+
+    let [a, b, ..] = v4.octets();
+    // 0.0.0.0/8 (\"this network\")
+    if a == 0 {
+        return false;
+    }
+    // 100.64.0.0/10 (carrier-grade NAT)
+    if a == 100 && (64..=127).contains(&b) {
+        return false;
+    }
+    // 198.18.0.0/15 (benchmarking)
+    if a == 198 && (b == 18 || b == 19) {
+        return false;
+    }
+    // 240.0.0.0/4 (reserved)
+    if a >= 240 {
+        return false;
+    }
+
+    true
+}
+
+fn is_documentation_ipv6(v6: Ipv6Addr) -> bool {
+    // 2001:db8::/32
+    let seg = v6.segments();
+    seg[0] == 0x2001 && seg[1] == 0x0db8
+}
+
+fn is_public_ipv6(v6: Ipv6Addr) -> bool {
+    if v6.is_loopback()
+        || v6.is_unspecified()
+        || v6.is_multicast()
+        || v6.is_unicast_link_local()
+        || v6.is_unique_local()
+        || is_documentation_ipv6(v6)
+    {
+        return false;
+    }
+    if let Some(v4) = v6.to_ipv4_mapped() {
+        return is_public_ipv4(v4);
+    }
+    true
+}
+
+fn is_public_destination_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => is_public_ipv4(v4),
+        IpAddr::V6(v6) => is_public_ipv6(v6),
+    }
+}
+
+fn is_destination_ip_allowed(ip: IpAddr, policy: &WebhookSecurityPolicy) -> bool {
+    if crate::limits::cidr_contains(&policy.allow_nets, ip) {
+        return true;
+    }
+    is_public_destination_ip(ip)
+}
+
+fn is_localhost_domain(domain: &str) -> bool {
+    let domain = domain.trim_end_matches('.');
+    domain.eq_ignore_ascii_case("localhost")
+}
+
+fn validate_webhook_url_for_create(
+    raw: &str,
+    policy: &WebhookSecurityPolicy,
+) -> Result<(), (StatusCode, String)> {
+    let url = Url::parse(raw)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid webhook url: {e}")))?;
+
+    match url.scheme() {
+        "http" | "https" | "ws" | "wss" => {}
+        other => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("unsupported webhook scheme `{other}`"),
+            ));
+        }
+    }
+
+    let Some(host) = url.host() else {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "webhook url must include a host".to_string(),
+        ));
+    };
+
+    if policy.enabled {
+        if let Host::Domain(domain) = host {
+            if is_localhost_domain(domain) {
+                return Err((
+                    StatusCode::FORBIDDEN,
+                    "webhook url host `localhost` is not allowed".to_string(),
+                ));
+            }
+        }
+
+        match host {
+            Host::Ipv4(v4) => {
+                if !is_destination_ip_allowed(IpAddr::V4(v4), policy) {
+                    return Err((
+                        StatusCode::FORBIDDEN,
+                        "webhook url host is not allowed".to_string(),
+                    ));
+                }
+            }
+            Host::Ipv6(v6) => {
+                if !is_destination_ip_allowed(IpAddr::V6(v6), policy) {
+                    return Err((
+                        StatusCode::FORBIDDEN,
+                        "webhook url host is not allowed".to_string(),
+                    ));
+                }
+            }
+            Host::Domain(_) => {}
+        }
+    }
+
+    Ok(())
+}
+
 /// POST /v1/webhooks – create a webhook entry.
 pub async fn handle_create_webhook(
     crate::utils::extractors::JsonOnly(req): crate::utils::extractors::JsonOnly<WebhookCreate>,
@@ -443,6 +613,10 @@ pub async fn handle_create_webhook(
         if let Err(e) = crate::filter::validate_filter(expr) {
             return (StatusCode::BAD_REQUEST, format!("invalid filter: {e}")).into_response();
         }
+    }
+    let policy = webhook_security_policy();
+    if let Err((status, message)) = validate_webhook_url_for_create(&req.url, &policy) {
+        return (status, message).into_response();
     }
     let mut guard = registry().lock().expect("poisoned");
     guard.next_id += 1;
@@ -1538,35 +1712,139 @@ fn io_timeout_error(operation: &str, duration: Duration) -> std::io::Error {
     )
 }
 
+fn io_invalid_input(message: impl Into<String>) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidInput, message.into())
+}
+
+fn io_permission_denied(message: impl Into<String>) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::PermissionDenied, message.into())
+}
+
+async fn resolve_destination_addrs(
+    url: &Url,
+    policy: &WebhookSecurityPolicy,
+) -> std::io::Result<Vec<SocketAddr>> {
+    let Some(host) = url.host() else {
+        return Err(io_invalid_input("webhook url missing host"));
+    };
+    let Some(port) = url.port_or_known_default() else {
+        return Err(io_invalid_input("webhook url missing port"));
+    };
+
+    if policy.enabled {
+        if let Host::Domain(domain) = host {
+            if is_localhost_domain(domain) {
+                return Err(io_permission_denied(
+                    "webhook destination host `localhost` is not allowed",
+                ));
+            }
+        }
+    }
+
+    match host {
+        Host::Ipv4(v4) => {
+            let ip = IpAddr::V4(v4);
+            if policy.enabled && !is_destination_ip_allowed(ip, policy) {
+                return Err(io_permission_denied(
+                    "webhook destination IP is not allowed",
+                ));
+            }
+            Ok(vec![SocketAddr::new(ip, port)])
+        }
+        Host::Ipv6(v6) => {
+            let ip = IpAddr::V6(v6);
+            if policy.enabled && !is_destination_ip_allowed(ip, policy) {
+                return Err(io_permission_denied(
+                    "webhook destination IP is not allowed",
+                ));
+            }
+            Ok(vec![SocketAddr::new(ip, port)])
+        }
+        Host::Domain(domain) => {
+            let addrs: Vec<SocketAddr> = tokio::net::lookup_host((domain, port)).await?.collect();
+            if addrs.is_empty() {
+                return Err(io_invalid_input(
+                    "webhook destination resolved to no addresses",
+                ));
+            }
+            if policy.enabled {
+                for addr in &addrs {
+                    if !is_destination_ip_allowed(addr.ip(), policy) {
+                        return Err(io_permission_denied(
+                            "webhook destination resolved to a disallowed IP",
+                        ));
+                    }
+                }
+            }
+            Ok(addrs)
+        }
+    }
+}
+
+fn host_header_value(url: &Url) -> std::io::Result<String> {
+    let Some(host) = url.host() else {
+        return Err(io_invalid_input("webhook url missing host"));
+    };
+    let Some(port) = url.port_or_known_default() else {
+        return Err(io_invalid_input("webhook url missing port"));
+    };
+
+    let known_default = match url.scheme() {
+        "http" | "ws" => Some(80),
+        "https" | "wss" => Some(443),
+        _ => None,
+    };
+
+    let host = match host {
+        Host::Domain(domain) => domain.to_string(),
+        Host::Ipv4(v4) => v4.to_string(),
+        Host::Ipv6(v6) => format!("[{v6}]"),
+    };
+    let mut out = host;
+    if known_default.is_some_and(|d| d != port) {
+        out.push(':');
+        out.push_str(&port.to_string());
+    }
+    Ok(out)
+}
+
 async fn http_post_plain(
-    url: &str,
+    url: &Url,
+    connect_addr: SocketAddr,
+    host_header: &str,
     headers: &[(&str, String)],
     body: &[u8],
 ) -> std::io::Result<u16> {
-    // Very small plain HTTP/1.1 client for http:// (no TLS). For https, fail fast.
-    if let Some(rest) = url.strip_prefix("http://") {
-        let (host_port, path) = match rest.split_once('/') {
-            Some((hp, p)) => (hp, format!("/{}", p)),
-            None => (rest, "/".to_string()),
-        };
-        let (host, port) = match host_port.split_once(':') {
-            Some((h, p)) => (h, p.parse::<u16>().unwrap_or(80)),
-            None => (host_port, 80),
-        };
+    // Very small plain HTTP/1.1 client for http:// (no TLS).
+    if url.scheme() != "http" {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "invalid scheme for plain HTTP client",
+        ))
+    } else {
+        let mut path = url.path().to_string();
+        if path.is_empty() {
+            path = "/".to_string();
+        }
+        if let Some(query) = url.query() {
+            path.push('?');
+            path.push_str(query);
+        }
+
         use tokio::{
             io::{AsyncReadExt, AsyncWriteExt},
             net::TcpStream,
         };
         let timeouts = http_timeout_config();
         let mut stream =
-            match tokio::time::timeout(timeouts.connect, TcpStream::connect((host, port))).await {
+            match tokio::time::timeout(timeouts.connect, TcpStream::connect(connect_addr)).await {
                 Ok(Ok(stream)) => stream,
                 Ok(Err(e)) => return Err(e),
                 Err(_) => return Err(io_timeout_error("tcp connect", timeouts.connect)),
             };
         let mut req = Vec::new();
         req.extend_from_slice(format!("POST {} HTTP/1.1\r\n", path).as_bytes());
-        req.extend_from_slice(format!("Host: {}\r\n", host).as_bytes());
+        req.extend_from_slice(format!("Host: {}\r\n", host_header).as_bytes());
         req.extend_from_slice(b"Connection: close\r\n");
         req.extend_from_slice(b"User-Agent: iroha-torii-webhook/1\r\n");
         for (k, v) in headers {
@@ -1597,11 +1875,6 @@ async fn http_post_plain(
             }
         }
         Ok(0)
-    } else {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "HTTPS not supported without TLS client",
-        ))
     }
 }
 
@@ -1654,9 +1927,16 @@ async fn http_post(url: &str, headers: &[(&str, String)], body: &[u8]) -> std::i
         return handler(url, headers, body);
     }
 
-    if url.starts_with("https://") {
+    let parsed = Url::parse(url).map_err(|e| io_invalid_input(format!("bad url: {e}")))?;
+    let scheme = parsed.scheme();
+    let policy = webhook_security_policy();
+
+    if scheme == "https" {
         #[cfg(feature = "app_api_https")]
         {
+            if policy.enabled {
+                let _ = resolve_destination_addrs(&parsed, &policy).await?;
+            }
             return http_post_https(url, headers, body).await;
         }
         #[cfg(not(feature = "app_api_https"))]
@@ -1668,28 +1948,58 @@ async fn http_post(url: &str, headers: &[(&str, String)], body: &[u8]) -> std::i
         }
     }
     #[cfg(feature = "app_api_wss")]
-    if url.starts_with("wss://") || url.starts_with("ws://") {
-        return ws_send(url, headers, body).await;
+    if scheme == "wss" || scheme == "ws" {
+        let connect_addr = if scheme == "ws" {
+            resolve_destination_addrs(&parsed, &policy)
+                .await?
+                .into_iter()
+                .next()
+        } else if policy.enabled {
+            let _ = resolve_destination_addrs(&parsed, &policy).await?;
+            None
+        } else {
+            None
+        };
+        return ws_send(&parsed, connect_addr, headers, body).await;
     }
     #[cfg(not(feature = "app_api_wss"))]
-    if url.starts_with("wss://") || url.starts_with("ws://") {
+    if scheme == "wss" || scheme == "ws" {
         return Err(std::io::Error::new(
             std::io::ErrorKind::Other,
             "WS/WSS not supported; enable feature app_api_wss",
         ));
     }
-    http_post_plain(url, headers, body).await
+
+    if scheme != "http" {
+        return Err(io_invalid_input(format!(
+            "unsupported webhook scheme `{scheme}`"
+        )));
+    }
+
+    let addrs = resolve_destination_addrs(&parsed, &policy).await?;
+    let Some(connect_addr) = addrs.into_iter().next() else {
+        return Err(io_invalid_input(
+            "webhook destination resolved to no addresses",
+        ));
+    };
+    let host_header = host_header_value(&parsed)?;
+    http_post_plain(&parsed, connect_addr, &host_header, headers, body).await
 }
 
 #[cfg(feature = "app_api_wss")]
-async fn ws_send(url: &str, headers: &[(&str, String)], body: &[u8]) -> std::io::Result<u16> {
+async fn ws_send(
+    url: &Url,
+    connect_addr: Option<SocketAddr>,
+    headers: &[(&str, String)],
+    body: &[u8],
+) -> std::io::Result<u16> {
     use std::str::FromStr;
 
     use futures::SinkExt as _;
-    use tokio_tungstenite::connect_async;
+    use tokio_tungstenite::{MaybeTlsStream, client_async, connect_async};
     use tungstenite::{Message, client::IntoClientRequest, http::HeaderName};
 
-    let mut req = url.into_client_request().map_err(|e| {
+    let mut req = url.as_str().into_client_request().map_err(|e| {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("bad url: {e}"))
     })?;
     for (k, v) in headers {
@@ -1699,9 +2009,22 @@ async fn ws_send(url: &str, headers: &[(&str, String)], body: &[u8]) -> std::io:
             }
         }
     }
-    let (mut ws, _resp) = connect_async(req)
-        .await
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("ws connect: {e}")))?;
+    let (mut ws, _resp) = match connect_addr {
+        Some(addr) => {
+            use tokio::net::TcpStream;
+            let timeouts = http_timeout_config();
+            let stream = tokio::time::timeout(timeouts.connect, TcpStream::connect(addr))
+                .await
+                .map_err(|_| io_timeout_error("tcp connect", timeouts.connect))??;
+            let stream = MaybeTlsStream::Plain(stream);
+            client_async(req, stream).await.map_err(|e| {
+                std::io::Error::new(std::io::ErrorKind::Other, format!("ws connect: {e}"))
+            })?
+        }
+        None => connect_async(req).await.map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::Other, format!("ws connect: {e}"))
+        })?,
+    };
     ws.send(Message::Binary(body.to_vec().into()))
         .await
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("ws send: {e}")))?;
@@ -1730,6 +2053,17 @@ async fn try_deliver(pd: &mut PendingDelivery, secret: Option<&str>) -> bool {
             false
         }
         Err(e) => {
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::InvalidInput
+            ) {
+                iroha_logger::warn!(
+                    %e,
+                    url=%pd.url,
+                    "dropping webhook payload due to disallowed destination"
+                );
+                return true;
+            }
             if e.kind() == std::io::ErrorKind::TimedOut {
                 iroha_logger::warn!(%e, url=%pd.url, "webhook delivery timed out");
             } else {
@@ -2794,5 +3128,62 @@ mod tests {
         let filters = event_filter_boxes_from_expr(&expr);
         assert!(!filters.is_empty());
         assert!(filters.iter().any(|f| f.matches(&ev)));
+    }
+
+    #[test]
+    fn webhook_url_validation_rejects_localhost_when_enabled() {
+        let policy = WebhookSecurityPolicy {
+            enabled: true,
+            allow_nets: Vec::new(),
+        };
+        let err = super::validate_webhook_url_for_create("http://localhost/callback", &policy)
+            .expect_err("localhost must be rejected");
+        assert_eq!(err.0, StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn webhook_url_validation_allows_localhost_when_disabled() {
+        let policy = WebhookSecurityPolicy {
+            enabled: false,
+            allow_nets: Vec::new(),
+        };
+        super::validate_webhook_url_for_create("http://localhost/callback", &policy)
+            .expect("localhost allowed when guard rails disabled");
+    }
+
+    #[test]
+    fn webhook_url_validation_rejects_private_ip_literal_when_enabled() {
+        let policy = WebhookSecurityPolicy {
+            enabled: true,
+            allow_nets: Vec::new(),
+        };
+        let err = super::validate_webhook_url_for_create("http://127.0.0.1:8080/callback", &policy)
+            .expect_err("loopback must be rejected");
+        assert_eq!(err.0, StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn webhook_url_validation_allows_allowlisted_ip_literal_when_enabled() {
+        let allow = crate::limits::parse_cidr("127.0.0.1/32").expect("valid cidr");
+        let policy = WebhookSecurityPolicy {
+            enabled: true,
+            allow_nets: vec![allow],
+        };
+        super::validate_webhook_url_for_create("http://127.0.0.1:8080/callback", &policy)
+            .expect("allow-listed loopback allowed");
+    }
+
+    #[test]
+    fn webhook_delivery_guard_rejects_private_ip_literal_when_enabled() {
+        let policy = WebhookSecurityPolicy {
+            enabled: true,
+            allow_nets: Vec::new(),
+        };
+        let url = Url::parse("http://127.0.0.1:1/callback").expect("valid url");
+        let rt = Runtime::new().expect("tokio runtime");
+        let err = rt
+            .block_on(super::resolve_destination_addrs(&url, &policy))
+            .expect_err("private destination rejected");
+        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
     }
 }

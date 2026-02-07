@@ -21,6 +21,8 @@ Options:
   --queue-ttl-ms <MS>        queue.transaction_time_to_live_ms override (default: 600000)
   --queue-soft-limit <N>     tx_load soft queue delta limit (default: 5000)
   --queue-hard-limit <N>     tx_load hard queue delta limit (default: 15000)
+  --localnet-timeout <SEC>   seconds to wait for localnet readiness (default: 180)
+  --cli-timeout <SEC>        tx_load CLI timeout seconds (default: 15)
   --pprof-seconds <SEC>      CPU profile duration seconds (default: 30)
   --artifact-base <DIR>      artifact base directory (default: ./artifacts/localnet-100tps-profile)
   --out-base <DIR>           localnet base directory (default: /tmp/iroha-localnet-100tps)
@@ -43,6 +45,8 @@ QUEUE_CAPACITY=20000
 QUEUE_TTL_MS=600000
 QUEUE_SOFT_LIMIT=5000
 QUEUE_HARD_LIMIT=15000
+LOCALNET_TIMEOUT=180
+CLI_TIMEOUT=15
 PPROF_SECONDS=30
 ARTIFACT_BASE=""
 OUT_BASE="/tmp/iroha-localnet-100tps"
@@ -91,6 +95,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --queue-hard-limit)
       QUEUE_HARD_LIMIT="$2"
+      shift 2
+      ;;
+    --localnet-timeout)
+      LOCALNET_TIMEOUT="$2"
+      shift 2
+      ;;
+    --cli-timeout)
+      CLI_TIMEOUT="$2"
       shift 2
       ;;
     --pprof-seconds)
@@ -163,14 +175,12 @@ if [[ "$PROFILE" != "release" ]]; then
   PPROF_IROHAD_BIN="${PPROF_TARGET_DIR}/debug/irohad"
 fi
 
-if [[ ! -x "$PPROF_IROHAD_BIN" ]]; then
-  echo "Building irohad with profiling endpoint ($PROFILE)..."
-  mkdir -p "$PPROF_TARGET_DIR"
-  if [[ "$PROFILE" == "release" ]]; then
-    (cd "$IROHA_DIR" && CARGO_TARGET_DIR="$PPROF_TARGET_DIR" cargo build --release -p irohad --features profiling-endpoint)
-  else
-    (cd "$IROHA_DIR" && CARGO_TARGET_DIR="$PPROF_TARGET_DIR" cargo build -p irohad --features profiling-endpoint)
-  fi
+echo "Building irohad with profiling endpoint ($PROFILE)..."
+mkdir -p "$PPROF_TARGET_DIR"
+if [[ "$PROFILE" == "release" ]]; then
+  (cd "$IROHA_DIR" && CARGO_TARGET_DIR="$PPROF_TARGET_DIR" cargo build --release -p irohad --features profiling-endpoint)
+else
+  (cd "$IROHA_DIR" && CARGO_TARGET_DIR="$PPROF_TARGET_DIR" cargo build -p irohad --features profiling-endpoint)
 fi
 
 run_mode() {
@@ -205,6 +215,7 @@ run_mode() {
       --queue-ttl-ms "$QUEUE_TTL_MS" \
       --base-api-port "$base_api_port" \
       --base-p2p-port "$base_p2p_port" \
+      --timeout "$LOCALNET_TIMEOUT" \
       --force \
       --skip-asset-register \
       "${PROFILE_ARGS[@]}"
@@ -238,6 +249,7 @@ run_mode() {
     --batch-size "$batch_size" \
     --batch-interval 1 \
     --drain-timeout 180 \
+    --cli-timeout "$CLI_TIMEOUT" \
     --queue-soft-limit "$QUEUE_SOFT_LIMIT" \
     --queue-hard-limit "$QUEUE_HARD_LIMIT" \
     --queue-wait-timeout 60 \
@@ -251,7 +263,7 @@ run_mode() {
 
   local pprof_out="${artifact_dir}/pprof_peer0.pb.gz"
   echo "Capturing CPU profile (${PPROF_SECONDS}s) ..."
-  if curl -sS -m "$((PPROF_SECONDS + 10))" "$pprof_url" >"$pprof_out"; then
+  if curl -sS -m "$((PPROF_SECONDS + 60))" "$pprof_url" >"$pprof_out"; then
     echo "Saved profile: ${pprof_out}"
   else
     echo "Warning: failed to capture pprof profile from ${pprof_url}" >&2

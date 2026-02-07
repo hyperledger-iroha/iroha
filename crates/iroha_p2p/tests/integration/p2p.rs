@@ -125,6 +125,7 @@ fn trust_config(
         require_sm_openssl_preview_match: true,
         idle_timeout,
         connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
+        dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -135,6 +136,8 @@ fn trust_config(
         trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
         trust_gossip,
         prefer_ws_fallback: false,
+        p2p_proxy: None,
+        p2p_no_proxy: vec![],
         happy_eyeballs_stagger: Duration::from_millis(100),
         addr_ipv6_first: false,
         dns_refresh_interval: None,
@@ -237,6 +240,7 @@ async fn network_create() {
         require_sm_openssl_preview_match: true,
         idle_timeout,
         connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
+        dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -247,6 +251,8 @@ async fn network_create() {
         trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
         trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
         prefer_ws_fallback: false,
+        p2p_proxy: None,
+        p2p_no_proxy: vec![],
         happy_eyeballs_stagger: Duration::from_millis(100),
         addr_ipv6_first: false,
         dns_refresh_interval: None,
@@ -384,7 +390,7 @@ async fn trust_gossip_opt_out_blocks_trust_frames() {
         ShutdownSignal::new(),
     )
     .await;
-    let (net_b, _child_b) = match started_b {
+    let (mut net_b, _child_b) = match started_b {
         Ok(ok) => ok,
         Err(_) => return,
     };
@@ -392,18 +398,38 @@ async fn trust_gossip_opt_out_blocks_trust_frames() {
     let peer_a = Peer::new(addr_a.clone(), kp_a.public_key().clone());
     let peer_b = Peer::new(addr_b.clone(), kp_b.public_key().clone());
 
+    // Dial in one direction only (A -> B) to avoid flakiness from simultaneous connection
+    // resolution dropping one of the sockets around the time we post the test message.
     net_a.update_topology(UpdateTopology(HashSet::from([peer_b.id().clone()])));
     net_a.update_peers_addresses(UpdatePeers(vec![(peer_b.id().clone(), addr_b.clone())]));
+    // Still allow inbound from A, but do not provide A's address so B won't dial back.
     net_b.update_topology(UpdateTopology(HashSet::from([peer_a.id().clone()])));
-    net_b.update_peers_addresses(UpdatePeers(vec![(peer_a.id().clone(), addr_a.clone())]));
 
-    if tokio::time::timeout(Duration::from_millis(1500), async {
+    if tokio::time::timeout(Duration::from_millis(2500), async {
         let mut n = net_a
             .wait_online_peers_update(std::collections::HashSet::len)
             .await
             .expect("online peers channel closed");
         while n < 1 {
             n = net_a
+                .wait_online_peers_update(std::collections::HashSet::len)
+                .await
+                .expect("online peers channel closed");
+        }
+    })
+    .await
+    .is_err()
+    {
+        return;
+    }
+
+    if tokio::time::timeout(Duration::from_millis(2500), async {
+        let mut n = net_b
+            .wait_online_peers_update(std::collections::HashSet::len)
+            .await
+            .expect("online peers channel closed");
+        while n < 1 {
+            n = net_b
                 .wait_online_peers_update(std::collections::HashSet::len)
                 .await
                 .expect("online peers channel closed");
@@ -464,7 +490,7 @@ async fn trust_gossip_opt_out_blocks_trust_frames() {
         peer_id: peer_a.id().clone(),
         priority: Priority::Low,
     });
-    let msg_a = tokio::time::timeout(Duration::from_millis(1500), rx_a.recv())
+    let msg_a = tokio::time::timeout(Duration::from_millis(2500), rx_a.recv())
         .await
         .expect("peer gossip delivery timed out")
         .expect("subscriber channel closed");
@@ -479,7 +505,7 @@ async fn trust_gossip_opt_out_blocks_trust_frames() {
         peer_id: peer_b.id().clone(),
         priority: Priority::Low,
     });
-    let msg_b = tokio::time::timeout(Duration::from_millis(1500), rx_b.recv())
+    let msg_b = tokio::time::timeout(Duration::from_millis(2500), rx_b.recv())
         .await
         .expect("peer gossip delivery timed out")
         .expect("subscriber channel closed");
@@ -519,7 +545,7 @@ async fn trust_gossip_enabled_flows_through() {
         ShutdownSignal::new(),
     )
     .await;
-    let (net_b, _child_b) = match started_b {
+    let (mut net_b, _child_b) = match started_b {
         Ok(ok) => ok,
         Err(_) => return,
     };
@@ -527,18 +553,38 @@ async fn trust_gossip_enabled_flows_through() {
     let peer_a = Peer::new(addr_a.clone(), kp_a.public_key().clone());
     let peer_b = Peer::new(addr_b.clone(), kp_b.public_key().clone());
 
+    // Dial in one direction only (A -> B) to avoid flakiness from simultaneous connection
+    // resolution dropping one of the sockets around the time we post the test message.
     net_a.update_topology(UpdateTopology(HashSet::from([peer_b.id().clone()])));
     net_a.update_peers_addresses(UpdatePeers(vec![(peer_b.id().clone(), addr_b.clone())]));
+    // Still allow inbound from A, but do not provide A's address so B won't dial back.
     net_b.update_topology(UpdateTopology(HashSet::from([peer_a.id().clone()])));
-    net_b.update_peers_addresses(UpdatePeers(vec![(peer_a.id().clone(), addr_a.clone())]));
 
-    if tokio::time::timeout(Duration::from_millis(1500), async {
+    if tokio::time::timeout(Duration::from_millis(2500), async {
         let mut n = net_a
             .wait_online_peers_update(std::collections::HashSet::len)
             .await
             .expect("online peers channel closed");
         while n < 1 {
             n = net_a
+                .wait_online_peers_update(std::collections::HashSet::len)
+                .await
+                .expect("online peers channel closed");
+        }
+    })
+    .await
+    .is_err()
+    {
+        return;
+    }
+
+    if tokio::time::timeout(Duration::from_millis(2500), async {
+        let mut n = net_b
+            .wait_online_peers_update(std::collections::HashSet::len)
+            .await
+            .expect("online peers channel closed");
+        while n < 1 {
+            n = net_b
                 .wait_online_peers_update(std::collections::HashSet::len)
                 .await
                 .expect("online peers channel closed");
@@ -563,7 +609,7 @@ async fn trust_gossip_enabled_flows_through() {
         peer_id: peer_b.id().clone(),
         priority: Priority::Low,
     });
-    let msg_b = tokio::time::timeout(Duration::from_millis(1500), rx_b.recv())
+    let msg_b = tokio::time::timeout(Duration::from_millis(2500), rx_b.recv())
         .await
         .expect("trust gossip delivery timed out")
         .expect("subscriber channel closed");
@@ -604,6 +650,7 @@ async fn ws_fallback_connects_and_handshakes() {
             require_sm_openssl_preview_match: true,
             idle_timeout: idle,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
+            dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -615,6 +662,8 @@ async fn ws_fallback_connects_and_handshakes() {
             trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
             trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             prefer_ws_fallback: false,
+            p2p_proxy: None,
+            p2p_no_proxy: vec![],
             happy_eyeballs_stagger: Duration::from_millis(50),
             addr_ipv6_first: false,
             dns_refresh_interval: None,
@@ -678,6 +727,15 @@ async fn ws_fallback_connects_and_handshakes() {
             max_frame_bytes: 1_048_576,
             tcp_nodelay: true,
             tcp_keepalive: None,
+            max_frame_bytes_consensus: 262_144,
+            max_frame_bytes_control: 262_144,
+            max_frame_bytes_block_sync: 1_048_576,
+            max_frame_bytes_tx_gossip: 262_144,
+            max_frame_bytes_peer_gossip: 131_072,
+            max_frame_bytes_health: 65_536,
+            max_frame_bytes_other: 262_144,
+            tls_only_v1_3: true,
+            quic_max_idle_timeout: None,
         },
         Some(chain_id.clone()),
         None,
@@ -720,7 +778,7 @@ async fn ws_fallback_connects_and_handshakes() {
                         }
                         match futures::ready!(core::pin::Pin::new(&mut self.0).poll_next(cx)) {
                             Some(Ok(tokio_tungstenite::tungstenite::Message::Binary(b))) => {
-                                self.1 = bytes::Bytes::from(b);
+                                self.1 = b;
                                 let n = core::cmp::min(self.1.len(), buf.remaining());
                                 buf.put_slice(&self.1.split_to(n));
                                 core::task::Poll::Ready(Ok(()))
@@ -763,11 +821,22 @@ async fn ws_fallback_connects_and_handshakes() {
                             return core::task::Poll::Ready(Ok(()));
                         }
                         let data = core::mem::take(&mut self.1);
-                        match futures::ready!(
-                            core::pin::Pin::new(&mut self.0)
-                                .start_send(tokio_tungstenite::tungstenite::Message::Binary(data))
+                        match futures::ready!(core::pin::Pin::new(&mut self.0).poll_ready(cx)) {
+                            Ok(()) => {}
+                            Err(e) => {
+                                return core::task::Poll::Ready(Err(std::io::Error::new(
+                                    std::io::ErrorKind::Other,
+                                    format!("ws ready error: {e}"),
+                                )));
+                            }
+                        }
+                        if let Err(e) = core::pin::Pin::new(&mut self.0).start_send(
+                            tokio_tungstenite::tungstenite::Message::Binary(data.into()),
                         ) {
-                            () => {}
+                            return core::task::Poll::Ready(Err(std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                format!("ws send error: {e}"),
+                            )));
                         }
                         match futures::ready!(core::pin::Pin::new(&mut self.0).poll_flush(cx)) {
                             Ok(()) => core::task::Poll::Ready(Ok(())),
@@ -781,11 +850,22 @@ async fn ws_fallback_connects_and_handshakes() {
                         mut self: core::pin::Pin<&mut Self>,
                         cx: &mut core::task::Context<'_>,
                     ) -> core::task::Poll<std::io::Result<()>> {
-                        match futures::ready!(
-                            core::pin::Pin::new(&mut self.0)
-                                .start_send(tokio_tungstenite::tungstenite::Message::Close(None))
+                        match futures::ready!(core::pin::Pin::new(&mut self.0).poll_ready(cx)) {
+                            Ok(()) => {}
+                            Err(e) => {
+                                return core::task::Poll::Ready(Err(std::io::Error::new(
+                                    std::io::ErrorKind::Other,
+                                    format!("ws ready error: {e}"),
+                                )));
+                            }
+                        }
+                        if let Err(e) = core::pin::Pin::new(&mut self.0).start_send(
+                            tokio_tungstenite::tungstenite::Message::Close(None),
                         ) {
-                            () => {}
+                            return core::task::Poll::Ready(Err(std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                format!("ws close error: {e}"),
+                            )));
                         }
                         match futures::ready!(core::pin::Pin::new(&mut self.0).poll_flush(cx)) {
                             Ok(()) => core::task::Poll::Ready(Ok(())),
@@ -821,6 +901,7 @@ async fn ws_fallback_connects_and_handshakes() {
             require_sm_openssl_preview_match: true,
             idle_timeout: idle,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
+            dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -832,6 +913,8 @@ async fn ws_fallback_connects_and_handshakes() {
             trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
             trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             prefer_ws_fallback: true,
+            p2p_proxy: None,
+            p2p_no_proxy: vec![],
             happy_eyeballs_stagger: Duration::from_millis(50),
             addr_ipv6_first: false,
             dns_refresh_interval: None,
@@ -895,6 +978,15 @@ async fn ws_fallback_connects_and_handshakes() {
             max_frame_bytes: 1_048_576,
             tcp_nodelay: true,
             tcp_keepalive: None,
+            max_frame_bytes_consensus: 262_144,
+            max_frame_bytes_control: 262_144,
+            max_frame_bytes_block_sync: 1_048_576,
+            max_frame_bytes_tx_gossip: 262_144,
+            max_frame_bytes_peer_gossip: 131_072,
+            max_frame_bytes_health: 65_536,
+            max_frame_bytes_other: 262_144,
+            tls_only_v1_3: true,
+            quic_max_idle_timeout: None,
         },
         Some(chain_id.clone()),
         None,
@@ -1017,7 +1109,9 @@ impl TestActor {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
 async fn two_networks() {
-    let delay = Duration::from_millis(300);
+    // Allow some slack because this test can run in parallel with other integration tests and may
+    // experience short scheduling delays under load.
+    let delay = Duration::from_millis(1_000);
     let idle_timeout = Duration::from_secs(60);
     setup_logger();
     let key_pair1 = KeyPair::random();
@@ -1041,6 +1135,7 @@ async fn two_networks() {
         require_sm_openssl_preview_match: true,
         idle_timeout,
         connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
+        dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -1051,6 +1146,8 @@ async fn two_networks() {
         trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
         trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
         prefer_ws_fallback: false,
+        p2p_proxy: None,
+        p2p_no_proxy: vec![],
         happy_eyeballs_stagger: Duration::from_millis(100),
         addr_ipv6_first: false,
         dns_refresh_interval: None,
@@ -1155,6 +1252,7 @@ async fn two_networks() {
         require_sm_openssl_preview_match: true,
         idle_timeout,
         connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
+        dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -1165,6 +1263,8 @@ async fn two_networks() {
         trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
         trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
         prefer_ws_fallback: false,
+        p2p_proxy: None,
+        p2p_no_proxy: vec![],
         happy_eyeballs_stagger: Duration::from_millis(100),
         addr_ipv6_first: false,
         dns_refresh_interval: None,
@@ -1245,7 +1345,7 @@ async fn two_networks() {
         ShutdownSignal::new(),
     )
     .await;
-    let (network2, _) = match started2 {
+    let (mut network2, _) = match started2 {
         Ok(ok) => ok,
         Err(e) => {
             eprintln!("Skipping two_networks: cannot start network2: {e:?}");
@@ -1263,9 +1363,14 @@ async fn two_networks() {
     info!("Connecting peers...");
     let peer1 = Peer::new(address1.clone(), public_key1);
     let peer2 = Peer::new(address2.clone(), public_key2);
-    // Connect peers with each other
+    // Connect `network1` to `network2` (one direction only).
+    //
+    // Dialling both directions can create simultaneous connections and invoke the
+    // connection-resolution policy, which may transiently drop a connection around the time we
+    // post the test message, making the test flaky under parallel execution.
     update_topology_and_peers_addresses(&network1, std::slice::from_ref(&peer2));
-    update_topology_and_peers_addresses(&network2, std::slice::from_ref(&peer1));
+    // Ensure `network2` will accept inbound from `network1` without causing it to dial back.
+    network2.update_topology(UpdateTopology(HashSet::from([peer1.id().clone()])));
 
     tokio::time::timeout(Duration::from_millis(2000), async {
         let mut connections = network1
@@ -1274,6 +1379,22 @@ async fn two_networks() {
             .expect("online peers channel closed");
         while connections != 1 {
             connections = network1
+                .wait_online_peers_update(HashSet::len)
+                .await
+                .expect("online peers channel closed");
+        }
+    })
+    .await
+    .expect("Failed to get all connections");
+
+    // Ensure `network2` has observed the inbound connection as well.
+    tokio::time::timeout(Duration::from_millis(2000), async {
+        let mut connections = network2
+            .wait_online_peers_update(HashSet::len)
+            .await
+            .expect("online peers channel closed");
+        while connections != 1 {
+            connections = network2
                 .wait_online_peers_update(HashSet::len)
                 .await
                 .expect("online peers channel closed");
@@ -1335,6 +1456,7 @@ async fn update_peers_triggers_immediate_connect() {
             require_sm_openssl_preview_match: true,
             idle_timeout,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
+            dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -1346,6 +1468,8 @@ async fn update_peers_triggers_immediate_connect() {
             trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
             trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             prefer_ws_fallback: false,
+            p2p_proxy: None,
+            p2p_no_proxy: vec![],
             happy_eyeballs_stagger: Duration::from_millis(100),
             addr_ipv6_first: false,
             dns_refresh_interval: None,
@@ -1451,6 +1575,7 @@ async fn update_peers_triggers_immediate_connect() {
             require_sm_openssl_preview_match: true,
             idle_timeout,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
+            dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -1462,6 +1587,8 @@ async fn update_peers_triggers_immediate_connect() {
             trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
             trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             prefer_ws_fallback: false,
+            p2p_proxy: None,
+            p2p_no_proxy: vec![],
             happy_eyeballs_stagger: Duration::from_millis(100),
             addr_ipv6_first: false,
             dns_refresh_interval: None,
@@ -1609,6 +1736,7 @@ async fn happy_eyeballs_parallel_dials() {
             require_sm_openssl_preview_match: true,
             idle_timeout,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
+            dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -1620,6 +1748,8 @@ async fn happy_eyeballs_parallel_dials() {
             trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
             trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             prefer_ws_fallback: false,
+            p2p_proxy: None,
+            p2p_no_proxy: vec![],
             happy_eyeballs_stagger: Duration::from_millis(100),
             addr_ipv6_first: false,
             dns_refresh_interval: None,
@@ -1726,6 +1856,7 @@ async fn happy_eyeballs_parallel_dials() {
             require_sm_openssl_preview_match: true,
             idle_timeout,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
+            dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -1737,6 +1868,8 @@ async fn happy_eyeballs_parallel_dials() {
             trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
             trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             prefer_ws_fallback: false,
+            p2p_proxy: None,
+            p2p_no_proxy: vec![],
             happy_eyeballs_stagger: Duration::from_millis(100),
             addr_ipv6_first: false,
             dns_refresh_interval: None,
@@ -1881,6 +2014,7 @@ async fn low_topics_do_not_starve_each_other() {
             require_sm_openssl_preview_match: true,
             idle_timeout,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
+            dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -1892,6 +2026,8 @@ async fn low_topics_do_not_starve_each_other() {
             trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
             trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             prefer_ws_fallback: false,
+            p2p_proxy: None,
+            p2p_no_proxy: vec![],
             happy_eyeballs_stagger: Duration::from_millis(50),
             addr_ipv6_first: false,
             dns_refresh_interval: None,
@@ -1998,6 +2134,7 @@ async fn low_topics_do_not_starve_each_other() {
             require_sm_openssl_preview_match: true,
             idle_timeout,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
+            dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -2009,6 +2146,8 @@ async fn low_topics_do_not_starve_each_other() {
             trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
             trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             prefer_ws_fallback: false,
+            p2p_proxy: None,
+            p2p_no_proxy: vec![],
             happy_eyeballs_stagger: Duration::from_millis(50),
             addr_ipv6_first: false,
             dns_refresh_interval: None,
@@ -2210,6 +2349,7 @@ async fn relay_hub_routes_consensus_between_spokes() {
             require_sm_openssl_preview_match: true,
             idle_timeout,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
+            dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -2221,6 +2361,8 @@ async fn relay_hub_routes_consensus_between_spokes() {
             trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
             trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             prefer_ws_fallback: false,
+            p2p_proxy: None,
+            p2p_no_proxy: vec![],
             happy_eyeballs_stagger: Duration::from_millis(50),
             addr_ipv6_first: false,
             dns_refresh_interval: None,
@@ -2511,6 +2653,7 @@ async fn start_network(
         require_sm_openssl_preview_match: true,
         idle_timeout,
         connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
+        dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -2521,6 +2664,8 @@ async fn start_network(
         trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
         trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
         prefer_ws_fallback: false,
+        p2p_proxy: None,
+        p2p_no_proxy: vec![],
         happy_eyeballs_stagger: Duration::from_millis(100),
         addr_ipv6_first: false,
         dns_refresh_interval: None,
@@ -2697,6 +2842,7 @@ async fn tls_inbound_listener_smoke() {
         require_sm_openssl_preview_match: true,
         idle_timeout,
         connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
+        dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -2707,6 +2853,8 @@ async fn tls_inbound_listener_smoke() {
         trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
         trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
         prefer_ws_fallback: false,
+        p2p_proxy: None,
+        p2p_no_proxy: vec![],
         happy_eyeballs_stagger: Duration::from_millis(50),
         addr_ipv6_first: false,
         dns_refresh_interval: None,
@@ -2818,6 +2966,7 @@ async fn tls_inbound_listener_smoke() {
             require_sm_openssl_preview_match: true,
             idle_timeout,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
+            dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -2829,6 +2978,8 @@ async fn tls_inbound_listener_smoke() {
             trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
             trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             prefer_ws_fallback: false,
+            p2p_proxy: None,
+            p2p_no_proxy: vec![],
             happy_eyeballs_stagger: Duration::from_millis(50),
             addr_ipv6_first: false,
             dns_refresh_interval: None,

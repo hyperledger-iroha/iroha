@@ -9,6 +9,7 @@ the Protobuf wire format sufficient for pprof CPU profiles emitted by pprof-rs.
 from __future__ import annotations
 
 import argparse
+import gzip
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -334,11 +335,13 @@ def compute_hotspots(profile: Profile, top_n: int) -> Tuple[List[Tuple[str, int]
 
 def main(argv: List[str]) -> int:
     ap = argparse.ArgumentParser(description="Extract top pprof hotspots from a pprof profile.pb")
-    ap.add_argument("profile", type=Path, help="Path to pprof profile (protobuf, not gz)")
+    ap.add_argument("profile", type=Path, help="Path to pprof profile (protobuf; .gz supported)")
     ap.add_argument("--top", type=int, default=20)
     args = ap.parse_args(argv)
 
     data = args.profile.read_bytes()
+    if data.startswith(b"\x1f\x8b"):
+        data = gzip.decompress(data)
     profile = parse_profile(data)
 
     value_idx = choose_value_index(profile)

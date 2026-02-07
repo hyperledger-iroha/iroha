@@ -2052,46 +2052,44 @@ fn derive_struct_deserialize(
                                             core::ptr::copy(ptr2, tmp_ptr, __len);
                                             let tmp_slice = std::slice::from_raw_parts(tmp_ptr as *const u8, __len);
                                             let _payload_guard = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                            let v = {
+                                            let v_res: ::core::result::Result<#ty, norito::core::Error> = {
                                                 // Try direct archived decode first
                                                 match <#ty as norito::core::NoritoDeserialize>::try_deserialize(&*(tmp_ptr as *const norito::core::Archived<#ty>)) {
-                                                    Ok(val) => val,
-                                                    Err(_) => {
+                                                    Ok(val) => Ok(val),
+                                                    Err(err) => {
                                                         #[cfg(feature = "compact-len")]
                                                         {
-                                                            if let Ok((inner_len, inner_hdr)) = norito::core::read_len_from_slice(tmp_slice) {
-                                                                if inner_hdr + inner_len == tmp_slice.len() {
-                                                                    // Strip outer varint and decode inner archived bytes
-                                                                    let layout2 = std::alloc::Layout::from_size_align(inner_len.max(1), core::mem::align_of::<norito::core::Archived<#ty>>()).unwrap();
-                                                                    let tmp2 = std::alloc::alloc(layout2);
-                                                                    if tmp2.is_null() {
-                                                                        std::alloc::handle_alloc_error(layout2);
+                                                            let fallback = Err(err);
+                                                            let compat = (|| {
+                                                                if let Ok((inner_len, inner_hdr)) = norito::core::read_len_from_slice(tmp_slice) {
+                                                                    if inner_hdr + inner_len == tmp_slice.len() {
+                                                                        // Strip outer varint and decode inner archived bytes.
+                                                                        let layout2 = std::alloc::Layout::from_size_align(inner_len.max(1), core::mem::align_of::<norito::core::Archived<#ty>>()).unwrap();
+                                                                        let tmp2 = std::alloc::alloc(layout2);
+                                                                        if tmp2.is_null() {
+                                                                            std::alloc::handle_alloc_error(layout2);
+                                                                        }
+                                                                        core::ptr::copy(tmp_slice.as_ptr().add(inner_hdr), tmp2, inner_len);
+                                                                        let inner_slice = std::slice::from_raw_parts(tmp2 as *const u8, inner_len);
+                                                                        let _g2 = norito::core::PayloadCtxGuard::enter(inner_slice);
+                                                                        let inner_res = <#ty as norito::core::NoritoDeserialize>::try_deserialize(&*(tmp2 as *const norito::core::Archived<#ty>));
+                                                                        std::alloc::dealloc(tmp2, layout2);
+                                                                        return Some(inner_res);
                                                                     }
-                                                                    core::ptr::copy(tmp_slice.as_ptr().add(inner_hdr), tmp2, inner_len);
-                                                                    let inner_slice = std::slice::from_raw_parts(tmp2 as *const u8, inner_len);
-                                                                    let _g2 = norito::core::PayloadCtxGuard::enter(inner_slice);
-                                                                    let val2 = <#ty as norito::core::NoritoDeserialize>::deserialize(&*(tmp2 as *const norito::core::Archived<#ty>));
-                                                                    std::alloc::dealloc(tmp2, layout2);
-                                                                    val2
-                                                                } else {
-                                                                    let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                                                    <#ty as norito::core::NoritoDeserialize>::deserialize(&*(tmp_ptr as *const norito::core::Archived<#ty>))
                                                                 }
-                                                            } else {
-                                                                let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                                                <#ty as norito::core::NoritoDeserialize>::deserialize(&*(tmp_ptr as *const norito::core::Archived<#ty>))
-                                                            }
+                                                                None
+                                                            })();
+                                                            compat.unwrap_or(fallback)
                                                         }
                                                         #[cfg(not(feature = "compact-len"))]
                                                         {
-                                                            let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                                            <#ty as norito::core::NoritoDeserialize>::deserialize(&*(tmp_ptr as *const norito::core::Archived<#ty>))
+                                                            Err(err)
                                                         }
                                                     }
                                                 }
                                             };
                                             std::alloc::dealloc(tmp_ptr, layout);
-                                            v
+                                            v_res?
                                         }
                                     } else {
                                         #compat_decode_named_len_mismatch
@@ -2119,12 +2117,13 @@ fn derive_struct_deserialize(
                                             core::ptr::copy(ptr2, tmp_ptr, __len);
                                             let tmp_slice = std::slice::from_raw_parts(tmp_ptr as *const u8, __len);
                                             let _payload_guard = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                            let v = {
-                                                match <#ty as norito::core::NoritoDeserialize>::try_deserialize(&*(tmp_ptr as *const norito::core::Archived<#ty>)) {
-                                                    Ok(val) => val,
-                                                    Err(_) => {
-                                                        #[cfg(feature = "compact-len")]
-                                                        {
+                                            let v_res: ::core::result::Result<#ty, norito::core::Error> = match <#ty as norito::core::NoritoDeserialize>::try_deserialize(&*(tmp_ptr as *const norito::core::Archived<#ty>)) {
+                                                Ok(val) => Ok(val),
+                                                Err(err) => {
+                                                    #[cfg(feature = "compact-len")]
+                                                    {
+                                                        let fallback = Err(err);
+                                                        let compat = (|| {
                                                             if let Ok((inner_len, inner_hdr)) = norito::core::read_len_from_slice(tmp_slice) {
                                                                 if inner_hdr + inner_len == tmp_slice.len() {
                                                                     let layout2 = std::alloc::Layout::from_size_align(inner_len.max(1), core::mem::align_of::<norito::core::Archived<#ty>>()).unwrap();
@@ -2135,28 +2134,23 @@ fn derive_struct_deserialize(
                                                                     core::ptr::copy(tmp_slice.as_ptr().add(inner_hdr), tmp2, inner_len);
                                                                     let inner_slice = std::slice::from_raw_parts(tmp2 as *const u8, inner_len);
                                                                     let _g2 = norito::core::PayloadCtxGuard::enter(inner_slice);
-                                                                    let val2 = <#ty as norito::core::NoritoDeserialize>::deserialize(&*(tmp2 as *const norito::core::Archived<#ty>));
+                                                                    let inner_res = <#ty as norito::core::NoritoDeserialize>::try_deserialize(&*(tmp2 as *const norito::core::Archived<#ty>));
                                                                     std::alloc::dealloc(tmp2, layout2);
-                                                                    val2
-                                                                } else {
-                                                                    let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                                                    <#ty as norito::core::NoritoDeserialize>::deserialize(&*(tmp_ptr as *const norito::core::Archived<#ty>))
+                                                                    return Some(inner_res);
                                                                 }
-                                                            } else {
-                                                                let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                                                <#ty as norito::core::NoritoDeserialize>::deserialize(&*(tmp_ptr as *const norito::core::Archived<#ty>))
                                                             }
-                                                        }
-                                                        #[cfg(not(feature = "compact-len"))]
-                                                        {
-                                                            let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                                            <#ty as norito::core::NoritoDeserialize>::deserialize(&*(tmp_ptr as *const norito::core::Archived<#ty>))
-                                                        }
+                                                            None
+                                                        })();
+                                                        compat.unwrap_or(fallback)
+                                                    }
+                                                    #[cfg(not(feature = "compact-len"))]
+                                                    {
+                                                        Err(err)
                                                     }
                                                 }
                                             };
                                             std::alloc::dealloc(tmp_ptr, layout);
-                                            v
+                                            v_res?
                                         }
                                     } else { #compat_decode_named }
                                 }
@@ -2456,9 +2450,9 @@ fn derive_struct_deserialize(
                                         core::ptr::copy(data_base.add(__start), tmp_ptr, __len);
                                         let tmp_slice = std::slice::from_raw_parts(tmp_ptr as *const u8, __len);
                                         let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                        let v = <#ty as norito::core::NoritoDeserialize>::deserialize(&*(tmp_ptr as *const norito::core::Archived<#ty>));
+                                        let v_res = <#ty as norito::core::NoritoDeserialize>::try_deserialize(&*(tmp_ptr as *const norito::core::Archived<#ty>));
                                         std::alloc::dealloc(tmp_ptr, layout);
-                                        v
+                                        v_res?
                                     }
                                 };
                             }
@@ -2560,9 +2554,9 @@ fn derive_struct_deserialize(
                                         core::ptr::copy(data_ptr, tmp_ptr, total_len);
                                         let tmp_slice = std::slice::from_raw_parts(tmp_ptr as *const u8, total_len);
                                         let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                        let v = <#ty as norito::core::NoritoDeserialize>::deserialize(&*(tmp_ptr as *const norito::core::Archived<#ty>));
+                                        let v_res = <#ty as norito::core::NoritoDeserialize>::try_deserialize(&*(tmp_ptr as *const norito::core::Archived<#ty>));
                                         std::alloc::dealloc(tmp_ptr, layout);
-                                        v
+                                        v_res?
                                     }
                                 };
                             }
@@ -2582,9 +2576,9 @@ fn derive_struct_deserialize(
                                         core::ptr::copy(ptr2, tmp_ptr, __fsz);
                                         let tmp_slice = std::slice::from_raw_parts(tmp_ptr as *const u8, __fsz);
                                         let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                        let v = <#ty as norito::core::NoritoDeserialize>::deserialize(&*(tmp_ptr as *const norito::core::Archived<#ty>));
+                                        let v_res = <#ty as norito::core::NoritoDeserialize>::try_deserialize(&*(tmp_ptr as *const norito::core::Archived<#ty>));
                                         std::alloc::dealloc(tmp_ptr, layout);
-                                        v
+                                        v_res?
                                     }
                                 };
                             }
@@ -2666,17 +2660,17 @@ fn derive_struct_deserialize(
             let __decode_from_slice_impl = if has_decode_from_slice_attr(container_attrs) {
                 let (impl_generics2, ty_generics2, where_clause2) = r#gen.split_for_impl();
                 quote! {
-                    impl<'a> #impl_generics2 norito::core::DecodeFromSlice<'a> for #ident #ty_generics2 #where_clause2 {
-                        #[inline]
-                        fn decode_from_slice(bytes: &'a [u8]) -> ::core::result::Result<(Self, usize), norito::core::Error> {
-                            let __archived = norito::core::archived_from_slice::<Self>(bytes)?;
-                            let __archived_bytes = __archived.bytes();
-                            let _pg = norito::core::PayloadCtxGuard::enter(__archived_bytes);
-                            let value = <Self as norito::core::NoritoDeserialize>::deserialize(__archived.archived());
-                            Ok((value, __archived_bytes.len()))
-                        }
-                    }
-                }
+	                    impl<'a> #impl_generics2 norito::core::DecodeFromSlice<'a> for #ident #ty_generics2 #where_clause2 {
+	                        #[inline]
+	                        fn decode_from_slice(bytes: &'a [u8]) -> ::core::result::Result<(Self, usize), norito::core::Error> {
+	                            let __archived = norito::core::archived_from_slice::<Self>(bytes)?;
+	                            let __archived_bytes = __archived.bytes();
+	                            let _pg = norito::core::PayloadCtxGuard::enter(__archived_bytes);
+	                            let value = <Self as norito::core::NoritoDeserialize>::try_deserialize(__archived.archived())?;
+	                            Ok((value, __archived_bytes.len()))
+	                        }
+	                    }
+	                }
             } else {
                 quote! {}
             };
@@ -2831,17 +2825,17 @@ fn derive_struct_deserialize(
             let __decode_from_slice_impl = if has_decode_from_slice_attr(container_attrs) {
                 let (impl_generics2, ty_generics2, where_clause2) = r#gen.split_for_impl();
                 quote! {
-                    impl<'a> #impl_generics2 norito::core::DecodeFromSlice<'a> for #ident #ty_generics2 #where_clause2 {
-                        #[inline]
-                        fn decode_from_slice(bytes: &'a [u8]) -> ::core::result::Result<(Self, usize), norito::core::Error> {
-                            let __archived = norito::core::archived_from_slice::<Self>(bytes)?;
-                            let __archived_bytes = __archived.bytes();
-                            let _pg = norito::core::PayloadCtxGuard::enter(__archived_bytes);
-                            let value = <Self as norito::core::NoritoDeserialize>::deserialize(__archived.archived());
-                            Ok((value, __archived_bytes.len()))
-                        }
-                    }
-                }
+	                    impl<'a> #impl_generics2 norito::core::DecodeFromSlice<'a> for #ident #ty_generics2 #where_clause2 {
+	                        #[inline]
+	                        fn decode_from_slice(bytes: &'a [u8]) -> ::core::result::Result<(Self, usize), norito::core::Error> {
+	                            let __archived = norito::core::archived_from_slice::<Self>(bytes)?;
+	                            let __archived_bytes = __archived.bytes();
+	                            let _pg = norito::core::PayloadCtxGuard::enter(__archived_bytes);
+	                            let value = <Self as norito::core::NoritoDeserialize>::try_deserialize(__archived.archived())?;
+	                            Ok((value, __archived_bytes.len()))
+	                        }
+	                    }
+	                }
             } else {
                 quote! {}
             };
@@ -3313,8 +3307,9 @@ fn derive_enum_deserialize(
                                                     unsafe { std::ptr::copy(data_ptr, tmp_ptr, hdr + field_len); }
                                                     let tmp_slice = unsafe { std::slice::from_raw_parts(tmp_ptr as *const u8, hdr + field_len) };
                                                     let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                                    let val = <#ty as norito::core::NoritoDeserialize>::deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
+                                                    let val_res = <#ty as norito::core::NoritoDeserialize>::try_deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
                                                     unsafe { std::alloc::dealloc(tmp_ptr, layout); }
+                                                    let val = val_res?;
                                                     offset += hdr + field_len;
                                                     val
                                                 } else {
@@ -3332,8 +3327,9 @@ fn derive_enum_deserialize(
                                                     unsafe { std::ptr::copy(data_ptr, tmp_ptr, field_len); }
                                                     let tmp_slice = unsafe { std::slice::from_raw_parts(tmp_ptr as *const u8, field_len) };
                                                     let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                                    let value = <#ty as norito::core::NoritoDeserialize>::deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
+                                                    let value_res = <#ty as norito::core::NoritoDeserialize>::try_deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
                                                     unsafe { std::alloc::dealloc(tmp_ptr, layout); }
+                                                    let value = value_res?;
                                                     #[cfg(feature = "compact-len")]
                                                     { offset += hdr + field_len; }
                                                     #[cfg(not(feature = "compact-len"))]
@@ -3358,8 +3354,9 @@ fn derive_enum_deserialize(
                                                     unsafe { std::ptr::copy(data.as_ptr(), tmp_ptr, __fsz); }
                                                     let tmp_slice = unsafe { std::slice::from_raw_parts(tmp_ptr as *const u8, __fsz) };
                                                     let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                                    let value = <#ty as norito::core::NoritoDeserialize>::deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
+                                                    let value_res = <#ty as norito::core::NoritoDeserialize>::try_deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
                                                     unsafe { std::alloc::dealloc(tmp_ptr, layout); }
+                                                    let value = value_res?;
                                                     offset += __fsz;
                                                     value
                                                 } else {
@@ -3377,8 +3374,9 @@ fn derive_enum_deserialize(
                                                     unsafe { std::ptr::copy(data_ptr, tmp_ptr, field_len); }
                                                     let tmp_slice = unsafe { std::slice::from_raw_parts(tmp_ptr as *const u8, field_len) };
                                                     let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                                    let value = <#ty as norito::core::NoritoDeserialize>::deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
+                                                    let value_res = <#ty as norito::core::NoritoDeserialize>::try_deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
                                                     unsafe { std::alloc::dealloc(tmp_ptr, layout); }
+                                                    let value = value_res?;
                                                     #[cfg(feature = "compact-len")]
                                                     { offset += hdr + field_len; }
                                                     #[cfg(not(feature = "compact-len"))]
@@ -3428,8 +3426,9 @@ fn derive_enum_deserialize(
                                                         unsafe { std::ptr::copy(data_ptr, tmp_ptr, field_len); }
                                                         let tmp_slice = unsafe { std::slice::from_raw_parts(tmp_ptr as *const u8, field_len) };
                                                         let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                                        let val = <#ty as norito::core::NoritoDeserialize>::deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
+                                                        let val_res = <#ty as norito::core::NoritoDeserialize>::try_deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
                                                         unsafe { std::alloc::dealloc(tmp_ptr, layout); }
+                                                        let val = val_res?;
                                                         offset += hdr + field_len;
                                                         val
                                                     }
@@ -3448,8 +3447,9 @@ fn derive_enum_deserialize(
                                                 unsafe { std::ptr::copy(data_ptr, tmp_ptr, field_len); }
                                                 let tmp_slice = unsafe { std::slice::from_raw_parts(tmp_ptr as *const u8, field_len) };
                                                 let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                                let val = <#ty as norito::core::NoritoDeserialize>::deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
+                                                let val_res = <#ty as norito::core::NoritoDeserialize>::try_deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
                                                 unsafe { std::alloc::dealloc(tmp_ptr, layout); }
+                                                let val = val_res?;
                                                 #[cfg(feature = "compact-len")]
                                                 { offset += hdr + field_len; }
                                                 #[cfg(not(feature = "compact-len"))]
@@ -3569,8 +3569,9 @@ fn derive_enum_deserialize(
                                                     );
                                                 }
                                                 let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                                let value = <#ty as norito::core::NoritoDeserialize>::deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
+                                                let value_res = <#ty as norito::core::NoritoDeserialize>::try_deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
                                                 unsafe { std::alloc::dealloc(tmp_ptr, layout); }
+                                                let value = value_res?;
                                                 (value, field_len)
                                             };
                                             offset += hdr + used_total;
@@ -3651,8 +3652,9 @@ fn derive_enum_deserialize(
                                                 unsafe { std::ptr::copy(data_ptr, tmp_ptr, field_len); }
                                                 let tmp_slice = unsafe { std::slice::from_raw_parts(tmp_ptr as *const u8, field_len) };
                                                 let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                                let value = <#ty as norito::core::NoritoDeserialize>::deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
+                                                let value_res = <#ty as norito::core::NoritoDeserialize>::try_deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
                                                 unsafe { std::alloc::dealloc(tmp_ptr, layout); }
+                                                let value = value_res?;
                                                 #[cfg(feature = "compact-len")]
                                                 { offset += hdr + field_len; }
                                                 #[cfg(not(feature = "compact-len"))]
@@ -3680,8 +3682,9 @@ fn derive_enum_deserialize(
                                                 unsafe { std::ptr::copy(data_ptr, tmp_ptr, total); }
                                                 let tmp_slice = unsafe { std::slice::from_raw_parts(tmp_ptr as *const u8, total) };
                                                 let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                                let value = <#ty as norito::core::NoritoDeserialize>::deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
+                                                let value_res = <#ty as norito::core::NoritoDeserialize>::try_deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
                                                 unsafe { std::alloc::dealloc(tmp_ptr, layout); }
+                                                let value = value_res?;
                                                 offset += total;
                                                 value
                                             } else {
@@ -3699,8 +3702,9 @@ fn derive_enum_deserialize(
                                                 unsafe { std::ptr::copy(data_ptr, tmp_ptr, field_len); }
                                                 let tmp_slice = unsafe { std::slice::from_raw_parts(tmp_ptr as *const u8, field_len) };
                                                 let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                                let value = <#ty as norito::core::NoritoDeserialize>::deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
+                                                let value_res = <#ty as norito::core::NoritoDeserialize>::try_deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
                                                 unsafe { std::alloc::dealloc(tmp_ptr, layout); }
+                                                let value = value_res?;
                                                 #[cfg(feature = "compact-len")]
                                                 { offset += hdr + field_len; }
                                                 #[cfg(not(feature = "compact-len"))]
@@ -3724,8 +3728,9 @@ fn derive_enum_deserialize(
                                                 unsafe { std::ptr::copy(data.as_ptr(), tmp_ptr, __fsz); }
                                                 let tmp_slice = unsafe { std::slice::from_raw_parts(tmp_ptr as *const u8, __fsz) };
                                                 let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                                let value = <#ty as norito::core::NoritoDeserialize>::deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
+                                                let value_res = <#ty as norito::core::NoritoDeserialize>::try_deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
                                                 unsafe { std::alloc::dealloc(tmp_ptr, layout); }
+                                                let value = value_res?;
                                                 offset += __fsz;
                                                 value
                                             } else {
@@ -3742,8 +3747,9 @@ fn derive_enum_deserialize(
                                                 unsafe { std::ptr::copy(data_ptr, tmp_ptr, field_len); }
                                                 let tmp_slice = unsafe { std::slice::from_raw_parts(tmp_ptr as *const u8, field_len) };
                                                 let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                                let value = <#ty as norito::core::NoritoDeserialize>::deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
+                                                let value_res = <#ty as norito::core::NoritoDeserialize>::try_deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
                                                 unsafe { std::alloc::dealloc(tmp_ptr, layout); }
+                                                let value = value_res?;
                                                 #[cfg(feature = "compact-len")]
                                                 { offset += hdr + field_len; }
                                                 #[cfg(not(feature = "compact-len"))]
@@ -3791,8 +3797,9 @@ fn derive_enum_deserialize(
                                                     unsafe { std::ptr::copy(data_ptr, tmp_ptr, field_len); }
                                                     let tmp_slice = unsafe { std::slice::from_raw_parts(tmp_ptr as *const u8, field_len) };
                                                     let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                                    let value = <#ty as norito::core::NoritoDeserialize>::deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
+                                                    let value_res = <#ty as norito::core::NoritoDeserialize>::try_deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
                                                     unsafe { std::alloc::dealloc(tmp_ptr, layout); }
+                                                    let value = value_res?;
                                                     offset += hdr + field_len;
                                                     value
                                                 }
@@ -3817,8 +3824,9 @@ fn derive_enum_deserialize(
                                             unsafe { std::ptr::copy(data_ptr, tmp_ptr, field_len); }
                                             let tmp_slice = unsafe { std::slice::from_raw_parts(tmp_ptr as *const u8, field_len) };
                                             let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                            let value = <#ty as norito::core::NoritoDeserialize>::deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
+                                            let value_res = <#ty as norito::core::NoritoDeserialize>::try_deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
                                             unsafe { std::alloc::dealloc(tmp_ptr, layout); }
+                                            let value = value_res?;
                                             #[cfg(feature = "compact-len")]
                                             { offset += hdr + field_len; }
                                             #[cfg(not(feature = "compact-len"))]
@@ -3861,18 +3869,18 @@ fn derive_enum_deserialize(
     let (_, ty_generics, _) = r#gen.split_for_impl();
     let __decode_from_slice_impl = if has_decode_from_slice_attr(container_attrs) {
         let (impl_generics2, ty_generics2, where_clause2) = r#gen.split_for_impl();
-        quote! {
-            impl<'a> #impl_generics2 norito::core::DecodeFromSlice<'a> for #ident #ty_generics2 #where_clause2 {
-                #[inline]
-                fn decode_from_slice(bytes: &'a [u8]) -> ::core::result::Result<(Self, usize), norito::core::Error> {
-                    let __archived = norito::core::archived_from_slice::<Self>(bytes)?;
-                    let __archived_bytes = __archived.bytes();
-                    let _pg = norito::core::PayloadCtxGuard::enter(__archived_bytes);
-                    let value = <Self as norito::core::NoritoDeserialize>::deserialize(__archived.archived());
-                    Ok((value, __archived_bytes.len()))
-                }
-            }
-        }
+	        quote! {
+	            impl<'a> #impl_generics2 norito::core::DecodeFromSlice<'a> for #ident #ty_generics2 #where_clause2 {
+	                #[inline]
+	                fn decode_from_slice(bytes: &'a [u8]) -> ::core::result::Result<(Self, usize), norito::core::Error> {
+	                    let __archived = norito::core::archived_from_slice::<Self>(bytes)?;
+	                    let __archived_bytes = __archived.bytes();
+	                    let _pg = norito::core::PayloadCtxGuard::enter(__archived_bytes);
+	                    let value = <Self as norito::core::NoritoDeserialize>::try_deserialize(__archived.archived())?;
+	                    Ok((value, __archived_bytes.len()))
+	                }
+	            }
+	        }
     } else {
         quote! {}
     };

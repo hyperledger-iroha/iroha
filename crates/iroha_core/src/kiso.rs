@@ -761,6 +761,7 @@ mod tests {
                 soranet_privacy_ingest: iroha_config::parameters::actual::SoranetPrivacyIngest::default(),
                 debug_match_filters: false,
                 operator_auth: iroha_config::parameters::actual::ToriiOperatorAuth::default(),
+                operator_signatures: iroha_config::parameters::actual::ToriiOperatorSignatures::default(),
                 preauth_max_connections: None,
                 preauth_max_connections_per_ip: None,
                 preauth_rate_per_ip_per_sec: None,
@@ -915,6 +916,7 @@ mod tests {
                         iroha_config::parameters::defaults::torii::WEBHOOK_READ_TIMEOUT_MS,
                     ),
                 },
+                webhook_security: iroha_config::parameters::actual::WebhookSecurity::default(),
                 push: iroha_config::parameters::actual::Push {
                     enabled: iroha_config::parameters::defaults::torii::PUSH_ENABLED,
                     rate_per_minute: iroha_config::parameters::defaults::torii::PUSH_RATE_PER_MINUTE

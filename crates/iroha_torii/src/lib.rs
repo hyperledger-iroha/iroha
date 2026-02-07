@@ -58,6 +58,7 @@
 //! - `app_api_wss` (off by default): enables WebSocket/WebSocket Secure webhook delivery
 mod api_version;
 mod operator_auth;
+mod operator_signatures;
 #[cfg(feature = "push")]
 mod push;
 /// Helpers for constructing Norito JSON values within Torii.
@@ -748,6 +749,7 @@ struct AppState {
     require_api_token: bool,
     api_tokens_set: Arc<HashSet<String>>,
     operator_auth: Arc<operator_auth::OperatorAuth>,
+    operator_signatures: Arc<operator_signatures::OperatorSignatures>,
     soranet_privacy_ingest: iroha_config::parameters::actual::SoranetPrivacyIngest,
     soranet_privacy_tokens: Arc<HashSet<String>>,
     soranet_privacy_allow_nets: Arc<Vec<limits::IpNet>>,
@@ -5274,9 +5276,7 @@ async fn handler_webhooks_create(
         return Ok(webhook::handle_create_webhook(body).await);
     }
 
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(&app, &headers, None, "v1/webhooks", enforce).await?;
+    check_access_enforced(&app, &headers, None, "v1/webhooks", true).await?;
 
     Ok(webhook::handle_create_webhook(body).await)
 }
@@ -5290,9 +5290,7 @@ async fn handler_webhooks_list(
         return Ok(webhook::handle_list_webhooks().await);
     }
 
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(&app, &headers, None, "v1/webhooks", enforce).await?;
+    check_access_enforced(&app, &headers, None, "v1/webhooks", true).await?;
 
     Ok(webhook::handle_list_webhooks().await)
 }
@@ -5307,9 +5305,7 @@ async fn handler_webhooks_delete(
         return Ok(webhook::handle_delete_webhook(axum::extract::Path(id)).await);
     }
 
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(&app, &headers, None, "v1/webhooks", enforce).await?;
+    check_access_enforced(&app, &headers, None, "v1/webhooks", true).await?;
 
     Ok(webhook::handle_delete_webhook(axum::extract::Path(id)).await)
 }
@@ -12113,6 +12109,7 @@ pub struct Torii {
     require_api_token: bool,
     api_tokens_set: std::sync::Arc<std::collections::HashSet<String>>,
     operator_auth: Arc<operator_auth::OperatorAuth>,
+    operator_signatures: Arc<operator_signatures::OperatorSignatures>,
     soranet_privacy_ingest: iroha_config::parameters::actual::SoranetPrivacyIngest,
     soranet_privacy_tokens: std::sync::Arc<std::collections::HashSet<String>>,
     soranet_privacy_allow_nets: std::sync::Arc<Vec<limits::IpNet>>,
@@ -12176,7 +12173,7 @@ impl Torii {
         builder.apply_with_state(|router, state| {
             let operator_layer = axum::middleware::from_fn_with_state(
                 state.clone(),
-                operator_auth::enforce_operator_auth,
+                operator_signatures::enforce_operator_access,
             );
             let operator_router = Router::new()
                 .route(
@@ -12377,7 +12374,7 @@ impl Torii {
         builder.apply_with_state(|router, state| {
             let operator_layer = axum::middleware::from_fn_with_state(
                 state.clone(),
-                operator_auth::enforce_operator_auth,
+                operator_signatures::enforce_operator_access,
             );
             let sumeragi = Router::new()
                 .route(
@@ -12459,7 +12456,7 @@ impl Torii {
         builder.apply_with_state(|router, state| {
             let operator_layer = axum::middleware::from_fn_with_state(
                 state.clone(),
-                operator_auth::enforce_operator_auth,
+                operator_signatures::enforce_operator_access,
             );
             let operator_router = Router::new()
                 .route(
@@ -12560,7 +12557,7 @@ impl Torii {
         builder.apply_with_state(|router, state| {
             let operator_layer = axum::middleware::from_fn_with_state(
                 state.clone(),
-                operator_auth::enforce_operator_auth,
+                operator_signatures::enforce_operator_access,
             );
             let profiling = Router::new()
                 .route(uri::PROFILE, get(handler_profile))
@@ -13702,6 +13699,10 @@ impl Torii {
                 write_timeout: config.webhook.write_timeout,
                 read_timeout: config.webhook.read_timeout,
             });
+            crate::webhook::set_webhook_security_policy(crate::webhook::WebhookSecurityPolicy {
+                enabled: config.webhook_security.enabled,
+                allow_nets: limits::parse_cidrs(&config.webhook_security.allow_cidrs),
+            });
             crate::zk_attachments::configure(
                 config.attachments_ttl_secs,
                 config.attachments_max_bytes,
@@ -13907,6 +13908,12 @@ impl Torii {
             )
             .unwrap_or_else(|err| panic!("invalid torii.operator_auth configuration: {err}")),
         );
+        let operator_signatures = Arc::new(operator_signatures::OperatorSignatures::new(
+            config.operator_signatures.clone(),
+            da_receipt_signer.public_key().clone(),
+            config.max_content_len.get(),
+            telemetry.clone(),
+        ));
 
         #[cfg(all(feature = "app_api", feature = "telemetry"))]
         let peer_telemetry_urls = config
@@ -14046,6 +14053,7 @@ impl Torii {
             require_api_token: config.require_api_token,
             api_tokens_set: api_tokens_set.clone(),
             operator_auth,
+            operator_signatures,
             soranet_privacy_ingest: config.soranet_privacy_ingest.clone(),
             soranet_privacy_tokens: std::sync::Arc::new(soranet_privacy_tokens),
             soranet_privacy_allow_nets: std::sync::Arc::new(soranet_privacy_allow_nets),
@@ -14256,6 +14264,7 @@ impl Torii {
             require_api_token: self.require_api_token,
             api_tokens_set: self.api_tokens_set.clone(),
             operator_auth: self.operator_auth.clone(),
+            operator_signatures: self.operator_signatures.clone(),
             soranet_privacy_ingest: self.soranet_privacy_ingest.clone(),
             soranet_privacy_tokens: self.soranet_privacy_tokens.clone(),
             soranet_privacy_allow_nets: self.soranet_privacy_allow_nets.clone(),
@@ -16138,6 +16147,12 @@ pub(crate) mod tests_runtime_handlers {
             )
             .expect("operator auth defaults should be valid"),
         );
+        let operator_signatures = Arc::new(operator_signatures::OperatorSignatures::new(
+            iroha_config::parameters::actual::ToriiOperatorSignatures::default(),
+            da_receipt_signer.public_key().clone(),
+            defaults::torii::MAX_CONTENT_LEN.get(),
+            telemetry.clone(),
+        ));
 
         Arc::new(AppState {
             events,
@@ -16159,6 +16174,7 @@ pub(crate) mod tests_runtime_handlers {
             require_api_token: false,
             api_tokens_set: api_tokens_set.clone(),
             operator_auth,
+            operator_signatures,
             soranet_privacy_ingest,
             soranet_privacy_tokens: Arc::new(soranet_privacy_tokens),
             soranet_privacy_allow_nets: Arc::new(soranet_privacy_allow_nets),
