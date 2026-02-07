@@ -752,7 +752,7 @@ async fn ws_fallback_connects_and_handshakes() {
     tokio::spawn(async move {
         if let Ok((stream, remote)) = listener.accept().await {
             if let Ok(ws) = accept_async(stream).await {
-                let (mut sink, mut stream) = ws.split();
+                let (sink, stream) = ws.split();
                 // Adapters
                 #[allow(clippy::items_after_statements)]
                 struct R<S>(S, bytes::Bytes);

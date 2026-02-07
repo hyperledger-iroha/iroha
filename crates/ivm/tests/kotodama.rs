@@ -3119,7 +3119,9 @@ fn runtime_durable_get_or_insert_default_state_map() {
     let val = val.expect("durable state entry should exist");
     let tlv = validate_tlv_bytes(&val).expect("state entry should use NoritoBytes TLV");
     assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-    assert_eq!(std::str::from_utf8(tlv.payload).unwrap(), "0");
+    let stored: i64 =
+        norito::decode_from_bytes(tlv.payload).expect("durable int value should be Norito i64");
+    assert_eq!(stored, 0);
 }
 
 #[test]

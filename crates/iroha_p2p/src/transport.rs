@@ -615,6 +615,7 @@ use std::sync::{Mutex, OnceLock};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_primitives::addr::SocketAddr;
+use socket2::{SockRef, TcpKeepalive};
 use tokio::{
     io::{self, AsyncReadExt, AsyncWriteExt, Result},
     net::TcpStream,
@@ -868,9 +869,12 @@ pub(crate) fn apply_tcp_socket_options(
     tcp_keepalive: Option<std::time::Duration>,
 ) {
     let _ = stream.set_nodelay(tcp_nodelay);
-    // Keepalive tuning would require `unsafe`/platform-specific socket options.
-    // We intentionally keep the default TCP behavior in the safe Rust surface.
-    let _ = tcp_keepalive;
+    if let Some(idle) = tcp_keepalive {
+        // Best-effort: keepalive knobs vary across OSes. Socket2 provides a safe wrapper.
+        let sock_ref = SockRef::from(stream);
+        let keepalive = TcpKeepalive::new().with_time(idle);
+        let _ = sock_ref.set_tcp_keepalive(&keepalive);
+    }
 }
 
 #[cfg(test)]
@@ -928,5 +932,24 @@ mod tests {
         };
         let req = build_connect_request("dest:443", &proxy_no_auth);
         assert!(!req.contains("Proxy-Authorization"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn apply_tcp_socket_options_enables_keepalive_when_configured() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("local addr");
+        let accept_task = tokio::spawn(async move {
+            let _ = listener.accept().await;
+        });
+
+        let stream = tokio::net::TcpStream::connect(addr).await.expect("connect");
+        apply_tcp_socket_options(&stream, true, Some(std::time::Duration::from_secs(123)));
+
+        let enabled = SockRef::from(&stream).keepalive().expect("read keepalive");
+        assert!(enabled, "SO_KEEPALIVE was not enabled");
+
+        let _ = accept_task.await;
     }
 }

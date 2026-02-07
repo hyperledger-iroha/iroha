@@ -3109,11 +3109,19 @@ impl IVMHost for WsvHost {
                         type_id: tlv.type_id as u16,
                     });
                 }
-                if !matches!(tlv.type_id, PointerType::NoritoBytes | PointerType::Json) {
-                    return Err(VMError::NoritoInvalid);
-                }
-                let json: iroha_primitives::json::Json =
-                    decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let json: iroha_primitives::json::Json = match tlv.type_id {
+                    PointerType::NoritoBytes | PointerType::Json => {
+                        decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?
+                    }
+                    // Devex: accept raw JSON bytes too (validated and canonicalised).
+                    PointerType::Blob => {
+                        let raw =
+                            core::str::from_utf8(tlv.payload).map_err(|_| VMError::DecodeError)?;
+                        let value = njson::parse_value(raw).map_err(|_| VMError::DecodeError)?;
+                        iroha_primitives::json::Json::from(value)
+                    }
+                    _ => return Err(VMError::NoritoInvalid),
+                };
                 let body = norito::to_bytes(&json).map_err(|_| VMError::NoritoInvalid)?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
                 out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
@@ -3296,11 +3304,11 @@ impl IVMHost for WsvHost {
                     if let Ok(name) = decode_from_bytes(tlv.payload) {
                         name
                     } else if let Ok(raw) = core::str::from_utf8(tlv.payload) {
-                        Name::from_str(raw).map_err(|_| VMError::NoritoInvalid)?
+                        Name::from_str(raw).map_err(|_| VMError::DecodeError)?
+                    } else if let Ok(raw) = decode_from_bytes::<String>(tlv.payload) {
+                        Name::from_str(&raw).map_err(|_| VMError::DecodeError)?
                     } else {
-                        let raw: String =
-                            decode_from_bytes(tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
-                        Name::from_str(&raw).map_err(|_| VMError::NoritoInvalid)?
+                        return Err(VMError::DecodeError);
                     };
                 let body = norito::to_bytes(&nm).map_err(|_| VMError::NoritoInvalid)?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
