@@ -68,11 +68,7 @@ fn build_harness() -> Harness {
     let query = LiveQueryStore::start_test();
     let fixtures = build_fixtures();
     let world = world_from_fixtures(&fixtures);
-    let state = Arc::new(State::new_for_testing(
-        world,
-        Arc::clone(&kura),
-        query,
-    ));
+    let state = Arc::new(State::new_for_testing(world, Arc::clone(&kura), query));
 
     let queue_cfg = QueueConfig::default();
     let (events_sender, _) = broadcast::channel(64);
@@ -145,7 +141,11 @@ fn world_from_fixtures(fixtures: &Fixtures) -> World {
         confidential_policy: Default::default(),
     };
 
-    World::with([domain], [controller, receiver, operator], [asset_definition])
+    World::with(
+        [domain],
+        [controller, receiver, operator],
+        [asset_definition],
+    )
 }
 
 fn build_fixtures() -> Fixtures {

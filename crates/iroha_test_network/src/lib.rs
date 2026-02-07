@@ -5501,7 +5501,9 @@ impl NetworkPeer {
             .parse()
             .expect("peer client config should be valid");
 
-        Client::new(config)
+        let mut client = Client::new(config);
+        client.set_operator_key_pair(self.key_pair.clone());
+        client
     }
 
     /// Client for Alice. ([`Self::client_for`] + [`Signatory::Alice`])
