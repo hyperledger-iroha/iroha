@@ -1098,13 +1098,28 @@ impl Actor {
         } else {
             self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode)
         };
-        let canonical_topology = if canonical_roster.is_empty() {
+        let canonical_topology = if matches!(consensus_mode, ConsensusMode::Permissioned)
+            && !topology.as_ref().is_empty()
+        {
+            let provided = super::roster::canonicalize_roster_for_mode(
+                topology.as_ref().to_vec(),
+                consensus_mode,
+            );
+            super::network_topology::Topology::new(provided)
+        } else if canonical_roster.is_empty() {
             topology.clone()
         } else {
             super::network_topology::Topology::new(canonical_roster)
         };
+        let signature_topology_source = if matches!(consensus_mode, ConsensusMode::Npos)
+            && !topology.as_ref().is_empty()
+        {
+            topology
+        } else {
+            &canonical_topology
+        };
         let signature_topology =
-            topology_for_view(&canonical_topology, height, view, mode_tag, prf_seed);
+            topology_for_view(signature_topology_source, height, view, mode_tag, prf_seed);
         let required = signature_topology.min_votes_for_commit();
         let voting_len = signature_topology.as_ref().len();
         if let Some(existing) = self.qc_cache.get(&(phase, block_hash, height, view, epoch)) {

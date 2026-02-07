@@ -5,6 +5,13 @@ use norito::to_bytes;
 
 mod common;
 
+const ALICE_ACCOUNT_ID: &[u8] =
+    b"ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@wonderland";
+const BOB_ACCOUNT_ID: &[u8] =
+    b"ed0120C6C6F575510FB87360CB773FAF2665C9BD0FBD00320684A966569A2C0217F063@wonderland";
+const SAMPLE_NFT_ID: &[u8] = b"rose$wonderland";
+const ALT_NFT_ID: &[u8] = b"lily$wonderland";
+
 fn assemble(code: &[u8]) -> Vec<u8> {
     let meta = ivm::ProgramMetadata {
         version_major: 1,
@@ -52,7 +59,7 @@ fn set_account_detail_validates_tlvs() {
     vm.set_host(CoreHost::new());
 
     // Prepare TLVs in INPUT
-    let acc = make_tlv(PointerType::AccountId as u16, 1, b"alice@wonderland");
+    let acc = make_tlv(PointerType::AccountId as u16, 1, ALICE_ACCOUNT_ID);
     let key = make_tlv(PointerType::Name as u16, 1, b"cursor");
     let val = make_tlv(PointerType::Json as u16, 1, br#"{"k":1}"#);
     let mut off = 0u64;
@@ -79,7 +86,7 @@ fn set_account_detail_rejects_wrong_type() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     // Place AccountId in r11 (expected Name)
-    let acc = make_tlv(PointerType::AccountId as u16, 1, b"alice@wonderland");
+    let acc = make_tlv(PointerType::AccountId as u16, 1, ALICE_ACCOUNT_ID);
     vm.memory.preload_input(0, &acc).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, Memory::INPUT_START); // wrong type here
@@ -100,9 +107,9 @@ fn set_account_detail_rejects_wrong_type() {
 fn nft_mint_asset_validates_tlvs() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
-    let nft = make_tlv(PointerType::NftId as u16, 1, b"rose:uuid:0123");
+    let nft = make_tlv(PointerType::NftId as u16, 1, SAMPLE_NFT_ID);
     vm.memory.preload_input(0, &nft).expect("preload input");
-    let acc = make_tlv(PointerType::AccountId as u16, 1, b"alice@wonderland");
+    let acc = make_tlv(PointerType::AccountId as u16, 1, ALICE_ACCOUNT_ID);
     vm.memory
         .preload_input(nft.len() as u64 + 8, &acc)
         .expect("preload input");
@@ -117,9 +124,9 @@ fn nft_mint_asset_validates_tlvs() {
 fn transfer_asset_validates_tlvs() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
-    let from = make_tlv(PointerType::AccountId as u16, 1, b"alice@wonderland");
+    let from = make_tlv(PointerType::AccountId as u16, 1, ALICE_ACCOUNT_ID);
     vm.memory.preload_input(0, &from).expect("preload input");
-    let to = make_tlv(PointerType::AccountId as u16, 1, b"bob@wonderland");
+    let to = make_tlv(PointerType::AccountId as u16, 1, BOB_ACCOUNT_ID);
     vm.memory
         .preload_input(from.len() as u64 + 8, &to)
         .expect("preload input");
@@ -149,8 +156,8 @@ fn transfer_asset_rejects_wrong_asset_type() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     // Put Name instead of AssetDefinitionId in r12
-    let from = make_tlv(PointerType::AccountId as u16, 1, b"alice@wonderland");
-    let to = make_tlv(PointerType::AccountId as u16, 1, b"bob@wonderland");
+    let from = make_tlv(PointerType::AccountId as u16, 1, ALICE_ACCOUNT_ID);
+    let to = make_tlv(PointerType::AccountId as u16, 1, BOB_ACCOUNT_ID);
     let wrong = make_tlv(PointerType::Name as u16, 1, b"not-an-asset-id");
     vm.memory.preload_input(0, &from).expect("preload input");
     vm.memory
@@ -181,7 +188,7 @@ fn transfer_asset_rejects_wrong_asset_type() {
 fn nft_set_metadata_validates_tlvs() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
-    let nft = make_tlv(PointerType::NftId as u16, 1, b"rose:uuid:0123");
+    let nft = make_tlv(PointerType::NftId as u16, 1, SAMPLE_NFT_ID);
     vm.memory.preload_input(0, &nft).expect("preload input");
     let json = make_tlv(PointerType::Json as u16, 1, br#"{"k":"v"}"#);
     vm.memory
@@ -198,7 +205,7 @@ fn nft_set_metadata_validates_tlvs() {
 fn nft_set_metadata_rejects_wrong_type() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
-    let nft = make_tlv(PointerType::NftId as u16, 1, b"rose:uuid:0123");
+    let nft = make_tlv(PointerType::NftId as u16, 1, SAMPLE_NFT_ID);
     vm.memory.preload_input(0, &nft).expect("preload input");
     // Put Name instead of Json in r11
     let wrong = make_tlv(PointerType::Name as u16, 1, b"not-json");
@@ -217,7 +224,7 @@ fn nft_set_metadata_rejects_wrong_type() {
 fn nft_burn_asset_validates_tlv() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
-    let nft = make_tlv(PointerType::NftId as u16, 1, b"rose:uuid:deadbeef");
+    let nft = make_tlv(PointerType::NftId as u16, 1, ALT_NFT_ID);
     vm.memory.preload_input(0, &nft).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     let prog = encode_prog_syscall(syscalls::SYSCALL_NFT_BURN_ASSET);
@@ -230,7 +237,7 @@ fn nft_burn_asset_rejects_wrong_type() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     // Put AccountId instead of NftId in r10
-    let wrong = make_tlv(PointerType::AccountId as u16, 1, b"alice@wonderland");
+    let wrong = make_tlv(PointerType::AccountId as u16, 1, ALICE_ACCOUNT_ID);
     vm.memory.preload_input(0, &wrong).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     let prog = encode_prog_syscall(syscalls::SYSCALL_NFT_BURN_ASSET);
