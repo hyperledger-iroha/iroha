@@ -25,9 +25,10 @@ use iroha_core::{
 use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
 use iroha_data_model::{
     ChainId,
-    account::AccountId,
-    asset::{AssetDefinitionId, AssetId},
+    account::{Account, AccountId},
+    asset::{AssetDefinition, AssetDefinitionId, AssetId},
     block::BlockHeader,
+    domain::Domain,
     isi::offline::RegisterOfflineAllowance,
     metadata::Metadata,
     offline::{
@@ -36,7 +37,7 @@ use iroha_data_model::{
         compute_receipts_root,
     },
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::{Numeric, NumericSpec};
 use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii, test_utils};
 use nonzero_ext::nonzero;
 use norito::json::{self, Value};
@@ -65,13 +66,13 @@ fn build_harness() -> Harness {
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
+    let fixtures = build_fixtures();
+    let world = world_from_fixtures(&fixtures);
     let state = Arc::new(State::new_for_testing(
-        World::default(),
+        world,
         Arc::clone(&kura),
         query,
     ));
-
-    let fixtures = build_fixtures();
 
     let queue_cfg = QueueConfig::default();
     let (events_sender, _) = broadcast::channel(64);
@@ -99,6 +100,52 @@ fn build_harness() -> Harness {
         fixtures,
         state,
     }
+}
+
+fn world_from_fixtures(fixtures: &Fixtures) -> World {
+    let domain = Domain {
+        id: fixtures.controller.domain().clone(),
+        logo: None,
+        metadata: Metadata::default(),
+        owned_by: fixtures.controller.clone(),
+    };
+
+    let controller = Account {
+        id: fixtures.controller.clone(),
+        metadata: Metadata::default(),
+        label: None,
+        uaid: None,
+        opaque_ids: Vec::new(),
+    };
+    let receiver = Account {
+        id: fixtures.receiver.clone(),
+        metadata: Metadata::default(),
+        label: None,
+        uaid: None,
+        opaque_ids: Vec::new(),
+    };
+    let operator = Account {
+        id: fixtures.certificate.operator.clone(),
+        metadata: Metadata::default(),
+        label: None,
+        uaid: None,
+        opaque_ids: Vec::new(),
+    };
+
+    // `RegisterOfflineAllowance` seeding resolves the definition in order to evaluate
+    // offline escrow requirements, so the test harness must include it.
+    let asset_definition = AssetDefinition {
+        id: fixtures.certificate.allowance.asset.definition().clone(),
+        spec: NumericSpec::integer(),
+        mintable: Default::default(),
+        logo: None,
+        metadata: Metadata::default(),
+        owned_by: fixtures.controller.clone(),
+        total_quantity: Numeric::zero(),
+        confidential_policy: Default::default(),
+    };
+
+    World::with([domain], [controller, receiver, operator], [asset_definition])
 }
 
 fn build_fixtures() -> Fixtures {

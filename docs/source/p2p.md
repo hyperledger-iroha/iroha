@@ -345,8 +345,8 @@ Notes
 
 - `iroha_p2p::NetworkHandle::accept_stream(read, write, remote_addr)` allows accepting externally provided duplex streams and spawning a peer, applying the same caps/throttle as TCP accepts.
 - Intended use: Torii `/p2p` WebSocket route upgrades to a raw duplex and forwards its halves to `accept_stream` (feature `p2p_ws`).
-- Outbound fallback: the dialer attempts QUIC/TLS/TCP for hostname peers; if TCP fails, it falls back to WSS, then WS (`wss://host:port/p2p` then `ws://host:port/p2p`).
-- Preference knob: set `[network].prefer_ws_fallback = true` to try WSS/WS first for Host addresses (useful for constrained environments and CI).
+- Outbound fallback: the dialer attempts QUIC/TLS/TCP; if that fails it can fall back to WS/WSS (`ws://host:port/p2p` and `wss://host:port/p2p`).
+- Preference knob: set `[network].prefer_ws_fallback = true` to try WS/WSS first for any peer address (useful for constrained environments and CI).
 - Status: server-side route and outbound fallback implemented behind `p2p_ws`. An end‑to‑end test exercises the Torii `/p2p` route.
 
 ### Pre‑Handshake Header (defense‑in‑depth)

@@ -742,6 +742,8 @@ pub mod network {
     pub const IDLE_TIMEOUT: Duration = Duration::from_mins(5);
     /// Delay outbound peer dials after startup.
     pub const CONNECT_STARTUP_DELAY: Duration = Duration::from_millis(0);
+    /// Timeout applied to an individual outbound dial attempt (TCP/TLS/QUIC/WS).
+    pub const DIAL_TIMEOUT: Duration = Duration::from_secs(5);
     /// Idle timeout before expiring accept throttle buckets.
     pub const ACCEPT_BUCKET_IDLE: Duration = Duration::from_mins(10);
     /// Maximum number of accept throttle buckets to retain.
@@ -1303,6 +1305,24 @@ pub mod torii {
             Vec::new()
         }
     }
+    /// Operator request-signature defaults for Torii operator endpoints.
+    pub mod operator_signatures {
+        /// Master enable switch for operator signature authentication.
+        pub const ENABLED: bool = true;
+        /// Allow the node identity key (from `[common]`) to sign operator requests.
+        pub const ALLOW_NODE_KEY: bool = true;
+        /// Maximum allowed clock skew for signed operator requests (seconds).
+        pub const MAX_CLOCK_SKEW_SECS: u64 = 60;
+        /// TTL for operator nonces retained for replay detection (seconds).
+        pub const NONCE_TTL_SECS: u64 = 300;
+        /// Maximum number of nonces held in memory for replay detection.
+        pub const REPLAY_CACHE_CAPACITY: usize = 10_000;
+
+        /// Additional operator public keys allowed to sign requests (empty by default).
+        pub fn allowed_public_keys() -> Vec<iroha_crypto::PublicKey> {
+            Vec::new()
+        }
+    }
     /// Operator authentication defaults for Torii operator endpoints.
     pub mod operator_auth {
         /// Master enable switch for operator authentication.
@@ -1368,6 +1388,16 @@ pub mod torii {
             pub fn allowed_algorithms() -> Vec<String> {
                 vec!["es256".to_string(), "ed25519".to_string()]
             }
+        }
+    }
+    /// Webhook destination security defaults for app-facing webhooks.
+    pub mod webhook_security {
+        /// Master enable switch for webhook destination guard rails.
+        pub const ENABLED: bool = true;
+
+        /// CIDR allow-list for webhook destinations (empty => only public IPs are allowed).
+        pub fn allow_cidrs() -> Vec<String> {
+            Vec::new()
         }
     }
     /// Capacity of the broadcast channel used for Torii events/SSE/webhooks.

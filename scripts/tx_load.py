@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
-"""Submit transaction pings in parallel (optionally sharded) and estimate TPS from /status + /metrics."""
+"""Submit transaction pings in parallel (optionally sharded).
+
+The script prefers to estimate admitted/committed throughput using `/status` and `/metrics`, but those
+endpoints may be operator-protected. When they are unavailable (for example HTTP 401/403), the script
+still drives load and prints a "submitted" throughput summary from CLI results.
+"""
 
 from __future__ import annotations
 
 import argparse
 import json
+import math
+import re
 import subprocess
 import tempfile
 import threading
@@ -132,11 +139,32 @@ def count_rate_limit_hits(output: str) -> int:
     return hits
 
 
+PING_SUBMIT_RE = re.compile(r"Submitted\s+(?P<submitted>\d+)\s*/\s*(?P<attempted>\d+)\s+ping transactions", re.IGNORECASE)
+
+
+def parse_ping_submitted(output: str) -> Optional[tuple[int, int]]:
+    """Return (submitted, attempted) for `iroha ledger transaction ping` output."""
+    if not output:
+        return None
+    last = None
+    for line in output.splitlines():
+        match = PING_SUBMIT_RE.search(line)
+        if not match:
+            continue
+        try:
+            submitted = int(match.group("submitted"))
+            attempted = int(match.group("attempted"))
+        except (TypeError, ValueError):
+            continue
+        last = (submitted, attempted)
+    return last
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Drive transaction ping load via iroha CLI and estimate throughput from /status and "
-            "/metrics."
+            "Drive transaction ping load via iroha CLI. When available, estimate admitted/committed "
+            "throughput from /status and /metrics; otherwise fall back to submission stats."
         )
     )
     parser.add_argument("--iroha-bin", default="target/release/iroha")
@@ -309,10 +337,6 @@ def main() -> int:
         print(f"Sharding load across {len(shard_specs)} peers (counts: {shard_counts})")
         print(f"Parallel per shard: {shard_parallel}")
 
-    snapshots = []
-    lock = threading.Lock()
-    stop_event = threading.Event()
-
     def fetch_json(url: str) -> dict:
         with urllib.request.urlopen(url, timeout=5) as resp:
             return json.loads(resp.read().decode("utf-8"))
@@ -321,16 +345,42 @@ def main() -> int:
         with urllib.request.urlopen(url, timeout=5) as resp:
             return resp.read().decode("utf-8")
 
+    snapshots = []
+    lock = threading.Lock()
+    stop_event = threading.Event()
+
+    try:
+        baseline = fetch_json(args.status_url)
+        baseline_status = extract_status_snapshot(baseline)
+    except Exception as exc:
+        baseline_status = None
+        if args.queue_soft_limit > 0 or args.queue_hard_limit > 0:
+            print(
+                f"Warning: failed to read baseline status ({args.status_url}): {exc}; "
+                "disabling queue limits."
+            )
+        else:
+            print(
+                f"Warning: failed to read baseline status ({args.status_url}): {exc}; "
+                "status-based throughput estimates disabled."
+            )
+
+    status_enabled = baseline_status is not None
+
     def poller() -> None:
         while not stop_event.is_set():
             try:
                 status_raw = fetch_json(args.status_url)
-                metrics_raw = fetch_text(args.metrics_url)
                 status = extract_status_snapshot(status_raw)
-                dag_vertices = parse_metric_value(metrics_raw, "pipeline_dag_vertices")
             except Exception:
                 time.sleep(args.poll_interval)
                 continue
+            dag_vertices = None
+            try:
+                metrics_raw = fetch_text(args.metrics_url)
+                dag_vertices = parse_metric_value(metrics_raw, "pipeline_dag_vertices")
+            except Exception:
+                pass
             with lock:
                 snapshots.append(
                     {
@@ -341,26 +391,22 @@ def main() -> int:
                 )
             time.sleep(args.poll_interval)
 
-    thread = threading.Thread(target=poller, name="status-poller", daemon=True)
-    thread.start()
-
-    try:
-        baseline = fetch_json(args.status_url)
-        baseline_status = extract_status_snapshot(baseline)
-    except Exception as exc:
-        print(f"Failed to read baseline status: {exc}")
-        stop_event.set()
-        thread.join(timeout=2)
-        return 1
+    thread = None
+    if status_enabled:
+        thread = threading.Thread(target=poller, name="status-poller", daemon=True)
+        thread.start()
 
     baseline_queue_by_peer: dict[str, int] = {}
-    for torii_url in peer_urls:
-        status_url = urllib.parse.urljoin(torii_url, "status")
-        try:
-            status_raw = fetch_json(status_url)
-            baseline_queue_by_peer[torii_url] = int(status_raw.get("queue_size", 0) or 0)
-        except Exception:
-            baseline_queue_by_peer[torii_url] = baseline_status["queue_size"]
+    if status_enabled:
+        for torii_url in peer_urls:
+            status_url = urllib.parse.urljoin(torii_url, "status")
+            try:
+                status_raw = fetch_json(status_url)
+                baseline_queue_by_peer[torii_url] = int(status_raw.get("queue_size", 0) or 0)
+            except Exception:
+                baseline_queue_by_peer[torii_url] = baseline_status["queue_size"]
+    else:
+        baseline_queue_by_peer = {torii_url: 0 for torii_url in peer_urls}
 
     base_config_text = Path(args.client_config).read_text(encoding="utf-8")
     temp_configs: list[Path] = []
@@ -381,12 +427,15 @@ def main() -> int:
                 batch_interval=args.batch_interval,
                 client_config=temp_path,
                 baseline_queue_size=baseline_queue_by_peer.get(
-                    torii_url, baseline_status["queue_size"]
+                    torii_url,
+                    baseline_status["queue_size"] if baseline_status is not None else 0,
                 ),
             )
         )
 
     def wait_for_queue(shard: LoadShard) -> bool:
+        if not status_enabled:
+            return True
         if args.queue_soft_limit <= 0 and args.queue_hard_limit <= 0:
             return True
         deadline = None
@@ -449,12 +498,12 @@ def main() -> int:
         timed_out = False
         start = time.monotonic()
 
-        def run_batch(batch_count: int) -> subprocess.CompletedProcess[str]:
+        def run_batch(batch_count: int, parallel: int) -> subprocess.CompletedProcess[str]:
             cmd = ping_cmd + [
                 "--count",
                 str(batch_count),
                 "--parallel",
-                str(shard.parallel),
+                str(parallel),
             ]
             timeout = None if args.cli_timeout <= 0 else args.cli_timeout
             try:
@@ -483,28 +532,79 @@ def main() -> int:
                     stderr=stderr,
                 )
 
+        def extract_submitted(
+            combined_output: str,
+            attempted: int,
+            returncode: int,
+        ) -> int:
+            parsed = parse_ping_submitted(combined_output)
+            if parsed is not None:
+                submitted_count, attempted_count = parsed
+                # Trust the CLI when present, but keep it within reasonable bounds.
+                if attempted_count > 0:
+                    return max(0, min(submitted_count, attempted_count))
+            if returncode == 0:
+                return attempted
+            return 0
+
         if shard.batch_size > 0 and shard.batch_interval > 0:
-            remaining = shard.count
-            while remaining > 0:
+            parallel = shard.parallel
+            attempted = 0
+            planned_batches = int(math.ceil(shard.count / shard.batch_size))
+            while attempted < shard.count:
                 if not wait_for_queue(shard):
                     returncode = 2
                     break
-                batch = min(shard.batch_size, remaining)
+                batch = min(shard.batch_size, shard.count - attempted)
+                attempted += batch
                 batch_start = time.monotonic()
-                result = run_batch(batch)
-                stdout_chunks.append(result.stdout or "")
-                stderr_chunks.append(result.stderr or "")
-                combined = (result.stdout or "") + (result.stderr or "")
-                rate_limit_hits += count_rate_limit_hits(combined)
-                if result.returncode != 0:
-                    if result.returncode == 124:
-                        timed_out = True
+                result = run_batch(batch, parallel)
+                stdout = result.stdout or ""
+                stderr = result.stderr or ""
+                stdout_chunks.append(stdout)
+                stderr_chunks.append(stderr)
+                combined = stdout + stderr
+                batch_rate_limits = count_rate_limit_hits(combined)
+                rate_limit_hits += batch_rate_limits
+                batch_submitted = extract_submitted(combined, batch, result.returncode)
+                submitted += batch_submitted
+                if result.returncode == 124:
+                    timed_out = True
+                if returncode == 0 and result.returncode != 0:
                     returncode = result.returncode
-                    break
-                submitted += batch
-                remaining -= batch
-                if remaining <= 0:
-                    break
+
+                missing = batch - batch_submitted
+                if (
+                    missing > 0
+                    and batch_rate_limits == 0
+                    and result.returncode not in (124, 2)
+                    and parallel > 1
+                ):
+                    retry_parallel = max(1, parallel // 2)
+                    retry = run_batch(missing, retry_parallel)
+                    r_stdout = retry.stdout or ""
+                    r_stderr = retry.stderr or ""
+                    stdout_chunks.append(r_stdout)
+                    stderr_chunks.append(r_stderr)
+                    r_combined = r_stdout + r_stderr
+                    r_limits = count_rate_limit_hits(r_combined)
+                    rate_limit_hits += r_limits
+                    r_submitted = extract_submitted(r_combined, missing, retry.returncode)
+                    submitted += r_submitted
+                    missing -= r_submitted
+                    if retry.returncode == 124:
+                        timed_out = True
+                    if returncode == 0 and retry.returncode != 0:
+                        returncode = retry.returncode
+                    # If the retry also fails, reduce parallelism for subsequent batches.
+                    if missing > 0 and retry_parallel > 1:
+                        parallel = retry_parallel
+
+                if missing > 0 and planned_batches > 0:
+                    # We do not extend the run; load windows are time-based. Missing txs stay
+                    # missing to avoid turning perf runs into multi-hour retries.
+                    pass
+
                 elapsed = time.monotonic() - batch_start
                 sleep_for = shard.batch_interval - elapsed
                 if sleep_for > 0:
@@ -513,16 +613,39 @@ def main() -> int:
             if not wait_for_queue(shard):
                 returncode = 2
             else:
-                result = run_batch(shard.count)
-                stdout_chunks.append(result.stdout or "")
-                stderr_chunks.append(result.stderr or "")
-                combined = (result.stdout or "") + (result.stderr or "")
-                rate_limit_hits += count_rate_limit_hits(combined)
+                parallel = shard.parallel
+                result = run_batch(shard.count, parallel)
+                stdout = result.stdout or ""
+                stderr = result.stderr or ""
+                stdout_chunks.append(stdout)
+                stderr_chunks.append(stderr)
+                combined = stdout + stderr
+                batch_rate_limits = count_rate_limit_hits(combined)
+                rate_limit_hits += batch_rate_limits
                 returncode = result.returncode
-                if returncode == 0:
-                    submitted = shard.count
-                elif returncode == 124:
+                submitted = extract_submitted(combined, shard.count, result.returncode)
+                if result.returncode == 124:
                     timed_out = True
+                missing = shard.count - submitted
+                if (
+                    missing > 0
+                    and batch_rate_limits == 0
+                    and result.returncode not in (124, 2)
+                    and parallel > 1
+                ):
+                    retry_parallel = max(1, parallel // 2)
+                    retry = run_batch(missing, retry_parallel)
+                    r_stdout = retry.stdout or ""
+                    r_stderr = retry.stderr or ""
+                    stdout_chunks.append(r_stdout)
+                    stderr_chunks.append(r_stderr)
+                    r_combined = r_stdout + r_stderr
+                    rate_limit_hits += count_rate_limit_hits(r_combined)
+                    submitted += extract_submitted(r_combined, missing, retry.returncode)
+                    if retry.returncode == 124:
+                        timed_out = True
+                    if returncode == 0 and retry.returncode != 0:
+                        returncode = retry.returncode
 
         elapsed = time.monotonic() - start
         return LoadShardResult(
@@ -556,28 +679,44 @@ def main() -> int:
 
     if submit_failed and not args.continue_on_failure:
         stop_event.set()
-        thread.join(timeout=2)
+        if thread is not None:
+            thread.join(timeout=2)
         print("load submission failed")
         return 1
 
-    drain_deadline = time.monotonic() + args.drain_timeout
-    while time.monotonic() < drain_deadline:
-        with lock:
-            if snapshots:
-                last = snapshots[-1]["status"]
-                if last["queue_size"] <= baseline_status["queue_size"]:
-                    break
-        time.sleep(args.poll_interval)
+    if status_enabled:
+        drain_deadline = time.monotonic() + args.drain_timeout
+        while time.monotonic() < drain_deadline:
+            with lock:
+                if snapshots:
+                    last = snapshots[-1]["status"]
+                    if last["queue_size"] <= baseline_status["queue_size"]:
+                        break
+            time.sleep(args.poll_interval)
 
     stop_event.set()
-    thread.join(timeout=2)
+    if thread is not None:
+        thread.join(timeout=2)
 
     with lock:
         samples = list(snapshots)
 
-    if not samples:
-        print("No status samples captured; cannot compute throughput.")
-        return 1
+    submitted_total = sum(result.submitted for result in results)
+    submit_tps = submitted_total / max(submit_elapsed, 1e-6)
+    total_rate_limits = sum(result.rate_limit_hits for result in results)
+    total_timeouts = sum(1 for result in results if result.timed_out)
+
+    if not status_enabled or not samples:
+        print("Load summary")
+        print(f"- submitted: {submitted_total} tx in {submit_elapsed:.2f}s ({submit_tps:.1f} tps)")
+        print(f"- rate_limit_hits (status 429): {total_rate_limits}")
+        if total_timeouts:
+            print(f"- cli_timeouts: {total_timeouts} shard(s)")
+        if not status_enabled:
+            print("- status: unavailable (skipping admitted/committed estimates)")
+        else:
+            print("- status: sampling failed (skipping admitted/committed estimates)")
+        return 1 if submit_failed else 0
 
     start_ts = samples[0]["ts"]
     end_ts = samples[-1]["ts"]
@@ -587,8 +726,6 @@ def main() -> int:
     admitted = final_status["txs_approved"] - baseline_status["txs_approved"]
     rejected = final_status["txs_rejected"] - baseline_status["txs_rejected"]
     admit_tps = admitted / elapsed
-    submitted_total = sum(result.submitted for result in results)
-    submit_tps = submitted_total / max(submit_elapsed, 1e-6)
 
     committed = 0
     last_block = baseline_status["blocks_non_empty"]
@@ -616,9 +753,6 @@ def main() -> int:
     else:
         commit_window = last_block_ts - first_block_ts
     commit_tps = committed / max(commit_window, 1e-6)
-
-    total_rate_limits = sum(result.rate_limit_hits for result in results)
-    total_timeouts = sum(1 for result in results if result.timed_out)
 
     print("Load summary")
     print(f"- submitted: {submitted_total} tx in {submit_elapsed:.2f}s ({submit_tps:.1f} tps)")

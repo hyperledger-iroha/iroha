@@ -538,6 +538,14 @@ fn minimal_config_snapshot() {
                     },
                     webauthn: None,
                 },
+                operator_signatures: ToriiOperatorSignatures {
+                    enabled: true,
+                    allow_node_key: true,
+                    allowed_public_keys: [],
+                    max_clock_skew: 60s,
+                    nonce_ttl: 300s,
+                    replay_cache_capacity: 10000,
+                },
                 preauth_max_connections: Some(
                     1024,
                 ),
@@ -933,6 +941,10 @@ fn minimal_config_snapshot() {
                     connect_timeout: 10s,
                     write_timeout: 10s,
                     read_timeout: 10s,
+                },
+                webhook_security: WebhookSecurity {
+                    enabled: true,
+                    allow_cidrs: [],
                 },
                 push: Push {
                     enabled: false,

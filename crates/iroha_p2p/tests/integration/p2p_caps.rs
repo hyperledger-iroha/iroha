@@ -84,6 +84,7 @@ fn make_config(
         require_sm_openssl_preview_match: true,
         idle_timeout: Duration::from_millis(2000),
         connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
+        dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -94,6 +95,8 @@ fn make_config(
         trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
         trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
         prefer_ws_fallback: false,
+        p2p_proxy: None,
+        p2p_no_proxy: vec![],
         happy_eyeballs_stagger: Duration::from_millis(50),
         addr_ipv6_first: false,
         dns_refresh_interval: None,
@@ -651,7 +654,7 @@ async fn quic_global_frame_cap_disconnects() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn ws_global_frame_cap_disconnects() {
     use bytes::Bytes;
-    use futures::{SinkExt, StreamExt};
+    use futures::StreamExt;
     use tokio::{
         io::{AsyncRead, AsyncWrite, ReadBuf},
         net::TcpListener,
@@ -729,7 +732,7 @@ async fn ws_global_frame_cap_disconnects() {
 
                         match futures::ready!(core::pin::Pin::new(&mut self.stream).poll_next(cx)) {
                             Some(Ok(WsMessage::Binary(frame))) => {
-                                self.buffer = Bytes::from(frame);
+                                self.buffer = frame;
                                 let n = core::cmp::min(self.buffer.len(), buf.remaining());
                                 buf.put_slice(&self.buffer.split_to(n));
                                 core::task::Poll::Ready(Ok(()))
@@ -782,11 +785,22 @@ async fn ws_global_frame_cap_disconnects() {
                             return core::task::Poll::Ready(Ok(()));
                         }
                         let payload = core::mem::take(&mut self.buffer);
-                        match futures::ready!(
-                            core::pin::Pin::new(&mut self.sink)
-                                .start_send(WsMessage::Binary(payload))
-                        ) {
-                            () => {}
+                        match futures::ready!(core::pin::Pin::new(&mut self.sink).poll_ready(cx)) {
+                            Ok(()) => {}
+                            Err(err) => {
+                                return core::task::Poll::Ready(Err(std::io::Error::new(
+                                    std::io::ErrorKind::Other,
+                                    format!("ws ready error: {err}"),
+                                )));
+                            }
+                        }
+                        if let Err(err) = core::pin::Pin::new(&mut self.sink)
+                            .start_send(WsMessage::Binary(payload.into()))
+                        {
+                            return core::task::Poll::Ready(Err(std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                format!("ws send error: {err}"),
+                            )));
                         }
                         match futures::ready!(core::pin::Pin::new(&mut self.sink).poll_flush(cx)) {
                             Ok(()) => core::task::Poll::Ready(Ok(())),
@@ -801,10 +815,22 @@ async fn ws_global_frame_cap_disconnects() {
                         mut self: core::pin::Pin<&mut Self>,
                         cx: &mut core::task::Context<'_>,
                     ) -> core::task::Poll<std::io::Result<()>> {
-                        match futures::ready!(
+                        match futures::ready!(core::pin::Pin::new(&mut self.sink).poll_ready(cx)) {
+                            Ok(()) => {}
+                            Err(err) => {
+                                return core::task::Poll::Ready(Err(std::io::Error::new(
+                                    std::io::ErrorKind::Other,
+                                    format!("ws ready error: {err}"),
+                                )));
+                            }
+                        }
+                        if let Err(err) =
                             core::pin::Pin::new(&mut self.sink).start_send(WsMessage::Close(None))
-                        ) {
-                            () => {}
+                        {
+                            return core::task::Poll::Ready(Err(std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                format!("ws close error: {err}"),
+                            )));
                         }
                         match futures::ready!(core::pin::Pin::new(&mut self.sink).poll_flush(cx)) {
                             Ok(()) => core::task::Poll::Ready(Ok(())),
@@ -830,7 +856,7 @@ async fn ws_global_frame_cap_disconnects() {
         16 * 1024,
     );
     dialer_cfg.prefer_ws_fallback = true;
-    let (mut net_dialer, _child_dialer) = match NetworkHandle::<BigMsg>::start(
+    let (net_dialer, _child_dialer) = match NetworkHandle::<BigMsg>::start(
         kp_dialer.clone(),
         dialer_cfg,
         Some(chain.clone()),

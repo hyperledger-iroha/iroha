@@ -58,6 +58,7 @@
 //! - `app_api_wss` (off by default): enables WebSocket/WebSocket Secure webhook delivery
 mod api_version;
 mod operator_auth;
+mod operator_signatures;
 #[cfg(feature = "push")]
 mod push;
 /// Helpers for constructing Norito JSON values within Torii.
@@ -748,6 +749,7 @@ struct AppState {
     require_api_token: bool,
     api_tokens_set: Arc<HashSet<String>>,
     operator_auth: Arc<operator_auth::OperatorAuth>,
+    operator_signatures: Arc<operator_signatures::OperatorSignatures>,
     soranet_privacy_ingest: iroha_config::parameters::actual::SoranetPrivacyIngest,
     soranet_privacy_tokens: Arc<HashSet<String>>,
     soranet_privacy_allow_nets: Arc<Vec<limits::IpNet>>,
@@ -5274,9 +5276,7 @@ async fn handler_webhooks_create(
         return Ok(webhook::handle_create_webhook(body).await);
     }
 
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(&app, &headers, None, "v1/webhooks", enforce).await?;
+    check_access_enforced(&app, &headers, None, "v1/webhooks", true).await?;
 
     Ok(webhook::handle_create_webhook(body).await)
 }
@@ -5290,9 +5290,7 @@ async fn handler_webhooks_list(
         return Ok(webhook::handle_list_webhooks().await);
     }
 
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(&app, &headers, None, "v1/webhooks", enforce).await?;
+    check_access_enforced(&app, &headers, None, "v1/webhooks", true).await?;
 
     Ok(webhook::handle_list_webhooks().await)
 }
@@ -5307,9 +5305,7 @@ async fn handler_webhooks_delete(
         return Ok(webhook::handle_delete_webhook(axum::extract::Path(id)).await);
     }
 
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(&app, &headers, None, "v1/webhooks", enforce).await?;
+    check_access_enforced(&app, &headers, None, "v1/webhooks", true).await?;
 
     Ok(webhook::handle_delete_webhook(axum::extract::Path(id)).await)
 }
@@ -12113,6 +12109,7 @@ pub struct Torii {
     require_api_token: bool,
     api_tokens_set: std::sync::Arc<std::collections::HashSet<String>>,
     operator_auth: Arc<operator_auth::OperatorAuth>,
+    operator_signatures: Arc<operator_signatures::OperatorSignatures>,
     soranet_privacy_ingest: iroha_config::parameters::actual::SoranetPrivacyIngest,
     soranet_privacy_tokens: std::sync::Arc<std::collections::HashSet<String>>,
     soranet_privacy_allow_nets: std::sync::Arc<Vec<limits::IpNet>>,
@@ -12176,13 +12173,9 @@ impl Torii {
         builder.apply_with_state(|router, state| {
             let operator_layer = axum::middleware::from_fn_with_state(
                 state.clone(),
-                operator_auth::enforce_operator_auth,
+                operator_signatures::enforce_operator_access,
             );
             let operator_router = Router::new()
-                .route(
-                    &format!("{}/{{*tail}}", uri::STATUS),
-                    get(handler_status_tail),
-                )
                 // Telemetry-gated Sumeragi endpoints (runtime gate inside handlers)
                 .route("/v1/sumeragi/rbc", get(handler_rbc_status))
                 .route(
@@ -12193,8 +12186,6 @@ impl Torii {
                 .route("/v1/sumeragi/phases", get(handler_sumeragi_phases))
                 .route("/v1/debug/axt/cache", get(handler_debug_axt_cache))
                 .route("/v1/debug/witness", get(handler_debug_witness))
-                .route(uri::STATUS, get(handler_status_root))
-                .route(uri::METRICS, get(handler_metrics))
                 .route_layer(operator_layer);
 
             let public_router = Router::new()
@@ -12213,7 +12204,15 @@ impl Torii {
                 .route(
                     "/v1/assets/{definition_id}/holders/query",
                     post(handler_asset_holders_query),
-                );
+                )
+                // `/status` and `/metrics` are used by localnet/perf harnesses and typical
+                // monitoring setups; keep them outside of operator signature middleware.
+                .route(uri::STATUS, get(handler_status_root))
+                .route(
+                    &format!("{}/{{*tail}}", uri::STATUS),
+                    get(handler_status_tail),
+                )
+                .route(uri::METRICS, get(handler_metrics));
 
             router.merge(operator_router).merge(public_router)
         });
@@ -12377,7 +12376,7 @@ impl Torii {
         builder.apply_with_state(|router, state| {
             let operator_layer = axum::middleware::from_fn_with_state(
                 state.clone(),
-                operator_auth::enforce_operator_auth,
+                operator_signatures::enforce_operator_access,
             );
             let sumeragi = Router::new()
                 .route(
@@ -12459,7 +12458,7 @@ impl Torii {
         builder.apply_with_state(|router, state| {
             let operator_layer = axum::middleware::from_fn_with_state(
                 state.clone(),
-                operator_auth::enforce_operator_auth,
+                operator_signatures::enforce_operator_access,
             );
             let operator_router = Router::new()
                 .route(
@@ -12558,13 +12557,11 @@ impl Torii {
     #[allow(clippy::unused_self)]
     fn add_profiling_routes(&self, builder: &mut RouterBuilder) {
         builder.apply_with_state(|router, state| {
-            let operator_layer = axum::middleware::from_fn_with_state(
-                state.clone(),
-                operator_auth::enforce_operator_auth,
-            );
-            let profiling = Router::new()
-                .route(uri::PROFILE, get(handler_profile))
-                .route_layer(operator_layer);
+            let _ = state;
+            // Profiling endpoints are feature-gated (`profiling-endpoint`) and used for local
+            // debugging/perf runs. Keep them reachable without operator auth so localnet harnesses
+            // can reliably collect profiles.
+            let profiling = Router::new().route(uri::PROFILE, get(handler_profile));
             router.merge(profiling)
         });
     }
@@ -13702,6 +13699,10 @@ impl Torii {
                 write_timeout: config.webhook.write_timeout,
                 read_timeout: config.webhook.read_timeout,
             });
+            crate::webhook::set_webhook_security_policy(crate::webhook::WebhookSecurityPolicy {
+                enabled: config.webhook_security.enabled,
+                allow_nets: limits::parse_cidrs(&config.webhook_security.allow_cidrs),
+            });
             crate::zk_attachments::configure(
                 config.attachments_ttl_secs,
                 config.attachments_max_bytes,
@@ -13907,6 +13908,12 @@ impl Torii {
             )
             .unwrap_or_else(|err| panic!("invalid torii.operator_auth configuration: {err}")),
         );
+        let operator_signatures = Arc::new(operator_signatures::OperatorSignatures::new(
+            config.operator_signatures.clone(),
+            da_receipt_signer.public_key().clone(),
+            config.max_content_len.get(),
+            telemetry.clone(),
+        ));
 
         #[cfg(all(feature = "app_api", feature = "telemetry"))]
         let peer_telemetry_urls = config
@@ -14046,6 +14053,7 @@ impl Torii {
             require_api_token: config.require_api_token,
             api_tokens_set: api_tokens_set.clone(),
             operator_auth,
+            operator_signatures,
             soranet_privacy_ingest: config.soranet_privacy_ingest.clone(),
             soranet_privacy_tokens: std::sync::Arc::new(soranet_privacy_tokens),
             soranet_privacy_allow_nets: std::sync::Arc::new(soranet_privacy_allow_nets),
@@ -14256,6 +14264,7 @@ impl Torii {
             require_api_token: self.require_api_token,
             api_tokens_set: self.api_tokens_set.clone(),
             operator_auth: self.operator_auth.clone(),
+            operator_signatures: self.operator_signatures.clone(),
             soranet_privacy_ingest: self.soranet_privacy_ingest.clone(),
             soranet_privacy_tokens: self.soranet_privacy_tokens.clone(),
             soranet_privacy_allow_nets: self.soranet_privacy_allow_nets.clone(),
@@ -16138,6 +16147,12 @@ pub(crate) mod tests_runtime_handlers {
             )
             .expect("operator auth defaults should be valid"),
         );
+        let operator_signatures = Arc::new(operator_signatures::OperatorSignatures::new(
+            iroha_config::parameters::actual::ToriiOperatorSignatures::default(),
+            da_receipt_signer.public_key().clone(),
+            defaults::torii::MAX_CONTENT_LEN.get(),
+            telemetry.clone(),
+        ));
 
         Arc::new(AppState {
             events,
@@ -16159,6 +16174,7 @@ pub(crate) mod tests_runtime_handlers {
             require_api_token: false,
             api_tokens_set: api_tokens_set.clone(),
             operator_auth,
+            operator_signatures,
             soranet_privacy_ingest,
             soranet_privacy_tokens: Arc::new(soranet_privacy_tokens),
             soranet_privacy_allow_nets: Arc::new(soranet_privacy_allow_nets),
@@ -19383,6 +19399,7 @@ mod tests {
     #[tokio::test]
     async fn sorafs_repair_worker_auth_accepts_signed_worker() {
         let app = mk_app_state_for_tests();
+        let _guard = guard_account_resolvers(&app);
         let report = repair_report("REP-900", [0x11; 32], [0x22; 32], 1_701_000_000);
         app.sorafs_node
             .enqueue_repair_report(&report)
@@ -19392,6 +19409,7 @@ mod tests {
         let worker_id: AccountId = format!("{}@sora", worker_key.public_key())
             .parse()
             .expect("valid worker id");
+        let worker_id_literal = format!("{worker_id}@{}", worker_id.domain());
         grant_repair_worker_permission(&app, &worker_id, report.evidence.provider_id);
 
         let claimed_at = report.submitted_at_unix + 10;
@@ -19401,7 +19419,7 @@ mod tests {
             ticket_id: report.ticket_id.clone(),
             manifest_digest: report.evidence.manifest_digest,
             provider_id: report.evidence.provider_id,
-            worker_id: worker_id.to_string(),
+            worker_id: worker_id_literal.clone(),
             idempotency_key: idempotency_key.to_string(),
             action: RepairWorkerActionV1::Claim {
                 claimed_at_unix: claimed_at,
@@ -19413,7 +19431,7 @@ mod tests {
             &app,
             &report.ticket_id,
             &hex::encode(report.evidence.manifest_digest),
-            &worker_id.to_string(),
+            &worker_id_literal,
             idempotency_key,
             RepairWorkerActionV1::Claim {
                 claimed_at_unix: claimed_at,
@@ -19427,6 +19445,7 @@ mod tests {
     #[tokio::test]
     async fn sorafs_repair_worker_auth_rejects_missing_permission() {
         let app = mk_app_state_for_tests();
+        let _guard = guard_account_resolvers(&app);
         let report = repair_report("REP-901", [0x33; 32], [0x44; 32], 1_701_000_100);
         app.sorafs_node
             .enqueue_repair_report(&report)
@@ -19436,6 +19455,7 @@ mod tests {
         let worker_id: AccountId = format!("{}@sora", worker_key.public_key())
             .parse()
             .expect("valid worker id");
+        let worker_id_literal = format!("{worker_id}@{}", worker_id.domain());
 
         let failed_at = report.submitted_at_unix + 20;
         let idempotency_key = "fail-901";
@@ -19444,7 +19464,7 @@ mod tests {
             ticket_id: report.ticket_id.clone(),
             manifest_digest: report.evidence.manifest_digest,
             provider_id: report.evidence.provider_id,
-            worker_id: worker_id.to_string(),
+            worker_id: worker_id_literal.clone(),
             idempotency_key: idempotency_key.to_string(),
             action: RepairWorkerActionV1::Fail {
                 failed_at_unix: failed_at,
@@ -19457,7 +19477,7 @@ mod tests {
             &app,
             &report.ticket_id,
             &hex::encode(report.evidence.manifest_digest),
-            &worker_id.to_string(),
+            &worker_id_literal,
             idempotency_key,
             RepairWorkerActionV1::Fail {
                 failed_at_unix: failed_at,
@@ -19475,6 +19495,7 @@ mod tests {
     #[tokio::test]
     async fn sorafs_repair_worker_auth_rejects_manifest_digest_mismatch() {
         let app = mk_app_state_for_tests();
+        let _guard = guard_account_resolvers(&app);
         let report = repair_report("REP-902", [0x55; 32], [0x66; 32], 1_701_000_200);
         app.sorafs_node
             .enqueue_repair_report(&report)
@@ -19484,6 +19505,7 @@ mod tests {
         let worker_id: AccountId = format!("{}@sora", worker_key.public_key())
             .parse()
             .expect("valid worker id");
+        let worker_id_literal = format!("{worker_id}@{}", worker_id.domain());
         grant_repair_worker_permission(&app, &worker_id, report.evidence.provider_id);
 
         let claimed_at = report.submitted_at_unix + 10;
@@ -19493,7 +19515,7 @@ mod tests {
             ticket_id: report.ticket_id.clone(),
             manifest_digest: report.evidence.manifest_digest,
             provider_id: report.evidence.provider_id,
-            worker_id: worker_id.to_string(),
+            worker_id: worker_id_literal.clone(),
             idempotency_key: idempotency_key.to_string(),
             action: RepairWorkerActionV1::Claim {
                 claimed_at_unix: claimed_at,
@@ -19505,7 +19527,7 @@ mod tests {
             &app,
             &report.ticket_id,
             &hex::encode([0x77u8; 32]),
-            &worker_id.to_string(),
+            &worker_id_literal,
             idempotency_key,
             RepairWorkerActionV1::Claim {
                 claimed_at_unix: claimed_at,

@@ -3,7 +3,7 @@
 mod common;
 
 use instruction::wide;
-use ivm::{IVM, VMError, cost_of, instruction};
+use ivm::{IVM, VMError, cost_of as cost_of_opt, instruction};
 
 fn push32(code: &mut Vec<u8>, word: u32) {
     code.extend_from_slice(&word.to_le_bytes());
@@ -26,6 +26,10 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
 
 // Execution mode flag for VECTOR operations in ProgramMetadata
 const MODE_VECTOR: u8 = 0x02;
+
+fn cost_of(word: u32) -> u64 {
+    cost_of_opt(word).expect("valid opcode must have gas cost")
+}
 
 fn wide_rr(op: u8, rd: u8, rs1: u8, rs2: u8) -> u32 {
     ivm::encoding::wide::encode_rr(op, rd, rs1, rs2)

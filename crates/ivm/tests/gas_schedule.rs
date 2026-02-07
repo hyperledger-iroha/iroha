@@ -1,6 +1,10 @@
-use ivm::{IVM, ProgramMetadata, cost_of, encoding, instruction};
+use ivm::{IVM, ProgramMetadata, cost_of as cost_of_opt, encoding, instruction};
 
 const HALT_WORD: u32 = encoding::wide::encode_halt();
+
+fn cost_of(word: u32) -> u64 {
+    cost_of_opt(word).expect("valid opcode must have gas cost")
+}
 
 fn assemble_words(words: &[u32]) -> Vec<u8> {
     let mut bytes = header();
@@ -56,7 +60,7 @@ fn sha3_error_path_consumes_base_gas() {
     assert!(res.is_err());
     // Gas consumed should be at least the base cost of SHA3BLOCK
     let used = 1000 - vm.remaining_gas();
-    assert!(used >= cost_of(sha3) as u64);
+    assert!(used >= cost_of(sha3));
 }
 
 #[test]
@@ -69,5 +73,5 @@ fn aesenc_mode_disabled_consumes_base_gas() {
     let res = vm.run();
     assert!(matches!(res, Err(ivm::VMError::VectorExtensionDisabled)));
     let used = 1000 - vm.remaining_gas();
-    assert!(used >= ivm::cost_of(aes) as u64);
+    assert!(used >= cost_of(aes));
 }

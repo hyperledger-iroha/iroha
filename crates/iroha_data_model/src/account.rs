@@ -1844,6 +1844,7 @@ mod tests {
 
     #[test]
     fn parse_account_id() {
+        let _default_domain_guard = address::default_domain_guard(None);
         let key_pair = KeyPair::random();
         let domain: DomainId = address::default_domain_name()
             .as_ref()
@@ -1953,6 +1954,7 @@ mod tests {
 
     #[test]
     fn multisig_account_id_roundtrip() {
+        let _default_domain_guard = address::default_domain_guard(None);
         let domain: DomainId = address::default_domain_name()
             .as_ref()
             .parse()

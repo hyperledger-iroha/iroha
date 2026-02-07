@@ -897,6 +897,16 @@ impl<'a> Parser<'a> {
                                     snippet: String::new(),
                                 });
                             }
+                            if value != 1 {
+                                return Err(ParseError {
+                                    message: format!(
+                                        "meta key '{key}' value {value} is not supported in the first release (expected 1)"
+                                    ),
+                                    line: value_tok.line,
+                                    column: value_tok.column,
+                                    snippet: String::new(),
+                                });
+                            }
                             meta.abi_version = Some(value as u8);
                         }
                         "vector_length" | "vl" => {
@@ -1332,17 +1342,21 @@ impl<'a> Parser<'a> {
                     || self.peek(TokenKind::SlashEqual)
                     || self.peek(TokenKind::PercentEqual)
                 {
-                    let op_tok = self.bump().kind.clone();
+                    let op_tok = self.bump();
                     let rhs = self.parse_expr()?;
                     self.expect(TokenKind::Semicolon)?;
-                    let op = match op_tok {
+                    let op = match op_tok.kind {
                         TokenKind::Equal => AssignOp::Set,
                         TokenKind::PlusEqual => AssignOp::Add,
                         TokenKind::MinusEqual => AssignOp::Sub,
                         TokenKind::StarEqual => AssignOp::Mul,
                         TokenKind::SlashEqual => AssignOp::Div,
                         TokenKind::PercentEqual => AssignOp::Mod,
-                        _ => unreachable!(),
+                        _ => {
+                            return Err(
+                                self.error(op_tok, "expected one of: =, +=, -=, *=, /=, %=")
+                            );
+                        }
                     };
                     return Ok(match (target, op) {
                         (Expr::Ident(name), AssignOp::Set) => {
@@ -1401,16 +1415,20 @@ impl<'a> Parser<'a> {
                         || self.peek(TokenKind::SlashEqual)
                         || self.peek(TokenKind::PercentEqual))
                 {
-                    let op_tok = self.bump().kind.clone();
+                    let op_tok = self.bump();
                     let rhs = self.parse_expr()?;
-                    let op = match op_tok {
+                    let op = match op_tok.kind {
                         TokenKind::Equal => AssignOp::Set,
                         TokenKind::PlusEqual => AssignOp::Add,
                         TokenKind::MinusEqual => AssignOp::Sub,
                         TokenKind::StarEqual => AssignOp::Mul,
                         TokenKind::SlashEqual => AssignOp::Div,
                         TokenKind::PercentEqual => AssignOp::Mod,
-                        _ => unreachable!(),
+                        _ => {
+                            return Err(
+                                self.error(op_tok, "expected one of: =, +=, -=, *=, /=, %=")
+                            );
+                        }
                     };
                     return Ok(match (target, op) {
                         (Expr::Ident(name), AssignOp::Set) => {
@@ -2191,14 +2209,25 @@ mod tests {
     }
 
     #[test]
-    fn parse_contract_meta_rejects_out_of_range_values() {
+    fn parse_contract_meta_rejects_unsupported_abi_version() {
         let src = r#"
         seiyaku C {
-            meta { abi_version: 999; }
+            meta { abi_version: 2; }
         }
         "#;
         let err = parse(src).unwrap_err();
-        assert!(err.contains("out of range"));
+        assert!(err.contains("expected 1"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn parse_contract_meta_rejects_out_of_range_values() {
+        let src = r#"
+        seiyaku C {
+            meta { vl: 999; }
+        }
+        "#;
+        let err = parse(src).unwrap_err();
+        assert!(err.contains("out of range"), "unexpected error: {err}");
     }
 
     #[test]

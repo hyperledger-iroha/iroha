@@ -17,7 +17,7 @@ use std::{
     io::Read as _,
     path::{Path, PathBuf},
     sync::{
-        Arc, OnceLock,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
     thread,
@@ -260,14 +260,15 @@ fn reports_dir() -> PathBuf {
 }
 
 fn ensure_dirs() {
-    if cfg!(test) {
-        let _ = fs::create_dir_all(reports_dir());
-        return;
+    // `base_dir()` can be overridden in tests; keep directory creation keyed to the current path.
+    static LAST_DIR: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+    let slot = LAST_DIR.get_or_init(|| Mutex::new(None));
+    let dir = reports_dir();
+    let mut guard = slot.lock().expect("reports dir lock poisoned");
+    if guard.as_ref() != Some(&dir) {
+        let _ = fs::create_dir_all(&dir);
+        *guard = Some(dir);
     }
-    static INIT: OnceLock<()> = OnceLock::new();
-    INIT.get_or_init(|| {
-        let _ = fs::create_dir_all(reports_dir());
-    });
 }
 
 fn now_ms() -> u64 {

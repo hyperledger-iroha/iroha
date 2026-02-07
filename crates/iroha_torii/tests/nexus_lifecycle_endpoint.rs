@@ -19,18 +19,28 @@ use iroha_core::{
     queue::{ConfigLaneRouter, Queue, QueueLimits, SingleLaneRouter},
     state::State,
 };
+use iroha_crypto::KeyPair;
 use iroha_torii::Torii;
 use iroha_torii_shared::uri::NEXUS_LANE_LIFECYCLE;
 use tower::ServiceExt as _;
+
+#[path = "fixtures.rs"]
+mod fixtures;
 
 fn decode_norito_json(bytes: &[u8]) -> norito::json::Value {
     let decoded: String = norito::decode_from_bytes(bytes).expect("decode Norito JSON");
     norito::json::from_str(&decoded).expect("parse JSON payload")
 }
 
-fn build_app(nexus_enabled: bool) -> Router {
+struct NexusHarness {
+    app: Router,
+    key_pair: KeyPair,
+}
+
+fn build_app(nexus_enabled: bool) -> NexusHarness {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.nexus.enabled = nexus_enabled;
+    let key_pair = cfg.common.key_pair.clone();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -109,25 +119,27 @@ fn build_app(nexus_enabled: bool) -> Router {
         iroha_torii::OnlinePeersProvider::new(peers_rx),
     );
 
-    torii.api_router_for_tests()
+    NexusHarness {
+        app: torii.api_router_for_tests(),
+        key_pair,
+    }
 }
 
 #[tokio::test]
 async fn nexus_lifecycle_applies_plan_and_reports_lane_count() {
-    let app = build_app(true);
+    let harness = build_app(true);
     let body = r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"beta","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(NEXUS_LANE_LIFECYCLE)
-                .header("content-type", "application/json")
-                .body(Body::from(body))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let req = fixtures::operator_signed_request(
+        &harness.key_pair,
+        Request::builder()
+            .method("POST")
+            .uri(NEXUS_LANE_LIFECYCLE)
+            .header("content-type", "application/json")
+            .body(Body::from(body))
+            .unwrap(),
+        body.as_bytes(),
+    );
+    let resp = harness.app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::ACCEPTED);
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let payload = decode_norito_json(&bytes);
@@ -137,54 +149,51 @@ async fn nexus_lifecycle_applies_plan_and_reports_lane_count() {
 
 #[tokio::test]
 async fn nexus_lifecycle_rejects_when_disabled() {
-    let app = build_app(false);
+    let harness = build_app(false);
     let body = r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"beta","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(NEXUS_LANE_LIFECYCLE)
-                .header("content-type", "application/json")
-                .body(Body::from(body))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let req = fixtures::operator_signed_request(
+        &harness.key_pair,
+        Request::builder()
+            .method("POST")
+            .uri(NEXUS_LANE_LIFECYCLE)
+            .header("content-type", "application/json")
+            .body(Body::from(body))
+            .unwrap(),
+        body.as_bytes(),
+    );
+    let resp = harness.app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
 async fn nexus_lifecycle_supports_retire_after_add() {
-    let app = build_app(true);
+    let harness = build_app(true);
     let add_body = r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"beta","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
-    let add_resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(NEXUS_LANE_LIFECYCLE)
-                .header("content-type", "application/json")
-                .body(Body::from(add_body))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let add_req = fixtures::operator_signed_request(
+        &harness.key_pair,
+        Request::builder()
+            .method("POST")
+            .uri(NEXUS_LANE_LIFECYCLE)
+            .header("content-type", "application/json")
+            .body(Body::from(add_body))
+            .unwrap(),
+        add_body.as_bytes(),
+    );
+    let add_resp = harness.app.clone().oneshot(add_req).await.unwrap();
     assert_eq!(add_resp.status(), StatusCode::ACCEPTED);
 
     let retire_body = r#"{"additions":[],"retire":[1]}"#;
-    let retire_resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(NEXUS_LANE_LIFECYCLE)
-                .header("content-type", "application/json")
-                .body(Body::from(retire_body))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let retire_req = fixtures::operator_signed_request(
+        &harness.key_pair,
+        Request::builder()
+            .method("POST")
+            .uri(NEXUS_LANE_LIFECYCLE)
+            .header("content-type", "application/json")
+            .body(Body::from(retire_body))
+            .unwrap(),
+        retire_body.as_bytes(),
+    );
+    let retire_resp = harness.app.clone().oneshot(retire_req).await.unwrap();
     assert_eq!(retire_resp.status(), StatusCode::ACCEPTED);
     let bytes = retire_resp.into_body().collect().await.unwrap().to_bytes();
     let payload = decode_norito_json(&bytes);
