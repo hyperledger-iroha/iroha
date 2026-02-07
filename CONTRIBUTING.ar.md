@@ -6,73 +6,74 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 71baf5d038cbe6518fd294fcc1b279dff8aaf092e4a83f6159b699a378e51467
 source_last_modified: "2025-12-08T10:55:43+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Contributing Guide
+# دليل المساهمة
 
-Thank you for taking the time to contribute to Iroha 2!
+شكرًا لك على الوقت الذي أمضيته للمساهمة في Iroha 2!
 
-Please read this guide to learn how you can contribute and which guidelines we expect you to follow. This includes the guidelines about code and documentation as well as our conventions regarding git workflow.
+يرجى قراءة هذا الدليل لمعرفة كيف يمكنك المساهمة والإرشادات التي نتوقع منك اتباعها. يتضمن ذلك الإرشادات حول التعليمات البرمجية والوثائق بالإضافة إلى اتفاقياتنا المتعلقة بسير عمل git.
 
-Reading these guidelines will save you time later.
+قراءة هذه الإرشادات ستوفر عليك الوقت لاحقًا.
 
-## How Can I Contribute?
+## كيف يمكنني المساهمة؟
 
-There are a lot of ways you could contribute to our project:
+هناك الكثير من الطرق التي يمكنك من خلالها المساهمة في مشروعنا:
 
-- Report [bugs](#reporting-bugs) and [vulnerabilities](#reporting-vulnerabilities)
-- [Suggest improvements](#suggesting-improvements) and implement them
-- [Ask questions](#asking-questions) and engage with the community
+- الإبلاغ عن [الأخطاء](#reporting-bugs) و[نقاط الضعف](#reporting-vulnerabilities)
+- [اقتراح التحسينات](#suggesting-improvements) وتنفيذها
+- [طرح الأسئلة](#asking-questions) والتفاعل مع المجتمع
 
-New to our project? [Make your first contribution](#your-first-code-contribution)!
+هل أنت جديد في مشروعنا؟ [قم بمساهمتك الأولى](#your-first-code-contribution)!
 
 ### TL;DR
 
-- Find [ZenHub](https://app.zenhub.com/workspaces/iroha-v2-60ddb820813b9100181fc060/board?repos=181739240).
-- Fork [Iroha](https://github.com/hyperledger-iroha/iroha/tree/main).
-- Fix your issue of choice.
-- Ensure you follow our [style guides](#style-guides) for code and documentation.
-- Write [tests](https://doc.rust-lang.org/cargo/commands/cargo-test.html). Ensure they all pass (`cargo test --workspace`). If you touch the SM cryptography stack, also run `cargo test -p iroha_crypto --features "sm sm_proptest"` to execute the optional fuzz/property harness.
-  - Note: Tests that exercise the IVM executor will automatically synthesize a minimal, deterministic executor bytecode if `defaults/executor.to` is not present. No pre-step is required to run tests. To generate the canonical bytecode for parity, you can run:
-    - `cargo run --manifest-path scripts/generate_executor_to/Cargo.toml`
-    - `cargo run --manifest-path scripts/regenerate_codec_samples/Cargo.toml`
-- If you change derive/proc-macro crates, run the trybuild UI suites via
-  `make check-proc-macro-ui` (or
-  `PROC_MACRO_UI_CRATES="crate1 crate2" make check-proc-macro-ui`) and refresh
-  `.stderr` fixtures when diagnostics change to keep messages stable.
-- Run `make dev-workflow` (wrapper around `scripts/dev_workflow.sh`) to execute fmt/clippy/build/test with `--locked` plus `swift test`; expect `cargo test --workspace` to take hours and use `--skip-tests` only for quick local loops. See `docs/source/dev_workflow.md` for the full runbook.
-- Enforce guardrails with `make check-agents-guardrails` to block `Cargo.lock` edits and new workspace crates, `make check-dependency-discipline` to fail on new dependencies unless explicitly allowed, and `make check-missing-docs` to prevent new `#[allow(missing_docs)]` shims, missing crate-level docs on touched crates, or new public items without doc comments (the guard refreshes `docs/source/agents/missing_docs_inventory.{json,md}` via `scripts/inventory_missing_docs.py`). Add `make check-tests-guard` so changed functions fail unless unit tests reference them (inline `#[cfg(test)]`/`#[test]` blocks or crate `tests/`; existing coverage counts) and `make check-docs-tests-metrics` so roadmap changes are paired with docs, tests, and metrics/dashboards. Keep TODO enforcement via `make check-todo-guard` so TODO markers are not dropped without accompanying docs/tests. `make check-env-config-surface` regenerates the env-toggle inventory and now fails when new **production** env shims appear relative to `AGENTS_BASE_REF`; set `ENV_CONFIG_GUARD_ALLOW=1` only after documenting intentional additions in the migration tracker. `make check-serde-guard` refreshes the serde inventory and fails on stale snapshots or new production `serde`/`serde_json` hits; set `SERDE_GUARD_ALLOW=1` only with an approved migration plan. Keep large deferrals visible via TODO breadcrumbs and follow-up tickets instead of deferring silently. Run `make check-std-only` to catch `no_std`/`wasm32` cfgs and `make check-status-sync` to ensure `roadmap.md` open items remain open-only and that roadmap/status changes land together; set `STATUS_SYNC_ALLOW_UNPAIRED=1` only for rare status-only typo fixes after pinning `AGENTS_BASE_REF`. For a single invocation, use `make agents-preflight` to run all guardrails together.
-- Run local serialization guards before pushing: `make guards`.
-  - This denies direct `serde_json` in production code, disallows new direct serde deps outside allowlist, and prevents ad‑hoc AoS/NCB helpers outside `crates/norito`.
-- Optionally dry-run Norito feature matrix locally: `make norito-matrix` (uses a fast subset).
-  - For full coverage, run `scripts/run_norito_feature_matrix.sh` without `--fast`.
-  - To include a downstream smoke per combo (default crate `iroha_data_model`): `make norito-matrix-downstream` or `scripts/run_norito_feature_matrix.sh --fast --downstream [crate]`.
-- For proc-macro crates, add a `trybuild` UI harness (`tests/ui.rs` + `tests/ui/pass`/`tests/ui/fail`) and commit `.stderr` diagnostics for the failing cases. Keep diagnostics stable and non-panicking; refresh fixtures with `TRYBUILD=overwrite cargo test -p <crate> -F trybuild-tests` and guard them with `cfg(all(feature = "trybuild-tests", not(coverage)))`.
-- Perform pre-commit routine like formatting & artifacts regeneration (see [`pre-commit.sample`](./hooks/pre-commit.sample))
-- With the `upstream` set to track [Hyperledger Iroha repository](https://github.com/hyperledger-iroha/iroha), `git pull -r upstream main`, `git commit -s`, `git push <your-fork>`, and [create a pull request](https://github.com/hyperledger-iroha/iroha/compare) to the `main` branch. Ensure it follows the [pull request guidelines](#pull-request-etiquette).
+- ابحث عن [ZenHub](https://app.zenhub.com/workspaces/iroha-v2-60ddb820813b9100181fc060/board?repos=181739240).
+- شوكة [Iroha](https://github.com/hyperledger-iroha/iroha/tree/main).
+- إصلاح المشكلة التي تختارها.
+- تأكد من اتباع [أدلة النمط] (#style-guides) للحصول على التعليمات البرمجية والوثائق.
+- كتابة [الاختبارات](https://doc.rust-lang.org/cargo/commands/cargo-test.html). تأكد من اجتيازهم جميعًا (`cargo test --workspace`). إذا قمت بلمس مكدس التشفير SM، فقم أيضًا بتشغيل `cargo test -p iroha_crypto --features "sm sm_proptest"` لتنفيذ مجموعة Fuzz/الخاصية الاختيارية.
+  - ملاحظة: الاختبارات التي تمارس المنفذ IVM ستقوم تلقائيًا بتجميع رمز ثانوي محدد ومحدد للمنفذ في حالة عدم وجود `defaults/executor.to`. ليست هناك حاجة إلى خطوة مسبقة لإجراء الاختبارات. لإنشاء رمز البايت المتعارف عليه للتكافؤ، يمكنك تشغيل:
+    -`cargo run --manifest-path scripts/generate_executor_to/Cargo.toml`
+    -`cargo run --manifest-path scripts/regenerate_codec_samples/Cargo.toml`
+- إذا قمت بتغيير صناديق المشتق/proc-macro، فقم بتشغيل مجموعات Trybuild UI عبر
+  `make check-proc-macro-ui` (أو
+  `PROC_MACRO_UI_CRATES="crate1 crate2" make check-proc-macro-ui`) والتحديث
+  يتم تثبيت `.stderr` عند تغيير التشخيص للحفاظ على استقرار الرسائل.
+- تشغيل `make dev-workflow` (المجمّع حول `scripts/dev_workflow.sh`) لتنفيذ fmt/clippy/build/test باستخدام `--locked` بالإضافة إلى `swift test`؛ توقع أن يستغرق `cargo test --workspace` ساعات وأن يستخدم `--skip-tests` فقط للحلقات المحلية السريعة. راجع `docs/source/dev_workflow.md` للحصول على دليل التشغيل الكامل.
+- فرض حواجز الحماية باستخدام `make check-agents-guardrails` لمنع تعديلات `Cargo.lock` وصناديق مساحة العمل الجديدة، و`make check-dependency-discipline` للفشل في التبعيات الجديدة ما لم يسمح بذلك صراحة، و`make check-missing-docs` لمنع حشوات `#[allow(missing_docs)]` الجديدة، وفقدان المستندات على مستوى الصندوق عند لمسها الصناديق، أو العناصر العامة الجديدة بدون تعليقات المستند (يقوم الحارس بتحديث `docs/source/agents/missing_docs_inventory.{json,md}` عبر `scripts/inventory_missing_docs.py`). أضف `make check-tests-guard` بحيث تفشل الوظائف التي تم تغييرها ما لم تشير اختبارات الوحدة إليها (`#[cfg(test)]`/`#[test]` كتل أو صندوق `tests/`؛ أعداد التغطية الحالية) و`make check-docs-tests-metrics` بحيث يتم إقران تغييرات خريطة الطريق مع المستندات والاختبارات والمقاييس/لوحات المعلومات. حافظ على تطبيق TODO عبر `make check-todo-guard` حتى لا يتم إسقاط علامات TODO بدون المستندات/الاختبارات المصاحبة. يقوم `make check-env-config-surface` بإعادة إنشاء مخزون env-toggle ويفشل الآن عند ظهور حشوات البيئة **الإنتاج** الجديدة بالنسبة إلى `AGENTS_BASE_REF`؛ قم بتعيين `ENV_CONFIG_GUARD_ALLOW=1` فقط بعد توثيق الإضافات المتعمدة في متعقب الترحيل. يقوم `make check-serde-guard` بتحديث مخزون serde ويفشل في اللقطات القديمة أو نتائج الإنتاج الجديد `serde`/`serde_json`؛ قم بتعيين `SERDE_GUARD_ALLOW=1` فقط باستخدام خطة ترحيل معتمدة. اجعل التأجيلات الكبيرة مرئية عبر مسارات التنقل TODO وتذاكر المتابعة بدلاً من التأجيل بصمت. قم بتشغيل `make check-std-only` للقبض على `no_std`/`wasm32` cfgs و`make check-status-sync` لضمان بقاء العناصر المفتوحة `roadmap.md` مفتوحة فقط وأن تغييرات خريطة الطريق/الحالة تستقر معًا؛ قم بتعيين `STATUS_SYNC_ALLOW_UNPAIRED=1` فقط لإصلاحات الأخطاء المطبعية النادرة للحالة فقط بعد تثبيت `AGENTS_BASE_REF`. لاستدعاء واحد، استخدم `make agents-preflight` لتشغيل كل حواجز الحماية معًا.
+- قم بتشغيل حراس التسلسل المحلي قبل الدفع: `make guards`.
+  - يؤدي هذا إلى رفض `serde_json` المباشر في كود الإنتاج، ولا يسمح بعمليات serde المباشرة الجديدة خارج القائمة المسموح بها، ويمنع مساعدي AoS/NCB المخصصين خارج `crates/norito`.
+- مصفوفة ميزات Norito التي يتم تشغيلها جافًا بشكل اختياري محليًا: `make norito-matrix` (تستخدم مجموعة فرعية سريعة).
+  - للحصول على تغطية كاملة، قم بتشغيل `scripts/run_norito_feature_matrix.sh` بدون `--fast`.
+  - لتضمين دخان في اتجاه مجرى النهر لكل مجموعة (الصندوق الافتراضي `iroha_data_model`): `make norito-matrix-downstream` أو `scripts/run_norito_feature_matrix.sh --fast --downstream [crate]`.
+- بالنسبة لصناديق proc-macro، قم بإضافة مجموعة `trybuild` UI (`tests/ui.rs` + `tests/ui/pass`/`tests/ui/fail`) وقم بإجراء تشخيصات `.stderr` للحالات الفاشلة. حافظ على استقرار التشخيص وعدم الذعر؛ قم بتحديث التركيبات باستخدام `TRYBUILD=overwrite cargo test -p <crate> -F trybuild-tests` وحمايتها باستخدام `cfg(all(feature = "trybuild-tests", not(coverage)))`.
+- تنفيذ روتين الالتزام المسبق مثل التنسيق وتجديد العناصر (راجع [`pre-commit.sample`](./hooks/pre-commit.sample))
+- مع تعيين `upstream` لتتبع [مستودع Hyperledger Iroha](https://github.com/hyperledger-iroha/iroha)، و`git pull -r upstream main`، و`git commit -s`، و`git push <your-fork>`، و[إنشاء سحب طلب](https://github.com/hyperledger-iroha/iroha/compare) إلى فرع `main`. تأكد من أنه يتبع [إرشادات طلب السحب] (#pull-request-etiquette).
 
-### AGENTS workflow quickstart
+### البدء السريع لسير عمل الوكلاء
 
-- Run `make dev-workflow` (wrapper around `scripts/dev_workflow.sh`, documented in `docs/source/dev_workflow.md`). It wraps `cargo fmt --all`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo build/test --workspace --locked` (tests can take several hours), and `swift test`.
-- Use `scripts/dev_workflow.sh --skip-tests` or `--skip-swift` for faster iterations; rerun the full sequence before opening a pull request.
-- Guardrails: avoid touching `Cargo.lock`, adding new workspace members, introducing new dependencies, adding new `#[allow(missing_docs)]` shims, omitting crate-level docs, skipping tests when changing functions, dropping TODO markers without docs/tests, or reintroducing `no_std`/`wasm32` cfgs without approval. Run `make check-agents-guardrails` (or `AGENTS_BASE_REF=origin/main bash ci/check_agents_guardrails.sh`) plus `make check-dependency-discipline`, `make check-missing-docs` (refreshes `docs/source/agents/missing_docs_inventory.{json,md}`), `make check-tests-guard` (fails when production functions change without unit-test evidence—either tests change in the diff or existing tests must reference the function), `make check-docs-tests-metrics` (fails when roadmap changes lack docs/tests/metrics updates), `make check-todo-guard`, `make check-env-config-surface` (fails on stale inventories or new production env toggles; override with `ENV_CONFIG_GUARD_ALLOW=1` only after updating docs), and `make check-serde-guard` (fails on stale serde inventories or new production serde hits; override with `SERDE_GUARD_ALLOW=1` only with an approved migration plan) locally for early signal, `make check-std-only` for the std-only guard, and keep `roadmap.md`/`status.md` in sync with `make check-status-sync` (set `STATUS_SYNC_ALLOW_UNPAIRED=1` only for rare status-only typo fixes after pinning `AGENTS_BASE_REF`). Use `make agents-preflight` if you want a single command to run all guards before opening a PR.
+- قم بتشغيل `make dev-workflow` (المجمّع حول `scripts/dev_workflow.sh`، الموثق في `docs/source/dev_workflow.md`). وهو يلتف حول `cargo fmt --all`، و`cargo clippy --workspace --all-targets --locked -- -D warnings`، و`cargo build/test --workspace --locked` (يمكن أن تستغرق الاختبارات عدة ساعات)، و`swift test`.
+- استخدم `scripts/dev_workflow.sh --skip-tests` أو `--skip-swift` لتكرارات أسرع؛ أعد تشغيل التسلسل الكامل قبل فتح طلب السحب.
+- حواجز الحماية: تجنب لمس `Cargo.lock`، أو إضافة أعضاء جدد في مساحة العمل، أو تقديم تبعيات جديدة، أو إضافة حشوات `#[allow(missing_docs)]` جديدة، أو حذف المستندات على مستوى الصندوق، أو تخطي الاختبارات عند تغيير الوظائف، أو إسقاط علامات TODO بدون مستندات/اختبارات، أو إعادة تقديم `no_std`/`wasm32` cfgs دون موافقة. تشغيل `make check-agents-guardrails` (أو `AGENTS_BASE_REF=origin/main bash ci/check_agents_guardrails.sh`) بالإضافة إلى `make check-dependency-discipline`، `make check-missing-docs` (تحديث `docs/source/agents/missing_docs_inventory.{json,md}`)، `make check-tests-guard` (يفشل عندما تتغير وظائف الإنتاج دون دليل اختبار الوحدة - إما أن تتغير الاختبارات في الفرق أو يجب أن تشير الاختبارات الموجودة إلى دالة)، `make check-docs-tests-metrics` (يفشل عندما تفتقر تغييرات خريطة الطريق إلى تحديثات المستندات/الاختبارات/المقاييس)، `make check-todo-guard`، `make check-env-config-surface` (يفشل في المخزونات القديمة أو تبديل بيئة الإنتاج الجديدة؛ التجاوز باستخدام `ENV_CONFIG_GUARD_ALLOW=1` فقط بعد تحديث المستندات)، و `make check-serde-guard` (فشل في مخزونات serde التي لا معنى لها أو نتائج serde الإنتاج الجديدة؛ التجاوز مع `SERDE_GUARD_ALLOW=1` فقط مع خطة ترحيل معتمدة) محليًا للإشارة المبكرة، `make check-std-only` للحارس القياسي فقط، واحتفظ بمزامنة `roadmap.md`/`status.md` مع `make check-status-sync` (قم بتعيين `STATUS_SYNC_ALLOW_UNPAIRED=1` فقط لإصلاحات الأخطاء المطبعية النادرة للحالة فقط بعد تثبيت `AGENTS_BASE_REF`). استخدم `make agents-preflight` إذا كنت تريد أمرًا واحدًا لتشغيل جميع الحراس قبل فتح العلاقات العامة.
 
-### Reporting Bugs
+### الإبلاغ عن الأخطاء
 
-A *bug* is an error, design flaw, failure or fault in Iroha that causes it to produce an incorrect, unexpected, or unintended result or behaviour.
+*الخطأ* هو خطأ أو عيب في التصميم أو فشل أو خطأ في Iroha يؤدي إلى إنتاج نتيجة أو سلوك غير صحيح أو غير متوقع أو غير مقصود.
 
-We track Iroha bugs via [GitHub Issues](https://github.com/hyperledger-iroha/iroha/issues?q=is%3Aopen+is%3Aissue+label%3ABug) labeled with the `Bug` tag.
+نحن نتتبع أخطاء Iroha عبر [GitHub Issues](https://github.com/hyperledger-iroha/iroha/issues?q=is%3Aopen+is%3Aissue+label%3ABug) المسمى بعلامة `Bug`.
 
-When you create a new issue, there is a template for you to fill in. Here's the checklist of what you should do when you are reporting bugs:
-- [ ] Add the `Bug` tag
-- [ ] Explain the issue
-- [ ] Provide a minimum working example
-- [ ] Attach a screenshot
+عندما تقوم بإنشاء عدد جديد، يوجد نموذج يمكنك ملؤه. وإليك القائمة المرجعية لما يجب عليك فعله عند الإبلاغ عن الأخطاء:
+- [ ] أضف العلامة `Bug`
+- [ ] اشرح المشكلة
+- [ ] تقديم الحد الأدنى من الأمثلة العملية
+- [ ] أرفق لقطة شاشة
 
-<details> <summary>Minimum working example</summary>
+<details> <summary>الحد الأدنى من الأمثلة العملية</summary>
 
-For each bug, you should provide a [minimum working example](https://en.wikipedia.org/wiki/Minimal_working_example). For example:
+لكل خطأ، يجب عليك تقديم [الحد الأدنى من مثال العمل](https://en.wikipedia.org/wiki/Minimal_working_example). على سبيل المثال:
 
 ```
 # Minting negative Assets with value spec `Numeric`.
@@ -95,33 +96,33 @@ not to be able to mint negative values
 <paste a screenshot>
 ```
 
-</details>
+</التفاصيل>
 
 ---
-**Note:** Issues such as outdated documentation, insufficient documentation, or feature requests should use the `Documentation` or `Enhancement` labels. They are not bugs.
+**ملاحظة:** يجب أن تستخدم مشكلات مثل الوثائق القديمة أو الوثائق غير الكافية أو طلبات الميزات التصنيفات `Documentation` أو `Enhancement`. انهم ليسوا البق.
 
 ---
 
-### Reporting Vulnerabilities
+### الإبلاغ عن نقاط الضعف
 
-While we are proactive in preventing security problems, it is possible that you might come across a security vulnerability before we do.
+على الرغم من أننا نعمل بشكل استباقي على منع المشكلات الأمنية، فمن الممكن أن تصادف ثغرة أمنية قبل أن نفعل ذلك.
 
-- Before the First Major Release (2.0) all vulnerabilities are considered bugs, so feel free to submit them as bugs [following the instructions above](#reporting-bugs).
-- After the First Major Release, use our [bug bounty program](https://hackerone.com/hyperledger) to submit vulnerabilities and get your reward.
+- قبل الإصدار الرئيسي الأول (2.0)، كانت جميع الثغرات الأمنية تعتبر أخطاء، لذا لا تتردد في إرسالها كأخطاء [باتباع الإرشادات أعلاه](#reporting-bugs).
+- بعد الإصدار الرئيسي الأول، استخدم [برنامج مكافأة الأخطاء](https://hackerone.com/hyperledger) لإرسال نقاط الضعف والحصول على مكافأتك.
 
-:exclamation: To minimize the damage caused by an unpatched security vulnerability, you should disclose the vulnerability directly to Hyperledger as soon as possible and **avoid disclosing the same vulnerability publicly** for a reasonable period of time.
+:exclamation: لتقليل الضرر الناتج عن ثغرة أمنية لم يتم تصحيحها، يجب عليك الكشف عن الثغرة الأمنية مباشرة إلى Hyperledger في أقرب وقت ممكن و **تجنب الكشف عن نفس الثغرة الأمنية علنًا** لفترة زمنية معقولة.
 
-If you have any questions regarding our handling of security vulnerabilities, please feel free to contact any of the currently active maintainers in Rocket.Chat private messages.
+إذا كانت لديك أي أسئلة بخصوص تعاملنا مع الثغرات الأمنية، فلا تتردد في الاتصال بأي من المشرفين النشطين حاليًا في رسائل Rocket.Chat الخاصة.
 
-### Suggesting Improvements
+### اقتراح التحسينات
 
-Create [an issue](https://github.com/hyperledger-iroha/iroha/issues/new) on GitHub with the appropriate tags (`Optimization`, `Enhancement`) and describe the improvement you are suggesting. You may leave this idea for us or someone else to develop, or you may implement it yourself.
+قم بإنشاء [مشكلة] (https://github.com/hyperledger-iroha/iroha/issues/new) على GitHub باستخدام العلامات المناسبة (`Optimization`، `Enhancement`) ووصف التحسين الذي تقترحه. يمكنك أن تترك هذه الفكرة لنا أو لشخص آخر ليقوم بتطويرها، أو يمكنك تنفيذها بنفسك.
 
-If you intend to implement the suggestion yourself, do the following:
+إذا كنت تنوي تنفيذ الاقتراح بنفسك، قم بما يلي:
 
-1. Assign the issue you created to yourself **before** you start working on it.
-2. Work on the feature you suggested and follow our [guidelines for code and documentation](#style-guides).
-3. When you are ready to open a pull request, make sure you follow the [pull request guidelines](#pull-request-etiquette) and mark it as implementing the previously created issue:
+1. قم بتعيين المشكلة التي قمت بإنشائها لنفسك **قبل** أن تبدأ العمل عليها.
+2. اعمل على الميزة التي اقترحتها واتبع [إرشاداتنا الخاصة بالكود والوثائق](#style-guides).
+3. عندما تكون مستعدًا لفتح طلب سحب، تأكد من اتباع [إرشادات طلب السحب](#pull-request-etiquette) ووضع علامة عليه باعتباره تنفيذ المشكلة التي تم إنشاؤها مسبقًا:
 
    ```
    feat: Description of the feature
@@ -131,157 +132,153 @@ If you intend to implement the suggestion yourself, do the following:
    Closes #1234
    ```
 
-4. If your change requires an API change, use the `api-changes` tag.
+4. إذا كان التغيير الذي أجريته يتطلب تغيير واجهة برمجة التطبيقات (API)، فاستخدم العلامة `api-changes`.
 
-   **Note:** features that require API changes may take longer to implement and approve as they require Iroha library makers to update their code.
+   **ملاحظة:** الميزات التي تتطلب تغييرات في واجهة برمجة التطبيقات (API) قد تستغرق وقتًا أطول للتنفيذ والموافقة لأنها تتطلب من صانعي مكتبة Iroha تحديث التعليمات البرمجية الخاصة بهم.### طرح الأسئلة
 
-### Asking Questions
+السؤال هو أي مناقشة ليست خطأ أو ميزة أو طلب تحسين.
 
-A question is any discussion that is neither a bug nor a feature or optimization request.
+<تفاصيل> <ملخص> كيف يمكنني طرح سؤال؟ </ملخص>
 
-<details> <summary> How do I ask a question? </summary>
+يرجى نشر أسئلتك على [إحدى منصات المراسلة الفورية لدينا] (#contact) حتى يتمكن الموظفون وأعضاء المجتمع من مساعدتك في الوقت المناسب.
 
-Please post your questions to [one of our instant messaging platforms](#contact) so that the staff and members of the community could help you in a timely manner.
+أنت، كجزء من المجتمع المذكور أعلاه، يجب أن تفكر في مساعدة الآخرين أيضًا. إذا قررت المساعدة، يرجى القيام بذلك [بطريقة محترمة](CODE_OF_CONDUCT.md).
 
-You, as part of the aforementioned community, should consider helping others too. If you decide to help, please do so in a [respectful manner](CODE_OF_CONDUCT.md).
+</التفاصيل>
 
-</details>
+## مساهمتك الأولى بالرمز
 
-## Your First Code Contribution
+1. ابحث عن إصدار مناسب للمبتدئين من بين الإصدارات ذات التصنيف [الإصدار الأول الجيد](https://github.com/hyperledger-iroha/iroha/labels/good%20first%20issue).
+2. تأكد من عدم قيام أي شخص آخر بالعمل على القضايا التي اخترتها عن طريق التحقق من عدم إسنادها لأي شخص.
+3. قم بتخصيص المشكلة لنفسك حتى يتمكن الآخرون من رؤية أن هناك من يعمل عليها.
+4. اقرأ [دليل نمط الصدأ] (#rust-style-guide) قبل البدء في كتابة التعليمات البرمجية.
+5. عندما تكون مستعدًا لتنفيذ التغييرات، اقرأ [إرشادات طلب السحب](#pull-request-etiquette).
 
-1. Find a beginner-friendly issue among issues with the [good-first-issue](https://github.com/hyperledger-iroha/iroha/labels/good%20first%20issue) label.
-2. Make sure that no one else is working on the issues you have chosen by checking that it is not assigned to anybody.
-3. Assign the issue to yourself so that others can see that someone is working on it.
-4. Read our [Rust Style Guide](#rust-style-guide) before you start writing code.
-5. When you are ready to commit your changes, read the [pull request guidelines](#pull-request-etiquette).
+## آداب طلب السحب
 
-## Pull Request Etiquette
+من فضلك [تفرع](https://docs.github.com/en/get-started/quickstart/fork-a-repo) [المستودع](https://github.com/hyperledger-iroha/iroha/tree/main) و[إنشاء فرع ميزات](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-and-deleting-branches-within-your-repository) لمساهماتك. عند العمل مع **PRs from forks**، راجع [هذا الدليل](https://help.github.com/articles/checking-out-pull-requests-locally).
 
-Please [fork](https://docs.github.com/en/get-started/quickstart/fork-a-repo) the [repository](https://github.com/hyperledger-iroha/iroha/tree/main) and [create a feature branch](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-and-deleting-branches-within-your-repository) for your contributions. When working with **PRs from forks**, check [this manual](https://help.github.com/articles/checking-out-pull-requests-locally).
+#### العمل على المساهمة بالكود:
+- اتبع [دليل نمط الصدأ](#rust-style-guide) و[دليل نمط التوثيق](#documentation-style-guide).
+- التأكد من أن الكود الذي كتبته مشمول بالاختبارات. إذا أصلحت خطأ ما، فيرجى تحويل الحد الأدنى من مثال العمل الذي يعيد إنتاج الخطأ إلى اختبار.
+- عند لمس صناديق المشتق/proc-macro، قم بتشغيل `make check-proc-macro-ui` (أو
+  قم بالتصفية باستخدام `PROC_MACRO_UI_CRATES="crate1 crate2"`) لذا حاول إنشاء تركيبات واجهة المستخدم
+  البقاء متزامنًا وتبقى التشخيصات مستقرة.
+- توثيق واجهات برمجة التطبيقات العامة الجديدة (`//!` و`///` على العناصر الجديدة) وتشغيلها
+  `make check-missing-docs` للتحقق من الدرابزين. استدعاء المستندات/الاختبارات لك
+  تمت إضافتها في وصف طلب السحب الخاص بك.
 
-#### Working on code contribution:
-- Follow the [Rust Style Guide](#rust-style-guide) and the [Documentation Style Guide](#documentation-style-guide).
-- Ensure that the code you've written is covered by tests. If you fixed a bug, please turn the minimum working example that reproduces the bug into a test.
-- When touching derive/proc-macro crates, run `make check-proc-macro-ui` (or
-  filter with `PROC_MACRO_UI_CRATES="crate1 crate2"`) so trybuild UI fixtures
-  stay in sync and diagnostics remain stable.
-- Document new public APIs (crate-level `//!` and `///` on new items), and run
-  `make check-missing-docs` to verify the guardrail. Call out the docs/tests you
-  added in your pull request description.
+#### الالتزام بعملك:
+- اتبع [دليل أنماط Git](#git-workflow).
+- قم بإلغاء التزاماتك [إما قبل](https://www.git-tower.com/learn/git/faq/git-squash/) أو [أثناء الدمج](https://rietta.com/blog/github-merge-types/).
+- إذا أصبح فرعك قديمًا أثناء إعداد طلب السحب، فقم بإعادة تأسيسه محليًا باستخدام `git pull --rebase upstream main`. وبدلاً من ذلك، يمكنك استخدام القائمة المنسدلة للزر `Update branch` واختيار الخيار `Update with rebase`.
 
-#### Committing your work:
-- Follow the [Git Style Guide](#git-workflow).
-- Squash your commits [either before](https://www.git-tower.com/learn/git/faq/git-squash/) or [during the merge](https://rietta.com/blog/github-merge-types/).
-- If during the preparation of your pull request your branch got out of date, rebase it locally with `git pull --rebase upstream main`. Alternatively, you may use the drop-down menu for the `Update branch` button and choose the `Update with rebase` option.
+  من أجل تسهيل هذه العملية للجميع، حاول ألا يكون لديك أكثر من عدد قليل من الالتزامات لطلب السحب، وتجنب إعادة استخدام فروع الميزات.
 
-  In the interest of making this process easier for everyone, try not to have more than a handful of commits for a pull request, and avoid re-using feature branches.
+#### إنشاء طلب سحب:
+- استخدم وصفًا مناسبًا لطلب السحب باتباع الإرشادات الواردة في قسم [آداب طلب السحب](#pull-request-etiquette). تجنب الانحراف عن هذه الإرشادات إن أمكن.
+- قم بإضافة [عنوان طلب السحب] (#pull-request-titles) بتنسيق مناسب.
+- إذا كنت تشعر أن الكود الخاص بك ليس جاهزًا للدمج، ولكنك تريد من المشرفين الاطلاع عليه، فقم بإنشاء مسودة طلب سحب.
 
-#### Creating a pull request:
-- Use an appropriate pull request description by following the guidance in the [Pull Request Etiquette](#pull-request-etiquette) section. Avoid deviating from these guidelines if possible.
-- Add an appropriately formatted [pull request title](#pull-request-titles).
-- If you feel like your code isn't ready to merge, but you want the maintainers to look through it, create a draft pull request.
+#### دمج عملك:
+- يجب أن يجتاز طلب السحب جميع الفحوصات الآلية قبل دمجه. كحد أدنى، يجب أن يتم تنسيق الكود، واجتياز كافة الاختبارات، بالإضافة إلى عدم وجود خطوط `clippy` معلقة.
+- لا يمكن دمج طلب السحب بدون مراجعتين موافقتين من المشرفين النشطين.
+- سيقوم كل طلب سحب بإخطار مالكي الكود تلقائيًا. يمكن العثور على قائمة محدثة بالمشرفين الحاليين في [MAINTAINERS.md](MAINTAINERS.md).
 
-#### Merging your work:
-- A pull request must pass all automated checks before being merged. At a minimum, the code must be formatted, passing all tests, as well as having no outstanding `clippy` lints.
-- A pull request cannot be merged without two approving reviews from the active maintainers.
-- Each pull request will automatically notify the code owners. An up to date list of current maintainers can be found in [MAINTAINERS.md](MAINTAINERS.md).
+#### آداب المراجعة:
+- لا تحل المحادثة بنفسك. دع المراجع يتخذ القرار.
+- الإقرار بتعليقات المراجعة والتفاعل مع المراجع (الموافقة، عدم الموافقة، التوضيح، الشرح، وما إلى ذلك). لا تتجاهل التعليقات.
+- للحصول على اقتراحات بسيطة لتغيير التعليمات البرمجية، إذا قمت بتطبيقها مباشرة، فيمكنك حل المحادثة.
+- تجنب الكتابة فوق التزاماتك السابقة عند دفع التغييرات الجديدة. إنه يحجب ما تغير منذ المراجعة الأخيرة ويجبر المراجع على البدء من الصفر. يتم سحق الالتزامات قبل الدمج تلقائيًا.
 
-#### Review etiquette:
-- Do not resolve a conversation on your own. Let the reviewer make a decision.
-- Acknowledge review comments and engage with the reviewer (agree, disagree, clarify, explain, etc.). Do not ignore comments.
-- For simple code change suggestions, if you apply them directly, you can resolve the conversation.
-- Avoid overwriting your previous commits when pushing new changes. It obfuscates what changed since the last review and forces the reviewer to start from scratch. Commits are squashed before merging automatically.
+### سحب عناوين الطلب
 
-### Pull Request Titles
+نقوم بتحليل عناوين كافة طلبات السحب المدمجة لإنشاء سجلات التغيير. نتحقق أيضًا من أن العنوان يتبع الاصطلاح من خلال فحص *`check-PR-title`*.
 
-We parse the titles of all the merged pull requests to generate changelogs. We also check that the title follows the convention via the *`check-PR-title`* check.
+لاجتياز اختبار *`check-PR-title`*، يجب أن يلتزم عنوان طلب السحب بالإرشادات التالية:
 
-To pass the *`check-PR-title`* check, the pull request title must adhere to the following guidelines:
+<details> <summary> قم بالتوسيع لقراءة إرشادات العنوان التفصيلية</summary>
 
-<details> <summary> Expand to read the detailed title guidelines</summary>
+1. اتبع تنسيق [الالتزامات التقليدية](https://www.conventionalcommits.org/en/v1.0.0/#commit-message-with-multi-paragraph-body-and-multiple-footers).
 
-1. Follow the [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/#commit-message-with-multi-paragraph-body-and-multiple-footers) format.
+2. إذا كان طلب السحب يحتوي على التزام واحد، فيجب أن يكون عنوان PR هو نفس رسالة الالتزام.
 
-2. If the pull request has a single commit, the PR title should be the same as the commit message.
+</التفاصيل>
 
-</details>
+### سير عمل جيت
 
-### Git Workflow
+- [Fork](https://docs.github.com/en/get-started/quickstart/fork-a-repo) و[المستودع](https://github.com/hyperledger-iroha/iroha/tree/main) و[إنشاء فرع ميزات](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-and-deleting-branches-within-your-repository) لمساهماتك.
+- [قم بتكوين جهاز التحكم عن بعد](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/configuring-a-remote-repository-for-a-fork) لمزامنة شوكتك مع [مستودع Hyperledger Iroha](https://github.com/hyperledger-iroha/iroha/tree/main).
+- استخدم [سير عمل Git Rebase](https://git-rebase.io/). تجنب استخدام `git pull`. استخدم `git pull --rebase` بدلاً من ذلك.
+- استخدم [خطافات git](./hooks/) المتوفرة لتسهيل عملية التطوير.
 
-- [Fork](https://docs.github.com/en/get-started/quickstart/fork-a-repo) the [repository](https://github.com/hyperledger-iroha/iroha/tree/main) and [create a feature branch](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-and-deleting-branches-within-your-repository) for your contributions.
-- [Configure the remote](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/configuring-a-remote-repository-for-a-fork) to sync your fork with the [Hyperledger Iroha repository](https://github.com/hyperledger-iroha/iroha/tree/main).
-- Use the [Git Rebase Workflow](https://git-rebase.io/). Avoid using `git pull`. Use `git pull --rebase` instead.
-- Use the provided [git hooks](./hooks/) to ease the development process.
+اتبع إرشادات الالتزام هذه:
 
-Follow these commit guidelines:
+- **تسجيل الخروج من كل التزام**. إذا لم تقم بذلك، فلن يسمح لك [DCO](https://github.com/apps/dco) بالدمج.
 
-- **Sign-off every commit**. If you don't, [DCO](https://github.com/apps/dco) will not let you merge.
+  استخدم `git commit -s` لإضافة `Signed-off-by: $NAME <$EMAIL>` تلقائيًا باعتباره السطر الأخير لرسالة الالتزام الخاصة بك. يجب أن يكون اسمك وبريدك الإلكتروني هو نفسه المحدد في حساب GitHub الخاص بك.
 
-  Use `git commit -s` to automatically add `Signed-off-by: $NAME <$EMAIL>` as the final line of your commit message. Your name and email should be the same as specified in your GitHub account.
+  نحن نشجعك أيضًا على توقيع التزاماتك باستخدام مفتاح GPG باستخدام `git commit -sS` ([مزيد من المعلومات](https://docs.github.com/en/authentication/managing-commit-signature-verification/signing-commits)).
 
-  We also encourage you to sign your commits with GPG key using `git commit -sS` ([learn more](https://docs.github.com/en/authentication/managing-commit-signature-verification/signing-commits)).
+  يمكنك استخدام [الخطاف `commit-msg`](./hooks/) لتسجيل الخروج من التزاماتك تلقائيًا.
 
-  You may use [the `commit-msg` hook](./hooks/) to automatically sign-off your commits.
+- يجب أن تتبع رسائل الالتزام [الالتزامات التقليدية](https://www.conventionalcommits.org/en/v1.0.0/#commit-message-with-multi-paragraph-body-and-multiple-footers) ونفس مخطط التسمية كما هو الحال في [عناوين طلبات السحب](#pull-request-titles). هذا يعني:
+  - **استخدم زمن المضارع** ("أضف ميزة"، وليس "ميزة مضافة")
+  - **استخدم الحالة الأمرية** ("النشر إلى عامل الإرساء..." وليس "النشر إلى عامل الإرساء...")
+- اكتب رسالة التزام ذات معنى.
+- حاول إبقاء رسالة الالتزام قصيرة.
+- إذا كنت بحاجة إلى رسالة التزام أطول:
+  - حدد السطر الأول من رسالة الالتزام بـ 50 حرفًا أو أقل.
+  - يجب أن يحتوي السطر الأول من رسالة الالتزام على ملخص العمل الذي قمت به. إذا كنت بحاجة إلى أكثر من سطر واحد، فاترك سطرًا فارغًا بين كل فقرة ووصف التغييرات التي أجريتها في المنتصف. يجب أن يكون السطر الأخير هو تسجيل الخروج.
+- إذا قمت بتعديل المخطط (تحقق من خلال إنشاء المخطط باستخدام `kagami schema` وdiff)، فيجب عليك إجراء جميع التغييرات على المخطط في التزام منفصل بالرسالة `[schema]`.
+- حاول الالتزام بالتزام واحد لكل تغيير ذي معنى.
+  - إذا قمت بإصلاح العديد من المشكلات في علاقة عامة واحدة، فقم بمنحهم التزامات منفصلة.
+  - كما ذكرنا سابقًا، يجب إجراء التغييرات على `schema` وواجهة برمجة التطبيقات (API) في التزامات مناسبة منفصلة عن بقية عملك.
+  - إضافة اختبارات للوظيفة في نفس الالتزام مثل تلك الوظيفة.
 
-- Commit messages must follow [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/#commit-message-with-multi-paragraph-body-and-multiple-footers) and the same naming schema as for [pull request titles](#pull-request-titles). This means:
-  - **Use present tense** ("Add feature", not "Added feature")
-  - **Use imperative mood** ("Deploy to docker..." not "Deploys to docker...")
-- Write a meaningful commit message.
-- Try keeping a commit message short.
-- If you need to have a longer commit message:
-  - Limit the first line of your commit message to 50 characters or less.
-  - The first line of your commit message should contain the summary of the work you've done. If you need more than one line, leave a blank line between each paragraph and describe your changes in the middle. The last line must be the sign-off.
-- If you modify the Schema (check by generating the schema with `kagami schema` and diff), you should make all changes to the schema in a separate commit with the message `[schema]`.
-- Try to stick to one commit per meaningful change.
-  - If you fixed several issues in one PR, give them separate commits.
-  - As mentioned previously, changes to the `schema` and the API should be done in appropriate commits separate from the rest of your work.
-  - Add tests for functionality in the same commit as that functionality.
+## الاختبارات والمقاييس
 
-## Tests and Benchmarks
+- لتشغيل الاختبارات المستندة إلى التعليمات البرمجية المصدر، قم بتنفيذ [`cargo test`](https://doc.rust-lang.org/cargo/commands/cargo-test.html) في جذر Iroha. لاحظ أن هذه عملية طويلة.
+- لتشغيل المعايير، قم بتنفيذ [`cargo bench`](https://doc.rust-lang.org/cargo/commands/cargo-bench.html) من جذر Iroha. للمساعدة في تصحيح أخطاء مخرجات قياس الأداء، قم بتعيين متغير البيئة `debug_assertions` مثل: `RUSTFLAGS="--cfg debug_assertions" cargo bench`.
+- إذا كنت تعمل على مكون معين، فضع في اعتبارك أنه عند تشغيل `cargo test` في [مساحة عمل](https://doc.rust-lang.org/cargo/reference/workspaces.html)، فإنه سيتم تشغيل الاختبارات الخاصة بمساحة العمل هذه فقط، والتي لا تتضمن عادةً أي [اختبارات تكامل](https://www.testingxperts.com/blog/what-is-integration-testing).
+- إذا كنت تريد اختبار تغييراتك على الحد الأدنى من الشبكة، فإن [`docker-compose.yml`](defaults/docker-compose.yml) المتوفر يقوم بإنشاء شبكة مكونة من 4 أقران Iroha في حاويات عامل الإرساء التي يمكن استخدامها لاختبار الإجماع والمنطق المتعلق بنشر الأصول. نوصي بالتفاعل مع تلك الشبكة باستخدام إما [I18NI000000245X](https://github.com/hyperledger-iroha/iroha-python)، أو واجهة سطر الأوامر للعميل Iroha المضمنة.
+- لا تقم بإزالة الاختبارات الفاشلة. حتى الاختبارات التي تم تجاهلها سيتم تشغيلها في مسارنا في النهاية.
+- إذا كان ذلك ممكنًا، يرجى قياس الكود الخاص بك قبل وبعد إجراء التغييرات، حيث أن التراجع الكبير في الأداء يمكن أن يؤدي إلى تعطيل عمليات تثبيت المستخدمين الحاليين.
 
-- To run the source-code based tests, execute [`cargo test`](https://doc.rust-lang.org/cargo/commands/cargo-test.html) in the Iroha root. Note that this is a long process.
-- To run benchmarks, execute [`cargo bench`](https://doc.rust-lang.org/cargo/commands/cargo-bench.html) from the Iroha root. To help debug benchmark outputs, set the `debug_assertions` environment variable like so: `RUSTFLAGS="--cfg debug_assertions" cargo bench`.
-- If you are working on a particular component, be mindful that when you run `cargo test` in a [workspace](https://doc.rust-lang.org/cargo/reference/workspaces.html), it will only run the tests for that workspace, which usually doesn't include any [integration tests](https://www.testingxperts.com/blog/what-is-integration-testing).
-- If you want to test your changes on a minimal network, the provided [`docker-compose.yml`](defaults/docker-compose.yml) creates a network of 4 Iroha peers in docker containers that can be used to test consensus and asset propagation-related logic. We recommend interacting with that network using either [`iroha-python`](https://github.com/hyperledger-iroha/iroha-python), or the included Iroha client CLI.
-- Do not remove failing tests. Even tests that are ignored will be run in our pipeline eventually.
-- If possible, please benchmark your code both before and after making your changes, as a significant performance regression can break existing users' installations.
+### فحوصات حراسة التسلسل
 
-### Serialization guard checks
+قم بتشغيل `make guards` للتحقق من صحة سياسات المستودع محليًا:
 
-Run `make guards` to validate repository policies locally:
+- رفض إدراج `serde_json` المباشر في مصادر الإنتاج (يفضل `norito::json`).
+- منع التبعيات/الاستيرادات المباشرة `serde`/`serde_json` خارج القائمة المسموح بها.
+- منع إعادة تقديم مساعدات AoS/NCB المخصصة خارج `crates/norito`.
 
-- Deny-list direct `serde_json` in production sources (prefer `norito::json`).
-- Forbid direct `serde`/`serde_json` dependencies/imports outside the allowlist.
-- Prevent reintroduction of ad‑hoc AoS/NCB helpers outside `crates/norito`.
+### اختبارات التصحيح
 
-### Debugging tests
+<details> <summary> قم بالتوسيع لتتعلم كيفية تغيير مستوى السجل أو كتابة السجلات إلى JSON.</summary>
 
-<details> <summary> Expand to learn how to change the log level or write logs to a JSON.</summary>
+إذا فشل أحد اختباراتك، فقد ترغب في تقليل الحد الأقصى لمستوى التسجيل. افتراضيًا، يقوم Iroha بتسجيل رسائل المستوى `INFO` فقط، ولكنه يحتفظ بالقدرة على إنتاج سجلات المستوى `DEBUG` و`TRACE`. يمكن تغيير هذا الإعداد إما باستخدام متغير البيئة `LOG_LEVEL` للاختبارات المستندة إلى التعليمات البرمجية، أو باستخدام نقطة النهاية `/configuration` على أحد النظراء في شبكة منشورة.على الرغم من أن السجلات المطبوعة في `stdout` كافية، فقد تجد أنه من الملائم أكثر إنتاج سجلات بتنسيق `json` في ملف منفصل وتحليلها باستخدام إما [node-bunyan](https://www.npmjs.com/package/bunyan) أو [rust-bunyan](https://crates.io/crates/bunyan).
 
-If one of your tests is failing, you may want to decrease the maximum logging level. By default, Iroha only logs `INFO` level messages, but retains the ability to produce both `DEBUG` and `TRACE` level logs. This setting can be changed either using the `LOG_LEVEL` environment variable for code-based tests, or using the `/configuration` endpoint on one of the peers in a deployed network.
+قم بتعيين متغير البيئة `LOG_FILE_PATH` إلى موقع مناسب لتخزين السجلات وتحليلها باستخدام الحزم المذكورة أعلاه.
 
-While logs printed in the `stdout` are sufficient, you may find it more convenient to produce `json`-formatted logs into a separate file and parse them using either [node-bunyan](https://www.npmjs.com/package/bunyan) or [rust-bunyan](https://crates.io/crates/bunyan).
+</التفاصيل>
 
-Set the `LOG_FILE_PATH` environment variable to an appropriate location to store the logs and parse them using the above packages.
+### تصحيح الأخطاء باستخدام وحدة تحكم tokio
 
-</details>
+<details> <summary> قم بالتوسيع لتتعلم كيفية ترجمة Iroha مع دعم وحدة تحكم tokio.</summary>
 
-### Debugging using tokio console
+في بعض الأحيان قد يكون من المفيد تصحيح الأخطاء لتحليل مهام tokio باستخدام [tokio-console](https://github.com/tokio-rs/console).
 
-<details> <summary> Expand to learn how to compile Iroha with tokio console support.</summary>
-
-Sometimes it might be helpful for debugging to analyze tokio tasks using [tokio-console](https://github.com/tokio-rs/console).
-
-In this case you should compile Iroha with support of tokio console like that:
+في هذه الحالة يجب عليك ترجمة Iroha مع دعم وحدة التحكم tokio مثل هذا:
 
 ```bash
 RUSTFLAGS="--cfg tokio_unstable" cargo build --features tokio-console
 ```
 
-Port for tokio console can by configured through `LOG_TOKIO_CONSOLE_ADDR` configuration parameter (or environment variable).
-Using tokio console require log level to be `TRACE`, can be enabled through configuration parameter or environment variable `LOG_LEVEL`.
+يمكن تكوين منفذ وحدة تحكم tokio من خلال معلمة التكوين `LOG_TOKIO_CONSOLE_ADDR` (أو متغير البيئة).
+يتطلب استخدام وحدة تحكم tokio أن يكون مستوى السجل `TRACE`، ويمكن تمكينه من خلال معلمة التكوين أو متغير البيئة `LOG_LEVEL`.
 
-Example of running Iroha with tokio console support using `scripts/test_env.sh`:
+مثال على تشغيل Iroha مع دعم وحدة تحكم tokio باستخدام `scripts/test_env.sh`:
 
 ```bash
 # 1. Compile Iroha
@@ -292,29 +289,29 @@ LOG_LEVEL=TRACE ./scripts/test_env.sh setup
 tokio-console http://127.0.0.1:5555
 ```
 
-</details>
+</التفاصيل>
 
-### Profiling
+### التنميط
 
-<details> <summary> Expand to learn how to profile Iroha. </summary>
+<تفاصيل> <ملخص> قم بالتوسيع للتعرف على كيفية إنشاء ملف تعريف Iroha. </ملخص>
 
-To optimize performance it's useful to profile Iroha.
+لتحسين الأداء، من المفيد إنشاء ملف تعريف Iroha.
 
-Profiling builds currently require a nightly toolchain. To prepare one, compile Iroha with the `profiling` profile and feature using `cargo +nightly`:
+تتطلب إنشاءات ملفات التعريف حاليًا سلسلة أدوات ليلية. لإعداد واحدة، قم بتجميع Iroha مع ملف التعريف والميزة `profiling` باستخدام `cargo +nightly`:
 
 ```bash
 RUSTFLAGS="-C force-frame-pointers=on" cargo +nightly -Z build-std build --target your-desired-target --profile profiling --features profiling
 ```
 
-Then start Iroha and attach profiler of your choice to the Iroha pid.
+ثم ابدأ تشغيل Iroha وقم بإرفاق ملف تعريف من اختيارك بمعرف الهوية Iroha.
 
-Alternatively it's possible to build Iroha inside docker with profiler support and profile Iroha this way.
+وبدلاً من ذلك، من الممكن إنشاء Iroha داخل عامل الإرساء مع دعم ملف التعريف وملف التعريف Iroha بهذه الطريقة.
 
 ```bash
 docker build -f Dockerfile.glibc --build-arg="PROFILE=profiling" --build-arg='RUSTFLAGS=-C force-frame-pointers=on' --build-arg='FEATURES=profiling' --build-arg='CARGOFLAGS=-Z build-std' -t iroha:profiling .
 ```
 
-E.g. using perf (available only on linux):
+على سبيل المثال باستخدام الأداء (متوفر فقط على نظام التشغيل Linux):
 
 ```bash
 # to capture profile
@@ -323,15 +320,15 @@ sudo perf record -g -p <PID>
 sudo perf report
 ```
 
-To be able to observe profile of the executor during Iroha profiling, executor should be compiled without stripping symbols.
-It can be done by running:
+لتتمكن من مراقبة ملف تعريف المنفذ أثناء إنشاء ملف تعريف Iroha، يجب تجميع المنفذ دون تجريد الرموز.
+يمكن القيام بذلك عن طريق تشغيل:
 
 ```bash
 # compile executor without optimizations
 cargo run --bin kagami -- ivm build ./path/to/executor --out-file executor.to
 ```
 
-With profiling feature enabled Iroha exposes endpoint to scrap pprof profiles:
+مع تمكين ميزة التوصيف، يعرض Iroha نقطة النهاية لملفات تعريف pprof:
 
 ```bash
 # profile Iroha for 30 seconds and download the profile data
@@ -340,94 +337,94 @@ curl host:port/debug/pprof/profile?seconds=30 -o profile.pb
 go tool pprof -web profile.pb
 ```
 
-</details>
+</التفاصيل>
 
-## Style Guides
+## أدلة الأسلوب
 
-Please follow these guidelines when you make code contributions to our project:
+يرجى اتباع هذه الإرشادات عند تقديم مساهمات التعليمات البرمجية لمشروعنا:
 
-### Git Style Guide
+### دليل أسلوب جيت
 
-:book: [Read git guidelines](#git-workflow)
+:book: [اقرأ إرشادات git](#git-workflow)
 
-### Rust Style Guide
+### دليل نمط الصدأ
 
-<details> <summary> :book: Read code guidelines</summary>
+<details> <summary> :book: اقرأ إرشادات التعليمات البرمجية</summary>
 
-- Use `cargo fmt --all` (edition 2024) to format code.
+- استخدم `cargo fmt --all` (إصدار 2024) لتنسيق التعليمات البرمجية.
 
-Code guidelines:
+إرشادات الكود:
 
-- Unless otherwise specified, refer to [Rust best practices](https://github.com/mre/idiomatic-rust).
-- Use the `mod.rs` style. [Self-named modules](https://rust-lang.github.io/rust-clippy/master/) will not pass static analysis, except as [`trybuild`](https://crates.io/crates/trybuild) tests.
-- Use a domain-first modules structure.
+- ما لم ينص على خلاف ذلك، راجع [أفضل ممارسات الصدأ] (https://github.com/mre/idiomatic-rust).
+- استخدم النمط `mod.rs`. لن تجتاز [الوحدات النمطية ذاتية التسمية](https://rust-lang.github.io/rust-clippy/master/) التحليل الثابت، باستثناء اختبارات [`trybuild`](https://crates.io/crates/trybuild).
+- استخدم بنية الوحدات النمطية للمجال أولاً.
 
-  Example: don't do `constants::logger`. Instead, invert the hierarchy, putting the object for which it is used first: `iroha_logger::constants`.
-- Use [`expect`](https://learning-rust.github.io/docs/unwrap-and-expect/) with an explicit error message or proof of infallibility instead of `unwrap`.
-- Never ignore an error. If you can't `panic` and can't recover, it at least needs to be recorded in the log.
-- Prefer to return a `Result` instead of `panic!`.
-- Group related functionality spatially, preferably inside appropriate modules.
+  مثال: لا تفعل `constants::logger`. بدلاً من ذلك، قم بعكس التسلسل الهرمي، مع وضع الكائن الذي يتم استخدامه له أولاً: `iroha_logger::constants`.
+- استخدم [`expect`](https://learning-rust.github.io/docs/unwrap-and-expect/) مع رسالة خطأ صريحة أو إثبات العصمة بدلاً من `unwrap`.
+- لا تتجاهل الخطأ أبدًا. إذا لم تتمكن من `panic` ولا يمكنك استرداده، فيجب على الأقل تسجيله في السجل.
+- يفضل إرجاع `Result` بدلاً من `panic!`.
+- وظائف المجموعة ذات الصلة مكانيًا، ويفضل أن يكون ذلك داخل الوحدات المناسبة.
 
-  For example, instead of having a block with `struct` definitions and then `impl`s for each individual struct, it is better to have the `impl`s related to that `struct` next to it.
-- Declare before implementation: `use` statements and constants at the top, unit tests at the bottom.
-- Try to avoid `use` statements if the imported name is used only once. This makes moving your code into a different file easier.
-- Do not silence `clippy` lints indiscriminately. If you do, explain your reasoning with a comment (or `expect` message).
-- Prefer  `#[outer_attribute]` to `#![inner_attribute]` if either is available.
-- If your function doesn't mutate any of its inputs (and it shouldn't mutate anything else), mark it as `#[must_use]`.
-- Avoid `Box<dyn Error>` if possible (we prefer strong typing).
-- If your function is a getter/setter, mark it `#[inline]`.
-- If your function is a constructor (i.e., it's creating a new value from the input parameters and calls `default()`), mark it `#[inline]`.
-- Avoid tying your code to concrete data structures; `rustc` is smart enough to turn a `Vec<InstructionExpr>` into `impl IntoIterator<Item = InstructionExpr>` and vice versa when it needs to.
+  على سبيل المثال، بدلاً من وجود كتلة تحتوي على تعريفات `struct` ثم `impl`s لكل بنية فردية، فمن الأفضل أن يكون `impl`s المرتبط بهذا `struct` بجوارها.
+- أعلن قبل التنفيذ: عبارات وثوابت `use` في الأعلى، واختبارات الوحدة في الأسفل.
+- حاول تجنب عبارات `use` إذا تم استخدام الاسم المستورد مرة واحدة فقط. وهذا يجعل نقل التعليمات البرمجية الخاصة بك إلى ملف مختلف أسهل.
+- لا تقم بإسكات الوبر `clippy` بشكل عشوائي. إذا قمت بذلك، اشرح أسبابك من خلال تعليق (أو رسالة `expect`).
+- تفضل `#[outer_attribute]` إلى `#![inner_attribute]` إذا كان أي منهما متاحًا.
+- إذا لم تقم وظيفتك بتغيير أي من مدخلاتها (ولا ينبغي لها تغيير أي شيء آخر)، فضع علامة عليها كـ `#[must_use]`.
+- تجنب `Box<dyn Error>` إن أمكن (نفضل الكتابة القوية).
+- إذا كانت وظيفتك عبارة عن أداة getter/setter، فقم بوضع علامة عليها `#[inline]`.
+- إذا كانت وظيفتك منشئة (أي أنها تنشئ قيمة جديدة من معلمات الإدخال وتستدعي `default()`)، فضع علامة عليها `#[inline]`.
+- تجنب ربط التعليمات البرمجية الخاصة بك بهياكل بيانات محددة؛ يعد `rustc` ذكيًا بما يكفي لتحويل `Vec<InstructionExpr>` إلى `impl IntoIterator<Item = InstructionExpr>` والعكس عندما يحتاج الأمر إلى ذلك.
 
-Naming guidelines:
-- Use only full words in *public* structure, variable, method, trait, constant, and module names. However, abbreviations are allowed if:
-  - The name is local (e.g. closure arguments).
-  - The name is abbreviated by Rust convention (e.g. `len`, `typ`).
-  - The name is an accepted abbreviation (e.g. `tx`, `wsv` etc); see the [project glossary](https://docs.iroha.tech/reference/glossary.html) for canonical abbreviations.
-  - The full name would have been shadowed by a local variable (e.g. `msg <- message`).
-  - The full name would have made the code cumbersome with more than 5-6 words in it (e.g. `WorldStateViewReceiverTrait -> WSVRecvTrait`).
-- If you change naming conventions, make sure that the new name that you've chosen is _much_ clearer than what we had before.
+إرشادات التسمية:
+- استخدم الكلمات الكاملة فقط في أسماء البنية *العامة* والمتغير والطريقة والسمات والثابت وأسماء الوحدات. ومع ذلك، يُسمح بالاختصارات إذا:
+  - الاسم محلي (مثل وسيطات الإغلاق).
+  - يتم اختصار الاسم حسب اصطلاح Rust (على سبيل المثال `len`، `typ`).
+  - الاسم هو اختصار مقبول (مثل `tx`، `wsv` وما إلى ذلك)؛ راجع [مسرد المشروع] (https://docs.iroha.tech/reference/glossary.html) للتعرف على الاختصارات الأساسية.
+  - الاسم الكامل قد تم تظليله بواسطة متغير محلي (على سبيل المثال `msg <- message`).
+  - الاسم الكامل قد يجعل الكود مرهقًا لأنه يحتوي على أكثر من 5-6 كلمات (على سبيل المثال `WorldStateViewReceiverTrait -> WSVRecvTrait`).
+- إذا قمت بتغيير اصطلاحات التسمية، فتأكد من أن الاسم الجديد الذي اخترته أكثر وضوحًا مما كان لدينا من قبل.
 
-Comment guidelines:
-- When writing non-doc comments, instead of describing *what* your function does, try to explain *why* it does something in a particular way. This will save you and the reviewer time.
-- You may leave `TODO` markers in code as long as you reference an issue that you created for it. Not creating an issue means it doesn't get merged.
+إرشادات التعليق:
+- عند كتابة تعليقات غير مستندية، بدلاً من وصف *ما* تقوم به وظيفتك، حاول شرح *سبب* قيامها بشيء ما بطريقة معينة. وهذا سيوفر لك ووقت المراجع.
+- يمكنك ترك علامات `TODO` في الكود طالما أنك تشير إلى مشكلة قمت بإنشائها لها. عدم إنشاء مشكلة يعني عدم دمجها.
 
-We use pinned dependencies. Follow these guidelines for versioning:
+نحن نستخدم التبعيات المثبتة. اتبع هذه الإرشادات للإصدار:
 
-- If your work depends on a particular crate, see if it wasn't already installed using [`cargo tree`](https://doc.rust-lang.org/cargo/commands/cargo-tree.html) (use `bat` or `grep`), and try to use that version, instead of the latest version.
-- Use the full version "X.Y.Z" in `Cargo.toml`.
-- Provide version bumps in a separate PR.
+- إذا كان عملك يعتمد على صندوق معين، فتأكد مما إذا لم يتم تثبيته بالفعل باستخدام [`cargo tree`](https://doc.rust-lang.org/cargo/commands/cargo-tree.html) (استخدم `bat` أو `grep`)، وحاول استخدام هذا الإصدار، بدلاً من الإصدار الأحدث.
+- استخدم الإصدار الكامل "X.Y.Z" في `Cargo.toml`.
+- تقديم المطبات الإصدار في العلاقات العامة منفصلة.
 
-</details>
+</التفاصيل>
 
-### Documentation Style Guide
+### دليل أسلوب التوثيق
 
-<details> <summary> :book: Read documentation guidelines</summary>
-
-
-- Use the [`Rust Docs`](https://doc.rust-lang.org/cargo/commands/cargo-doc.html) format.
-- Prefer the single-line comment syntax. Use `///` above inline modules and `//!` for file-based modules.
-- If you can link to a structure/module/function's docs, do it.
-- If you can provide an example of usage, do it. This [is also a test](https://doc.rust-lang.org/rustdoc/documentation-tests.html).
-- If a function can error or panic, avoid modal verbs. Example: `Fails if disk IO fails` instead of `Can possibly fail, if disk IO happens to fail`.
-- If a function can error or panic for more than one reason, use a bulleted list of failure conditions, with the appropriate `Error` variants (if any).
-- Functions *do* things. Use imperative mood.
-- Structures *are* things. Get to the point. For example `Log level for reloading from the environment` is better than `This struct encapsulates the idea of logging levels, and is used for reloading from the environment`.
-- Structures have fields, which also *are* things.
-- Modules *contain* things, and we know that. Get to the point. Example: use `Logger-related traits.` instead of `Module which contains logger-related logic`.
+<details> <summary> :كتاب: اقرأ إرشادات التوثيق</summary>
 
 
-</details>
+- استخدم التنسيق [`Rust Docs`](https://doc.rust-lang.org/cargo/commands/cargo-doc.html).
+- تفضل صيغة التعليق المكونة من سطر واحد. استخدم `///` أعلاه الوحدات النمطية المضمنة و`//!` للوحدات النمطية القائمة على الملفات.
+- إذا كان بإمكانك الارتباط بمستندات البنية/الوحدة النمطية/الوظيفة، فافعل ذلك.
+- إذا كان بإمكانك تقديم مثال للاستخدام، فافعل ذلك. هذا [أيضًا اختبار](https://doc.rust-lang.org/rustdoc/documentation-tests.html).
+- إذا كانت الوظيفة يمكن أن تخطئ أو تثير الذعر، فتجنب الأفعال الشرطية. مثال: `Fails if disk IO fails` بدلاً من `Can possibly fail, if disk IO happens to fail`.
+- إذا كان من الممكن أن تخطئ إحدى الوظائف أو تصاب بالذعر لأكثر من سبب واحد، فاستخدم قائمة ذات تعداد نقطي لحالات الفشل، مع متغيرات `Error` المناسبة (إن وجدت).
+- وظائف * تفعل * الأشياء. استخدم المزاج الحتمي.
+- الهياكل *هي* الأشياء. نصل الى هذه النقطة. على سبيل المثال، `Log level for reloading from the environment` أفضل من `This struct encapsulates the idea of logging levels, and is used for reloading from the environment`.
+- الهياكل لها حقول، وهي أيضًا *أشياء*.
+- الوحدات *تحتوي* على أشياء، ونحن نعلم ذلك. نصل الى هذه النقطة. مثال: استخدم `Logger-related traits.` بدلاً من `Module which contains logger-related logic`.
 
-## Contact
 
-Our community members are active at:
+</التفاصيل>
 
-| Service       | Link                                                               |
-|---------------|--------------------------------------------------------------------|
-| StackOverflow | https://stackoverflow.com/questions/tagged/hyperledger-iroha       |
-| Mailing List  | https://lists.lfdecentralizedtrust.org/g/iroha                     |
-| Telegram      | https://t.me/hyperledgeriroha                                      |
-| Discord       | https://discord.com/channels/905194001349627914/905205848547155968 |
+## الاتصال
+
+أعضاء مجتمعنا ينشطون في:
+
+| الخدمة | الرابط |
+|--------------|--------------------------------------------------------------------|
+| ستاكوفرفلوو | https://stackoverflow.com/questions/tagged/hyperledger-iroha |
+| القائمة البريدية | https://lists.lfdecentralizedtrust.org/g/iroha |
+| برقية | https://t.me/hyperledgeriroha |
+| الخلاف | https://discord.com/channels/905194001349627914/905205848547155968 |
 
 ---

@@ -719,14 +719,21 @@ impl<'a> norito::core::NoritoDeserialize<'a> for InstructionBox {
 
 impl<'a> norito::core::DecodeFromSlice<'a> for InstructionBox {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let archived =
-            norito::core::archived_from_slice::<InstructionBox>(bytes).map_err(|_| {
-                norito::core::Error::Message(
-                    "instruction payload must use canonical Norito framing".to_owned(),
-                )
-            })?;
+        fn canonical_framing_error() -> norito::core::Error {
+            norito::core::Error::Message(
+                "instruction payload must use canonical Norito framing".to_owned(),
+            )
+        }
+
+        let archived = norito::core::archived_from_slice::<InstructionBox>(bytes)
+            .map_err(|_| canonical_framing_error())?;
         let _guard = norito::core::PayloadCtxGuard::enter(archived.bytes());
-        let inst = norito::core::NoritoDeserialize::try_deserialize(archived.archived())?;
+        let inst = norito::core::NoritoDeserialize::try_deserialize(archived.archived()).map_err(
+            |err| match err {
+                norito::core::Error::Message(_) => err,
+                _ => canonical_framing_error(),
+            },
+        )?;
         Ok((inst, archived.bytes().len()))
     }
 }

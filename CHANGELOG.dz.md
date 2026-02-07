@@ -7,1860 +7,1816 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 26f5115a14476de15fbc8f26c5a9807954df6884763a818b2bc98ec6cfe1a4cc
 source_last_modified: "2026-01-05T09:28:11.640562+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Changelog
+# བསྒྱུར་བཅོས།
 
 [Unreleased]: https://github.com/hyperledger-iroha/iroha/compare/v2.0.0-rc.2.0...HEAD
 [2.0.0-rc.2.0]: https://github.com/hyperledger-iroha/iroha/releases/tag/v2.0.0-rc.2.0
 
-All notable changes to this project will be documented in this file.
+ལས་འགུལ་འདི་ལུ་ ཁྱད་འཕགས་ཅན་གྱི་བསྒྱུར་བཅོས་ཚུ་ཆ་མཉམ་རང་ ཡིག་སྣོད་འདི་ནང་ ཡིག་ཐོག་ལུ་བཀོད་འོང་།
 
-## [Unreleased]
-
-- Drop the SCALE shim; `norito::codec` is now implemented with native Norito serialization.
-- Replace `parity_scale_codec` usages with `norito::codec` across crates.
-- Begin migrating tooling to native Norito serialization.
-- Remove remaining `parity-scale-codec` dependency from the workspace in favor of native Norito serialization.
-- Replace residual SCALE trait derivations with native Norito implementations and rename versioned codec module.
-- Merge `iroha_config_base_derive` and `iroha_futures_derive` into `iroha_derive` with feature-gated macros.
-- *(multisig)* Reject direct signatures from multisig authorities with a stable error code/reason, enforce multisig TTL caps across nested relayers, and surface TTL caps in the CLI before submission (SDK parity pending).
-- Move FFI procedural macros into `iroha_ffi` and remove `iroha_ffi_derive` crate.
-- *(schema_gen)* Remove unnecessary `transparent_api` feature from `iroha_data_model` dependency.
-- *(data_model)* Cache the ICU NFC normalizer for `Name` parsing to reduce repeated initialization overhead.
-- 📚 Document JS quickstart, configuration resolver, publishing workflow, and configuration-aware recipe for the Torii client.
-- *(IrohaSwift)* Raise minimum deployment targets to iOS 15 / macOS 12, adopt Swift concurrency across Torii client APIs, and mark public models as `Sendable`.
-- *(IrohaSwift)* Added `ToriiDaProofSummaryArtifact` and `DaProofSummaryArtifactEmitter.emit` so Swift apps can build/emit CLI-compatible DA proof bundles without shelling out to the CLI, complete with docs and regression tests covering both in-memory and on-disk workflows.【F:IrohaSwift/Sources/IrohaSwift/ToriiDaProofSummaryArtifact.swift:1】【F:IrohaSwift/Tests/IrohaSwiftTests/ToriiDaProofSummaryArtifactTests.swift:1】【F:docs/source/sdk/swift/index.md:260】
-- *(data_model/js_host)* Fix Kaigi Option serialization by removing the archived-reuse flag from `KaigiParticipantCommitment`, add native roundtrip tests, and drop the JS decode fallback so Kaigi instructions now Norito round-trip before submission.【F:crates/iroha_data_model/src/kaigi.rs:128】【F:crates/iroha_js_host/src/lib.rs:1379】【F:javascript/iroha_js/test/instructionBuilders.test.js:30】
-- *(javascript)* Allow `ToriiClient` callers to delete default headers (by passing `null`) so `getMetrics` cleanly switches between JSON and Prometheus text Accept headers.【F:javascript/iroha_js/src/toriiClient.js:488】【F:javascript/iroha_js/src/toriiClient.js:761】
-- *(javascript)* Added iterable helpers for NFTs, per-account asset balances, and asset-definition holders (with TypeScript defs, docs, and tests) so Torii pagination now covers the remaining app endpoints.【F:javascript/iroha_js/src/toriiClient.js:105】【F:javascript/iroha_js/index.d.ts:80】【F:javascript/iroha_js/test/toriiClient.test.js:365】【F:javascript/iroha_js/README.md:470】
-- *(javascript)* Added governance instruction/transaction builders plus a governance recipe so JS clients can stage deploy proposals, ballots, enactment, and council persistence end to end.【F:javascript/iroha_js/src/instructionBuilders.js:1012】【F:javascript/iroha_js/src/transaction.js:1082】【F:javascript/iroha_js/recipes/governance.mjs:1】
-- *(javascript)* Added ISO 20022 pacs.008 submit/status helpers and a matching recipe, letting JS callers exercise the Torii ISO bridge without bespoke HTTP plumbing.【F:javascript/iroha_js/src/toriiClient.js:888】【F:javascript/iroha_js/index.d.ts:706】【F:javascript/iroha_js/recipes/iso_bridge.mjs:1】
-- *(javascript)* Added pacs.008/pacs.009 builder helpers plus a config-driven recipe so JS callers can synthesise ISO 20022 payloads with validated BIC/IBAN metadata before hitting the bridge.【F:javascript/iroha_js/src/isoBridge.js:1】【F:javascript/iroha_js/test/isoBridge.test.js:1】【F:javascript/iroha_js/recipes/iso_bridge_builder.mjs:1】【F:javascript/iroha_js/index.d.ts:1】
-- *(javascript)* Completed the DA ingest/fetch/prove loop: `ToriiClient.fetchDaPayloadViaGateway` now auto-derives chunker handles (via the new `deriveDaChunkerHandle` binding), optional proof summaries reuse the native `generateDaProofSummary`, and the README/typings/tests were refreshed so SDK callers can mirror `iroha da get-blob/prove-availability` without bespoke plumbing.【F:javascript/iroha_js/src/toriiClient.js:1123】【F:javascript/iroha_js/src/dataAvailability.js:1】【F:javascript/iroha_js/test/toriiClient.test.js:1454】【F:javascript/iroha_js/index.d.ts:3275】【F:javascript/iroha_js/README.md:760】
-- *(javascript/js_host)* `sorafsGatewayFetch` scoreboard metadata now records the gateway manifest id/CID whenever gateway providers are used so adoption artefacts align with the CLI captures.【F:crates/iroha_js_host/src/lib.rs:3017】【F:docs/source/sorafs_orchestrator_rollout.md:23】
-- *(torii/cli)* Enforce ISO crosswalks: Torii now rejects `pacs.008` submissions with unknown agent BICs and the DvP CLI preview validates `--delivery-instrument-id` via `--iso-reference-crosswalk`.【F:crates/iroha_torii/src/iso20022_bridge.rs:704】【F:crates/iroha_cli/src/main.rs:3892】
-- *(torii)* Add PvP cash ingestion via `POST /v1/iso20022/pacs009`, enforcing `Purp=SECU` and BIC reference-data checks before building transfers.【F:crates/iroha_torii/src/iso20022_bridge.rs:1070】【F:crates/iroha_torii/src/lib.rs:4759】
-- *(tooling)* Added `cargo xtask iso-bridge-lint` (plus `ci/check_iso_reference_data.sh`) to validate ISIN/CUSIP, BIC↔LEI, and MIC snapshots alongside repository fixtures.【F:xtask/src/main.rs:146】【F:ci/check_iso_reference_data.sh:1】
-- *(javascript)* Hardened npm publishing by declaring repository metadata, an explicit files allowlist, provenance-enabled `publishConfig`, a `prepublishOnly` changelog/test guard, and a GitHub Actions workflow that exercises Node 18/20 in CI【F:javascript/iroha_js/package.json:1】【F:javascript/iroha_js/scripts/check-changelog.mjs:1】【F:docs/source/sdk/js/publishing.md:1】【F:.github/workflows/javascript-sdk.yml:1】
-- *(ivm/cuda)* BN254 field add/sub/mul now execute on the new CUDA kernels with host-side batching via `bn254_launch_kernel`, enabling hardware acceleration for Poseidon and ZK gadgets while preserving deterministic fallbacks.【F:crates/ivm/cuda/bn254.cu:1】【F:crates/ivm/src/cuda.rs:66】【F:crates/ivm/src/cuda.rs:1244】
+## [མི་གསར་མ་ཐོབ།]- SCALE ཤིམ་འདི་བཀོ་ནི།; `norito::codec` ད་ལྟ་ I18NT0000019X རིམ་སྒྲིག་དང་མཉམ་དུ་ལག་ལེན་འཐབ་ཡོད།
+- I18NI000000126X ལག་ལེན་ཚུ་ I18NI000000127X དང་ཅིག་ཁར་ ཀེརེསི་ནང་ ཚབ་བཙུགས།
+- ལག་ཆས་ལག་ཆས་ I18NT0000020X རིམ་སྒྲིག་ལུ་གནས་སྤོ་འབད་ནི་འགོ་བཙུགས།
+- ལྷག་ལུས་ `parity-scale-codec` ལཱ་གི་ས་སྒོ་ལས་ ས་གནས་ཀྱི་ Norito རིམ་སྒྲིག་ལུ་རྒྱབ་སྐྱོར་འབད་ནི།
+- SCALE རང་གཤིས་ཀྱི་ ལྷག་ལུས་ཚུ་ རང་གི་ I1NT0000022 ལག་བསྟར་ཚུ་དང་ ཐོན་རིམ་འབད་ཡོད་པའི་ ཀོ་ཌེག་ཚད་གཞི་ཚུ་དང་གཅིག་ཁར་ ཚབ་བཙུགས།
+- `iroha_config_base_derive` དང་ I18NI000000130X ཁྱད་རྣམ་-gated gated མེཀ་རོ་ཚུ་དང་གཅིག་ཁར་ I18NI000000131X ལུ་མཉམ་བསྡོམས་འབད།
+- *(multisig)* སྣ་མང་སིག་དབང་འཛིན་ཚུ་ལས་ ཐད་ཀར་གྱི་མཚན་རྟགས་ཚུ་ ཆ་མེད་གཏང་དགོ། རྒྱུ་མཚན་གཏན་ཏོག་ཏོ་ཡོད་པའི་ཨང་རྟགས་/རྒྱུ་མཚན་དང་ སྣ་མང་སིག་ཊི་ཊི་ཨེལ་ མགུ་ཏོག་ཚུ་ རི་ལེ་ཡརསི་ནང་ བསྟར་སྤྱོད་འབད་དགོ།
+- ཨེཕ་ཨེཕ་ཨའི་ བྱ་རིམ་མེཀ་རོ་ཚུ་ `iroha_ffi` ནང་ལུ་སྤོ་བཤུད་འབད་ཞིནམ་ལས་ I18NI0000013X crat བཏོན་གཏང་།
+- *(schema_gen)* དགོས་མཁོ་མེད་པའི་ `transparent_api` ཁྱད་རྣམ་འདི་ I18NI000000135X བརྟེན་པ་ལས་ རྩ་བསྐྲད་གཏང་།
+- *(data_model)* ICU NFC སྤྱིར་བཏང་བཟོ་མི་ ICU NFC འདི་ `Name` མིང་དཔྱད་ཀྱི་དོན་ལུ་ མགོ་ཐོག་གུ་བསྐྱར་ལོག་འགོ་བཙུགས་ནི་མར་ཕབ་འབད་ནི་ལུ་ འཛིན་དགོ།
+- ཡིག་ཆ་ JS མགྱོགས་མྱུར་དང་ རིམ་སྒྲིག་ཐག་གཅོད་འབད་མི་ དཔེ་སྐྲུན་ལཱ་གི་རྒྱུན་རིམ་ དེ་ལས་ རིམ་སྒྲིག་-འཕྲུལ་ཆས་ཤེས་རྟོགས་ Torii མཁོ་སྤྲོད་འབད་མི་གི་ ཐབས་ཤེས།
+- *(IrohaSwift)* ཉུང་མཐའ་བཀྲམ་སྤེལ་དམིགས་གཏད་ཚུ་ iOS 15 / macOS 12 ལུ་ཡར་འཕར་འབད་ཞིནམ་ལས་ I18NT000000103X མགྲོན་པོ་ཨེ་པི་ཨའི་ཨེསི་ཚུ་ནང་ལུ་ སུའིཕཊི་མཉམ་བསྡོམས་འདི་ངོས་ལེན་འབད་ཞིནམ་ལས་ མི་མང་གི་དཔེ་ཚད་ཚུ་ I18NI000000137X སྦེ་རྟགས་བཀལ།
+- *(IrohaSwift)* ཁ་སྐོང་བཀོད་ཡོདཔ་ལས་ Swift གློག་རིམ་ཚུ་གིས་ CLI དང་མཐུན་སྒྲིག་ཡོད་པའི་ DA གི་བདེན་ཁུངས་ཚུ་ བཟོ་བསྐྲུན་/ཕྱིར་འཐེན་འབད་ཚུགས། ལས་ཀ།【F:ཨི་རོ་ཧ་སུའིཕཊི་/འབྱུང་ཁུངས།/ཨའི་རོ་ཧ་སུའིཕ/ཊོ་རི་ཌ་པྲོཕ་སམ་མ་རི་ཨཱར་ཊི་ཕེཀཊ་.༡】】【F:ཨའི་རོ་ཧ་སུའིཕ/ཊེསི། s/IrohaSwiftTests/ToriiDaProofSummaryArtifactTests.swift:1】【F:docs/source/sdk/swift/index.md:260】
+- *(data_model/js_host)* `KaigiParticipantCommitment` ལས་ གཏན་མཛོད་-བསྐྱར་ལོག་དར་ཆ་བཏོན་གཏང་ཐོག་ལས་ Kaigi གདམ་ཁའི་རིམ་པ་གཏན་འཁེལ་བཟོ་ཞིནམ་ལས་ ཇེ་ཨེསི་ཌི་ཀོཌི་ཕོལཊི་བཱོཀ་ཁ་སྐོང་འབདཝ་ལས་ ཀ་གིའི་བཀོད་རྒྱ་ཚུ་ I18NT000023X འདི་ I18NT000023X འདི་ ཧེ་མ་ I18NT000023X འདི་ཧེ་མ་ལས་ཧེ་མ་ཧེ་མ་ལས་རང་ འབད་ཚུགསཔ་ཨིན། submission.【F:crates/iroha_data_model/src/kaigi.rs:128】【F:crates/iroha_js_host/src/lib.rs:1379】【F:javascript/iroha_js/test/instructionBuilders.test.js:30】
+- *(javascript)* སྔོན་སྒྲིག་མགོ་ཡིག་ཚུ་བཏོན་གཏང་ནིའི་དོན་ལུ་ `ToriiClient` འབོད་བརྡ་གཏང་མི་ཚུ་ (`null`) དེ་འབདཝ་ལས་ JSON དང་ I18NI0000000000X ཚིག་ཡིག་གི་བར་ན་ གཙང་སྦྲ་དང་ལྡནམ་སྦེ་བསྒྱུར་བཅོས་འབད་དགོ། མགོ་ཡིག་།【F:ཇ་ཝ་སི་ཀིརིཔཊ།/ཨི་རོ་ཧ་_ཇས/སྲི་/ཊོ་རི་ཀི་ལིནཊ།:ཇེ་ཨེཇ་:༤༨༨【F:ཇ་བ་ཡིག་/ཨི་རོ་ཧ_ཇས/སརསི/ཊོ་རི་ཀི་ལིནཊ།ཇེ་ཨེས:༧༦༡】།
+- *(javascript)* ཨེན་ཨེཕ་ཊི་དང་ རྩིས་ཐོ་རེ་ལུ་ རྒྱུ་དངོས་ལྷག་ལུས་ དེ་ལས་ རྒྱུ་དངོས་ངེས་འཛིན་འབད་མི་ཚུ་གི་དོན་ལུ་ བསྐྱར་ལོག་འབད་ཚུགས་པའི་ གྲོགས་རམ་པ་ཚུ་ཁ་སྐོང་བརྐྱབ་ཡོདཔ་ཨིན། མཇུག་བསྡུ།【F:ཇ་བ་སི་ཀིརིཔཊ།/ཨི་རོ་ཧ་_ཇས/སི་ཨར་སི/ཊོ་རི་ཀི་ལིནཊ།:ཇེ་ཨེཇ་:༡༠༥【F:ཇ་བ་ཡིག་/ཨི་རོ་ཧ_ཇུས/ཨིན་ཌིགསི།ཌི་.ཊི་སི་:༨། 0】【F:javascript/iroha_js/test/toriiClient.test.js:365】【F:javascript/iroha_js/README.md:470】
+- *(javascript)* གཞུང་སྐྱོང་སློབ་སྟོན་ཁ་སྐོང་/ཚོང་འབྲེལ་བཟོ་སྐྲུན་པ་ཚུ་ ཁ་སྐོང་བཀོད་ཡོདཔ་ལས་ ཇེ་ཨེསི་མཁོ་མངགས་འབད་མི་ཚུ་གིས་ གྲོས་འཆར་དང་ ཚོགས་རྒྱན་བཙུགས་ནི་ ཁྲིམས་ལུགས་དང་ ཚོགས་སྡེ་གི་བརྟན་ཏོག་ཏོ་ཚུ་ བཀོད་སྒྲིག་འབད་ཚུགས། མཇུག་བསྡུ།【F:ཇ་བ་ཡིག་/ཨི་རོ་ཧ་_ཇུས/སི་ཨར་སི། བཟོ་སྐྲུན་པ།:ཇེ་ཨེཇ་:༡༠༡༢【F:ཇ་བ་ཡིག་/རི་རོ་ཧ་ཇས/སརསི/བརྒྱུད་འཕྲིན་.ཇེ་ཨེཇ་:༡༠༨༢】】
+- *(javascript)* ཁ་སྐོང་བཀོད་ཡོདཔ། ISO 20022 pacs.008 གིས་ ཕུལ་/གནས་སྟངས་གྲོགས་རམ་པ་ཚུ་དང་ མཐུན་སྒྲིག་འབད་ནིའི་བཟོ་ཐངས་ཅིག་ ཁ་སྐོང་བརྐྱབ་ཡོདཔ་ཨིན། plumbing.【F:Javascript/iroha_js/src/toriClient.js:888【F:ཇ་བ་ཡིག་/རི་རོ་ཧ་ཇས/ཨིན་ཌེགསི་.ཌི་.ཊི་ཨེསི་:༧༠༦】】 】 】 】 】             རོཧ་_ཇུས/ཨི་སོ་_བིརིཇ་.༡】】 །- *(javascript)* ཁ་སྐོང་བཀོད་ཡོད་པའི་ pacs.008/pacs.009 བཟོ་བསྐྲུན་པ་རོགས་རམ་དང་ རིམ་སྒྲིག་འབད་བརྩོན་བསྐྱེད་པའི་བཟོ་ཐངས་ཅིག་ དེ་ལས་ JS འབོད་བརྡ་གཏང་མི་ཚུ་གིས་ ISO 20022 པེ་ལོཌི་ཚུ་ བདེན་དཔྱད་འབད་ཡོད་པའི་ བི་ཨའི་སི་/ཨའི་བཱན་ མེ་ཊ་ཌེ་ཊ་ཚུ་ ཨེབ་གཏང་མ་འབད་བའི་ཧེ་མ་ མཉམ་སྦྱོར་འབད་ཚུགས། ཟམ་.【F:ཇ་ཝ་སི་ཀིརིཔ་/ཨི་རོ་ཧ་_ཇས/ཨེསི་ཨར་སི/ཨའི་སོ་བིརིཇ་:ཇ་ས:1】】】 ཨི་རོ་ཧ_ཇས/བརྟག་དཔྱད་/ཨའི་སོ་བིརིཇ་.js :1】【F:javascript/iroha_js/recipes/iso_bridge_builder.mjs:1】【F:javascript/iroha_js/index.d.ts:1】
+- *(javascript)* DA insets/fatch/prove loop: `ToriiClient.fetchDaPayloadViaGateway` ད་ལྟོ་ལས་ཐོན་པའི་ཆ་ཤས་ཚུ་ རང་བཞིན་གྱིས་ རང་བཞིན་གྱིས་ བཀོལ་སྤྱོད་འབདཝ་ཨིན། ཨེསི་ཌི་ཀེ་ འབོད་བརྡ་གཏང་མི་ཚུ་གིས་ བཀག་ཆ་འབད་མེད་པར་ `iroha da get-blob/prove-availability` ལུ་ མེ་ལོང་བཟོ་ཚུགས། པཱལམ་བིང་།【F:ཇ་བ་སི་ཀིརིཔཊ།/ཨི་རོ་ཧ་_ཇས/སི་ཨར་སི/ཊོ་རི་ཀི་ལིནཊ།ཇེས་:1123【F:ཇ་བ་ཡིག་/རི་རོ་ཧ_ཇུས/སརསི/གནས་སྡུད་ཐོབ་ཚུགས.ཇས:】】།】།】།】།】།】།】།】།】།】 t/iroha_js/test/tresclient.js:1454】【F:ཇ་བ་ཡིག་/ཨི་རོ་ཧ_ཇས/ཨིན་ཌེགསི་.ཌི་.ཊི་ཨེསི་:༣༢༧༥】【F:ཇ་བ་ཡིག་/ཨི་རོ་ཧ་_ཇས/རིཌ་མེ།ཨེམ་ཌི་:༧༦༠】
+- *(javascript/js_host)* `sorafsGatewayFetch` སྐུགས་ཤོག་མེ་ཊ་ཌེ་ཊ་གིས་ ད་ལྟོ་ འཛུལ་སྒོ་བྱིན་མི་ཚུ་ ལག་ལེན་འཐབ་པའི་སྐབས་ འཛུལ་སྒོ་གི་གསལ་སྟོན་གསལ་སྟོན་ཚུ་ ཐོ་བཀོད་འབདཝ་ཨིན། བཟུང་མི།【F:crates/iroha_js_host/src/lib.s:3017】【F:ཌོག་སི་/ཐོན་ཁུངས་/སོ་རཕ་ས_ཨོར་ཀེཊ་ཊར་_ཨོར་ཀེཊ་ཊར་_རོལ་ཊི་ཊར་ཨམ་ཌི་:༢༣】།
+- *(torie/cli)* ISO crosswalks: `pacs.008` གིས་ མ་ཤེས་པའི་བི་ཨའི་སི་ དང་ ཌི་ཝི་པི་ སི་ཨེལ་ཨའི་ སྔོན་ལྟ་གིས་ I18NI0000000150X གིས་ བདེན་དཔྱད་འབདཝ་ཨིན། I18NI00000000151X.【F:ctrates/iroha_tori/src/so20022_bridge.s:704】「F:ctates/iroha_cli/src/main.3892】
+- *(tori)* `POST /v1/iso20022/pacs009` བརྒྱུད་དེ་ PvP དངུལ་གྱི་བཅུད་བསྡུས་ཁ་སྐོང་འབད་དེ་ `Purp=SECU` དང་ BIC གཞི་བསྟུན་-གནས་སྡུད་བརྟག་དཔྱད་ཚུ་ བཟོ་བསྐྲུན་མ་འབད་བའི་ཧེ་མ་ བསྟར་སྤྱོད་འབདཝ་ཨིན། སྤོ་བཤུད།【F:crates/iroha_tori/src/iso20022_bridg.s:1070】【F:ctrates/iroha_torii/src/lib.4759】།
+- *(tooling)* ISIN/CUSIP, BIC↔LEI, དང་ MIC པར་ཚུ་ བདེན་དཔྱད་འབད་ནིའི་དོན་ལུ་ `cargo xtask iso-bridge-lint` ཁ་སྐོང་བརྐྱབ་ཡོདཔ། བརྟན་ཐངས།【F:xtask/src/main.s:146】【F:ཅི་/ཅེག་_སོ་_གཞི་བསྟུན་_གནས་སྡུད་.ཤ་:1】】】།
+- *(javscript)* ཡིག་མཛོད་ཀྱི་མེ་ཊ་ཌེ་ཊ་གསལ་བསྒྲགས་འབད་དེ་ ཧར་ཌེན་འབད་ཡོད་པའི་ npm དཔར་བསྐྲུན་འདི་ ཐོ་ཡིག་དང་ ཁུངས་གཏུག་ལྕོགས་ཅན་བཟོ་ཡོད་མི་ `prepublishOnly` བསྒྱུར་བཅོས་/བརྟག་དཔྱད་ཀྱི་སྲུང་སྐྱོབ། CI【F:ཇ་བ་ཡིག་/ཨི་རོ་ཧ་_js/package.json:1【F:ཇ་བ་ཡིག་/ཨི་རོ་ཧ་_ཇི་/ཡིག་གཟུགས་/ཅེག་-ཅེང་ལོག། .mjs:1】【F:ཌོཀསི/འབྱུང་ཁུངས་/སཌི་ཀ/ཇེས/དཔེ་བསྐྲུན་.ཨེམ་ཌི་:【F:.གི་ཐུབ་/ལཱ་གི་རྒྱུན་རིམ་/ཇ་བ་སི་ཀིརིཔ་-ཨེསི་ཌི་ཀེ་.ཡམ་ལི་:1】
+- *(ivm/cuda)* BN254 ས་སྒོའི་ཁ་སྐོང་/ཡན་ལག་/mul གིས་ CUDA ཀར་ནེལ་གསརཔ་གུ་ I18NI000000158X བརྒྱུད་དེ་ ཧོསིཊ་ཟུར་གྱི་སྡེ་ཚན་ཚུ་དང་གཅིག་ཁར་ ལག་ལེན་འཐབ་ཨིན། ཕོལཀ་བེསི།【F:ཀླེ་/ཨཝ་མ/ཅུ་ད/བན༢༥༤།༡【F:crates/avm/src/cudars:༦༦】】【F:ctrates/vm/src/cudas:124】
 
 ## [2.0.0-rc.2.0] - 2025-05-08
 
-### 🚀 Features
+### 🚀 ཁྱད་ཆོས།
 
-- *(cli)* Add `iroha transaction get` and other important commands (#5289)
-- [**breaking**] Separate fungible and non-fungible assets (#5308)
-- [**breaking**] Finalize non-empty blocks by allowing empty blocks after them (#5320)
-- Expose telemetry types in schema and client (#5387)
-- *(iroha_torii)* Stubs for feature-gated endpoints (#5385)
-- Add commit time metrics (#5380)
+- *(cli)* `iroha transaction get` ཁ་སྐོང་རྐྱབས་ (#5289)
+- [**བརྡུངས**]
+- [**བརྡ་རྟགས་**] དེ་ཚུ་གི་ཤུལ་ལས་ སྡེབ་ཚན་སྟོངམ་ཚུ་འབད་བཅུག་ཐོག་ལས་ སྡེབ་ཚན་སྟོངམ་མེན་མི་ཚུ་ མཐའ་འཁྱོལ་འབད། (#༥༣༢༠)
+- ལས་འཆར་དང་ མཁོ་སྤྲོད་ནང་ ཊེ་ལི་མེ་ཊི་དབྱེ་བ་ཚུ་ ཕྱིར་བཏོན་འབད།(#5387)
+- *(iroha_tori)* ཁྱད་རྣམ་ཡོད་པའི་ སྒོ་སྒྲིག མཐའ་ཐིག་ཚུ་གི་དོན་ལུ་ སི་ཊབ་ཚུ་ (#༥༣༨༥)
+- དུས་ཚོད་མེ་ཊིགསི་ཚུ་ཁ་སྐོང་རྐྱབས་ (#༥༣༨༠)
 
-### 🐛 Bug Fixes
+### 🐛 བུག་ཕིག་སི།
 
-- Revise NonZeros (#5278)
-- Typos in documentation files (#5309)
-- *(crypto)* Expose `Signature::payload` getter (#5302) (#5310)
-- *(core)* Add checks for role presence before granting it (#5300)
-- *(core)* Reconnect disconnected peer (#5325)
-- Fix pytests related to store assets and NFT (#5341)
-- *(CI)* Fix python static analysis workflow for poetry v2 (#5374)
-- Expired transaction event appears after commit (#5396)
+- ནོན་ཛེ་རོ་ (#5278) བསྐྱར་ཞིབ་འབད།
+- ཡིག་ཆའི་ཡིག་སྣོད་ཚུ་ནང་ཡིག་དཔར་ (#5309)
+- *(ཀིརིཔ་ཊོ་)* ཕྱིར་ཐོན་ `Signature::payload` འཐོབ་མཁན་ (#5302) (#5310)
+- *(core)* དེ་ལུ་མ་བྱིན་པའི་ཧེ་མར་ འགན་ཁུར་ཡོད་པའི་དོན་ལུ་ ཞིབ་དཔྱད་ཁ་སྐོང་བརྐྱབ་ཨིན། (#༥༣༠༠)
+- *(core)* མཐུད་ལམ་བཏོག་བཏང་མི་ མཉམ་རོགས་ (#5325) ལོག་སྟེ་མཐུད།
+- ཚོང་ཁང་གི་རྒྱུ་དངོས་དང་ཨེན་ཨེཕ་ཊི་དང་འབྲེལ་བའི་ པི་ཊི་པི་ཊེསི་ཚུ་ བཅོ་ཁ་རྐྱབས། (#༥༣༤༡)
+- *(CI)* སྙན་རྩོམ་གྱི་དོན་ལུ་ v2 (#5374)
+- དུས་ཡོལ་ཡོད་པའི་ཚོང་འབྲེལ་བྱུང་ལས་འདི་ ཁས་བླངས་ཀྱི་ཤུལ་ལས་འབྱུངམ་ཨིན། (#༥༣༩༦)
 
-### 💼 Other
+### 💼 གཞན་ཡང་།- `rust-toolchain.toml` (#༥༣༧༦) ཚུད་ཡོད།
+- `unused` ལུ་ཉེན་བརྡ་འབད། I18NI000000163X (#5377)
 
-- Include `rust-toolchain.toml` (#5376)
-- Warn on `unused`, not `deny` (#5377)
+### 🚜 བསྐྲུན་པ།
 
-### 🚜 Refactor
+- གཞུ་དབྱིབས་ Iroha CLI (#5282)
+- *(iroha_test_network)* དྲན་ཐོ་ཚུ་གི་དོན་ལུ་ རྩ་སྒྲིག་མཛེས་ཏོག་ཏོ་ལག་ལེན་འཐབ། (#5331)
+- [**བརྡུངས་པ་**] `NumericSpec` གི་རིམ་འབྱུང་འདི་ `genesis.json` ནང་ (#5340)
+- p2p འཐུས་ཤོར་བྱུང་མི་ p2p མཐུད་ལམ་གྱི་དོན་ལུ་ ནང་བསྐྱོད་ཡར་རྒྱས་གཏང་ (#5379)
+- `logger.level`, ཁ་སྐོང་ `logger.filter`, རྒྱ་བསྐྱེད་རིམ་སྒྲིག་འགྲུལ་ལམ་ (#5384) ཁ་སྐོང་འབད།
 
-- Umbrella Iroha CLI (#5282)
-- *(iroha_test_network)* Use pretty format for logs (#5331)
-- [**breaking**] Simplify serialization of `NumericSpec` in `genesis.json` (#5340)
-- Improve logging for failed p2p connection  (#5379)
-- Revert `logger.level`, add `logger.filter`, extend config routes (#5384)
+### 📚 ཡིག་ཆ།
 
-### 📚 Documentation
+- I18NI0000168X ལུ་ `peer.template.toml` (#5321) ཁ་སྐོང་འབད།
 
-- Add `network.public_address` to `peer.template.toml` (#5321)
+### ⚡ ལས་རིམ།
 
-### ⚡ Performance
+- *(ཀུ་ར)* ལས་འགན་མངོན་གསལ་ཅན་བཀག་ཆ་འབད་ནི་ལས་སྔོན་བཀག་འབདཝ་ཨིན་ (#5373)།
+- ཚོང་འབྲེལ་ཚུའི་དོན་ལུ་ སྲོལ་སྒྲིག་གསོག་འཇོག་ལག་ལེན་འཐབ་ཡོདཔ། (#5405)
 
-- *(kura)* Prevent redundant block writes to disk (#5373)
-- Implemented custom storage for transactions hashes (#5405)
+### ⚙️ ལས་རིམ།
 
-### ⚙️ Miscellaneous Tasks
-
-- Fix poetry usage (#5285)
-- Remove redundant consts from `iroha_torii_const` (#5322)
-- Remove unused `AssetEvent::Metadata*` (#5339)
-- Bump Sonarqube Action version (#5337)
-- Remove unused permissions (#5346)
-- Add unzip package to ci-image (#5347)
-- Fix some comments (#5397)
-- Move integrations tests out from `iroha` crate (#5393)
-- Disable defectdojo job (#5406)
-- Add DCO sign-off for missing commits
-- Reorganise workflows (second try) (#5399)
-- Do not run Pull Request CI on push to main (#5415)
+- བཅོས་མའི་སྙན་ངག་ལག་ལེན་ (#5285)
+- I18NI000000170X (#5322) ལས་ མང་དྲགས་པའི་སེན་ཊི་ཚུ་ རྩ་བསྐྲད་གཏང་།
+- ལག་ལེན་མ་འཐབ་པའི་ I18NI0000171X (#5339) བཏོན་གཏང་།
+- བུམཔ་ སོ་ནར་ཀུབ་བྱ་བའི་ཐོན་རིམ་ (#5337)
+- ལག་ལེན་མ་འཐབ་པའི་གནང་བ་ཚུ་ རྩ་བསྐྲད་གཏང་ (#༥༣༤༦)
+- སི་པར་ (#༥༣༤༧) ལུ་ ཨོན་ཟིཔ་ཐུམ་སྒྲིལ་ཁ་སྐོང་རྐྱབས།
+- བསམ་བཀོད་འགའ་ཤས་བསྒྲིག་དགོས།(#༥༣༩༧)
+- མཉམ་བསྡོམས་ཚུ་ `iroha` crate (#5393) ལས་བརྟག་དཔྱད་འབད།
+-  མ་ནི་མི་མང་གི་ལས་ཀ་ལྕོགས་མིན་བཟོ།(#༥༤༠༦)
+- བརླག་སྟོར་ཤོར་བའི་དོན་ལུ་ ཌི་སི་ཨོ་མིང་རྟགས་བཀོད་ནི།
+- ལཱ་གི་རྒྱུན་རིམ་ཚུ་ བསྐྱར་སྒྲིག་འབད་ (ཚོད་བལྟ་) (#5399)
+- གཙོ་བོ་ལུ་ཨེབ་གཏང་འབད་བའི་སྐབས་ པུལ་ ཕྱིར་འཐེན་སི་ཨའི་ གཡོག་བཀོལ། (#༥༤༡༥)
 
 <!-- generated by git-cliff -->
 
 ## [2.0.0-rc.1.3] - 2025-03-07
 
-### Added
+### ཁ་སྐོང་རྐྱབ།
 
-- finalize non-empty blocks by allowing empty blocks after them (#5320)
+- དེ་ཚུ་གི་ཤུལ་ལས་ སྡེབ་ཚན་སྟོངམ་ཚུ་འབད་བཅུག་ཐོག་ལས་ སྡེབ་ཚན་སྟོངམ་མེན་པའི་སྡེབ་ཚན་ཚུ་མཐའ་མཇུག་བཟོ།
 
 ## [2.0.0-rc.1.2] - 2025-02-25
 
-### Fixed
+### བརྟན༌པོ
 
-- re-registered peers are now correctly reflected in the peer list (#5327)
+- བསྐྱར་ཐོ་བཀོད་འབད་མི་ མཉམ་རོགས་ཚུ་ ད་ལྟོ་ མཉམ་རོགས་ཐོ་ཡིག་ནང་ བདེན་པ་སྦེ་ གསལ་སྟོན་འབདཝ་ཨིན། (#༥༣༢༧)
 
-## [2.0.0-rc.1.1] - 2025-02-12
+## [2.0.0-rc.1] - 2025-02-12
 
-### Added
+### ཁ་སྐོང་རྐྱབ།
 
-- add `iroha transaction get` and other important commands (#5289)
+- `iroha transaction get` དང་ གཞན་ཁག་ཆེ་བའི་བརྡ་བཀོད་ (#5289) ཁ་སྐོང་འབད།
 
 ## [2.0.0-rc.1.0] - 2024-12-06
 
-### Added
+### ཁ་སྐོང་རྐྱབ།
 
-- implement query projections (#5242)
-- use persistent executor (#5082)
-- add listen timeouts to iroha cli (#5241)
-- add /peers API endpoint to torii (#5235)
-- address agnostic p2p (#5176)
-- improve multisig utility and usability (#5027)
-- protect `BasicAuth::password` from being printed (#5195)
-- sort descending in `FindTransactions` query (#5190)
-- introduce block header into every smart contract execution context (#5151)
-- dynamic commit time based on view change index (#4957)
-- define default permission set (#5075)
-- add implementation of Niche for `Option<Box<R>>` (#5094)
-- transaction and block predicates (#5025)
-- report amount of remaining items in query (#5016)
-- bounded discrete time (#4928)
-- add missing mathematical operations to `Numeric` (#4976)
-- validate block sync messages (#4965)
-- query filters (#4833)
+- ལག་ལེན་འདྲི་དཔྱད་ཚོད་དཔག་ (#5242)
+- རྟག་བརྟན་བཀོལ་སྤྱོད་པ་ (#5082) ལག་ལེན་འཐབ།
+- iroha cli (#5241) ལུ་ཉན་པའི་དུས་ཚོད་ཚུ་ཁ་སྐོང་འབད།
+- ཁ་སྐོང་ /པི་ཡར་ཨེ་པི་ཨའི་ མཐའ་མཚམས་ ཊོ་རི་ (#5235)
+- ཁ་བྱང་ཨེག་ནོསི་ཊིག་ p2p (#5176).
+- མལ་ཊི་སིག་མཐུན་རྐྱེན་དང་ ལག་ལེན་འཐབ་བཏུབ་པའི་ ལེགས་བཅོས་འབད། (#5027)
+- `BasicAuth::password` པར་སྐྲུན་འབད་ཡོད་མི་ལས་སྲུང་སྐྱོབ་འབདཝ་ཨིན། (#5195)
+- `FindTransactions` འདྲི་དཔྱད་ (#5190) ནང་མར་འབབ་དབྱེ་སེལ་འབད།
+- བཀག་ཆ་མགོ་ཡིག་འདི་ གན་རྒྱ་བཟོ་བའི་ལག་ལེན་སྐབས་དོན་ག་རའི་ནང་ལུ་ ངོ་སྤྲོད་འབད། (#5151)
+-མཐོང་སྣང་བསྒྱུར་བཅོས་ཟུར་ཐོ་ (#༤༩༥༧) ལུ་གཞི་བཞག་སྟེ་ ཌའི་ན་མན་པོ་ཁས་བླངས་དུས་ཚོད་།
+- ངེས་འཛིན་གྱི་གནང་བ་གཞི་སྒྲིག་ (#5075).
+- `Option<Box<R>>` (#5094) གི་དོན་ལུ་ Niche གི་ཁ་སྐོང་བཀོད།
+- ཚོང་འབྲེལ་དང་བཀག་ཆ་སྔོན་སྒྲིག་འབདཝ་ཨིན་ (#5025)
+- འདྲི་དཔྱད་ནང་ལྷག་ལུས་རྣམ་གྲངས་ཚུ་གི་སྙན་ཞུ་ (#5016)
+- མཐའ་མཚམས་ཐ་དད་ཀྱི་དུས་ཚོད། (#4928)
+- ཨང་རྩིས་རིག་པའི་བཀོལ་སྤྱོད་ `Numeric` (#4976) ལུ་ཁ་སྐོང་འབད།
+- སྡེབ་ཚན་མཉམ་འབྱུང་འཕྲིན་དོན་ཚུ་བདེན་དཔྱད་འབད།(#༤༩༦༥)
+- འདྲི་དཔྱད་ཚགས་མ་ཚུ་ (#༤༨༣༣)
 
-### Changed
+### བསྒྱུར་བཅོས་འབད་ཡོདཔ།
 
-- simplify peer id parsing (#5228)
-- move transaction error out of block payload (#5118)
-- rename JsonString to Json (#5154)
-- add client entity to smart contracts (#5073)
-- leader as transaction ordering service (#4967)
-- make kura drop old blocks from memory (#5103)
-- use `ConstVec` for instructions in `Executable` (#5096)
-- gossip txs at most once (#5079)
-- reduce memory usage of `CommittedTransaction` (#5089)
-- make query cursor errors more specific (#5086)
-- reorganize crates (#4970)
-- introduce `FindTriggers` query, remove `FindTriggerById` (#5040)
-- dont depend on signatures for update (#5039)
-- change parameters format in genesis.json (#5020)
-- only send current and previous view change proof (#4929)
-- disable sending message when not ready to prevent busy loop (#5032)
-- move total asset quantity to asset definition (#5029)
-- sign only block's header, not the whole payload (#5000)
-- use `HashOf<BlockHeader>` as the type of the block hash (#4998)
-- simplify `/health` and `/api_version` (#4960)
-- rename `configs` to `defaults`, remove `swarm` (#4862)
+- པི་ཡར་ཨའི་ཌི་དབྱེ་དཔྱད་འཇམ་ཏོང་ཏོ་ (#5228)
+- སྡེབ་ཚན་པེ་ལོཌི་ནང་ལས་ སྤོ་བཤུད་ཚོང་འབྲེལ་འཛོལ་བ་ (#5118)
+- ཇེ་སོན་སི་ཊིར་ཟེར་མི་འདི་ ཇེ་སོན་ལུ་ (#༥༡༥༤)
+- གན་ཡིག་ཚུ་ མཉེན་ཆས་ཚུ་ལུ་ མཁོ་སྤྲོད་འབད་མི་ ངོ་བོ་ཁ་སྐོང་འབད། (#5073)
+- འགོ་ཁྲིད་འདི་ ཚོང་འབྲེལ་བཀའ་རྒྱ་ཞབས་ཏོག་སྦེ་ (#༤༩༦༧)
+- དྲན་ཚད་ལས་ བཀག་ཆ་རྙིངམ་ཚུ་ (#5103) བཟོ།
+- `Executable` (#5096) ནང་བཀོད་རྒྱ་ཚུ་གི་དོན་ལུ་ `ConstVec` ལག་ལེན་འཐབ།
+- མང་ཤོས་རང་ ཚར་གཅིག་ (#5079)
+- `CommittedTransaction` གི་དྲན་ཚད་ལག་ལེན་མར་ཕབ་འབད། (#5089)
+- འདྲི་དཔྱད་འོད་རྟགས་ཀྱི་འཛོལ་བ་ཚུ་ དམིགས་བསལ་བཟོ་བཅུག། (#5086)
+- ཀེརེཊ་ཚུ་ བསྐྱར་སྒྲིག་འབད་ནི། (#༤༩༧༠)
+- `FindTriggers` འདྲི་དཔྱད་ `FindTriggerById` (#5040) བཏོན་གཏང་།
+- དུས་མཐུན་བཟོ་ནིའི་དོན་ལུ་ མཚན་རྟགས་ཚུ་ལུ་བརྟེན་མི་བཏུབ། (#5039)
+- རིགས་མཚན་.json (#5020) ནང་ འགྱུར་བའི་ཚད་གཞི་གི་རྩ་སྒྲིག་།
+- ད་ལྟོ་དང་ཧེ་མའི་མཐོང་སྣང་བསྒྱུར་བཅོས་བདེན་ཁུངས་ (#4929) རྐྱངམ་ཅིག་གཏང་།
+- བྲེལ་ཟིང་ཅན་གྱི་བསྐྱར་ལོག་བཀག་ཐབས་ལུ་གྲ་སྒྲིག་མེད་པའི་སྐབས་ འཕྲིན་དོན་གཏང་ནི་འདི་ལྕོགས་མིན་བཟོ།(#5032)
+- རྒྱུ་དངོས་ངེས་ཚིག་ལུ་ ཡོངས་བསྡོམས་རྒྱུ་དངོས་ཚད་ (#5029) སྤོ་བཤུད་འབད།
+- སྡེབ་ཚན་གྱི་མགོ་ཡིག་རྐྱངམ་ཅིག་ལུ་མིང་རྟགས་བཀོད་དགོ། (#5000)
+- སྡེབ་ཚན་ཧེཤ་ (#༤༩༩༨) གི་དབྱེ་བ་སྦེ་ `HashOf<BlockHeader>` ལག་ལེན་འཐབ།
+- `/health` དང་ `/api_version` (#4960) འཇམ་ཏོང་ཏོ་བཟོ་ཡོདཔ།
+- མིང་རྟགས་ `configs` ལས་ I18NI000000187X, `swarm` (#4862) བཏོན་གཏང་།
 
-### Fixed
+### བརྟན༌པོ- json (#5198) ནང་ ནང་སེམས་ཀྱི་འགན་ཁུར་ ལེབ་ཏོམ།
+- བདེ་སྒྲིག་ `cargo audit` ཉེན་བརྡ་ (#5183)
+- མིང་རྟགས་ལུ་ཁྱབ་ཚད་ཞིབ་དཔྱད་ཁ་སྐོང་རྐྱབས་ (#5157)
+- ཡིག་ཆ་ཚུ་ནང་ དཔེ་ཚད་མེཀ་རོ་དཔེ་ (#༥༡༤༩)
+- སྡེབ་ཚན་/བྱུང་ལས་རྒྱུན་ལམ་ནང་ ཚུལ་མཐུན་སྦེ་ཁ་བསྡམས། (#5101)
+- བློ་གཏད་ཅན་གྱི་མཉམ་རོགས་ཀྱིས་བརྟག་དཔྱད་ (#5121).
+- ཤུལ་མའི་སྡེབ་ཚན་འདི་ མཐོ་ཚད་ +༡ (#༥༡༡༡) ཡོདཔ་ཨིན་ན་ ཞིབ་དཔྱད་འབད།
+- རིགས་མཚན་སྡེབ་ཚན་གྱི་ གཏན་འཇགས་དུས་ཚོད་མཚོན་རྟགས་ (#5098)
+- `iroha_genesis` `transparent_api` ཁྱད་རྣམ་ (#5056) མེད་པའི་ བདེ་སྒྲིག་འབད།
+- `replace_top_block` (#4870) ཚུལ་མཐུན་སྦེ་འཛིན་སྐྱོང་འཐབ་ཨིན།
+- བཀོལ་སྤྱོད་པ་གི་ བདེ་སྒྲིག་བཟོ་བཅོས་ (#4955)
+- འཛོལ་བ་མངམ་བཀྲམ་སྟོན་འབད་ (#༤༩༧༣)།
+- སྡེབ་ཚན་ཚུ་རྒྱུན་སྤེལ་གྱི་དོན་ལུ་ (#4990) ལག་ལེན་འཐབ་ཨིན།
+- བང་རིམ་ཚོང་འབྲེལ་འཛིན་སྐྱོང་ (#༤༩༤༧) ལེགས་བཅོས་འབད།
+- ལྷག་ལུས་བཀག་ཆའི་སྡེབ་ཚན་འཕྲིན་དོན་ (#4909) བཀག་ཐབས་འབད།
+- དུས་མཉམ་དུ་འཕྲིན་དོན་སྦོམ་གཏང་ནི་ལུ་ མཇུག་བསྡུའི་བཀག་ཆ་འབད་ (#༤༩༤༨)
+- དུས་ཡོལ་ཡོད་པའི་ཚོང་འབྲེལ་འདི་ འདྲ་མཛོད་ལས་བཏོན་གཏང་། (#4922)
+- ལམ་དང་མཉམ་དུ་ཊོ་རི་ཨུར་ལ་བདེ་སྒྲིག་འབད། (#4903)
 
-- flatten inner role in json (#5198)
-- fix `cargo audit` warnings (#5183)
-- add range check to signature index (#5157)
-- fix model macro example in docs (#5149)
-- close ws properly in blocks/events stream (#5101)
-- broken trusted peers check (#5121)
-- check that next block has height +1 (#5111)
-- fix timestamp of genesis block (#5098)
-- fix `iroha_genesis` compilation without `transparent_api` feature (#5056)
-- correctly handle `replace_top_block` (#4870)
-- fix cloning of executor (#4955)
-- display more error details (#4973)
-- use `GET` for blocks stream (#4990)
-- improve queue transactions handling (#4947)
-- prevent redundant blocksync block messages (#4909)
-- prevent deadlock on simultaneous sending large message (#4948)
-- remove expired transaction from cache (#4922)
-- fix torii url with path (#4903)
+### རྩ་བསྐྲད་གཏང་ཡོདཔ།
 
-### Removed
+- མཁོ་སྤྲོད་པ་ལས་ མཐུན་རྐྱེན་ལུ་བརྟེན་པའི་ཨེ་པི་ (#5184) བཏོན་གཏང་།
+- `riffle_iter` བཏོན་གཏང་། (#༥༡༨༡)
+- ལག་ལེན་མ་འཐབ་པའི་བརྟེན་པ་ཚུ་ (#༥༡༧༣) བཏོན་གཏང་།
+- `max` `blocks_in_memory` (#5145) ལས་ བཏོན་གཏང་།
+- མོས་མཐུན་ཚད་རྩིས་ (#5116) བཏོན་གཏང་ནི།
+- སྡེབ་ཚན་ (#4932) ལས་ `event_recommendations` བཏོན་གཏང་།
 
-- remove module-based api from client (#5184)
-- remove `riffle_iter` (#5181)
-- remove unused dependencies (#5173)
-- remove `max` prefix from `blocks_in_memory` (#5145)
-- remove consensus estimation (#5116)
-- remove `event_recommendations` from block (#4932)
-
-### Security
+### ཉེན་སྲུང
 
 ## [2.0.0-pre-rc.22.1] - 2024-07-30
 
-### Fixed
+### བརྟན༌པོ
 
-- added `jq` to the docker image
+- ཌོཀ་པར་གཟུགས་བརྙན་ལུ་ `jq`
 
 ## [2.0.0-pre-rc.22.0] - 2024-07-25
 
-### Added
+### ཁ་སྐོང་རྐྱབ།
 
-- specify on-chain parameters explicitly in genesis (#4812)
-- allow turbofish with multiple `Instruction`s (#4805)
-- reimplement multisignature transactions (#4788)
-- implement built-in vs custom on-chain parameters (#4731)
-- improve custom instruction usage (#4778)
-- make the metadata dynamic via implementing JsonString (#4732)
-- allow multiple peers submit genesis block (#4775)
-- supply `SignedBlock` instead of `SignedTransaction` to peer (#4739)
-- custom instructions in executor (#4645)
-- extend client cli to request json queries (#4684)
- - add detect support for `norito_decoder` (#4680)
-- generalize permissions schema to executor data model (#4658)
-- added register trigger permissions in the default executor (#4616)
- - support JSON in `norito_cli`
-- introduce p2p idle timeout
+- རིགས་མཚན་ནང་གསལ་པོ་སྦེ་ རིམ་ཐེངས་ཚད་བཟུང་ཚུ་གསལ་བཀོད་འབད།(#༤༨༡༢)
+- `Instruction`s (#4805) མང་པོའི་ཐོག་ལས་ ཊར་ཝིཤ་འབད་བཅུག།
+- མཚན་རྟགས་སྣ་ཚོགས་ཀྱི་ཚོང་འབྲེལ་ཚུ་ ལོག་སྟེ་ལག་ལེན་འཐབ། (#༤༧༨༨)
+- བཀོད་སྒྲིག་དང་ སྲོལ་སྒྲིག་ཨོན་རྒྱུན་རིམ་ཚད་བཟུང་ (#4731) ལག་ལེན་འཐབ་ནི།
+- སྲོལ་སྒྲིག་བཀོད་རྒྱ་ལག་ལེན་ (#4778) ལེགས་བཅོས་འབད།
+- ཇེ་སོན་སི་ཊིང་ (#༤༧༣༢) ལག་ལེན་འཐབ་ཐོག་ལས་ མེ་ཊ་ཌེ་ཊ་ ཌའི་ནམ་བཟོ།
+- མཉམ་རོགས་མང་ཤོས་ཅིག་གིས་ རིགས་མཚན་བཀག་ཆ་ (#4775) བཙུགས་བཅུགཔ་ཨིན།
+- མཉམ་རོགས་ (#4739) ལུ་ I18NI000002000 གི་ཚབ་ལུ་ `SignedTransaction` གི་ཚབ་ལུ་ `SignedTransaction` ཨིན།
+- སྲོལ་སྒྲིག་བཀོད་རྒྱ་ལག་ལེན་པ་ (#4645).
+- ཇི་སོན་འདྲི་དཔྱད་ (#༤༦༨༤) ཞུ་བ་འབད་ནི་ལུ་ མཁོ་སྤྲོད་འབད་མི་ ཀླད་ཀོར་རྒྱ་སྐྱེད་འབད།
+ - `norito_decoder` (#4680) གི་དོན་ལུ་ ཤེས་རྟོགས་རྒྱབ་སྐྱོར་ཁ་སྐོང་འབད།
+- སྤྱིར་བཏང་གནང་བ་ཚུ་ ལག་ལེན་འཐབ་མིའི་གནས་སྡུད་དཔེ་ཚད་ (#༤༦༥༨)
+- ཁ་སྐོང་འབད་ཡོད་པའི་ཐོ་བཀོད་ཀྱི་ ཊི་གར་གནང་བ་ཚུ་ སྔོན་སྒྲིག་ལག་ལེན་པ་ (#༤༦༡༦) ནང་།
+ - `norito_cli` ནང་ JSON རྒྱབ་སྐྱོར།
+- p2p ལས་མེད་དུས་མཚམས་ངོ་སྤྲོད་འབད།
 
-### Changed
+### བསྒྱུར་བཅོས་འབད་ཡོདཔ།
 
-- replace `lol_alloc` with `dlmalloc` (#4857)
-- rename `type_` to `type` in schema (#4855)
-- replace `Duration` with `u64` in schema (#4841)
-- use `RUST_LOG`-like EnvFilter for logging (#4837)
-- keep voting block when possible (#4828)
-- migrate from warp to axum (#4718)
-- split executor data model (#4791)
-- shallow data model (#4734) (#4792)
-- don't send public key with signature (#4518)
-- rename `--outfile` to `--out-file` (#4679)
-- rename iroha server and client (#4662)
-- rename `PermissionToken` to `Permission` (#4635)
-- reject `BlockMessages` eagerly (#4606)
-- make `SignedBlock` immutable (#4620)
-- rename TransactionValue into CommittedTransaction (#4610)
-- authenticate personal accounts by ID (#4411)
-- use multihash format for private keys (#4541)
- - rename `parity_scale_decoder` to `norito_cli`
-- send blocks to Set B validators
-- make `Role` transparent (#4886)
-- derive block hash from header (#4890)
+- `lol_alloc` འདི་ `dlmalloc` (#4857) དང་ཅིག་ཁར་ ཚབ་བཙུགསཔ་ཨིན།
+- མིང་བསྐྱར་མིང་ `type_` ལས་ `type` ལས་ ལས་འཆར་ནང་ (#༤༨༥༥)
+- ལས་འཆར་ (#4841) ནང་ I18NI000000208X འདི་ `u64` དང་ཅིག་ཁར་ ཚབ་བཙུགས།
+- ནང་བསྐྱོད་ཀྱི་དོན་ལུ་ `RUST_LOG` བཟུམ་མའི་ཨེབ་ཕིལ་ཊར་ (#4837) ལག་ལེན་འཐབ།
+- འབད་ཚུགསཔ་ཨིན་པའི་སྐབས་ ཚོགས་རྒྱན་བཙུགས་བཞག་དགོ། (#4828)
+- ཝརཔ་ལས་ axum (#4718) ལུ་གནས་སྤོ།
+- ཁ་ཕྱེ་ཡོད་པའི་ལག་ལེན་པའི་གནས་སྡུད་དཔེ་གཞི།(#༤༧༩༡)
+- གནས་སྡུད་དཔེ་ཚད་ (#༤༧༣༤) (#༤༧༩༢)
+- མིང་རྟགས་(#༤༥༡༨) དང་བཅས་མི་མང་ལྡེ་མིག་མ་གཏང་།
+- མིང་རྟགས་ `--outfile` ལས་ `--out-file` (#4679)
+- ཨི་རོ་ཧ་སར་བར་དང་ མཁོ་སྤྲོད་འབད་མི་ (#4662) བསྐྱར་མིང་བཏགས་དགོ།
+- མིང་རྟགས་ `PermissionToken` ལས་ I18NI000000214X (#4635)
+- `BlockMessages` བཀག་ཆ་འབད། (#4606)
+- `SignedBlock` འགྱུར་མེད་ (#4620) བཟོ།
+- བསྐྱར་མིང་བཏགས་མི་ TransactoValue འདི་ ཀམ་ཊི་ཊི་རཱན་སིག་ ནང་ལུ་ (#༤༦༡༠)
+- མི་སྒེར་རྩིས་ཐོ་ཚུ་ ID (#4411) གིས་བདེན་བཤད་འབད།
+- སྒེར་གྱི་ལྡེ་མིག་ཚུ་གི་དོན་ལུ་ སྣ་མང་ཧཤ་རྩ་སྒྲིག་ལག་ལེན་འཐབ། (#༤༥༤༡)
+ - མིང་ `parity_scale_decoder` ལས་ I18NI000000218X ལུ།
+- བི་བདེན་དཔྱད་ཚུ་ གཞི་སྒྲིག་འབད་མི་ལུ་ གཏང་ནིའི་སྡེབ་ཚད།
+- `Role` དྭངས་གསལ་ (#༤༨༨༦) བཟོ།
+- མགོ་ཡིག་ལས་ སྡེབ་ཚན་ཧེཤ་ (#4890) ལས་ཐོན་ཡོདཔ།
 
-### Fixed
+### བརྟན༌པོ- དབང་འཛིན་གྱིས་ མངའ་ཁོངས་འདི་ སྤོ་བཤུད་འབད་ནི་ལུ་ ཞིབ་དཔྱད་འབད།(#༤༨༠༧)
+- དྲན་ཐོ་གཉིས་ལྡན་གྱི་འགོ་བཙུགས་ (#༤༨༠༠) བཏོན་གཏང་།
+- རྒྱུ་དངོས་དང་གནང་བ་ཚུ་གི་དོན་ལུ་ བཅོ་ཁ་རྐྱབ་ནིའི་མིང་བཏགས་མཐུན་རྐྱེན། (#4741)
+- རིགས་མཚན་སྡེབ་ཚན་ནང་ ཚོང་འབྲེལ་སོ་སོ་ནང་ ཡར་འཕེལ་ཅན་གྱི་ལག་ལེན་པ། (#༤༧༥༧)
+- `JsonString` (#4692) གི་དོན་ལུ་ སྔོན་སྒྲིག་གནས་གོང་ནོར་བཅོས་འབད།
+- མཚམས་འཇོག་འཛོལ་བའི་འཕྲིན་དོན་ཡར་རྒྱས་གཏང་ (#4659)
+- ཆ་འཇོག་འབད་ཡོད་པའི་ Ed25519Sha512 མི་མང་ལྡེ་མིག་འདི་ ནུས་མེད་ཀྱི་རིང་ཚད་ (#༤༦༥༠) ཨིན་པ་ཅིན་ འདྲོག་བྱེལ་མ་འཐབ།
+- མཐོང་སྣང་བསྒྱུར་བཅོས་ཟུར་ཐོ་འོས་འབབ་ཅན་འདི་ init back མངོན་གསལ་ (#༤༦༡༢) ལུ་ལག་ལེན་འཐབ།
+- ཁོང་རའི་ `start` དུས་ཚོད་མཚོན་རྟགས་ (#4333) གི་ཧེ་མ་ དུས་ཚོད་མ་འགྱོ་བའི་ཧེ་མ་ དུས་ཚོད་མ་འགྱོ་བར་ ལག་ལེན་མ་འཐབ།
+- རྒྱབ་སྐྱོར་ `https` གི་དོན་ལུ་ `torii_url` (#4601) (#4617)
+- སེཊི་ཀེ་བེ་ལུ་/བཏོན་གཏང་ཀི་བེ་བེ་ལུ་ (#༤༥༤༧) ལས་ སར་ཌི་(འཕུར་ལྡིང་) བཏོན་གཏང་།
+- ཊི་གར་ཊི་ཆ་ཚན་འདི་ ངེས་བདེན་ རིམ་སྒྲིག་འབད་ཡོད།
+- བཏོན་བཏང་མི་ `PermissionToken` འདི་ I18NI000000225X གུ་ (#4503)
+- ད་ལྟོའི་སྐོར་ར་གི་དོན་ལུ་ མཐོང་སྣང་བསྒྱུར་བཅོས་ཟུར་ཐོ་ནོར་བཅོས་འབད།
+- `Unregister<Domain>` (#4461) གུ་ མཐུན་སྒྲིག་ཅན་གྱི་ འབྱུང་ཁུངས་ཚུ་བཏོན་གཏང་།
+- རིགས་མཚན་ཆུ་ཚད་ཀྱི་ སྐོར་ཐེངས་ནང་ རིགས་མཚན་Pub ལྡེ་མིག་བརྟག་དཔྱད་འབད་ནི།
+- ཐོ་བཀོད་ཀྱི་རིགས་ཚན་ཐོ་འགོད་བཀག་སྡོམ། ཡང་ན་རྩིས་ཐོ།
+- ངོ་བོ་ ཐོ་བཀོད་མ་འབད་བའི་ འགན་ཁུར་ལས་ གནང་བ་ཚུ་ བཏོན་གཏང་ནི།
+- ཊི་གར་མེ་ཊ་ཌེ་ཊ་འདི་ མཉེན་ཆས་ སའིཊི་ གན་རྒྱ་ཚུ་ནང་ འཛུལ་སྤྱོད་འབད་ཚུགས།
+- མཐུན་སྒྲིག་མེད་པའི་གནས་སྟངས་མཐོང་སྣང་ (#4867) - མཐུན་སྒྲིག་མེད་པའི་གནས་སྟངས་མཐོང་སྣང་བཀག་ཐབས་ལུ་ ལག་ལེན་འཐབ།
+- པར་ཆས་ནང་ མཉེན་པའི་ཕོརཀ་ (#༤༨༦༨)
+- ChaCha20POly1305 for MinSize for MinSize དང་།
+- དྲན་ཚད་མཐོ་བའི་ལག་ལེན་ (#4893) བཀག་ཐབས་ལུ་ LiveQueryStore ལུ་ཚད་ཁ་སྐོང་འབད།
 
-- check that authority owns domain to transfer (#4807)
-- remove logger double initialization (#4800)
-- fix naming convention for assets and permissions (#4741)
-- upgrade executor in separate transaction in genesis block (#4757)
-- correct default value for `JsonString` (#4692)
-- improve deserialization error message (#4659)
-- do not panic if the passed Ed25519Sha512 public key is of invalid length (#4650)
-- use proper view change index on init block load (#4612)
-- don't prematurely execute time-triggers before their `start` timestamp (#4333)
-- support `https` for `torii_url` (#4601) (#4617)
-- remove serde(flatten) from SetKeyValue/RemoveKeyValue (#4547)
-- trigger set is correctly serialized
-- revoke removed `PermissionToken`s on `Upgrade<Executor>` (#4503)
-- report correct view change index for current round
-- remove corresponding triggers on `Unregister<Domain>` (#4461)
-- check genesis pub key in genesis round
-- prevent registering genesis Domain or Account
-- remove permissions from roles on entity unregistration
-- trigger metadata is accessible in smart contracts
-- use rw lock to prevent inconsitent state view (#4867)
-- handle soft fork in snapshot (#4868)
-- fix MinSize for ChaCha20Poly1305
-- add limits to LiveQueryStore to prevent high memory usage (#4893)
+### རྩ་བསྐྲད་གཏང་ཡོདཔ།
 
-### Removed
+- མི་མང་ལྡེ་མིག་ ed25519 སྒེར་གྱི་ལྡེ་མིག་ (#4856) ལས་བཏོན་གཏང་།
+- ཀུ་ར.ལོག་ (#༤༨༤༩) བཏོན་གཏང་།
+- རིམ་སྒྲིག་ནང་ `_ms` དང་ `_bytes` རྗེས་འཇུག་ (#༤༦༦༧) སླར་ལོག་འབད།
+- `_id` དང་ `_file` རིགས་མཚན་ས་སྒོ་ (#4724) བཏོན་གཏང་།
+- ཟུར་ཐོ་བཏོན་གཏང (#4701) གིས་ AsetDefinitionId གིས་ AssetsMap ནང་གི་རྒྱུ་དངོས་ཚུ།
+- མངའ་ཁོངས་ ཊི་གར་ངོ་རྟགས་ (#༤༦༤༠) ལས་ བཏོན་གཏང་།
+- Iroha (#4673) ལས་མིང་རྟགས་བཀོད་པའི་རིགས་མཚན་འདི་བཏོན་གཏང་།
+- I18NI000000232X (#4642) ལས་ མཐུད་ཡོད་པའི་ `Visit` བཏོན་གཏང་།
+- `TriggeringEventFilterBox` བཏོན་གཏང་། (#༤༨༦༦)
+- p2p ལགཔ་འཐུདཔ་ (#4889) ནང་ `garbage` བཏོན་གཏང་།
+- སྡེབ་ཚན་ (#4880) ལས་ `committed_topology` བཏོན་གཏང་།
 
-- remove public key from ed25519 private key (#4856)
-- remove kura.lock (#4849)
-- revert `_ms` and `_bytes` suffixes in config (#4667)
-- remove `_id` and `_file` suffix from genesis fields (#4724)
-- remove index Assets in AssetsMap by AssetDefinitionId (#4701)
-- remove domain from trigger identity (#4640)
-- remove genesis signing from Iroha (#4673)
-- remove `Visit` bound from `Validate` (#4642)
-- remove `TriggeringEventFilterBox` (#4866)
-- remove `garbage` in p2p handshake (#4889)
-- remove `committed_topology` from block (#4880)
+### ཉེན་སྲུང
 
-### Security
+- གསང་སྤྱོད་ལས་ འཛེགས་པའི་སྲུང་སྐྱོབ།
 
-- guard against secrets leakage
+## [2.0.0-pre-rc.21] - ༢༠༢༤-༠༤-༡༩
 
-## [2.0.0-pre-rc.21] - 2024-04-19
+### ཁ་སྐོང་རྐྱབ།
 
-### Added
+- ཊི་གར་ནང་འཛུལ་ས་ཚིགས་ནང་ ཊི་གར་ཌིའི་ཌི་ (#4391) བཙུགས།
+- ལས་འཆར་ནང་བིཊི་ཕིལཌི་སྦེ་ བྱུང་ལས་གཞི་སྒྲིག་འབད་ (#༤༣༨༡)
+- རྡུལ་ཕྲན་འཛུལ་སྤྱོད་དང་གཅིག་ཁར་ `wsv` གསརཔ་འགོ་བཙུགས་ཡོདཔ། (#2664)
+- `PermissionTokenSchemaUpdate`, `Configuration` དང་ `Executor` ལས་རིམ་ཚུ་གི་དོན་ལུ་ བྱུང་ལས་ཚགས་མ་ཚུ་ཁ་སྐོང་འབད།
+- "ཐབས་ལམ་" (#4365) ངོ་སྤྲོད་འབད།
+- འགན་ཁུར་གྱི་གནང་བ་/ཆ་མེད་གཏང་ཆོག་པའི་གནང་བ་ (#༤༢༤༤)
+- རྒྱུ་དངོས་ཚུ་གི་དོན་ལུ་ གང་བྱུང་ངེས་ཏིག་གཏན་འཁེལ་གྱི་ཨང་གྲངས་དབྱེ་བ་ (#༣༦༦༠) ངོ་སྤྲོད་འབད། (#3660)
+- བཀོལ་སྤྱོད་པ་ (#3354) གི་དོན་ལུ་ ས་སྣུམ་ཚད་གཞི་སོ་སོ།
+- པི་པོརཕ་གསལ་སྡུད་ (#༤༢༥༠) མཉམ་བསྡོམས་འབད།
+- མཁོ་སྤྲོད་འབད་མི་ CLI (#4200) ནང་ རྒྱུ་དངོས་ཡན་ལག་བརྡ་བཀོད་ཁ་སྐོང་འབད།
+- `Register<AssetDefinition>` གནང་བ་ (#4049)
+- བསྐྱར་རྩེད་ཀྱི་འཇབ་རྒོལ་བཀག་ཐབས་ལུ་ `chain_id` ཁ་སྐོང་རྐྱབས། (#4185)
+- མཁོ་སྤྲོད་འབད་མི་ CLI (#4175) ནང་ ཌོ་མེན་ཌེ་ཊ་ཞུན་དག་འབད་ནི་ལུ་ ཡན་ལག་བརྡ་བཀོད་ཚུ་ཁ་སྐོང་འབད།
+- ལག་ལེན་འཐབ་སའི་ཚོང་ཁང་ཆ་ཚན་, བཏོན་གཏང་, མཉེན་ཆས་ CLI (#4163) ནང་ བཀོལ་སྤྱོད་ཐོབ།
+- ཊི་རི་ཊི་ཚུ་གི་དོན་ལུ་ འདྲ་མཚུངས་ཀྱི་ རིག་རྩལ་ཅན་གྱི་ གན་རྒྱ་ཚུ་ བརྩི། (#༤༡༣༣)
+- མངའ་ཁོངས་ཚུ་སྤོ་བཤུད་འབད་ནི་ལུ་ མཁོ་སྤྲོད་འབད་མི་ CLI ནང་ལུ་ ཡན་ལག་བརྡ་བཀོད་ཁ་སྐོང་འབད། (#3974)
+- ཨེཕ་ཨེཕ་ཨའི་ (#4062) ནང་རྒྱབ་སྐྱོར་སྒྲོམ་གྱི་ཆ་ཤས་ཚུ།
+- མཁོ་སྤྲོད་འབད་མི་ CLI (#4042) ལུ་ SHA ཁས་བླངས་འབདཝ་ཨིན།
+- སྔོན་སྒྲིག་བདེན་དཔྱད་འབད་མི་ བོ་ལར་པེལེཊི་ (#3856) གི་དོན་ལུ་ པོརོ་སི་མེཀ་རོ་།
+- འདྲི་དཔྱད་ཞུ་བ་བཟོ་མི་འདི་ མཉེན་ཆས་ཨེ་པི་ཨའི་ (#3124) ནང་ལུ་ འགོ་བཙུགས་ཡོདཔ་ཨིན།
+- གན་རྒྱ་བཟོ་བའི་ནང་ལུ་ འདྲི་དཔྱད་ཚུ་ (#3929)
+- `fetch_size` འདྲི་དཔྱད་ཚད་བཟུང་ (#3900)
+- རྒྱུ་དངོས་ཚོང་ཁང་གི་ བར་ཚོང་བསླབ་བྱ། (#4258)
+- གསང་བ་ལས་ ཆུ་འཛག་ (#3240) ལས་སྲུང་སྐྱོབ་པ།
+- འབྱུང་ཁུངས་ཨང་རྟགས་གཅིག་པ་དང་བཅས་པའི་ duplicate titchs ཚུ་ (#4419)
 
-- include trigger id in trigger entrypoint (#4391)
-- expose event set as bitfields in schema (#4381)
-- introduce new `wsv` with granular access (#2664)
-- add event filters for `PermissionTokenSchemaUpdate`, `Configuration` and `Executor` events
-- introduce snapshot "mode" (#4365)
-- allow granting/revoking role's permissions (#4244)
-- introduce arbitrary-precision numeric type for assets (remove all other numeric types) (#3660)
-- different fuel limit for Executor (#3354)
-- integrate pprof profiler (#4250)
-- add asset subcommand in client CLI (#4200)
-- `Register<AssetDefinition>` permissions (#4049)
-- add `chain_id` to prevent replay attacks (#4185)
-- add subcommands to edit domain metadata in client CLI (#4175)
-- implement store set, remove, get operations in Client CLI (#4163)
-- count identical smart contracts for triggers (#4133)
-- add subcommand into client CLI to transfer domains (#3974)
-- support boxed slices in FFI (#4062)
-- git commit SHA to client CLI (#4042)
-- proc macro for default validator boilerplate (#3856)
-- introduced query request builder into Client API (#3124)
-- lazy queries inside smart contracts (#3929)
-- `fetch_size` query parameter (#3900)
-- asset store tranfer instruction (#4258)
-- guard against secrets leakage (#3240)
-- deduplicate triggers with the same source code (#4419)
+### བསྒྱུར་བཅོས་འབད་ཡོདཔ།- མཚན་མོ་-༢༠༢༤-༠༤-༡༨
+- བི་བདེན་དཔྱད་ཚུ་གཞི་སྒྲིག་འབད་ (#4387) ལུ་གཏང་ནིའི་སྡེབ་ཚན་ཚུ།
+- བཀག་ཆ་དང་ ཚོང་འབྲེལ་བྱུང་ལས་ཚུ་ནང་ལུ་ པའིཔ་ལའིན་བྱུང་ལས་ཚུ་ (#4366)
+- བསྐྱར་མིང་ `[telemetry.dev]` རིམ་སྒྲིག་དབྱེ་ཚན་ `[dev_telemetry]` (#4377) ལུ་ལུ།
+- `Action` དང་ `Filter` སྤྱིར་བཏང་མེན་པའི་དབྱེ་བ་ (#4375)
+- བྱུང་ལས་ཚགས་མ་ཨེ་པི་ཨའི་ བཟོ་བསྐྲུན་པ་དཔེ་རིས་ (#3068) ལེགས་བཅོས་འབད།
+- བྱུང་ལས་སྣ་ཚོགས་ཚགས་མ་ ཨེ་པི་ཨའི་ཨེསི་ཚུ་ མཉམ་བསྡོམས་འབད་དེ་ ཧྲམ་པའི་བཟོ་བསྐྲུན་པ་ཨེ་པི་ཨའི་ ངོ་སྤྲོད་འབད།
+- བསྐྱར་མིང་ `FilterBox` ནང་ `EventFilterBox` ལུ།
+- བསྐྱར་མིང་ `TriggeringFilterBox` ནང་ `TriggeringEventFilterBox` ལུ།
+- ཚགས་མ་མིང་བཏགས་ནི་ ལེགས་བཅོས་འབད་ནི། དཔེར་ན། I18NI0000251X -> I18NI0000252X
+- རིམ་སྒྲིག་ཨར་ཨེཕ་སི་ (#4239) དང་འཁྲིལ་ཏེ་ བསྐྱར་འབྲི་རིམ་སྒྲིག་འབད།
+- མི་མང་ཨེ་པི་ཨའི་ (#3887) ལས་ ཐོན་རིམ་བཀོད་ཡོད་པའི་ ཐོན་རིམ་གྱི་ ནང་འཁོད་གཞི་བཀོད་འདི་ སྦ་བཞག་ཡོདཔ།
+- མཐོང་སྣང་འགྱུར་བ་མང་དྲགས་པའི་ཤུལ་ལས་ གནས་སྐབས་ཅིག་གི་དོན་ལུ་ སྔོན་དཔག་འབད་ཚུགས་པའི་ གོ་རིམ་འདི་ ངོ་སྤྲོད་འབད། (#༤༢༦༣)
+- `iroha_crypto` (#4181) ནང་ བརྟན་བརྟན་གྱི་ལྡེ་མིག་དབྱེ་བ་ཚུ་ལག་ལེན་འཐབ།
+- སྤྱིར་བཏང་འཕྲིན་དོན་ཚུ་ལས་ བགོ་བཤའ་མཐོང་སྣང་བསྒྱུར་བཅོས་ (#4115)
+- `SignedTransaction` འགྱུར་མེད་ (#4162) བཟོ།
+- ཕྱིར་གཏོང་ `iroha_config` `iroha_client` (#4147) བརྒྱུད་དེ་ ཕྱིར་གཏོང་།
+- ཕྱིར་འདྲེན་ `iroha_crypto` `iroha_client` (#4149) བརྒྱུད་དེ་
+- ཕྱིར་གཏོང་ `data_model` ལས་ `iroha_client` (#4081)
+- I18NI000000262X ལས་ `openssl-sys` བརྟེན་པ་ བཏོན་གཏང་ཞིནམ་ལས་ རིམ་སྒྲིག་འབད་བཏུབ་པའི་ tls tls ཚུ་ `iroha_client` (#3422) ལུ་འགོ་བཙུགསཔ་ཨིན།
+- མ་བཙུགས་པའི་ EOF IOF `hyperledger/ursa` ནང་ན་གི་ཐབས་ཤེས་ `iroha_crypto` (#3422) དང་ཅིག་ཁར་ ཚབ་བཙུགས།
+- བཀོལ་སྤྱོད་པའི་ལཱ་འགན་ཡར་དྲག་གཏང་ (#༤༠༡༣)།
+- ཊོ་པོ་ལོ་ཇི་པི་ཡར་དུས་མཐུན་ (#3995)
 
-### Changed
+### བརྟན༌པོ
 
-- bump rust toolchain to nightly-2024-04-18
-- send blocks to Set B validators (#4387)
-- split pipeline events into block and transaction events (#4366)
-- rename `[telemetry.dev]` config section to `[dev_telemetry]` (#4377)
-- make `Action` and `Filter` non-generic types (#4375)
-- improve event filtering API with builder pattern (#3068)
-- unify various event filter APIs, introduce a fluent builder API
-- rename `FilterBox` into `EventFilterBox`
-- rename `TriggeringFilterBox` into `TriggeringEventFilterBox`
-- improve filter naming, e.g. `AccountFilter` -> `AccountEventFilter`
-- rewrite config according to the configuration RFC (#4239)
-- hide internal structure of the versioned structs from the public API (#3887)
-- temporarily introduce predictable ordering after too many failed view changes (#4263)
-- use concrete key types in `iroha_crypto` (#4181)
-- split view changes from normal messages (#4115)
-- make `SignedTransaction` immutable (#4162)
-- export `iroha_config` through `iroha_client` (#4147)
-- export `iroha_crypto` through `iroha_client` (#4149)
-- export `data_model` through `iroha_client` (#4081)
-- remove `openssl-sys` dependency from `iroha_crypto` and introduce configurable tls backends to `iroha_client` (#3422)
-- replace unmaintained EOF `hyperledger/ursa` with in-house solution `iroha_crypto` (#3422)
-- optimize executor performance (#4013)
-- topology peer update (#3995)
+- `Unregister<Domain>` (#4461) གུ་ མཐུན་སྒྲིག་ཅན་གྱི་ འབྱུང་ཁུངས་ཚུ་བཏོན་གཏང་།
+- ངོ་བོ་ཐོ་བཀོད་མ་འབད་བའི་ འགན་ཁུར་ལས་ གནང་བ་ཚུ་ བཏོན་གཏང་། (#༤༢༤༢)
+- རིགས་ཚན་གྱི་བརྒྱུད་འཕྲིན་འདི་ རིགས་ཚན་གྱི་ ཆང་རིགས་ཀྱི་ལྡེ་མིག་གིས་ མཚན་རྟགས་བཀོད་ཡོདཔ་སྦེ་ བཤདཔ་ཨིན། (#4253)
+- p2p (#4267) ནང་ ལན་མ་བཏབ་པའི་ཆ་རོགས་ཚུ་གི་དོན་ལུ་ དུས་ཚོད་འགོ་བཙུགས་ནི།
+- རིགས་མཚན་ཐོ་བཀོད་འབད་ནི་བཀག་ཆ་འབད་དོ་ཡོདཔ་ཨིན་ན་ ཡང་ན་ རྩིས་ཐོ་ (#༤༢༢༦)
+- `MinSize` གི་དོན་ལུ་ `ChaCha20Poly1305` (#4395)
+- `tokio-console` ལྕོགས་ཅན་བཟོ་བའི་སྐབས་ འགོ་ཚག་འགོ་བཙུགས། (#4377)
+- རྣམ་གྲངས་རེ་རེ་བཞིན་ `\n` དང་གཅིག་ཁར་སོ་སོ་སྦེ་བཞག་སྟེ་ `dev-telemetry` ཡིག་སྣོད་དྲན་ཐོ་ཚུ་གི་དོན་ལུ་ ཕ་མའི་སྣོད་ཐོ་ཚུ་ བསྐྱར་ལོག་སྦེ་གསར་བསྐྲུན་འབད།
+- མིང་རྟགས་མེད་པའི་རྩིས་ཁྲའི་ཐོ་བཀོད་བཀག་སྡོམ།(#༤༢༡༢)
+- ལྡེ་མིག་ཆ་གཅིག་འདི་ད་ལྟོ་ འཛོལ་བ་མེདཔ་ཨིན་ (#༤༢༨༣)
+- `X25519` ལྡེ་མིག་ཚུ་ `Ed25519` (#4174) སྦེ་ཨིན་ཀོ་ཌིང་བཀག་དགོ།
+- `no_std` (#4270) ནང་མིང་རྟགས་བདེན་དཔྱད་འབད།
+- ཨེ་སིན་ཀ་སྐབས་དོན་ནང་བཀག་པའི་ཐབས་ལམ་ཚུ་ (#༤༢༡༡) འབོད་བརྡ་གཏང་ནི།
+- ངོ་བོ་ཐོ་བཀོད་མེད་པའི་སྐོར་ལས་ འབྲེལ་ཡོད་ཀྱི་ ཌོག་ཊར་ཚུ་ ཆ་མེད་བཏང་ཡོདཔ། (#༣༩༦༢)
+- I18NT0000003X འགོ་བཙུགས་པའི་སྐབས་ ནོར་བཀག་བཞག་ནི།
+- གཏན་བཟོས་ `(get|set)_config` 401 HTTP (#4177)
+- `musl` ཡིག་མཛོད་ཀྱི་མིང་ Docker (#4193) ནང་།
+- གན་རྒྱ་བཟོ་བའི་རྐྱེན་སེལ་དཔར་བསྐྲུན་ (#4178)
+- ལོག་འགོ་བཙུགས་ (#4164) གུ་ ཊོ་པོ་ལོ་ཇི་དུས་མཐུན་བཟོ་ནི།
+- མཉམ་རོགས་གསརཔ་གི་ཐོ་བཀོད་ (#༤༡༤༢)
+- on-chain སྔོན་དཔག་འབད་བཏུབ་པའི་བསྐྱར་ལོག་གོ་རིམ་ (#4130)
+- བསྐྱར་སྒྲིག་འབད་མི་ ནང་བསྐྱོད་དང་ ཌའི་ནམ་རིམ་སྒྲིག་ (#༤༡༠༠)
+- ཊི་གར་ཨེ་ཊི་མི་ཊིག་ (#4106).
+- འདྲི་དཔྱད་གསོག་འཇོག་འཕྲིན་དོན་གོ་རིམ་སྒྲིག་སྟངས་ (#4057).
+- ཆ་ཚན་ `Content-Type: application/x-norito` མཐའ་མཚམས་ཚུ་གི་དོན་ལུ་ I18NT0000024X ལག་ལེན་འཐབ་ཐོག་ལས་ ལན་བཏབ་ཡོདཔ་ཨིན།
 
-### Fixed
+### རྩ་བསྐྲད་གཏང་ཡོདཔ།
 
-- remove corresponding triggers on `Unregister<Domain>` (#4461)
-- remove permissions from roles on entity unregistration (#4242)
-- assert that genesis tranasction is signed by genesis pub key (#4253)
-- introduce timeout for unresponsive peers in p2p (#4267)
-- prevent registering genesis Domain or Account (#4226)
-- `MinSize` for `ChaCha20Poly1305` (#4395)
-- start console when `tokio-console` is enabled (#4377)
-- separate each item with `\n` and recursively create parent directories for `dev-telemetry` file logs
-- prevent account registration without signatures (#4212)
-- key pair generation is now infallible (#4283)
-- stop encoding `X25519` keys as `Ed25519` (#4174)
-- do signature validation in `no_std` (#4270)
-- calling blocking methods within async context (#4211)
-- revoke associated tokens on entity unregistretration (#3962)
-- async blocking bug when starting Sumeragi
-- fixed `(get|set)_config` 401 HTTP (#4177)
-- `musl` archiver name in Docker (#4193)
-- smart contract debug print (#4178)
-- topology update on restart (#4164)
-- registration of new peer (#4142)
-- on-chain predictable iteration order (#4130)
-- re-architect logger and dynamic configuration (#4100)
-- trigger atomicity (#4106)
-- query store message ordering issue (#4057)
-- set `Content-Type: application/x-norito` for endpoints which reply using Norito
+- `logger.tokio_console_address` རིམ་སྒྲིག་ཚད་བཟུང་ (#4377)
+- `NotificationEvent` (#༤༣༧༧)
+- `Value` ཨེ་ནམ་ (#4305)
+- ཨའི་རོ་ཧ་ (#4229) ལས་ ཨེམ་ཨེསི་ཊི་བསྡོམས་རྩིས་ (#4229)
+- ISI གི་དོན་ལུ་ རིགས་མཚུངས་བཟོ་བཅོས་དང་ ཁག་འབག་རིག་པ་ནང་ འདྲི་དཔྱད་ལག་ལེན་འཐབ་ནི། (#4182)
+- `bridge` དང་ `dex` ཁྱད་ཆོས་ (#4152)
+- ལེབ་ལེབ་བཟོ་ཡོད་པའི་བྱུང་ལས་ (#3068).
+- གསལ་བརྗོད་ (#4089).
+- རང་བཞིན་གྱིས་བཟོ་ཡོད་པའི་རིམ་སྒྲིག་གཞི་བསྟུན།
+- `warp` དྲན་ཐོ་ནང་ (#༤༠༩༧)
 
-### Removed
+### ཉེན་སྲུང
 
-- `logger.tokio_console_address` configuration parameter (#4377)
-- `NotificationEvent` (#4377)
-- `Value` enum (#4305)
-- MST aggregation from iroha (#4229)
-- cloning for ISI and query execution in smart contracts (#4182)
-- `bridge` and `dex` features (#4152)
-- flattened events (#3068)
-- expressions (#4089)
-- auto-generated config reference
-- `warp` noise in logs (#4097)
-
-### Security
-
-- prevent pub key spoofing in p2p (#4065)
-- ensure the `secp256k1` signatures coming out of OpenSSL are normalized (#4155)
+- p2p (#4065) ནང་ པབ་ལྡེ་མིག་སྤུངས་ནི་ལས་ བཀག་ཐབས་འབད།
+- OpenSSL ལས་ཐོན་མི་ I18NI0000284X མཚན་རྟགས་ཚུ་ སྤྱིར་བཏང་བཟོ་ཡོདཔ་ངེས་གཏན་བཟོ།(#༤༡༥༥)
 
 ## [2.0.0-pre-rc.20] - 2023-10-17
 
-### Added
+### ཁ་སྐོང་རྐྱབ།- སྤོ་སོར་ `Domain` བདག་དབང་།
+- `Domain` བདག་དབང་གནང་བ།
+- I18NI0000287X ས་སྒོ་འདི་ `Domain` ལུ་ཁ་སྐོང་འབད།
+- `iroha_client_cli` (#3923) ནང་ JSON5 བཟུམ་སྦེ་ ཚགས་མ་སྦེ་དབྱེ་དཔྱད་འབད།
+- སེརཌི་ཆ་ཤས་ཅིག་རྟགས་བཀལ་ཡོད་པའི་ཨེ་ནམ་ཚུ་ནང་ རང་དོན་དབྱེ་བ་ལག་ལེན་འཐབ་ནིའི་དོན་ལུ་རྒྱབ་སྐྱོར་ཁ་སྐོང་རྐྱབས།
+- སྡེབ་ཚན་ཨེ་པི་ཨའི་ (#3884) ཚད་ལྡན་བཟོ་ནི།
+- `Fast` ཀུ་ར་ཨིན་ཊི་ཐབས་ལམ་ལག་ལེན་འཐབ།
+- iroha_swarm ཕྱིར་འཐེན་མགོ་ཡིག་ཁ་སྐོང་འབད།
+- ཌབ་ལུ་ཨེསི་ཝི་པར་ལེན་ཚུ་གི་དོན་ལུ་ འགོ་ཐོག་རྒྱབ་སྐྱོར་།
 
-- Transfer `Domain` ownership
-- `Domain` owner permissions
-- Add `owned_by` field to `Domain`
-- parse filter as JSON5 in `iroha_client_cli` (#3923)
-- Add support for usage of Self type in serde partially tagged enums
-- Standardize block API (#3884)
-- Implement `Fast` kura init mode
-- Add iroha_swarm disclaimer header
-- initial support for WSV snapshots
+### བརྟན༌པོ
 
-### Fixed
+- update_configs.sh (#3990) ནང་ཕབ་ལེན་འབད་མི་ བཀོལ་སྤྱོད་པ་ བདེ་སྒྲིག་འབད།
+- devShell ནང་ རསཊི་སི་ ཡང་དག་པ།
+- གཏན་བཟོས་ `Trigger` རིམ་འགྱུར་ཚུ།
+- གཏན་བཟོས་སྤོ་སོར་ `AssetDefinition`
+- `RemoveKeyValue` གི་དོན་ལུ་ `Domain`
+- `Span::join` གི་ལག་ལེན།
+- ཊོ་པོ་ལོ་ཇི་མ་མཐུན་པའི་འབུཔ་ (#3903)
+- `apply_blocks` དང་ `validate_blocks` གི་ཚད་གཞི་
+- `mkdir -r` ཚོང་ཁང་འགྲུལ་ལམ་དང་གཅིག་ཁར་, ལྡེ་མིག་འགྲུལ་ལམ་ (#3908)མེན།
+- ཌིར་འདི་ test_env.py ནང་ལུ་ཡོད་པ་ཅིན་ འཐུས་ཤོར་མ་འབད།
+- བདེན་བཤད་/ ཆ་ལག་ ཡིག་ཆ་ (#3876) གཏན་བཟོས་འབད།
+- འདྲི་དཔྱད་ཀྱི་དོན་ལུ་ འཛོལ་བའི་འཕྲིན་དོན་ལེགས་ཤོམ་འཚོལ་ནི།
+- dev ཌོག་ཀར་བརྩམ་ནིའི་དོན་ལུ་ རིགས་མཚན་རྩིས་ཁྲའི་མི་མང་ལྡེ་མིག་ཁ་སྐོང་འབད།
+- JSON (#3855) བཟུམ་སྦེ་ གནང་བ་ཊོ་ཀེན་པེ་ལོཌི་འདི་ ག་བསྡུར་འབད།
+- `irrefutable_let_patterns` ནང་ I18NI000000300X མེཀ་རོ་ལུ།
+- རིགས་མཚན་གང་རུང་ཅིག་ ལག་ལེན་འཐབ་བཅུག། (#3850)
+- གཏན་འཇགས་རིགས་མཚན་བདེན་དཔང་ (#3844)
+- མཉམ་རོགས་ ༣ ཡང་ན་ དེ་ལས་ཉུང་བའི་ ཊོ་པོ་ལོ་ཇི་ བདེ་སྒྲིག་འབད།
+- tx_Auneles histogram འདི་ ག་དེ་སྦེ་རྩིས་སྟོན་ཡོདཔ་ཨིན་ན་ ནོར་བཅོས་འབད།
+- `genesis_transactions_are_validated()` བརྟག་དཔྱད།
+- སྔོན་སྒྲིག་བདེན་དཔྱད་བཟོ་མི།
+- ཨའི་རོ་ཧ་ བྱིན་རླབས་ཅན་གྱི་སྒོ་བསྡམས།
 
-- Fix executor downloading in update_configs.sh (#3990)
-- proper rustc in devShell
-- Fix burn `Trigger` reprtitions
-- Fix transfer `AssetDefinition`
-- Fix `RemoveKeyValue` for `Domain`
-- Fix the usage of `Span::join`
-- Fix topology mismatch bug (#3903)
-- Fix `apply_blocks` and `validate_blocks` benchmark
-- `mkdir -r` with store path, not lock path (#3908)
-- Don't fail if dir exists in test_env.py
-- Fix authentication/authorization docstring (#3876)
-- Better error message for query find error
-- Add genesis account public key to dev docker compose
-- Compare permission token payload as JSON (#3855)
-- Fix `irrefutable_let_patterns` in the `#[model]` macro
-- Allow genesis to execute any ISI (#3850)
-- Fix genesis validation (#3844)
-- Fix topology for 3 or less peers
-- Correct how tx_amounts histogram is calculated.
-- `genesis_transactions_are_validated()` test flakiness
-- Default validator generation
-- Fix iroha graceful shutdown
-
-### Refactor
-
-- remove unused dependencies (#3992)
-- bump dependencies (#3981)
-- Rename validator to executor (#3976)
-- Remove `IsAssetDefinitionOwner` (#3979)
-- Include smart contract code into the workspace (#3944)
-- Merge API and Telemetry endpoints into a single server
-- move expression len out of public API into core (#3949)
-- Avoid clone in roles lookup
-- Range queries for roles
-- Move account roles to `WSV`
-- Rename ISI from *Box to *Expr (#3930)
-- Remove 'Versioned' prefix from versioned containers (#3913)
-- move `commit_topology` into block payload (#3916)
-- Migrate `telemetry_future` macro to syn 2.0
-- Registered with Identifiable in ISI bounds (#3925)
-- Add basic generics support to `derive(HasOrigin)`
-- Clean up Emitter APIs documentation to make clippy happy
-- Add tests for derive(HasOrigin) macro, reduce repetition in derive(IdEqOrdHash), fix error reporting on stable
-- Improve naming, simplify repeated .filter_maps & get rid of unnecessary .except in derive(Filter)
-- Make PartiallyTaggedSerialize/Deserialize use darling
-- Make derive(IdEqOrdHash) use darling, add tests
-- Make derive(Filter) use darling
-- Update iroha_data_model_derive to use syn 2.0
-- Add signature check condition unit tests
-- Allow only a fixed set of signature verification conditions
-- Generalize ConstBytes into a ConstVec that holds any const sequence
-- Use a more efficient representation for bytes values that are not changing
-- Store finalized wsv in snapshot
-- Add `SnapshotMaker` actor
-- document limitation of parsing derives in proc macros
-- clean up comments
-- extract a common test utility for parsing attributes to lib.rs
-- use parse_display & update Attr -> Attrs naming
-- allow usage of pattern matching in ffi function args
-- reduce repetition in getset attrs parsing
-- rename Emitter::into_token_stream into Emitter::finish_token_stream
-- Use parse_display to parse getset tokens
-- Fix typos and improve error messages
-- iroha_ffi_derive: use darling to parse attributes and use syn 2.0
-- iroha_ffi_derive: replace proc-macro-error with manyhow
-- Simplify kura lock file code
-- make all numeric values serialize as string literals
-- Split off Kagami (#3841)
-- Rewrite `scripts/test-env.sh`
-- Differentiate between smart contract and trigger entrypoints
-- Elide `.cloned()` in `data_model/src/block.rs`
-- update `iroha_schema_derive` to use syn 2.0
+### ལུ་བསྐྱར་བཟོ་འབད་ནི།- ལག་ལེན་མ་འཐབ་པའི་བརྟེན་པ་ཚུ་བཏོན་གཏང་ (#3992)
+- བམ་བརྟེན་ (#3981).
+- བཀོལ་སྤྱོད་པ་ལུ་ བདེན་དཔྱད་འབད་མི་ (#3976) བསྐྱར་མིང་བཏགས།
+- `IsAssetDefinitionOwner` བཏོན་གཏང་། (#3979)
+- ལཱ་གི་ས་སྒོ་ནང་ ཡིག་ཆའི་གསང་ཡིག་ གསང་ཡིག་ཨང་རྟགས་ (#༣༩༤༤) ནང་བཙུགས།
+- ཨེ་པི་ཨའི་ དང་ ཊེ་ལི་མི་ཊི་ མཐའ་མཚམས་ཚུ་ སར་བར་གཅིག་ནང་ མཉམ་བསྡོམས་འབད།
+- འགུལ་སྐྱོད་ཀྱི་གསལ་བརྗོད་ལེན་འདི་ མི་མང་ཨེ་པི་ཨའི་ལས་ ཀོར་ (#3949) ལུ་ཐོན་ཡོདཔ།
+- འགན་ཁུར་བལྟ་ནི་ལུ་ རིགས་མཚུངས་བཟོ་ནི་ལས་འཛེམ་དགོ།
+- ལས་འགན་ཚུ་གི་དོན་ལུ་ ཁྱབ་ཚད་འདྲི་དཔྱད་ཚུ།
+- རྩིས་ཁྲའི་ལས་འགན་ཚུ་ `WSV` ལུ་སྤོ་བཤུད་འབད།
+- *Box ལས་ *Expr (#3930) ལུ་ ཨའི་ཨེསི་ཨའི་ བསྐྱར་མིང་བཏགས།
+- ཐོན་རིམ་བཟོ་ཡོད་པའི་དོས་ཚུ་ལས་ 'ཐོན་རིམ་' སྔོན་སྒྲིག་བཏོན་གཏང་། (#3913)
+- བཀག་ཆ་པེ་ལོཌི་ནང་ `commit_topology` གཡོ་འགུལ་ (#3916)
+- `telemetry_future` མེཀ་རོ་ལུ་ སིན་ ༢.༠ ལུ་ གནས་སྤོ་འབད།
+- ISI གི་མཐའ་མཚམས་ནང་ངོས་འཛིན་འབད་ཚུགས་པའི་ངོས་འཛིན་ཐོག་ལས་ཐོ་བཀོད་འབད་ཡོདཔ། (#3925)
+- གཞི་རིམ་གྱི་རྒྱབ་སྐྱོར་ `derive(HasOrigin)` ལུ་ཁ་སྐོང་འབད།
+- དགའ་ཏོག་ཏོ་སྦེ་བཤུབ་ནིའི་དོན་ལུ་ ཨེ་མི་ཊི་ཊར་ཨེ་པི་ཨའི་ ཡིག་ཆ་ཚུ་ གཙང་མ་བཟོ་ནི།
+- འབྱུང་ཁུངས་(HasOrigin) མེཀ་རོ་གི་དོན་ལུ་བརྟག་དཔྱད་ཚུ་ཁ་སྐོང་འབད།
+- མིང་བཏགས་ཡར་རྒྱས་གཏང་ནི། བསྐྱར་ལོག་འབད་མི་ .filter_maps དང་ derive(ཚགས་མ་) མ་གཏོགས་ .filter_maps དང་ དགོས་མཁོ་མེད་པའི་ བཏོན་གཏང་།
+- ཆ་ཤས་དབྱེ་བསྒྲགས་རིམ་སྒྲིག་/ཚད་མེད་ལག་ལེན་འཐབ།
+- བཏོན་གཏང་ནི་(IdEqOrdHash) འདི་ darling ལག་ལེན་འཐབ་ཨིན།
+- བཏོན་གཏང་ནི་(ཚགས་མ་) darling ལག་ལེན་འཐབ།
+- syn 2.0 ལག་ལེན་འཐབ་ནིའི་དོན་ལུ་ iroha_data_model_derive དུས་མཐུན་བཟོ་ནི།
+- མཚན་རྟགས་ཞིབ་དཔྱད་གནས་སྟངས་ཡུ་ནིཊི་བརྟག་དཔྱད་ཚུ་ཁ་སྐོང་རྐྱབས།
+- མཚན་རྟགས་བདེན་དཔྱད་གནས་སྟངས་ཀྱི་གཏན་བཟོའི་ཆ་ཚན་ཅིག་རྐྱངམ་ཅིག་འབད་བཅུག།
+- རྒྱུན་རིམ་གྱི་རིམ་པ་གང་རུང་ཅིག་འཛིན་མི་ ཀོན་སི་ཊི་ཝེཀ་ནང་ ཀོན་སི་ཊི་བཱའིཊི།
+- བསྒྱུར་བཅོས་མ་འབད་མི་ བཱའིཊིསི་གནས་གོང་ཚུ་གི་དོན་ལུ་ ངོ་ཚབ་འཇོན་ཐངས་ཅན་ཅིག་ ལག་ལེན་འཐབ།
+- པར་ལེན་ནང་ wsv མཇུག་བསྡུའི་སྒྲུང་བཞག་ནི།
+- `SnapshotMaker` འཁྲབ་རྩེདཔ་ཁ་སྐོང་འབད།
+- proc mcros ནང་ མིང་དཔྱད་འབད་སའི་ ཡིག་ཆ་ཚད་འཛིན།
+- བསམ་བརྗོད་གཙང་མ་བཟོ་ནི།
+- lib.rs ལུ་དབྱེ་དཔྱད་འབད་ནིའི་དོན་ལུ་ སྤྱིར་བཏང་བརྟག་དཔྱད་ལག་ལེན་ཅིག་ བཏོན་གཏང།
+- parse_display & དུས་མཐུན་བཟོ་ནིའི་ Atr -> attrs མིང་བཏགས་ནི།
+- ཕི་ལས་འགན་ཨར་ཇི་ནང་ དཔེ་རིས་མཐུན་སྒྲིག་འབད་ནིའི་ལག་ལེན་འཐབ་བཅུག།
+- getset attrs དཔྱད་ཞིབ་ནང་ བསྐྱར་ལོག་བསྐྱར་གསོ་འབད་ནི།
+- rename Emitter::into_token_རྒྱུན་ལམ་ Emitter::finish_token_རྒྱུན་ལམ།
+- parse_display ལག་ལེན་འཐབ།
+- ཊའི་པོསི་ཚུ་ བཅོ་ཁ་རྐྱབ་ནི་དང་ འཛོལ་བའི་འཕྲིན་དོན་ཚུ་ ཡར་དྲག་གཏང་ནི།
+- iroha_ffi_derive: ཁྱད་ཆོས་ཚུ་དབྱེ་དཔྱད་འབད་ནི་ལུ་ darling ལག་ལེན་འཐབ་ཞིནམ་ལས་ syn 2.0 ལག་ལེན་འཐབ།
+- iroha_ffi_derive: how དང་འདྲ་བའི་ proc-macro-འཛོལ་བ་ཚབ་བཙུགས་ནི།
+- ཀུ་ར་ལྡེ་མིག་ཡིག་སྣོད་ཨང་རྟགས་འཇམ་ཏོང་ཏོ་བཟོ།
+- ཨང་གྲངས་ཀྱི་གནས་གོང་ཚུ་ཆ་མཉམ་ ཡིག་རྒྱུན་ཡིག་གཟུགས་སྦེ་ རིམ་སྒྲིག་འབད་བཅུག།
+- I18NT000000035X (#3841) བཏོན་གཏང་།
+- `scripts/test-env.sh` བསྐྱར་འབྲི་
+- མཉེན་ཆས་དང་ ཊི་གར་འཛུལ་སྒོ་ཚུ་གི་བར་ན་ ཁྱད་པར་བཟོ་ནི།
+- `.cloned()` ནང་ I18NI0000000310X ནང་།
+- syn 2.0 ལག་ལེན་འཐབ་ནིའི་དོན་ལུ་ `iroha_schema_derive` དུས་མཐུན་བཟོ་ནི།
 
 ## [2.0.0-pre-rc.19] - 2023-08-14
 
-### Added
+### ཁ་སྐོང་རྐྱབ།- hyperledger#3309 ཡར་རྒྱས་གཏང་ནིའི་དོན་ལུ་ I18NT0000111X གཡོག་བཀོལ་བའི་དུས་ཚོད་བཤུད།
+- hyperledger#3383 བསྡུ་སྒྲིག་འབད་བའི་དུས་ཚོད་ལུ་ སོ་ཀེཊི་ཁ་བྱང་ཚུ་དབྱེ་དཔྱད་འབད་ནི་ལུ་ མེཀ་རོ་འདི་ལག་ལེན་འཐབ།
+- ཧའི་པར་ལེ་ཇར་#2398 འདྲི་དཔྱད་ཚགས་མ་ཚུའི་དོན་ལུ་ མཉམ་བསྡོམས་བརྟག་ཞིབ་ཁ་སྐོང་རྐྱབས།
+- `InternalError` ནང་འཛོལ་བའི་འཕྲིན་དོན་ངོ་མ།
+- སྔོན་སྒྲིག་ལག་ཆས་-རིམ་སྒྲིག་སྦེ་ `nightly-2023-06-25` གི་ལག་ལེན་འཐབ་སྟེ།
+- ཧའི་པར་ལེ་ཇར་#3692 བདེན་དཔྱད་ཀྱི་གནས་སྤོ།
+- [DSL སློབ་སྦྱོང་།] hyperledger#3688: གཞི་རྟེན་ཨང་རྩིས་རིག་པ་འདི་ proc macro བཟུམ་སྦེ་ལག་ལེན་འཐབ།
+- hyperledger #3371 བགོ་བཤའ་བདེན་དཔྱད་འབད་མི་ I18NI000000314X བདེན་དཔྱད་འབད་མི་ཚུ་ ད་ལས་ཕར་ smart-གན་ཡིག་སྦེ་བལྟ་མ་ཚུགསཔ་སྦེ་ ངེས་གཏན་བཟོ་ནི་ལུ་ ངེས་གཏན་བཟོཝ་ཨིན།
+- hyperledger#3651 WSV པར་ལེན་ཚུ་ བརྡབ་འགྱོ་བའི་ཤུལ་ལས་ Iroha གི་ མཐུད་མཚམས་མགྱོགས་པ་རང་འབག་འོང་།
+- hyperledger#3752 `MockValidator` འདི་ ཚོང་འབྲེལ་ཆ་མཉམ་དང་ལེན་འབད་མི་ `Initial` བདེན་དཔྱད་འབད་མི་ཅིག་དང་གཅིག་ཁར་ ཚབ་བཙུགས།
+- hyperledger#3276 I18NI000000317X ཟེར་མི་གནས་སྐབས་བཀོད་རྒྱ་ཁ་སྐོང་རྐྱབས་ ཡིག་རྒྱུན་འདི་ I18NT0000005X node གི་དྲན་ཐོ་ངོ་མ་ལུ་ ནང་བསྐྱོད་འབདཝ་ཨིན།
+- hyperledger#3641 གནང་བ་འདི་ མི་གིས་ལྷག་ཚུགསཔ་བཟོ།
+- hyperledger#3324 ཁ་སྐོང་ `iroha_client_cli` འབྲེལ་བ་ཡོད་པའི་ `burn` ཞིབ་དཔྱད་དང་ བསྐྱར་བཟོ་འབད་ནི།
+- hyperledger#3781 རིགས་མཚན་ཚོང་འབྲེལ་ཚུ་བདེན་དཔྱད་འབདཝ་ཨིན།
+- ཧའི་པར་ལེ་ཇར་#2885 བྱུང་ལས་ཚུའི་བར་ན་ཁྱད་པར་ཕྱེ་ནི་ཨིན་པའི་ གཞི་བསྟུན་ཚུ་གི་དོན་ལུ་ལག་ལེན་འཐབ་བཏུབ་དང་ལག་ལེན་འཐབ་མ་བཏུབ།
+- hyperledger#2245 `Nix`- གཞི་བཞག་པའི་ ཨི་རོ་ཧ་ མཐུད་མཚམས་གཉིས་ལྡན་གྱི་ `AppImage` ཨིན།
 
-- hyperledger#3309 Bump IVM runtime for improved
-- hyperledger#3383 Implement macro to parse a socket addresses at compile time
-- hyperledger#2398 Add integration tests for query filters
-- Include the actual error message in `InternalError`
-- Usage of `nightly-2023-06-25` as the default tool-chain
-- hyperledger#3692 Validator migration
-- [DSL internship] hyperledger#3688: Implement basic arithmetic as proc macro
-- hyperledger#3371 Split validator `entrypoint` to ensure that validators are no longer viewed as smart-contracts
-- hyperledger#3651 WSV snapshots, which allow to bring up an Iroha node quickly after a crash
-- hyperledger#3752 Replace `MockValidator` with an `Initial` validator that accepts all transactions
-- hyperledger#3276 Add temporary instruction called `Log` that logs a specified string to the main log of the Iroha node
-- hyperledger#3641 Make the permission token payload human-readable
-- hyperledger#3324 Add `iroha_client_cli` related `burn` checks and refactoring
-- hyperledger#3781 Validate genesis transactions
-- hyperledger#2885 Differentiate between events that can and cannot be used for triggers
-- hyperledger#2245 `Nix`-based build of iroha node binary as `AppImage`
+### བརྟན༌པོ
 
-### Fixed
+- ཧའི་པར་ལེ་ཇར་#3613 ཕྱིར་ལོག་འབད་བཅུག་མི་ བསྐྱར་འགྱུར་མིང་རྟགས་བཀོད་ཡོད་པའི་ཚོང་འབྲེལ་ཚུ་ ཆ་འཇོག་འབད་ཡོདཔ།
+- རིམ་སྒྲིག་ནོར་འཁྲུལ་ཅན་གྱི་ རིམ་སྒྲིག་ ཊོ་པོ་ལོ་ཇི་འདི་ ཧེ་མ་ལས་ བཀག་ཆ་འབད་ནི།
+- hyperledger#3445 བདེ་སྒྲིག་འབད་ཞིནམ་ལས་ I18NI000000323X མཐའ་མཇུག་ལཱ་གུ་ `POST` བཟོ།
+- hyperledger #3654 གཏན་འཁེལ་ `iroha2` `glibc`- གཞི་བསྟུན་ I18NI000000326X-based
+- hyperledger#3451 བདེ་སྒྲིག་ `docker` ཨེ་པཱལ་སི་ལི་ཀོན་མེཀསི་གུ་བསྐྲུན།
+- hyperledger#3741 I18NI0000328X འཛོལ་བ་ `kagami validator` ནང་ བདེ་སྒྲིག་འབད།
+- hyperledger #3758 ངོ་རྐྱང་ཀེརེསི་བཟོ་མ་ཚུགས་པའི་ འགྱུར་ལྡོག་ཅན་གྱི་ རི་གེ་རེ་ཤཱན་ དེ་འབདཝ་ད་ ལཱ་གི་ས་སྒོ་གི་ཆ་ཤས་ཅིག་སྦེ་ བཟོ་བསྐྲུན་འབད་ཚུགས།
+- ཧའི་པར་ལེ་ཇར་#3777 འགན་འཁུར་གྱི་ཐོ་འགོད་འདི་བདེན་དཔྱད་མ་འབད་བའི་ པཏ་ཅ་ལུཕལ།
+- hyperledger#3805 གཏན་བཟོས་ I18NT0000056X `SIGTERM` ཐོབ་པའི་ཤུལ་ལས་ སྒོ་བསྡམ་མ་བཏུབ།
 
-- hyperledger#3613 Regression which could allow incorrectly signed transactions to be accepted
-- Reject incorrect Configuration topology early
-- hyperledger#3445 Fix regression and make `POST` on the `/configuration` endpoint work again
-- hyperledger#3654 Fix `iroha2` `glibc`-based `Dockerfiles` to be deployed
-- hyperledger#3451 Fix `docker` build on Apple silicon macs
-- hyperledger#3741 Fix `tempfile` error in `kagami validator`
-- hyperledger#3758 Fix regression where individual crates could not be built, but could be built as part of the workspace
-- hyperledger#3777 Patch loophole in role registration not being validated
-- hyperledger#3805 Fix Iroha not shutting down after receiving `SIGTERM`
+### གཞན
 
-### Other
-
-- hyperledger#3648 Include `docker-compose.*.yml` check in the CI processes
-- Move instruction `len()` from `iroha_data_model` into `iroha_core`
-- hyperledger#3672 Replace `HashMap` with `FxHashMap` in derive macros
-- hyperledger#3374 Unify error's doc-comments and `fmt::Display` implementation
-- hyperledger#3289 Use Rust 1.70 workspace inheritance throughout project
-- hyperledger#3654 Add `Dockerfiles` to build iroha2 on `GNU libc <https://www.gnu.org/software/libc/>`_
-- Introduce `syn` 2.0, `manyhow` and `darling` for proc-macros
-- hyperledger#3802 Unicode `kagami crypto` seed
+- hyperledger#3648 ནང་ སི་ཨའི་བྱ་རིམ་ནང་ `docker-compose.*.yml` ཞིབ་དཔྱད་འབད།
+- བཀོད་རྒྱ་ `len()` ལས་ I18NI000000333X ལས་ I18NI000000334X ལུ་སྤོ་བཤུད་འབད།
+- hyperledger#3672 `HashMap` འདི་ བཏོན་གཏང་ཡོད་པའི་མེཀ་རོ་ཚུ་ནང་ I18NI000000336X དང་ཅིག་ཁར་ཚབ་བཙུགས་འབད།
+- hyperledger#3374 འཛོལ་བ་གི་ ཡིག་ཆ་-བསམ་བཀོད་དང་ I18NI000000337X ལག་ལེན་འཐབ་ནི།
+- hyperledger#3289 ལས་འགུལ་ཆ་མཉམ་ནང་ རཱསི་ ༡.༧༠ ལཱ་གི་ས་སྒོ་ ཤུལ་འཛིན་ལག་ལེན་འཐབ།
+- hyperledger#3654 I18NI000000339X_ ལུ་ iroha2 བཟོ་བསྐྲུན་འབད་ནི་ལུ་ I18NI000000338X ཁ་སྐོང་འབད།
+- `syn` 2.0, `manyhow` དང་ I18NI000000342X proc-macros གི་དོན་ལུ་ ངོ་སྤྲོད་འབདཝ་ཨིན།
+- hyperledger#3802 ཡུ་ནི་ཀོཌ་ I18NI0000034X ས་བོན་
 
 ## [2.0.0-pre-rc.18]
 
-### Added
+### ཁ་སྐོང་རྐྱབ།
 
-- hyperledger#3468: Server-side cursor, which allows for lazily evaluated re-entrant pagination which should have major positive performance implications for query latency
-- hyperledger#3624: General purpose permission tokens; specifically
-  - Permissions tokens can have any structure
-  - Token structure is self-described in the `iroha_schema` and serialised as a JSON string
-  - Token value is `Norito`-encoded
-  - as a consequence of this change permission token naming convention was moved from `snake_case` to `UpeerCamelCase`
-- hyperledger#3615 Preserve wsv after validation
+- hyperledger #3468: འདྲི་དཔྱད་ཀྱི་ བར་ཆད་ཀྱི་ ལས་དོན་ལེགས་ཤོམ་གྱི་ བརྡ་སྟོན་འབད་དགོ་པའི་ ལྕེ་གི་ཕྱོགས་ཀྱི་ འོད་རྟགས་འདི་གིས་ ལོག་སྟེ་འཛུལ་ཞུགས་འབད་མི་ ལོག་སྟེ་འཛུལ་ཞུགས་འབད་བཅུགཔ་ཨིན།
+- hyperledger#3624: སྤྱིར་བཏང་དམིགས་ཡུལ་གྱི་གནང་བ་ཊོ་ཀེན་ཚུ། དམིགས་གསལ་;
+  - གནང་བ་ཚུ་ ཊོ་ཀེན་ཚུ་ལུ་ གཞི་བཀོད་གང་རུང་འོང་།
+  - ཊོ་ཀེན་གཞི་བཀོད་འདི་ I18NI000000344X ནང་ རང་གིས་འགྲེལ་བཤད་རྐྱབ་ཡོདཔ་དང་ JSON ཡིག་རྒྱུན་སྦེ་ རིམ་སྒྲིག་འབད་ཡོདཔ་ཨིན།
+  - ཊོ་ཀེན་གནས་གོང་ `Norito`-encoded ཨིན།
+  - འགྱུར་བའི་གནང་བ་འདི་གི་འབྲས་བུ་ཅིག་སྦེ་ `snake_case` ལས་ `UpeerCamelCase` ལུ་སྤོ་བཤུད་འབད་ཡོདཔ་ཨིན།
+- ཧའི་པར་ལེ་ཇར་#3615 བདེན་དཔྱད་ཀྱི་ཤུལ་ལས་ wsv ཉམས་སྲུང་འབད།
 
-### Fixed
+### བརྟན༌པོ- hyperledger #3627 ད་ལྟ་ `WorlStateView` རིགས་མཚུངས་བཟོ་བཅོས་བྱས་པའི་བརྒྱུད་དེ་ བརྒྱུད་འཕྲིན་གྱི་རྡུལ་ཕྲན་བསྟར་སྤྱོད་འབད་ཡོདཔ།
+- hyperledger#3195 ངོས་ལེན་མེད་པའི་རིགས་མཚན་ཚོང་འབྲེལ་ཐོབ་པའི་སྐབས་ རྒྱ་བསྐྱེད་ཀྱི་འཇིགས་སྣང་གི་སྤྱོད་ལམ་བཏོན།
+- ཧའི་པར་ལེ་ཇར་#3042 ཞུ་བ་ངན་པའི་འཕྲིན་དོན་བཤུད།
+- hyperledger#3352 རྒྱུན་ལམ་སོ་སོར་ནང་ ཚད་འཛིན་རྒྱུན་འབབ་དང་ གནད་སྡུད་བརྡ་འཕྲིན་ཁ་ཕྱེ་ནི།
+- hyperledger#3543 མེ་ཊིགསི་གི་ གཏན་གཏན་ཡར་རྒྱས་གཏང་།
 
-- hyperledger#3627 Transaction atomicity now enforced via cloning of the `WorlStateView`
-- hyperledger#3195 Extend panic behaviour for when receiving a rejected genesis transaction
-- hyperledger#3042 Fix bad request message
-- hyperledger#3352 Split up control flow and data message into separate channels
-- hyperledger#3543 Improve precision of metrics
+## ༢.༠.༠-སྔོན་འགོག་-༡༧
 
-## 2.0.0-pre-rc.17
+### ཁ་སྐོང་རྐྱབ།
 
-### Added
+- hyperledger#3330 `NumericValue` རྩ་མེད་གཏང་ནི།
+- ཧའི་པར་ལེ་ཇར་#2622 `u128`/`i128` ཨེཕ་ཨེཕ་ཨའི་ནང་རྒྱབ་སྐྱོར།
+- hyperledger#3088 གྱལ་རིམ་ཐོགས་ནི་ངོ་སྤྲོད་, DoS བཀག་ཐབས་ལུ།
+- hyperledger#2373 `kagami swarm file` དང་ `kagami swarm dir` I18NI000000354X ཡིག་སྣོད་ཚུ་བཟོ་བཏོན་འབད་ནིའི་དོན་ལུ་ བརྡ་བཀོད་ཀྱི་དབྱེ་བ་ཚུ།
+- ཧའི་པར་ལེ་ཇར་#3597 གནང་བ་ཊོ་ཀེན་དབྱེ་དཔྱད།(I18NT0000057X ཕྱོགས།)
+- hyperledger#3353 འཛོལ་བ་གནས་སྟངས་ཚུ་རྩིས་སྟོན་དང་ ཤུགས་སྦེ་ཡིག་དཔར་རྐྱབས་ཡོད་པའི་འཛོལ་བ་ཚུ་ལག་ལེན་འཐབ་ཐོག་ལས་ I18NI000000355X ལས་ I18NI000000355X རྩ་བསྐྲད་གཏང་།
+- hyperledger#3318 ཚོང་འབྲེལ་ལས་སྦྱོར་གོ་རིམ་ཉམས་སྲུང་འབད་ནིའི་དོན་ལུ་ སྡེབ་ཚན་ཚུ་ནང་ ནང་འཁོད་བཀག་ཆ་དང་ངོས་ལེན་འབད་ཡོད་པའི་ ཚོང་འབྲེལ་ཚུ།
 
-- hyperledger#3330 Extend `NumericValue` deserialisation
-- hyperledger#2622 `u128`/`i128` support in FFI
-- hyperledger#3088 Introduce queue throttling, to prevent DoS
-- hyperledger#2373 `kagami swarm file` and `kagami swarm dir` command variants for generating `docker-compose` files
-- hyperledger#3597 Permission Token Analysis (Iroha side)
-- hyperledger#3353 Remove `eyre` from `block.rs` by enumerating error conditions and using strongly-typed errors
-- hyperledger#3318 Interleave rejected and accepted transactions in blocks to preserve transaction processing order
+### བརྟན༌པོ
 
-### Fixed
+- hyperledger#3075 I18NI000000357X ནང་ ནུས་མེད་ཚོང་འབྲེལ་ལུ་ ཚ་གྱང་ལང་སྟེ་ ནུས་མེད་ཚོང་འབྲེལ་ཚུ་ ལས་སྦྱོར་འབད་ནི་ལས་ བཀག་ཐབས་ལུ་ཨིན།
+- hyperledger#3461 སྔོན་སྒྲིག་རིམ་སྒྲིག་ནང་ སྔོན་སྒྲིག་གནས་གོང་ཚུ་ ལེགས་སྐྱོང་འཐབ་ནི་ལུ་ འོས་འབབ་ཅན།
+- hyperledger #3548 བཅོ་ཁ་ `IntoSchema` དྭངས་གསལ་ཁྱད་ཆོས།
+- hyperledger#3552 གཏན་འཇགས་བདེན་དཔྱད་འགྲུལ་ལམ་གྱི་ལས་རིམ་ཁྱད་ཚད།
+- hyperledger #3546 དུས་ཚོད་ཀྱི་ གཡོ་འགུལ་ཚུ་ ཐོགས་ལུས་པའི་དོན་ལུ་ བདེ་སྒྲིག་འབད།
+- hyperledger#3162 སྡེབ་ཚན་རྒྱུན་སྤེལ་གྱི་ཞུ་བ་ཚུ་ མཐོ་ཚད་ ༠ བཀག།
+- རིམ་སྒྲིག་མེཀ་རོ་ འགོ་ཐོག་བརྟག་དཔྱད།
+- hyperledger#3592 `release` གུ་དུས་མཐུན་བཟོ་བའི་ཡིག་སྣོད་ཚུ་གི་དོན་ལུ་ བདེ་སྒྲིག་འབད།
+- hyperledger#3246 I18NI000000361X_ མེད་པར་ I18NI000000360X_ ཚུད་མ་བཅུག།
+- hyperledger#3570 མཁོ་སྤྲོད་པ་-ཕྱོགས་ཀྱི་ཡིག་རྒྱུན་འདྲི་དཔྱད་ཀྱི་འཛོལ་བ་ཚུ་ ནོར་བཅོས་འབད་བཀྲམ་སྟོན་འབད།
+- ཧའི་པར་ལེ་ཇར་#3596 `iroha_client_cli` གིས་ སྡེབ་ཚན་/བྱུང་ལས་ཚུ་སྟོནམ་ཨིན།
+- hyperledger#3473 ཨའི་རོ་ཧ་མཛོད་ཁང་གི་ཕྱི་ཁ་ལས་ `kagami validator` ལཱ་འབད་བཅུག།
 
-- hyperledger#3075 Panic on invalid transaction in the `genesis.json` to prevent invalid transactions from being processed
-- hyperledger#3461 Proper handling of default values in default config
-- hyperledger#3548 Fix `IntoSchema` transparent attribute
-- hyperledger#3552 Fix validator path schema representation
-- hyperledger#3546 Fix for time triggers getting stuck
-- hyperledger#3162 Forbid 0 height in block streaming requests
-- Configuration macro initial test
-- hyperledger#3592 Fix for  config files being updated on `release`
-- hyperledger#3246 Don't involve `Set B validators <https://github.com/hyperledger-iroha/iroha/blob/main/docs/source/iroha_2_whitepaper.md#2-system-architecture>`_ without `fault <https://en.wikipedia.org/wiki/Byzantine_fault>`_
-- hyperledger#3570 Correctly display client-side string query errors
-- hyperledger#3596 `iroha_client_cli` shows blocks/events
-- hyperledger#3473 Make `kagami validator` work from outside the  iroha repository root directory
+### གཞན
 
-### Other
-
-- hyperledger#3063 Map transaction `hash` to block height in `wsv`
-- strongly-typed `HashOf<T>` in `Value`
+- hyperledger#3063 ས་ཁྲའི་ཚོང་འབྲེལ་ I18NI000000364X མཐོ་ཚད་འདི་ I18NI000000365X ནང་བཀག་ནི་ལུ་བཀག་དགོ།
+- ཤུགས་ཅན་སྦེ་ཡིག་དཔར་རྐྱབས་ཡོད་མི་ `HashOf<T>` ནང་ `Value` ལུ།
 
 ## [2.0.0-pre-rc.16]
 
-### Added
+### ཁ་སྐོང་རྐྱབ།
 
-- hyperledger#2373 `kagami swarm` sub-command for generating `docker-compose.yml`
-- hyperledger#3525 Standardize transaction API
-- hyperledger#3376 Add Iroha Client CLI `pytest <https://docs.pytest.org/en/7.4.x/>`_ automation framework
-- hyperledger#3516 Retain original blob hash in `LoadedExecutable`
+- hyperledger#2373 `kagami swarm` `docker-compose.yml` བཟོ་བཏོན་འབད་ནིའི་དོན་ལུ་ ཡན་ལག་བརྡ་བཀོད་ ཡན་ལག་བརྡ་བཀོད་ཨིན།
+- ཧའི་པར་ལེ་ཇར་#3525 ཚད་ལྡན་བཟོ་བའི་ཚོང་འབྲེལ་ཨེ་པི་ཨའི་
+- ཧའི་པར་ལེ་ཇར་#3376 ཁ་སྐོང་རྐྱབས་ Iroha མཁོ་མངགས་འབད་མི་ CLI `pytest <https://docs.pytest.org/en/7.4.x/>`_ རང་བཞིན་གཞི་བཀོད།
+- hyperledger #3516 `LoadedExecutable` ནང་ བློ་སྟོབས་ངོ་མ་བདག་འཛིན་འཐབ་ཨིན།
 
-### Fixed
+### བརྟན༌པོ
 
-- hyperledger#3462 Add `burn` asset command to `client_cli`
-- hyperledger#3233 Refactor error types
-- hyperledger#3330 Fix regression, by manually implementing `serde::de::Deserialize` for `partially-tagged <https://serde.rs/enum-representations.html>`_ `enums`
-- hyperledger#3487 Return missing types into the schema
-- hyperledger#3444 Return discriminant into schema
-- hyperledger#3496 Fix `SocketAddr` field parsing
-- hyperledger#3498 Fix soft-fork detection
-- hyperledger#3396 Store block in `kura` before emitting a block committed event
+- hyperledger#3462 `burn` རྒྱུ་དངོས་བརྡ་བཀོད་ `client_cli` ལུ་ཁ་སྐོང་འབད།
+- ཧའི་པར་ལེ་ཇར་#3233 སླར་འབྱུང་འཛོལ་བ་དབྱེ་བ་ཚུ།
+- hyperledger #3330 ཕིགསི་རི་གེ་, ལག་ཐོག་ལས་ I18NI000000374X གི་དོན་ལུ་ I18NI000000375X_ I18NI0000000376X གི་དོན་ལུ་ ལག་ལེན་འཐབ་ཐོག་ལས་ ཕིགསི།
+- hyperledger#3487 ལས་འཆར་ནང་ལུ་ དབྱེ་བ་མེད་པའི་དབྱེ་བ་ཚུ་ ལོག་གཏང་།
+- hyperledger#3444 ལོག་འོང་བའི་ ལས་འཆར་ནང་ བསྐྱར་སྒྲིག་འབད་མི།
+- ཧའི་པར་ལེ་ཇར་#3496 གཏན་བཟོས་ I18NI0000037X ས་སྒོ་དབྱེ་དཔྱད་འབད་ནི།
+- hyperledger#3498 འཇམ་སམ་འཇམ་པའི་ ཕོརཀ་བརྟག་དཔྱད།
+- hyperledger#3396 སྡེབ་ཚན་ཅིག་བཏོན་པའི་སྔོན་མ་ལས་ I18NI0000000378X ནང་ གསོག་འཇོག་བཀག་སྡོམ།
 
-### Other
+### གཞན
 
-- hyperledger#2817 Remove interior mutability from `WorldStateView`
-- hyperledger#3363 Genesis API refactor
-- Refactor existing and supplement with new tests for topology
-- Switch from `Codecov <https://about.codecov.io/>`_ to `Coveralls <https://coveralls.io/>`_  for test coverage
-- hyperledger#3533 Rename `Bool` to `bool` in schema
+- hyperledger#2817 `WorldStateView` ལས་ ནང་ནའི་རིགས་འགྱུར་བཏོན་གཏང་།
+- ཧའི་པར་ལེ་ཇར་#3363 བྱུང་རིམ་ཨེ་པི་ཨའི་ བསྐྱར་བཟོ་
+- ཊོ་པོ་ལོ་ཇི་གི་དོན་ལུ་ བརྟག་དཔྱད་གསརཔ་དང་གཅིག་ཁར་ ཡོད་དང་ ལྷན་ཐབས་འབད་ནི།
+- བརྟག་དཔྱད་ཁྱབ་ཚད་ཀྱི་དོན་ལུ་ `Codecov <https://about.codecov.io/>`_ ལས་ `Coveralls <https://coveralls.io/>`_ ལས་ སོར་བསྒྱུར་འབད།
+- hyperledger #3533 མིང་བསྐྱར་མིང་ `Bool` ལས་ I18NI000000383X ལུ་ ལས་འཆར་ནང་ལུ།
 
 ## [2.0.0-pre-rc.15]
 
-### Added
+### ཁ་སྐོང་རྐྱབ།- ཧའི་པར་ལེ་ཇར་#3231 མོ་ནོ་ལི་ཐིག་བདེན་དཔྱད་པ།
+- hyperledger#3015 FFI ནང་ nice ཡར་འཕེལ་གྱི་རྒྱབ་སྐྱོར།
+- hyperledger#2547 `AssetDefinition` ལུ་རྟགས་མཚན་ཁ་སྐོང་རྐྱབས།
+- hyperledger#3274 དཔེ་ཚུ་བཟོ་བཏོན་འབད་མི་ (རྒྱབ་རྟེན་འབད་ཡོདཔ་) ཡན་ལག་བཀོད་རྒྱ་ I18NI000000385X ལུ་ཁ་སྐོང་རྐྱབས་ནུག (རྒྱབ་བསྐྱོད།)
+- ཧའི་པར་ལེ་ཇར་#3415 I18NI00000386_
+- hyperledger#3412 ཚོང་འབྲེལ་ཁ་བསྡམས་འདི་ འཁྲབ་རྩེདཔ་སོ་སོ་ཅིག་ལུ་སྤོ་བཤུད་འབད།
+- hyperledger #3435 ངོ་སྤྲོད་ `Expression` ལྟ་སྐོར་པ།
+- hyperledger#3168 རིགས་བརྒྱུད་བདེན་དཔྱད་པ་ ཡིག་སྣོད་སོ་སོ་སྦེ་བྱིན།
+- hyperledger#3454 I18NT0000040X བཀོལ་སྤྱོད་དང་ཡིག་ཆའི་དོན་ལུ་ LTS སྔོན་སྒྲིག་བཟོ།
+- ཧའི་པར་ལེ་ཇར་#3090 བཀག་ཆ་ལས་ `sumeragi` ལུ་ རྒྱུན་རིམ་ཚད་གཞི་ཚུ་ ཁྱབ་སྤེལ་འབད།
 
-- hyperledger#3231 Monolithic validator
-- hyperledger#3015 Support for niche optimization in FFI
-- hyperledger#2547 Add logo to `AssetDefinition`
-- hyperledger#3274 Add to `kagami` a sub-command that generates examples (backported into LTS)
-- hyperledger#3415 `Nix <https://nixos.wiki/wiki/Flakes>`_ flake
-- hyperledger#3412 Move transaction gossiping to a separate actor
-- hyperledger#3435 Introduce `Expression` visitor
-- hyperledger#3168 Provide genesis validator as a separate file
-- hyperledger#3454 Make LTS the default for most Docker operations and documentation
-- hyperledger#3090 Propagate on-chain parameters from blockchain to `sumeragi`
+### བརྟན༌པོ
 
-### Fixed
+- hyperledger #3330 `u128` ལྷག་ལུས་ཚུ་དང་གཅིག་ཁར་ རིམ་སྒྲིག་མ་འབད་བའི་ཨེ་ནམ་ཌི་-རིམ་སྒྲིག་འདི་ (རྒྱབ་ཐག་ RC14 ནང་ལུ་)
+- hyperledger#2581 ནང་གི་ནང་གི་སྐད་ཆ་མར་ཕབ་འབད་ཡོདཔ།
+- ཧའི་པར་ལེ་ཇར་#3360 གཏན་བཟོས་ `tx/s` ཚད་གཞི་།
+- hyperledger#3393 `actors` ནང་ བརྒྱུད་འབྲེལ་བསྐྱར་འཁོར་བཀག་ཆ།
+- hyperledger#3402 གཏན་བཟོས་ `nightly` བཟོ་བསྐྲུན་
+- hyperledger#3411 མཉམ་རོགས་ དུས་མཉམ་མཐུད་ལམ་ཚུ་ ལེགས་ཤོམ་སྦེ་ འཛིན་སྐྱོང་འཐབ་ཨིན།
+- ཧའི་པར་ལེ་ཇར་#3440 གནས་སོར་གྱི་སྐབས་ལུ་ རྒྱུ་དངོས་གཞི་བསྒྱུར་ཚུ་ སྔོན་སྒྲིག་འབད་ཡོདཔ་ཨིན་ དེ་གི་ཚབ་ལུ་ སརཊི་-གན་ཡིག་ཚུ་གིས་ འཛིན་སྐྱོང་འཐབ་ཨིན།
+- ཧའི་པར་ལེ་ཇར་#3408: གཏན་བཟོས་ `public_keys_cannot_be_burned_to_nothing` བརྟག་དཔྱད།
 
-- hyperledger#3330 Fix untagged enum de-serialization with `u128` leaves (backported into RC14)
-- hyperledger#2581 reduced noise in logs
-- hyperledger#3360 Fix `tx/s` benchmark
-- hyperledger#3393 Break communication deadlock loop in `actors`
-- hyperledger#3402 Fix `nightly` build
-- hyperledger#3411 Properly handle peers simultaneous connection
-- hyperledger#3440 Deprecate asset conversions during transfer, instead handled by smart-contracts
-- hyperledger#3408: Fix `public_keys_cannot_be_burned_to_nothing` test
+### གཞན
 
-### Other
-
-- hyperledger#3362 Migrate to `tokio` actors
-- hyperledger#3349 Remove `EvaluateOnHost` from smart contracts
-- hyperledger#1786 Add `iroha`-native types for socket addresses
-- Disable IVM cache
-- Re-enable IVM cache
-- Rename permission validator into validator
-- hyperledger#3388 Make `model!` a module-level attribute macro
-- hyperledger#3370 Serialize `hash` as hexadecimal string
-- Move `maximum_transactions_in_block` from `queue` to `sumeragi` configuration
-- Deprecate and remove `AssetDefinitionEntry` type
-- Rename `configs/client_cli` into `configs/client`
-- Update `MAINTAINERS.md`
+- ཧའི་པར་ལེ་ཇར་#3362 I18NI000000394X འཁྲབ་རྩེདཔ་ཚུ་ལུ་སྤོ་བཤུད་འབདཝ་ཨིན།
+- hyperledger#3349 `EvaluateOnHost` གན་ཡིག་ཚུ་ནང་ལས་བཏོན་གཏང་།
+- hyperledger#1786 སོ་ཀེཊི་ཁ་བྱང་ཚུ་གི་དོན་ལུ་ `iroha`-native དབྱེ་བ་ཚུ་ཁ་སྐོང་རྐྱབས།
+- IVM འདྲ་མཛོད་ལྕོགས་མིན་བཟོ།
+- IVM འདྲ་མཛོད་བསྐྱར་སྣང།
+- བདེན་དཔྱད་འབད་མི་ལུ་ བདེན་དཔྱད་འབད་མི་ལུ་ བསྐྱར་མིང་བཏགས།
+- ཧའི་པར་ལེ་ཇར་#3388 མཐུད་ལམ་གནས་རིམ་གྱི་ཁྱད་ཆོས་མེ་ཀོརོ་ཅིག་ I18NI000000397X བཟོ།
+- hyperledger#3370 `hash` འདི་ ཧེག་ཟ་ཌི་སི་མཱལ་ཡིག་རྒྱུན་སྦེ་ རིམ་སྒྲིག་འབད།
+- I18NI000003999X `queue` ལས་ I18NI000000401X རིམ་སྒྲིག་ལུ་སྤོ་བཤུད་འབད།
+- `AssetDefinitionEntry` དབྱེ་བ་འདི་ བཤུབ་བཏང་ཞིནམ་ལས་ རྩ་བསྐྲད་གཏང་།
+- མིང་བསྒྱུར་ `configs/client_cli` I18NI000004040 ནང་ལུ།
+- `MAINTAINERS.md` དུས་མཐུན་བཟོ།
 
 ## [2.0.0-pre-rc.14]
 
-### Added
+### ཁ་སྐོང་རྐྱབ།
 
-- hyperledger#3127 data model `structs` opaque by default
-- hyperledger#3122 use `Algorithm` for storing digest function (community contributor)
-- hyperledger#3153 `iroha_client_cli` output is machine readable
-- hyperledger#3105 Implement `Transfer` for  `AssetDefinition`
-- hyperledger#3010 `Transaction` expire pipeline event added
+- ཧའི་པར་ལེ་ཇར་#3127 གནད་སྡུད་དཔེ་ཚད་ `structs` སྔོན་སྒྲིག་གིས་ ཁ་ཕྱེ་མ་ཚུགས་པས།
+- hyperledger#3122 བཞུ་བཅོས་ལས་འགན་ (མི་སྡེ་ཕན་འདེབས་འབད་མི་) གསོག་འཇོག་འབད་ནིའི་དོན་ལུ་ `Algorithm` ལག་ལེན་འཐབ།
+- hyperledger#3153 `iroha_client_cli` ཐོན་འབྲས་འདི་འཕྲུལ་ཆས་ལྷག་བཏུབ་ཨིན།
+- hyperledger#3105 `Transfer` འདི་ `AssetDefinition` གི་དོན་ལུ་ལག་ལེན་འཐབ།
+- hyperledger#3010 `Transaction` དུས་ཡོལ་པའིལ་ བྱུང་རིམ་ཁ་སྐོང་འབད་ཡོདཔ།
 
-### Fixed
+### བརྟན༌པོ
 
-- hyperledger#3113 revision of unstable network tests
-- hyperledger#3129 Fix `Parameter` de/serialisation
-- hyperledger#3141 Manually implement `IntoSchema` for `Hash`
-- hyperledger#3155 Fix panic hook in tests, preventing deadlock
-- hyperledger#3166 Don't view change on idle, improving performance
-- hyperledger#2123 Return to PublicKey de/serialization from multihash
-- hyperledger#3132 Add NewParameter validator
-- hyperledger#3249 Split block hashes into partial and complete versions
-- hyperledger#3031 Fix the UI/UX of missing configuration parameters
-- hyperledger#3247 Removed fault injection from `sumeragi`.
+- ཧའི་པར་ལེ་ཇར་#3113 བརྟན་མེད་ཡོངས་འབྲེལ་བརྟག་དཔྱད་བསྐྱར་ཞིབ།
+- hyperledger#3129 གཏན་བཟོས་ `Parameter` ཌི་/རིམ་སྒྲིག་འབད་ནི།
+- hyperledger#3141 `Hash` གི་དོན་ལུ་ `IntoSchema` ལག་ཐོག་ལས་ལག་ལེན་འཐབ་ཨིན།
+- hyperledger#3155 བརྟག་དཔྱད་ནང་ པེ་ནིག་ ཧུཀ་ བདེ་སྒྲིག་འབད་ནི།
+- hyperledger#3166 ལས་མེད་གུ་བསྒྱུར་བཅོས་ལུ་མ་བལྟ་བ་ ལཱ་འགན་ལེགས་བཅོས་འབད།
+- hyperledger#2123 མལ་ཊི་ཧཤ་ལས་ མི་མང་ཀི་ཌི་/རིམ་སྒྲིག་ལུ་ལོག་འགྱོ།
+- ཧའི་པར་ལེ་ཇར་#3132 ནིའུ་པེ་ར་མི་ཊར་བདེན་དཔྱད་པ་ཁ་སྐོང་རྐྱབས།
+- ཧའི་པར་ལེ་ཇར་#3249 བར་མཚམས་ ཐོན་རིམ་ཚུ་ནང་ལུ་ སིལ་བཀག་བཀག།
+- ཧའི་པར་ལེ་ཇར་#3031 རིམ་སྒྲིག་ཚད་བཟུང་མེད་པའི་ཡུ་ཨའི་/ཡུ་ཨེགསི་འདི་ བདེ་སྒྲིག་འབད།
+- hyperledger #3247 `sumeragi` ལས་ འཛོལ་བའི་ནོར་འཁྲུལ་བཏོན་གཏང་ཡོདཔ།
 
-### Other
+### གཞན
 
-- Add missing `#[cfg(debug_assertions)]` to fix spurious failures
-- hyperledger#2133 Rewrite topology to be closer the whitepaper
-- Remove `iroha_client` dependency on `iroha_core`
-- hyperledger#2943 Derive `HasOrigin`
-- hyperledger#3232 Share workspace metadata
-- hyperledger#3254 Refactor `commit_block()` and `replace_top_block()`
-- Use stable default allocator handler
-- hyperledger#3183 Rename the `docker-compose.yml` files
-- Improved the `Multihash` display format
-- hyperledger#3268 Globally unique item identifiers
-- New PR template
+- གཡོ་སྒྱུ་ཅན་གྱི་འཐུས་ཤོར་ཚུ་བསལ་ནིའི་དོན་ལུ་ བརླག་སྟོར་ཞུགས་མི་ I18NI0000416X ཁ་སྐོང་བརྐྱབ།
+- hyperledger#2133 དཀརཔོ་ཤོག་གུ་གི་སྦོ་ལོགས་ཁར་ ཊོ་པོ་ལོ་ཇི་ ལོག་འབྲི་དགོ།
+- `iroha_client` བརྟེན་པའི་ `iroha_core` ལུ་བརྟེན་དགོ།
+- hyperledger#2943 དེ་ Derive `HasOrigin`
+- ཧའི་པར་ལེ་ཇར་#3232 ལས་ཀའི་ས་སྟོང་མེ་ཊ་ཌེ་ཊ་ཤོར།
+- hyperledger#3254 བསྐྱར་བཟོ་ `commit_block()` དང་ `replace_top_block()`
+- བརྟན་ཏོག་ཏོ་སྦེ་ བགོ་བཀྲམ་འབད་མི་ འཛིན་སྐྱོང་པ་ལག་ལེན་འཐབ།
+- hyperledger#3183 `docker-compose.yml` ཡིག་སྣོད་ཚུ་བསྐྱར་མིང་བཏགས།
+- `Multihash` གསལ་སྟོན་རྩ་སྒྲིག་ཡར་དྲག་གཏང་ཡོདཔ།
+- hyperledger#3268 འཛམ་གླིང་ནང་གཞན་དང་མ་འདྲ་བའི་རྣམ་གྲངས་ངོས་འཛིན་འབད་མི།
+- PR གསར་པ་ ཊེམ་པེལེཊི་
 
 ## [2.0.0-pre-rc.13]
 
-### Added
+### ཁ་སྐོང་རྐྱབ།- ཧའི་པར་ལེ་ཇར་#2399 ཚད་བཟུང་ཚུ་ཨའི་ཨེསི་ཨའི་སྦེ་རིམ་སྒྲིག་འབད།
+- hyperledger#3119 `dropped_messages` མེ་ཊི།
+- hyperledger#3094 `n` མཉམ་རོགས་ཚུ་དང་གཅིག་ཁར་ ཡོངས་འབྲེལ་བཟོ་བཏོན་འབད།
+- hyperledger#3082 `Created` བྱུང་ལས་ནང་ གནད་སྡུད་ཆ་ཚང་བྱིན།
+- hyperledger#3021 དཔག་བྱེད་ནང་འདྲེན་ཨོ་པཀི་ཨོ་པཀ་འབད།
+- hyperledger#2794 ཨེཕ་ཨེཕ་ཨའི་ནང་ གསལ་ཏོག་ཏོ་སྦེ་ ཉེ་རིང་ཕྱེ་མི་ཚུ་དང་གཅིག་ཁར་ དངོས་མེད་ཀྱི་ས་སྒོ་ཚུ་ ཆ་མེད་གཏང་ནི།
+- hyperledger#2922 སྔོན་སྒྲིག་རིགས་མཚན་ལུ་ `Grant<Role>` ཁ་སྐོང་འབད།
+- hyperledger#2922 `inner` ནང་ `NewRole` json གི་ རིམ་སྒྲིག་མེདཔ་བཟོ་ནི།
+- hyperledger#2922 json རིམ་སྒྲིག་མེད་པའི་ནང་ Omit I18NI0000430X.
+- hyperledger#2922 ཨོ་མིཊ་ `Id` json ཉམས་ལེན་ནང་།
+- hyperledger#2922 json རིམ་སྒྲིག་ནང་ I18NI0000432X ནང་།
+- hyperledger#2963 མེ་ཊིགསི་ལུ་ I18NI0000043X ཁ་སྐོང་རྐྱབས།
+- hyperledger#3027 ཀུ་ར་གི་དོན་ལུ་ ལྡེ་མིག་ཡིག་སྣོད་ལག་ལེན་འཐབ་ཨིན།
+- hyperledger#2813 I18NT000000036X སྔོན་སྒྲིག་པི་ཡར་རིམ་སྒྲིག་བཟོ་བཏོན་འབདཝ་ཨིན།
+- ཧའི་པར་ལེ་ཇར་#3019 རྒྱབ་སྐྱོར་ཇེ་ཨེསི་ཨོ་ཨེན་༥།
+- ཧའི་པར་ལེ་ཇར་#2231 ཨེཕ་ཨེཕ་ཨའི་ བཀབ་ཆ་ཨེ་པི་ཨའི་ བཟོ་བཏོན་འབད།
+- hyperledger#2999 སྡེབ་ཚན་མིང་རྟགས་ཚུ་བསྡུ་གསོག་འབད།
+- hyperledger#2995 མཉེན་ཆས་ཕོརཀ་བརྟག་དཔྱད།
+- hyperledger#2905 `NumericValue` ལུ་རྒྱབ་སྐྱོར་འབད་ནིའི་དོན་ལུ་ ཨང་རྩིས་རིག་པའི་བཀོལ་སྤྱོད་རྒྱ་བསྐྱེད་འབད།
+- hyperledger#2868 ཨའི་རོ་ཧ་ཐོན་རིམ་འདི་བཏོན་ཞིནམ་ལས་ དྲན་ཐོ་ཚུ་ནང་ ཧེཤ་བླམ།
+- hyperledger#2096 རྒྱུ་དངོས་ཡོངས་བསྡོམས་ཀྱི་འདྲི་དཔྱད་འབད།
+- ཧའི་པར་ལེ་ཇར་#2899 'client_cli' ནང་ལུ་ སྣ་མང་བཀོད་རྒྱ་ཡན་ལག་ཚུ་ཁ་སྐོང་རྐྱབས།
+- hyperledger#2247 ཝེབ་སོ་ཀེཊི་བརྒྱུད་འབྲེལ་སྐད་ཆ་བཏོན་གཏང་།
+- hyperledger#2889 `iroha_client` ནང་ལུ་ སྡེབ་ཚན་རྒྱུན་སྤེལ་རྒྱབ་སྐྱོར་ཁ་སྐོང་རྐྱབས།
+- ཧའི་པར་ལེ་ཇར་#2280 འགན་ཁུར་འདི་གནང་བ་/ཆ་མེད་གཏང་པའི་སྐབས་ གློག་རིམ་གནང་བ་བྱུང་ལས་ཚུ།
+- hyperledger#2797 བྱུང་ལས་ཚུ་ ལྕོགས་ཅན་བཟོ།
+- hyperledger#2725 `submit_transaction_blocking` ནང་དུས་ཚོད་ཕྱིར་འགོར།
+- hyperledger#2712 རིམ་སྒྲིག་ཚུ་རིམ་སྒྲིག་འབད།
+- ཧའི་པར་ལེ་ཇར་#2491 ཨེཕ་ཕི་ནང་ ཨེ་ནམ་རྒྱབ་སྐྱོར་།
+- hyperledger#2775 བཅོས་མའི་རིགས་མཚན་ནང་ ལྡེ་མིག་སོ་སོ་བཟོ་ནི།
+- hyperledger#2627 རིམ་སྒྲིག་མཐའ་མཇུག་དང་ ངོ་ཚབ་འཛུལ་སྒོ་ ཀ་ག་མི་ཌོག་ཇེན་.
+- hyperledger#2765 `kagami` ནང་ བཅོས་མའི་རིགས་མཚན་བཟོ་ནི།
+- hyperledger#2698 `iroha_client` ནང་ འཛོལ་བའི་འཕྲིན་དོན་གསལ་པོ་མེད་པར་ བདེ་སྒྲིག་འབད།
+- hyperledger#2689 གནང་བ་གི་ཊོ་ཀེན་ངེས་ཚིག་ཚད་བཟུང་ཚུ་ཁ་སྐོང་རྐྱབས།
+- hyperledger#2502 བཟོ་བསྐྲུན་གྱི་ཇི་ཨའི་ཊི་ཧེཤ་ གསོག་འཇོག་འབད།
+- hyperledger#2672 `ipv4Addr`, `ipv6Addr` འགྱུར་ཅན་དང་ སྔོན་བརྡ་ཚུ་ཁ་སྐོང་འབདཝ་ཨིན།
+- hyperledger#2626 བཀོལ་སྤྱོད་ `Combine` འབྱུང་ཁུངས་, ཁ་ཕྱེ་ I18NI000000442X མེཀ་རོས།
+- hyperledger#2586 `Builder` དང་ `LoadFromEnv` གིས་ ངོ་ཚབ་སྒྲིག་བཀོད་ཚུ་གི་དོན་ལུ་ཨིན།
+- hyperledger#2611 སྤྱིར་བཏང་དྭངས་གསལ་སྒྲིག་བཀོད་ཚུ་གི་དོན་ལུ་ `TryFromReprC` དང་ `IntoFfi` ལས་བཏོན་ཡོདཔ་ཨིན།
+- hyperledger#2587 རང་གཤིས་གཉིས་ལུ་ `Configurable` བགོ་བཤའ་རྐྱབ། #2587: རང་གཤིས་གཉིས་ལུ་ I18NI0000448X ལུ་བགོ་བཤའ་རྐྱབ།
+- hyperledger#2488 `ffi_export` ནང་ རང་གཤིས་ལུ་རྒྱབ་སྐྱོར་ཁ་སྐོང་རྐྱབས།
+- hyperledger#2553 ཨེསི་ཊི་འདྲི་དཔྱད་ཚུ་ལུ་དབྱེ་སེལ་འབད་དོ།
+- ཧའི་པར་ལེ་ཇར་#2407 པེ་ར་མི་ཊི་རི་སི་ ཊི་ཊར་ཚུ།
+- hyperledger#2536 FFI མཁོ་སྤྲོད་པ་ཚུ་གི་དོན་ལུ་ I18NI000000450X ངོ་སྤྲོད་འབདཝ་ཨིན།
+- hyperledger#2338 `cargo-all-features` ལག་ཆས།
+- ཧའི་པར་ལེ་ཇར་#2564 I18NT0000003X ལག་ཆས་ཨཱལ་གོ་རི་དམ་གདམ་ཁ་ཚུ།
+- ཧའི་པར་ལེ་ཇར་#2490 རང་དབང་ལས་འགན་ཚུ་གི་དོན་ལུ་ fi_ཕྱིར་འདྲེན་ལག་ལེན་འཐབ།
+- ཧའི་པར་ལེ་ཇར་#1891 གློག་ཐག་བཀོལ་སྤྱོད་བདེན་དཔྱད་འབད།
+- hyperledger#1988 ངོས་འཛིན་འབད་བཏུབ་པའི་དོན་ལུ་ མེཀ་རོ་ཚུ་བཏོན་གཏངམ་ཨིན།
+- hyperledger#2434 ཨེཕ་ཨེཕ་ཨའི་ བཱའིན་ཇེན་དཔེ་མཛོད་།
+- hyperledger#2073 བཀག་ཆ་ནང་ དབྱེ་བ་ཚུ་གི་དོན་ལུ་ ཡིག་རྒྱུན་གུ་ལས་ ཡིག་རྒྱུན་ལུ་ གཙོ་བོར་བཏོན།
+- hyperledger#1889 མངའ་ཁོངས་-མཐོང་ཆས་འབད་ཡོད་པའི་ ཊི་གར་ཚུ་ཁ་སྐོང་རྐྱབས།
+- hyperledger#2098 བཀག་ཆའི་མགོ་ཡིག་འདྲི་བ། #2098: སྡེབ་ཚན་མགོ་ཡིག་འདྲི་དཔྱད་ཚུ་ཁ་སྐོང་རྐྱབས།
+- hyperledger#2467 རྩིས་ཐོ་གྲོགས་རམ་འོག་མ་འདི་ iroha_client_cli ནང་ལུ་ཁ་སྐོང་རྐྱབས།
+- ཧའི་པར་ལེ་ཇར་#2301 འདྲི་དཔྱད་འབད་བའི་སྐབས་ བརྗེ་སོར་གྱི་སྡེབ་ཚན་ཧེཤ་ཁ་སྐོང་རྐྱབས།
+ - hyperledger#2454 ཌི་ཀོཌར་ལག་ཆས་ལུ་ བཟོ་བསྐྲུན་ཡིག་ཚུགས་ཅིག་ཁ་སྐོང་རྐྱབས།
+- ཧའི་པར་ལེ་ཇར་#༢༠༦༡ ཚགས་མ་ཚུ་གི་དོན་ལུ་མེཀ་རོ་ལས་བཏོན་།- hyperledger#2228 འདྲི་དཔྱད་ཀྱི་འཛོལ་བ་ མཱརཊི་གན་རྒྱ་ཚུ་ལུ་ གནང་བ་མེད་པའི་དབྱེ་བ་ཁ་སྐོང་རྐྱབས།
+- hyperledger#2395 རིགས་མཚན་འདི་ ལག་ལེན་འཐབ་མ་ཚུགས་པ་ཅིན་ ཚ་གྱང་ཁ་སྐོང་འབད།
+- hyperledger#2000 མིང་སྟོངམ་ཚུ་ མཚམས་འཇོག་འབད། #2000: སྟོང་པའི་མིང་སྟོང་ཚུ་མ་སྟོན།
+ - hyperledger#2127 I18NT0000027X གིས་ ཌི་ཀོཌི་འབད་ཡོད་པའི་གནད་སྡུད་ཆ་མཉམ་རང་ བཟའ་སྤྱོད་འབད་ཡོདཔ་ངེས་གཏན་བཟོ་ནི་ལུ་ གཙང་སྦྲ་བརྟག་དཔྱད་ཁ་སྐོང་འབད།
+- hyperledger#2360 `genesis.json` གདམ་ཁ་ཅན་བཟོ།
+- hyperledger#2053 སྒེར་གྱི་བཀག་ཆ་ནང་ ལྷག་ལུས་འདྲི་དཔྱད་ཚུ་ཆ་མཉམ་ལུ་ བརྟག་དཔྱད་ཁ་སྐོང་རྐྱབས།
+- ཧའི་པར་ལེ་ཇར་#2381 མཉམ་བསྡོམས་ `Role` ཐོ་འགོད་འབད།
+- hyperledger#2053 སྒེར་གྱི་བཀག་ཆ་ནང་ རྒྱུ་དངོས་དང་འབྲེལ་བའི་འདྲི་དཔྱད་ཚུ་ལུ་ བརྟག་དཔྱད་ཁ་སྐོང་བརྐྱབ་ཨིན།
+- hyperledger#2053 'private_blockchain' ལུ་བརྟག་དཔྱད་ཁ་སྐོང་རྐྱབས།
+- hyperledger#2302 ཁ་སྐོང་ 'FindTriggersByDomainId' གི་འདྲི་དཔྱད་འབད།
+- hyperledger#1998 འདྲི་དཔྱད་ཚུ་ལུ་ཚགས་མ་ཚུ་ཁ་སྐོང་བརྐྱབ།
+- hyperledger#2276 ད་ལྟོའི་བཀག་ཆའི་ཧེ་ཤི་འདི་ བཀག་ཆ་འབད་ཡོད་པའི་བཀག་ཆ་ནང་བཙུགས་དགོ།
+- hyperledger#2161 Handle id དང་ བརྗེ་སོར་གྱི་ FFI fns.
+- ཁ་སྐོང་ལག་བཟུང་ཨའི་ཌི་དང་ བརྗེ་སོར་གྱི་རང་གཤིས་ (Clone, Eq, Ord) གི་ FFI འདྲ་མཉམ་ཚུ་ ལག་ལེན་འཐབ་ནི། (Clone, Eq, Ord)
+- hyperledger#1638 `configuration` སླར་ལོག་ཌོཀ་ཤིང་།
+- hyperledger#2132 ཁ་སྐོང་ `endpointN` proc མེཀ་རོ།
+- hyperledger#2257 གིས་ རོ་ལི་བརྒྱབ་ཡོད་པའི་བྱུང་ལས་འདི་ བཏོན་གཏང་ཡོདཔ་ཨིན།
+- ཧའི་པར་ལེ་ཇར་#2125 འདྲི་དཔྱད་འདྲི་དཔྱད་ འདྲི་དཔྱད་འདྲི་དཔྱད་འབད་ཡོདཔ།
+- hyperledger#1926 བརྡ་རྟགས་འཛིན་སྐྱོང་དང་ མཛེས་སྡུག་ཅན་གྱི་སྒོ་བསྡམས།
+- hyperledger#2161 `data_model` གི་དོན་ལུ་ FFI ལས་འགན་ཚུ་བཟོ་བཏོན་འབདཝ་ཨིན།
+- ཧའི་པར་ལེ་ཇར་#1149 སྣོད་ཐོ་རེ་ལུ་བཀག་ཆའི་ཡིག་སྣོད་གྲངས་ཚད་ ༡༠༠༠༠ ལས་བརྒལ་མི་བཏུབ།
+- ཧའི་པར་ལེ་ཇར་#1413 ཨེ་པི་ཨའི་ཐོན་རིམ་མཐའ།
+- ཧའི་པར་ལེ་ཇར་#2103 སྡེབ་ཚན་དང་ཚོང་འབྲེལ་གྱི་དོན་ལུ་རྒྱབ་སྐྱོར་འདྲི་དཔྱད་འབད་དོ། `FindAllTransactions` འདྲི་དཔྱད་ཁ་སྐོང་འབད།
+- hyperledger#2186 ISI འདི་ ISI ISI ཁ་སྐོང་རྐྱབས།
+- hyperledger#2056 `AssetValueType` `enum` གི་དོན་ལུ་ འབྱུང་ཁུངས་ཕྲ་ཕུང་ཀེརེ་ཊི་ཁ་སྐོང་རྐྱབས།
+- hyperledger#2100 རྒྱུ་དངོས་ཡོད་པའི་རྩིས་ཐོ་ཚུ་ཆ་མཉམ་འཚོལ་ནི་ལུ་ འདྲི་དཔྱད་ཁ་སྐོང་རྐྱབས།
+- hyperledger#2179 གློག་ཤུགས་བཀོལ་སྤྱོད་འདི་ལེགས་བཅོས་འབད།
+- hyperledger#1883 བཙུགས་ཡོད་པའི་རིམ་སྒྲིག་ཡིག་སྣོད་ཚུ་རྩ་བསྐྲད་གཏང་།
+- hyperledger#2105 མཁོ་སྤྲོད་པ་ནང་ འདྲི་དཔྱད་འཛོལ་བ་ཚུ་ འཛིན་སྐྱོང་འཐབ་ཨིན།
+- hyperledger#2050 འགན་ཁུར་དང་འབྲེལ་བའི་འདྲི་དཔྱད་ཁ་སྐོང་རྐྱབས།
+- hyperledger#1572 དམིགས་བསལ་བཟོ་བའི་གནང་བ་ཊོ་ཀེན་ཚུ།
+- hyperledger#2121 གསར་བསྐྲུན་འབད་བའི་སྐབས་ ཞིབ་དཔྱད་ལྡེ་སྒྲོམ་འདི་ ནུས་ཅན་ཨིན།
+ - hyperledger#2003 ངོ་སྤྲོད་ I18NT0000028X ཌི་ཀོཌར་ལག་ཆ།
+- hyperledger#1952 ཡར་འཕེལ་གྱི་དོན་ལུ་ ཚད་ལྡན་སྦེ་ ཊི་པི་ཨེསི་བེན་ཇ་མཱརཀ་ཁ་སྐོང་འབད།
+- hyperledger#2040 ཚོང་འབྲེལ་ལག་ལེན་ཚད་དང་གཅིག་ཁར་ མཉམ་བསྡོམས་བརྟག་ཞིབ་ཁ་སྐོང་རྐྱབས།
+- hyperledger#1890 ཨོ་རི་ལི་ཡོན་ལག་ལེན་གྱི་ གནས་སྟངས་ལུ་གཞི་བཞག་སྟེ་ མཉམ་བསྡོམས་བརྟག་དཔྱད་ངོ་སྤྲོད་འབད་ཡོདཔ།
+- ཧའི་པར་ལེ་ཇར་#2048 ལག་ཆས་རྒྱུན་རིམ་ཡིག་སྣོད་ཁ་སྐོང་རྐྱབས།
+- hyperledger#2100 རྒྱུ་དངོས་ཡོད་པའི་རྩིས་ཐོ་ཚུ་ཆ་མཉམ་འཚོལ་ནི་ལུ་ འདྲི་དཔྱད་ཁ་སྐོང་རྐྱབས།
+- hyperledger#2179 གློག་ཤུགས་བཀོལ་སྤྱོད་འདི་ལེགས་བཅོས་འབད།
+- hyperledger#1883 བཙུགས་ཡོད་པའི་རིམ་སྒྲིག་ཡིག་སྣོད་ཚུ་རྩ་བསྐྲད་གཏང་།
+- hyperledger#2004 དང་ I18NI000000463X འདི་ `IntoSchema` ལས་ བཀག་ཐབས་འབདཝ་ཨིན།
+- hyperledger#2105 མཁོ་སྤྲོད་པ་ནང་ འདྲི་དཔྱད་འཛོལ་བ་ཚུ་ འཛིན་སྐྱོང་འཐབ་ཨིན།
+- hyperledger#2050 འགན་ཁུར་དང་འབྲེལ་བའི་འདྲི་དཔྱད་ཁ་སྐོང་རྐྱབས།
+- hyperledger#1572 དམིགས་བསལ་བཟོ་བའི་གནང་བ་ཊོ་ཀེན་ཚུ།
+- hyperledger#2121 གསར་བསྐྲུན་འབད་བའི་སྐབས་ ཞིབ་དཔྱད་ལྡེ་སྒྲོམ་འདི་ ནུས་ཅན་ཨིན།
+ - hyperledger#2003 ངོ་སྤྲོད་ I18NT0000029X ཌི་ཀོཌར་ལག་ཆ།
+- hyperledger#1952 ཡར་འཕེལ་གྱི་དོན་ལུ་ ཚད་ལྡན་སྦེ་ ཊི་པི་ཨེསི་བེན་ཇ་མཱརཀ་ཁ་སྐོང་འབད།
+- hyperledger#2040 ཚོང་འབྲེལ་ལག་ལེན་ཚད་དང་གཅིག་ཁར་ མཉམ་བསྡོམས་བརྟག་ཞིབ་ཁ་སྐོང་རྐྱབས།
+- hyperledger#1890 ཨོ་རི་ལི་ཡོན་ལག་ལེན་གྱི་གནད་དོན་ལུ་གཞི་བཞག་སྟེ་ མཉམ་བསྡོམས་བརྟག་དཔྱད་ངོ་སྤྲོད་འབདཝ་ཨིན།
+- ཧའི་པར་ལེ་ཇར་#2048 ལག་ཆས་རྒྱུན་རིམ་ཡིག་སྣོད་ཁ་སྐོང་རྐྱབས།
+- hyperledger#2037 སྔོན་འགྲོའི་ཁས་བླངས་ ཊི་རི་གཱར་ཚུ་ངོ་སྤྲོད་འབད།
+- hyperledger#1621 ངོ་སྤྲོད།
+- hyperledger#1970 གདམ་ཁའི་འཆར་གཞི་མཇུག་བསྣན་འབད།
+- hyperledger#1620 དུས་ཚོད་ལུ་གཞི་བཞག་པའི་ འབད་འགོ་བཙུགས་ཚུ་ ངོ་སྤྲོད་འབད།
+- hyperledger#1918 I18NI0000465X གི་དོན་ལུ་ གཞི་རྟེན་བདེན་བཤད་ལག་ལེན་འཐབ།
+- hyperledger#1726 གསར་བཏོན་ PR ལཱ་གི་རྒྱུན་རིམ་ཅིག་ལག་ལེན་འཐབ།
+- hyperledger#1815 འདྲི་དཔྱད་ཀྱི་ལན་ཚུ་ དབྱེ་བ་མངམ་བཟོ་དགོ།- hyperledger#1928 `gitchangelog` ལག་ལེན་འཐབ་ཐོག་ལས་ བསྒྱུར་བཅོས་ལོག་བཟོ་བཏོན་ནི།
+- hyperledger#1902 ལྕགས་རིགས་བཞི་པ་ ༤ མཉམ་པའི་སྒྲིག་བཀོད་ཡིག་གཟུགས་།
 
-- hyperledger#2399 Config parameters as ISI.
-- hyperledger#3119 Add `dropped_messages` metric.
-- hyperledger#3094 Generate network with `n` peers.
-- hyperledger#3082 Provide full data in `Created` event.
-- hyperledger#3021 Opaque pointer import.
-- hyperledger#2794 Reject Fieldless enums with explicit discriminants in FFI.
-- hyperledger#2922 Add `Grant<Role>` to default genesis.
-- hyperledger#2922 Omit `inner` field in `NewRole` json deserialization.
-- hyperledger#2922 Omit `object(_id)` in json deserialization.
-- hyperledger#2922 Omit `Id` in json deserialisation.
-- hyperledger#2922 Omit `Identifiable` in json deserialization.
-- hyperledger#2963 Add `queue_size` to the metrics.
-- hyperledger#3027 implement lockfile for Kura.
-- hyperledger#2813 Kagami generate default peer config.
-- hyperledger#3019 Support JSON5.
-- hyperledger#2231 Generate FFI wrapper API.
-- hyperledger#2999 Accumulate block signatures.
-- hyperledger#2995 Soft fork detection.
-- hyperledger#2905 Extend arithmetic operations to support `NumericValue`
-- hyperledger#2868 Emit iroha version and commit hash in logs.
-- hyperledger#2096 Query for total amount of asset.
-- hyperledger#2899 Add multi-instructions subcommand into 'client_cli'
-- hyperledger#2247 Remove websocket communication noise.
-- hyperledger#2889 Add block streaming support into `iroha_client`
-- hyperledger#2280 Produce permission events when role is granted/revoked.
-- hyperledger#2797 Enrich events.
-- hyperledger#2725 Reintroduce timeout into `submit_transaction_blocking`
-- hyperledger#2712 Config proptests.
-- hyperledger#2491 Enum support in FFi.
-- hyperledger#2775 Generate different keys in synthetic genesis.
-- hyperledger#2627 Config finalisation, proxy entrypoint, kagami docgen.
-- hyperledger#2765 Generate synthetic genesis in `kagami`
-- hyperledger#2698 Fix unclear error message in `iroha_client`
-- hyperledger#2689 Add permission token definition parameters.
-- hyperledger#2502 Store GIT hash of build.
-- hyperledger#2672 Add `ipv4Addr`,  `ipv6Addr` variant and predicates.
-- hyperledger#2626 Implement `Combine` derive, split `config` macros.
-- hyperledger#2586 `Builder` and `LoadFromEnv` for proxy structs.
-- hyperledger#2611 Derive `TryFromReprC` and `IntoFfi` for generic opaque structs.
-- hyperledger#2587 Split `Configurable` into two traits. #2587: Split `Configurable` into two traits
-- hyperledger#2488 Add support for trait impls in `ffi_export`
-- hyperledger#2553 Add sorting to asset queries.
-- hyperledger#2407 Parametrise triggers.
-- hyperledger#2536 Introduce `ffi_import` for FFI clients.
-- hyperledger#2338 Add `cargo-all-features` instrumentation.
-- hyperledger#2564 Kagami tool algorithm options.
-- hyperledger#2490 Implement ffi_export for freestanding functions.
-- hyperledger#1891 Validate trigger execution.
-- hyperledger#1988 Derive macros for Identifiable, Eq, Hash, Ord.
-- hyperledger#2434 FFI bindgen library.
-- hyperledger#2073 Prefer ConstString over String for types in blockchain.
-- hyperledger#1889 Add domain-scoped triggers.
-- hyperledger#2098 Block header queries. #2098: add block header queries
-- hyperledger#2467 Add account grant subcommand into iroha_client_cli.
-- hyperledger#2301 Add transaction's block hash when querying it.
- - hyperledger#2454 Add a build script to the Norito decoder tool.
-- hyperledger#2061 Derive macro for filters.
-- hyperledger#2228 Add Unauthorized variant to smartcontracts query error.
-- hyperledger#2395 Add panic if genesis cannot be applied.
-- hyperledger#2000 Disallow empty names. #2000: Disallow empty names
- - hyperledger#2127 Add sanity check to ensure that all data decoded by the Norito codec is consumed.
-- hyperledger#2360 Make `genesis.json` optional again.
-- hyperledger#2053 Add tests to all remaining queries in private blockchain.
-- hyperledger#2381 Unify `Role` registration.
-- hyperledger#2053 Add tests to the asset-related queries in private blockchain.
-- hyperledger#2053 Add tests to 'private_blockchain'
-- hyperledger#2302 Add 'FindTriggersByDomainId' stub-query.
-- hyperledger#1998 Add filters to queries.
-- hyperledger#2276 Include current Block hash into BlockHeaderValue.
-- hyperledger#2161 Handle id and shared FFI fns.
-- add handle id and implement FFI equivalents of shared traits (Clone, Eq, Ord)
-- hyperledger#1638 `configuration` return doc sub-tree.
-- hyperledger#2132 Add `endpointN` proc macro.
-- hyperledger#2257 Revoke<Role> emits RoleRevoked event.
-- hyperledger#2125 Add FindAssetDefinitionById query.
-- hyperledger#1926 Add signal handling and graceful shutdown.
-- hyperledger#2161 generate FFI functions for `data_model`
-- hyperledger#1149 Block file count does not exceed 1000000 per directory.
-- hyperledger#1413 Add API version endpoint.
-- hyperledger#2103 support querying for blocks and transactions. Add `FindAllTransactions` query
-- hyperledger#2186 Add transfer ISI for `BigQuantity` and `Fixed`.
-- hyperledger#2056 Add a derive proc macro crate for `AssetValueType` `enum`.
-- hyperledger#2100 Add query to find all accounts with asset.
-- hyperledger#2179 Optimise trigger execution.
-- hyperledger#1883 Remove embedded configuration files.
-- hyperledger#2105 handle query errors in client.
-- hyperledger#2050 Add role-related queries.
-- hyperledger#1572 Specialized permission tokens.
-- hyperledger#2121 Check keypair is valid when constructed.
- - hyperledger#2003 Introduce Norito Decoder tool.
-- hyperledger#1952 Add a TPS benchmark as a standard for optimizations.
-- hyperledger#2040 Add integration test with transaction execution limit.
-- hyperledger#1890 Introduce integration tests based on Orillion use-cases.
-- hyperledger#2048 Add toolchain file.
-- hyperledger#2100 Add query to find all accounts with asset.
-- hyperledger#2179 Optimise trigger execution.
-- hyperledger#1883 Remove embedded configuration files.
-- hyperledger#2004 Forbid `isize` and `usize` from becoming `IntoSchema`.
-- hyperledger#2105 handle query errors in client.
-- hyperledger#2050 Add role-related queries.
-- hyperledger#1572 Specialized permission tokens.
-- hyperledger#2121 Check keypair is valid when constructed.
- - hyperledger#2003 Introduce Norito Decoder tool.
-- hyperledger#1952 Add a TPS benchmark as a standard for optimizations.
-- hyperledger#2040 Add integration test with transaction execution  limit.
-- hyperledger#1890 Introduce integration tests based on Orillion use-  cases.
-- hyperledger#2048 Add toolchain file.
-- hyperledger#2037 Introduce Pre-commit Triggers.
-- hyperledger#1621 Introduce By Call Triggers.
-- hyperledger#1970 Add optional schema endpoint.
-- hyperledger#1620 Introduce time based triggers.
-- hyperledger#1918 Implement basic authentication for `client`
-- hyperledger#1726 Implement a release PR workflow.
-- hyperledger#1815 Make query responses more type-structured.
-- hyperledger#1928 implement changelog generation using `gitchangelog`
-- hyperledger#1902 Bare metal 4-peer setup script.
+  setup_test_env.sh གི་ཐོན་རིམ་ཅིག་ཁ་སྐོང་འབད་ཡོདཔ་དང་ ཌོག་ཀར་-བརྩམ་དགོཔ་མེད་པའི་ ཐོན་རིམ་ཅིག་ཁ་སྐོང་འབད་དེ་ Iroha གི་རྐྱེན་སེལ་བཟོ་བསྐྲུན་འདི་ལག་ལེན་འཐབ་ཨིན།
+- hyperledger#1619 བྱུང་ལས་གཞི་བཞག་པའི་ འབད་འགོ་བཙུགས་ཚུ་ ངོ་སྤྲོད་འབད།
+- hyperledger#1195 ཝེབ་སོ་ཀེཊ་ གཙང་སྦྲ་ཅན་སྦེ་ སྒོ་བསྡམས།
+- hyperledger#1606 ཌོ་མེན་གཞི་བཀོད་ནང་ ཌོ་མེན་རྟགས་མཚན་ལུ་ ipfs འབྲེལ་ལམ་ཁ་སྐོང་འབད།
+- hyperledger#1754 ཀུ་ར་ཞིབ་དཔྱད་པ་ CLI.
+- hyperledger#1790 བརྩེགས་ཕུང་གཞི་བཞག་པའི་ཝེཀ་ཊར་ཚུ་ལག་ལེན་འཐབ་ཐོག་ལས་ ལཱ་འགན་ཡར་དྲག་གཏང་།
+- hyperledger#1805 ཚ་གྱང་ཅན་གྱི་འཛོལ་བ་ཚུ་གི་དོན་ལུ་ གདམ་ཁ་ཅན་གྱི་ཊར་མི་ནཱལ་ཚོས་གཞི་ཚུ།
+- ཧའི་པར་ལེ་ཇར་#1749 `no_std` ནང་ `data_model` ལུ།
+- hyperledger#1179 ཆ་མེད་གནང་བ་ ཡང་ན་ འགན་ཁུར་བཀོད་རྒྱ་ཁ་སྐོང་རྐྱབས།
+- hyperledger#1782 འདི་ iroha_cypreto no_std མཐུན་སྒྲིག་བཟོཝ་ཨིན།
+- ཧའི་པར་ལེ་ཇར་#1172 བཀོད་རྒྱ་བྱུང་ལས་ཚུ་ལག་ལེན་འཐབ།
+- hyperledger#1734 དཀརཔོ་གི་བར་སྟོང་ཚུ་ཕྱིར་བཏོན་འབད་ནིའི་དོན་ལུ་ `Name` བདེན་དཔྱད་འབད།
+- hyperledger#1144 མེ་ཊ་ཌེ་ཊ་ ནེསི་ཊིང་ཁ་སྐོང་བརྐྱབ།
+- #1210 སྡེབ་ཚན་རྒྱུན་སྤེལ་ (སར་བར་གྱི་ཕྱོགས)།
+- hyperledger#1331 `Prometheus` metrics མངམ་ལག་ལེན་འཐབ།
+- hyperledger#1689 ཁྱད་རྣམ་ལུ་བརྟེན་པའི་ བཅོ་ཁ་རྐྱབ་ཡོདཔ། #1261: ཅ་ལག་བརྡབ་བཅོས།
+- ཐོན་རིམ་བཟོ་ཡོད་པའི་རྣམ་གྲངས་ཚུ་གི་དོན་ལུ་ wrapper struct གི་ཚབ་ལུ་ ཧའི་པར་ལེཌི་ཇར་#༡༦༧༥ ལག་ལེན་པའི་དབྱེ་བ།
+- hyperledger#1643 མཉམ་རོགས་ཚུ་གིས་ བརྟག་དཔྱད་ནང་ རིགས་མཚན་བརྩམ་ནིའི་དོན་ལུ་ བསྒུག་སྡོད།
+- ཧའི་པར་ལེ་ཇར་#1678 I18NI0000471X
+- hyperledger#1216 I1NT0000002X མཇུག་བསྡུ། #1216: མེ་ཊིགསི་མཇུག་བསྡུའི་འགོ་ཐོག་ལག་ལེན་འཐབ་ནི།
+- hyperledger#1238 གཡོག་བཀོལ་བའི་དྲན་ཐོ་གནས་རིམ་དུས་མཐུན་ཚུ། གསར་བསྐྲུན་འབད་ཡོད་མི་ `connection` འཛུལ་སྤྱོད་ས་ཚིགས་གཞི་བཞག་པའི་ བསྐྱར་མངོན་གསལ་འབད་ཡོདཔ།
+- hyperledger#1652 PR མགོ་མིང་ཕོརམ་ཊིང་།
+- མཐུད་ཡོད་པའི་མཉམ་རོགས་ `Status` ལུ་ཁ་སྐོང་འབད།
 
-  Added a version of setup_test_env.sh that does not require docker-compose and uses the debug build of Iroha.
-- hyperledger#1619 Introduce event-based triggers.
-- hyperledger#1195 Close a websocket connection cleanly.
-- hyperledger#1606 Add ipfs link to domain logo in Domain structure.
-- hyperledger#1754 Add Kura inspector CLI.
-- hyperledger#1790 Improve performance by using stack-based vectors.
-- hyperledger#1805 Optional terminal colors for panic errors.
-- hyperledger#1749 `no_std` in `data_model`
-- hyperledger#1179 Add revoke-permission-or-role instruction.
-- hyperledger#1782 make iroha_crypto no_std compatible.
-- hyperledger#1172 Implement instruction events.
-- hyperledger#1734 Validate `Name` to exclude whitespaces.
-- hyperledger#1144 Add metadata nesting.
-- #1210 Block streaming (server side).
-- hyperledger#1331 Implement more `Prometheus` metrics.
-- hyperledger#1689 Fix feature dependencies. #1261: Add cargo bloat.
-- hyperledger#1675 use type instead of wrapper struct for versioned items.
-- hyperledger#1643 Wait for peers to commit genesis in tests.
-- hyperledger#1678 `try_allocate`
-- hyperledger#1216 Add Prometheus endpoint. #1216: initial implementation of metrics endpoint.
-- hyperledger#1238 Run-time log-level updates. Created basic `connection` entrypoint-based reloading.
-- hyperledger#1652 PR Title Formatting.
-- Add the number of connected peers to `Status`
+  - སླར་ལོག་ "མཐུད་ཡོད་པའི་མཉམ་བསྡོམ་གྱི་གྱངས་ཁ་དང་འབྲེལ་བའི་དངོས་པོ་ཚུ་བཏོན་གཏང་།"
 
-  - Revert "Delete things related to the number of connected peers"
+  འདི་གིས་ b228b41dab3c035ce9973b6aa3b35d443c082544 འདི་ ཕྱིར་ལོག་འབདཝ་ཨིན།
+  - `Peer` འདི་ ལག་ཐོག་བཏབ་པའི་ཤུལ་ལས་རྐྱངམ་ཅིག་ མི་མང་ལྡེ་མིག་ངོ་མ་ཡོདཔ་ཨིན།
+  - I18NI000000475X བརྟག་དཔྱད་མེད་པ།
+  - ཐོ་བཀོད་མ་འབད་བའི་ མཉམ་རོགས་ བསྟར་སྤྱོད་ལག་ལེན་འཐབ།
+  - ཐོ་བཀོད་འོག་མ་འདི་ `client_cli` ལུ་ཁ་སྐོང་འབད།
+  - ཁ་བྱང་གིས་ ཐོ་བཀོད་མ་འབད་བའི་ མཉམ་རོགས་ལས་ ལོག་མཐུད་མ་ཚུགསཔ།
 
-  This reverts commit b228b41dab3c035ce9973b6aa3b35d443c082544.
-  - Clarify `Peer` has true public key only after handshake
-  - `DisconnectPeer` without tests
-  - Implement unregister peer execution
-  - Add (un)register peer subcommand to `client_cli`
-  - Refuse reconnections from an unregistered peer by its address
+  ཁྱོད་ཀྱི་མཉམ་རོགས་ ཐོ་བཀོད་མ་འབད་བའི་ཤུལ་ལས་ དེ་ལས་ མཉམ་རོགས་གཞན་ཅིག་ བཏོག་བཏངམ་ཨིན།
+  ཁྱོད་ཀྱི་ཡོངས་འབྲེལ་གྱིས་ མཉམ་རོགས་ལས་ བསྐྱར་མཐུད་ཀྱི་ཞུ་བ་ཚུ་ གོ་འོང་།
+  ཁྱོད་ཀྱིས་དང་པ་ཤེས་ཚུགས་མི་འདི་ འདྲེན་ལམ་ཨང་གྲངས་འདི་ གང་བྱུང་ཨིན་པའི་ཁ་བྱང་ཨིན།
+  དེ་འབདཝ་ལས་ འདྲེན་ལམ་ཨང་ལས་ལྷག་སྟེ་ ཐོ་བཀོད་མ་འབད་བའི་ མཉམ་རོགས་འདི་དྲན་དགོ།
+  དང་དེ་ལས་ཕྱིར་ལོག་མཐུད་པ།
+- དམིགས་བསལ་འདྲེན་ལམ་ཅིག་ལུ་ `/status` མཐའ་མཚམས་ཁ་སྐོང་འབད།
 
-  After your peer unregisters and disconnects another peer,
-  your network will hear reconnection requests from the peer.
-  All you can know at first is the address whose port number is arbitrary.
-  So remember the unregistered peer by the part other than the port number
-  and refuse reconnection from there
-- Add `/status` endpoint to a specific port.
-
-### Fixes
-
-- hyperledger#3129 Fix `Parameter` de/serialization.
-- hyperledger#3109 Prevent `sumeragi` sleep after role agnostic message.
-- hyperledger#3046 Ensure Iroha can start gracefully on empty
+### བདེ་ཐང་།- hyperledger#3129 གཏན་བཟོས་ `Parameter` ཌི་/རིམ་སྒྲིག་།
+- hyperledger#3109 འགན་ཁུར་གྱི་ བརྡ་འཕྲིན་གྱི་ཤུལ་ལས་ `sumeragi` གཉིད་འདི་སྔོན་འགོག་འབད།
+- hyperledger#3046 Iroha སྟོང་ཆ་ནང་ མཛེས་སྡུག་ཅན་སྦེ་འགོ་བཙུགས་ཚུགས།
   `./storage`
-- hyperledger#2599 Remove nursery lints.
-- hyperledger#3087 Collect votes from Set B validators after view change.
-- hyperledger#3056 Fix `tps-dev` benchmark hanging.
-- hyperledger#1170 Implement cloning-wsv-style soft-fork handling.
-- hyperledger#2456 Make genesis block unlimited.
-- hyperledger#3038 Re-enable multisigs.
-- hyperledger#2894 Fix `LOG_FILE_PATH` env variable deserialization.
-- hyperledger#2803 Return correct status code for signature errors.
-- hyperledger#2963 `Queue` remove transactions correctly.
-- hyperledger#0000 Vergen breaking CI.
-- hyperledger#2165 Remove toolchain fidget.
-- hyperledger#2506 Fix the block validation.
-- hyperledger#3013 Properly chain burn validators.
-- hyperledger#2998 Delete unused Chain code.
-- hyperledger#2816 Move responsibility of access to blocks to kura.
-- hyperledger#2384 Replace decode with decode_all.
-- hyperledger#1967 Replace ValueName with Name.
-- hyperledger#2980 Fix block value ffi type.
-- hyperledger#2858 Introduce parking_lot::Mutex instead of std.
-- hyperledger#2850 Fix deserialization/decoding of `Fixed`
-- hyperledger#2923 Return `FindError` when `AssetDefinition` does not
-  exist.
-- hyperledger#0000 Fix `panic_on_invalid_genesis.sh`
-- hyperledger#2880 Close websocket connection properly.
-- hyperledger#2880 Fix block streaming.
-- hyperledger#2804 `iroha_client_cli` submit transaction blocking.
-- hyperledger#2819 Move non-essential members out of WSV.
-- Fix expression serialization recursion bug.
-- hyperledger#2834 Improve shorthand syntax.
-- hyperledger#2379 Add ability to dump new Kura blocks to blocks.txt.
-- hyperledger#2758 Add Sorting structure to the schema.
+- hyperledger#2599 བྱིས་པའི་ཐིག་ཚུ་བཏོན་གཏང་།
+- hyperledger#3087 མཐོང་སྣང་བསྒྱུར་བཅོས་ཀྱི་ཤུལ་ལས་ གཞི་སྒྲིག་བི་བདེན་དཔྱད་འབད་མི་ཚུ་ལས་ ཚོགས་རྒྱན་བསྡུ་ལེན་འབད།
+- hyperledger#3056 གཏན་བཟོས་ `tps-dev` བེན་ཇ་རྟགས་བཀལ་ནི།
+- hyperledger#1170 ལག་ལེན་ རིགས་མཚུངས་བཟོ་བཅོས་-wsv-tyle-fork འཛིན་སྐྱོང་འཐབ་ནི།
+- hyperledger#2456 རིགས་མཚན་བཀག་ཆ་ཚད་མེད་བཟོ།
+- hyperledger#3038 སྣ་མང་སིག་ཚུ་ལོག་ལྕོགས་ཅན་བཟོ།
+- hyperledger#2894 གཏན་བཟོས་ `LOG_FILE_PATH` འགྱུར་ཅན་ env འགྱུར་ལྡོག་ཅན་གྱི་ རིམ་སྒྲིག་མེདཔ་བཟོ་ནི།
+- hyperledger#2803 མཚན་རྟགས་འཛོལ་བ་ཚུ་གི་དོན་ལུ་ གནས་ཚད་ཨང་རྟགས་ནོར་བཅོས་འབད།
+- hyperledger#2963 `Queue` གིས་ ཚོང་འབྲེལ་ཚུ་ ཚུལ་མཐུན་སྦེ་ བཏོན་གཏང་།
+- ཧའི་པར་ལེ་ཇར་#000 ཝར་ཇེན་ཆག་པའི་ CI.
+- hyperledger#2165 ལག་ཆས་རྒྱུན་རིམ་ fidget རྩ་བསྐྲད་གཏང་།
+- ཧའི་པར་ལེ་ཇར་#2506 སྡེབ་ཚན་བདེན་དཔྱད་འདི་གཏན་བཟོས་འབད།
+- hyperledger#3013 རིམ་ཐེངས་ཀྱི་མེ་འབར་བདེན་དཔང་འབད་མི།
+- hyperledger#2998 ལག་ལེན་མ་འཐབ་པའི་ རིམ་ཐེངས་ཨང་རྟགས་བཏོན་གཏང་།
+- hyperledger#2816 ཀུ་ར་ལུ་བཀག་ཆ་ཚུ་འཛུལ་སྤྱོད་འབད་ནིའི་འགན་ཁུར་འབགཔ་ཨིན།
+- ཧའི་པར་ལེ་ཇར་#2384 decode_all དང་ཅིག་ཁར་ decode ཚབ་བཙུགས་འབད།
+- hyperledger#1967 གནས་གོང་མིང་འདི་མིང་དང་གཅིག་ཁར་ཚབ་བཙུགས་འབད།
+- ཧའི་པར་ལེ་ཇར་#2980 བདེ་སྒྲིག་སྡེབ་ཚན་གནས་གོང་ ffi དབྱིབས།
+- hyperledger#2858 སྣུམ་འཁོར་བཞག་སའི་ས་ཁོངས་འགོ་བཙུགས་ནི་_::མུ་ཊེགསི་ ཨེསི་ཊི་ཌི་གི་ཚབ་ལུ་ ངོ་སྤྲོད་འབད།
+- hyperledger#2850 `Fixed` གི་ གཏོར་བཤིག་/ཌི་ཀོཌིང་ བདེ་སྒྲིག་འབད།
+- hyperledger#2923 `FindError` ལོག་ལོག་ I18NI0000046X མ་འབད་བས།
+  གནས་ནི།
+- ཧའི་པར་ལེ་ཇར་#000 གཏན་འཁེལ་ I18NI0000047X
+- hyperledger#2880 ཝེབ་སོ་ཀེཊི་མཐུད་ལམ་འདི་ལེགས་ཤོམ་སྦེ་ཁ་བསྡམས།
+- ཧའི་པར་ལེ་ཇར་#2880 གཏན་བཟོས་སྡེབ་ཚན་རྒྱུན་སྤེལ་འབད།
+- hyperledger#2804 I18NI0000048X བརྗེ་སོར་བཀག་ཆ་འབད་བཙུགས།
+- hyperledger#2819 གལ་ཆེ་བའི་འཐུས་མི་ཚུ་ WSV ལས་ཕྱིར་འཐོན་འབད།
+- གཏན་བཟོས་གསལ་བརྗོད་རིམ་སྒྲིག་བསྐྱར་འབྱུང་རྐྱེན་པ།
+- hyperledger#2834 ཐུང་ཐུང་ཚིག་སྦྱོར་ཡར་རྒྱས་གཏང་།
+- hyperledger#2379 བཀག་ཆ་ལུ་ཀུ་ར་གསརཔ་བཀོ་ནི་ལུ་ ལྕོགས་གྲུབ་ཁ་སྐོང་རྐྱབས།
+- hyperledger#2758 ལས་འཆར་ལུ་ གཞི་བཀོད་ཁ་སྐོང་རྐྱབས།
 - CI.
-- hyperledger#2548 Warn on large genesis file.
-- hyperledger#2638 Update `whitepaper` and propagate changes.
-- hyperledger#2678 Fix tests on staging branch.
-- hyperledger#2678 Fix tests abort on Kura force shutdown.
-- hyperledger#2607 Refactor of sumeragi code for more simplicity and
-  robustness fixes.
-- hyperledger#2561 Reintroduce viewchanges to consensus.
-- hyperledger#2560 Add back in block_sync and peer disconnecting.
-- hyperledger#2559 Add sumeragi thread shutdown.
-- hyperledger#2558 Validate genesis before updating the wsv from kura.
-- hyperledger#2465 Reimplement sumeragi node as singlethreaded state
-  machine.
-- hyperledger#2449 Initial implementation of Sumeragi Restructuring.
-- hyperledger#2802 Fix env loading for configuration.
-- hyperledger#2787 Notify every listener to shutdown on panic.
-- hyperledger#2764 Remove limit on max message size.
-- #2571: Better Kura Inspector UX.
-- hyperledger#2703 Fix Orillion dev env bugs.
-- Fix typo in a doc comment in schema/src.
-- hyperledger#2716 Make Duration in Uptime public.
-- hyperledger#2700 Export `KURA_BLOCK_STORE_PATH` in docker images.
-- hyperledger#0 Remove `/iroha/rust-toolchain.toml` from the builder
-  image.
-- hyperledger#0 Fix `docker-compose-single.yml`
-- hyperledger#2554 Raise error if `secp256k1` seed shorter than 32
-  bytes.
-- hyperledger#0 Modify `test_env.sh` to allocate storage for each peer.
-- hyperledger#2457 Forcibly shut down kura in tests.
-- hyperledger#2623 Fix doctest for VariantCount.
-- Update an expected error in ui_fail tests.
-- Fix incorrect doc comment in permission validators.
-- hyperledger#2422 Hide private keys in configuration endpoint response.
-- hyperledger#2492: Fix not all triggers being executed that match an event.
-- hyperledger#2504 Fix failing tps benchmark.
-- hyperledger#2477 Fix bug when permissions from roles weren't counted.
-- hyperledger#2416 Fix lints on macOS arm.
-- hyperledger#2457 Fix tests flakiness related to shut down on panic.
-  #2457: Add shut down on panic configuration
-- hyperledger#2473 parse rustc --version instead of RUSTUP_TOOLCHAIN.
-- hyperledger#1480 Shut down on panic. #1480: Add panic hook to exit program on panic
-- hyperledger#2376 Simplified Kura, no async, two files.
-- hyperledger#0000 Docker build failure.
-- hyperledger#1649 remove `spawn` from `do_send`
-- hyperledger#2128 Fix `MerkleTree` construction and iteration.
-- hyperledger#2137 Prepare tests for multiprocess context.
-- hyperledger#2227 Implement Register and Unregister for Asset.
-- hyperledger#2081 Fix role granting bug.
-- hyperledger#2358 Add release with debug profile.
-- hyperledger#2294 Add flamegraph generation to oneshot.rs.
-- hyperledger#2202 Fix total field in query response.
-- hyperledger#2081 Fix the test case to grant the role.
-- hyperledger#2017 Fix role unregistration.
-- hyperledger#2303 Fix docker-compose' peers doesn't get gracefully shut down.
-- hyperledger#2295 Fix unregister trigger bug.
-- hyperledger#2282 improve FFI derives from getset implementation.
-- hyperledger#1149 Remove nocheckin code.
-- hyperledger#2232 Make Iroha print meaningful message when genesis has too many isi.
-- hyperledger#2170 Fix build in docker container on M1 machines.
-- hyperledger#2215 Make nightly-2022-04-20 optional for `cargo build`
-- hyperledger#1990 Enable peer startup via env vars in the absence of config.json.
-- hyperledger#2081 Fix role registration.
-- hyperledger#1640 Generate config.json and genesis.json.
-- hyperledger#1716 Fix consensus failure with f=0 cases.
-- hyperledger#1845 Non-mintable assets can be minted once only.
-- hyperledger#2005 Fix `Client::listen_for_events()` not closing WebSocket stream.
-- hyperledger#1623 Create a RawGenesisBlockBuilder.
-- hyperledger#1917 Add easy_from_str_impl macro.
-- hyperledger#1990 Enable peer startup via env vars in the absence of config.json.
-- hyperledger#2081 Fix role registration.
-- hyperledger#1640 Generate config.json and genesis.json.
-- hyperledger#1716 Fix consensus failure with f=0 cases.
-- hyperledger#1845 Non-mintable assets can be minted once only.
-- hyperledger#2005 Fix `Client::listen_for_events()` not closing WebSocket stream.
-- hyperledger#1623 Create a RawGenesisBlockBuilder.
-- hyperledger#1917 Add easy_from_str_impl macro.
-- hyperledger#1922 Move crypto_cli into tools.
-- hyperledger#1969 Make the `roles` feature part of the default feature set.
-- hyperledger#2013 Hotfix CLI args.
-- hyperledger#1897 Remove usize/isize from serialization.
-- hyperledger#1955 Fix possibility to pass `:` inside `web_login`
-- hyperledger#1943 Add query errors to the schema.
-- hyperledger#1939 Proper features for `iroha_config_derive`.
-- hyperledger#1908 fix zero value handling for telemetry analysis script.
-- hyperledger#0000 Make implicitly ignored doc-test explicitly ignored.
-- hyperledger#1848 Prevent public keys from being burned to nothing.
-- hyperledger#1811 added tests and checks to dedup trusted peer keys.
-- hyperledger#1821 add IntoSchema for MerkleTree and VersionedValidBlock, fix HashOf and SignatureOf schemas.
-- hyperledger#1819 Remove traceback from error report in validation.
-- hyperledger#1774 log exact reason for validation failures.
-- hyperledger#1714 Compare PeerId only by key.
-- hyperledger#1788 Reduce memory footprint of `Value`.
-- hyperledger#1804 fix schema generation for HashOf, SignatureOf, add test to ensure no schemas are missing.
-- hyperledger#1802 Logging readability improvements.
-  - events log moved to trace level
-  - ctx removed from log capture
-  - terminal colors are made optional (for better log output to files)
-- hyperledger#1783 Fixed torii benchmark.
-- hyperledger#1772 Fix after #1764.
-- hyperledger#1755 Minor fixes for #1743, #1725.
-  - Fix JSONs according to #1743 `Domain` struct change
-- hyperledger#1751 Consensus fixes. #1715: Consensus fixes to handle high load (#1746)
-  - View change handling fixes
-  - View change proofs made independent of particular transaction hashes
-  - Reduced message passing
-  - Collect view change votes instead of sending messages right away (improves network resilience)
-  - Fully use Actor framework in Sumeragi (schedule messages to self instead of task spawns)
-  - Improves fault injection for tests with Sumeragi
-  - Brings testing code closer to production code
-  - Removes overcomplicated wrappers
-  - Allows Sumeragi use actor Context in test code
-- hyperledger#1734 Update genesis to fit the new Domain validation.
-- hyperledger#1742 Concrete errors returned in `core` instructions.
-- hyperledger#1404 Verify fixed.
-- hyperledger#1636 Remove `trusted_peers.json` and `structopt`
-  #1636: Remove `trusted_peers.json`.
-- hyperledger#1706 Update `max_faults` with Topology update.
-- hyperledger#1698 Fixed public keys, documentation and error messages.
-- Minting issues (1593 and 1405) issue 1405
+- hyperledger#2548 རིགས་མཚན་ཡིག་སྣོད་སྦོམ་གུ་ཉེན་བརྡ་འབད།
+- hyperledger#2638 `whitepaper` དུས་མཐུན་དང་ ཁྱབ་སྤེལ་གྱི་བསྒྱུར་བཅོས་ཚུ།
+- hyperledger#2678 གནས་རིམ་གྱི་ཐོག་ལུ་ བརྟག་དཔྱད་ཚུ།
+- hyperledger#2678 ཀུ་ར་གི་བཙན་ཤེད་ལུ་ བཅོས་མའི་བརྟག་དཔྱད་ཚུ་ བཀལཝ་ཨིན།
+- hyperledger#2607 འཇམ་ཏོང་ཏོ་གི་དོན་ལུ་ བསྡོམས་རྩིས་ཨང་རྟགས་འདི་ བསྐྱར་བཟོ་འབད་ནི།
+  བརྟན་བརྟན་བཟོ་ནི།
+- hyperledger#2561 མོས་མཐུན་ལུ་ whist བསྒྱུར་བཅོས་འབད་ནི།
+- hyperledger#2560 bloct_sync ནང་ལོག་ཁ་སྐོང་རྐྱབས་ཞིནམ་ལས་ མཉམ་རོགས་ བཏོན་གཏང་།
+- hyperledger#2559 བསྡོམས་རྩིས་ཐགསཔ་འདི་ཁ་བསྡམས།
+- hyperledger#2558 ཀུ་ར་ལས་ wsv དུས་མཐུན་བཟོ་མ་ཚར་བའི་ཧེ་མ་ hyperledger #2558 བདེན་དཔྱད་འབད་ནི།
+- hyperledger#2465 བརྟག་ཞིབ་རྐྱང་པའི་གནས་ལུགས་སྦེ་ བརྩེགས་ཚད་ཀྱི་མཛུབ་གནོན་བསྐྱར་བཟོ་འབད།
+  འཕྲུལ༌ཆས།
+- hyperledger#2449 Sumeragi བསྐྱར་བཟོ་གི་འགོ་བཙུགས་ལག་ལེན་འཐབ་ནི།
+- ཧའི་པར་ལེ་ཇར་#2802 རིམ་སྒྲིག་གི་དོན་ལུ་ ཕིགསི་ཨེན་ཝི་མངོན་གསལ་འབད།
+- hyperledger#2787 ཉན་མི་རེ་རེ་ལུ་ ཚ་གྱང་ལང་སྟེ་ སྒོ་བསྡམ་བཞག་དགོཔ་སྦེ་ བརྡ་སྤྲོད་འབད།
+- ཧའི་པར་ལེ་ཇར་#2764 མཐོ་ཤོས་འཕྲིན་དོན་ཚད་གུ་ཚད་རྩ་བསྐྲད་གཏང་།
+- #2571: ལེགས་ཤོམ་སྦེ་ཀུ་ར་ཞིབ་དཔྱད་པ་ ཡུ་ཨེགསི་.
+- hyperledger#2703 གཏན་འཁེལ་བཟོ་བའི་ཨོ་རི་ལི་ཡོན་ཌི་ཝི་ཨེན་ཝི་བུག་ཚུ།
+- ལས་འཆར་/src ནང་ ཡིག་ཆ་གི་བསམ་བཀོད་ནང་ ཊའིཔ་ བདེ་སྒྲིག་འབད།
+- hyperledger#2716 ཡར་འཕར་མི་མང་ལུ་དུས་ཡུན་བཟོ།
+- hyperledger#2700 ཌོཀ་ཀར་པར་རིས་ཚུ་ནང་ `KURA_BLOCK_STORE_PATH` ཕྱིར་འདྲེན་འབདཝ་ཨིན།
+- hyperledger#0 བཟོ་བསྐྲུན་པ་ལས་ `Transaction` རྩ་བསྐྲད་གཏང་།
+  པར།
+- hyperledger#0 གཏན་བཟོས་ I18NI0000042X
+- hyperledger#2554 གལ་སྲིད་ `secp256k1` སོན་འདི་ ༣༢ ལས་ཐུང་ཀུ་སྦེ་ཡོད་པ་ཅིན་ འཛོལ་བ་ཡར་སེང་འབད།
+  བཱའིཊིསི།
+- hyperledger#0 མཉམ་རོགས་རེ་རེ་གི་དོན་ལུ་ གསོག་འཇོག་བགོ་བཀྲམ་འབད་ནི་ལུ་ I18NI0000494X ལེགས་བཅོས་འབད།
+- hyperledger#2457 བརྟག་དཔྱད་ནང་ ཀུ་ར་འདི་ བཙན་ཤེད་ཀྱི་ཐོག་ལས་ སྒོ་བསྡམ་ཡོདཔ།
+- hyperledger#2623 ཝ་རི་ཡཱན་ཀའུན་ཊི་གི་དོན་ལུ་ ཌོག་ཊི་ཧྥེ།
+- ui_འཐུས་ཤོར་བརྟག་དཔྱད་ནང་ རེ་བ་བསྐྱེད་པའི་འཛོལ་བ་ཅིག་དུས་མཐུན་བཟོ།
+- གནང་བ་བདེན་དཔྱད་ནང་ ཡིག་ཆ་ནོར་བ་ཚུ་ ནོར་བཅོས་འབད།- hyperledger#2422 རིམ་སྒྲིག་མཐའ་མཇུག་གི་ལན་ལུ་སྒེར་གྱི་ལྡེ་མིག་ཚུ་སྦ་བཞག།
+- ཧའི་པར་ལེ་ཇར་#2492: བྱུང་ལས་ཅིག་དང་མཐུན་པའི་ འགྲུལ་བསྐྱོད་འབད་མི་ ཊི་གར་ཚུ་ཆ་མཉམ་རང་ བདེ་སྒྲིག་མ་འབད།
+- hyperledger#2504 འཐུས་ཤོར་ཅན་གྱི་ tps benchmark.
+- hyperledger#2477 འགན་ཁུར་ལས་གནང་བ་ཚུ་ རྩིས་མ་རྐྱབ་པའི་སྐབས་ རྐྱེན་སེལ་འབད།
+- hyperledger#2416 macOS sark གུ་ ཕིགསི་ ཕིགསི་ཚུ་ བདེ་སྒྲིག་འབད།
+- hyperledger#2457 བརྟག་དཔྱད་ཀྱི་ ཕེ་ལེ་ཀི་ཚུ་ འདྲོག་བྱེལ་འཐབ་སྟེ་ སྒོ་བསྡམ་བཞག་ཡོདཔ།
+  #2457: ཚ་གྱང་རིམ་སྒྲིག་གུ་ སྒོ་བསྡམས།
+- ཧའི་པར་ལེ་ཇར་#2473 རཱསི་ཊི་ --RUSTUP_TOOLCHAIN ​​གི་ཚབ་ལུ་ --version.
+- hyperledger#1480 ཚ་གྱང་ལུ་བརྟེན་སྒོ་བསྡམས། #1480: པེ་ནིག་གུ་ལས་ཐོན་པའི་ལས་རིམ་ཕྱིར་ཐོན་འབད་ནི་ལུ་ ཧུཀ་ཁ་སྐོང་རྐྱབས།
+- hyperledger#2376 ཀུ་ར་འཇམ་ཏོང་ཏོ་བཟོ་ཡོདཔ་ཨིན་ ཨ་སིན་ཀ་མེན, ཡིག་སྣོད་གཉིས།
+- ཧའི་པར་ལེཌ་ཇར་#ཧྥུ་ལེཌ་ཇར་#000 Docker བཟོ་བསྐྲུན།
+- hyperledger#1649 `spawn` འདི་ `do_send` ལས་བཏོན་གཏང་།
+- hyperledger#2128 གཏན་བཟོས་ `MerkleTree` བཟོ་བསྐྲུན་དང་བསྐྱར་བཅོས།
+- hyperledger#2137 སྣ་མང་ལས་སྦྱོར་སྐབས་དོན་གྱི་དོན་ལུ་ གྲ་སྒྲིག་བརྟག་དཔྱད་ཚུ་འབདཝ་ཨིན།
+- hyperledger#2227 ཐོ་བཀོད་ཐོ་བཀོད་དང་ Aset གི་དོན་ལུ་ཐོ་བཀོད་འབད་མི།
+- hyperledger#2081 རྐྱེན་ངན་གྱི་འགན་འཐེན།
+- hyperledger#2358 རྐྱེན་སེལ་གསལ་སྡུད་དང་གཅིག་ཁར་ གསར་བཏོན་ཁ་སྐོང་རྐྱབས།
+- hyperledger#2294 anshot.rs ལུ་ མེ་ལྕེ་པར་རིས་བཟོ་བཏོན་ཁ་སྐོང་འབད།
+- hyperledger#2202 འདྲི་དཔྱད་ལན་གསལ་ནང་ བསྡོམས་པའི་ས་སྒོ་གཏན་བཟོས་འབད་ནི།
+- hyperledger#2081 འགན་ཁུར་འདི་བྱིན་ནིའི་དོན་ལུ་ བརྟག་དཔྱད་ཀྱི་གནད་དོན་འདི་ བདེ་སྒྲིག་འབད།
+- hyperledger#2017 གཏན་འཇགས་འགན་འཁྲིའི་ཐོ་འགོད་མེད་པ།
+- hyperledger#2303 ཕིགསི་ཌོག་ཀར་-ཀམ་སི་' མཉམ་རོགས་ མཛེས་སྡུག་ལྡན་པའི་སྒོ་བསྡམས་མི་ཐུབ།
+- hyperledger#2295 ཐོ་བཀོད་མ་འབད་བའི་ ཊི་གར་ཊི་ རྐྱེན་གྱི་ འཛོལ་བ་ཚུ་ བདེ་སྒྲིག་འབད།
+- hyperledger#2282 འདི་ ཊེག་སེཊ་ལག་ལེན་ལས་ ཨེཕ་ཨེཕ་ཨའི་ ཡར་དྲག་གཏང་ཚུགས།
+- ཧའི་པར་ལེ་ཇར་#1149 ནོ་ཅེཀ་ཀིན་ཨང་རྟགས་རྩ་བསྐྲད་གཏང་།
+- hyperledger#2232 རིགས་མཚན་མང་དྲགས་པའི་སྐབས་ Iroha དོན་དག་ཅན་གྱི་འཕྲིན་དོན་བཟོ་དགོ།
+- hyperledger#2170 ཨེམ་༡ འཕྲུལ་ཆས་གུ་ ཌོག་ཀར་དོས་ནང་ བཟོ་བསྐྲུན་འབད།
+- hyperledger#2215 མཚན་མོ་-༢༠༢༢-༠༤-༢༠ གདམ་ཁ་ཅན་ `cargo build` གི་དོན་ལུ་བཟོ།
+- hyperledger#1990 config.json མེད་པའི་སྐབས་ env vars བརྒྱུད་དེ་ མཉམ་རོགས་ འགོ་བཙུགས་ལྕོགས་ཅན་བཟོ།
+- hyperledger#2081 འགན་ཁུར་གྱི་ཐོ་འགོད།
+- hyperledger#1640 figg.json དང་ རིགས་མཚན་.json བཟོ་བཏོན་འབད།
+- hyperledger#1716 f=0 གི་གནད་དོན་དང་གཅིག་ཁར་ མོས་མཐུན་འཐུས་ཤོར་བྱུང་ཡོདཔ།
+- hyperledger#1845 མིན་པའི་རྒྱུ་དངོས་ཚུ་ ཚར་གཅིག་རྐྱངམ་ཅིག་ བཏབ་ཚུགས།
+- hyperledger#2005 བདེ་སྒྲིག་ `Client::listen_for_events()` ཝེབ་སོ་ཀེཊི་རྒྱུན་ལམ་ཁ་མ་བསྡམས།
+- hyperledger#1623 རའུ་ཇེ་ནེ་སི་བཱོཀ་བཱའི་ལར་ཅིག་གསར་བསྐྲུན་འབད།
+- hyperledger#1917 འཇམ་སམ་_str_imp མེཀ་རོ་ཁ་སྐོང་རྐྱབས།
+- hyperledger#1990 config.json མེད་པའི་སྐབས་ env vars བརྒྱུད་དེ་ མཉམ་རོགས་ འགོ་བཙུགས་ལྕོགས་ཅན་བཟོ།
+- hyperledger#2081 འགན་ཁུར་གྱི་ཐོ་འགོད།
+- hyperledger#1640 figg.json དང་ རིགས་མཚན་.json བཟོ་བཏོན་འབད།
+- hyperledger#1716 f=0 གི་གནད་དོན་དང་གཅིག་ཁར་ མོས་མཐུན་འཐུས་ཤོར་བྱུང་ཡོདཔ།
+- hyperledger#1845 མིན་པའི་རྒྱུ་དངོས་ཚུ་ ཚར་གཅིག་རྐྱངམ་ཅིག་ བཏབ་ཚུགས།
+- hyperledger#2005 བདེ་སྒྲིག་ `Client::listen_for_events()` ཝེབ་སོ་ཀེཊི་རྒྱུན་ལམ་ཁ་མ་བསྡམས།
+- hyperledger#1623 རའུ་ཇེ་ནེ་སི་བཱོཀ་བཱའི་ལར་ཅིག་གསར་བསྐྲུན་འབད།
+- hyperledger#1917 འཇམ་སམ་_str_imp མེཀ་རོ་ཁ་སྐོང་རྐྱབས།
+- hyperledger#1922 ལག་ཆས་ཚུ་ནང་ལུ་ ཀིརིཔ་ཊོ་_ཀིལི་འདི་སྤོ་བཤུད་འབད།
+- hyperledger#1969 སྔོན་སྒྲིག་ཁྱད་རྣམ་ཆ་ཚན་གྱི་ `roles` ཁྱད་རྣམ་ཆ་ཤས་བཟོ།
+- hyperledger#2013 ཧོཊ་ཕིགསི་སི་ཨེལ་ཨའི་ཨར་གི།
+- hyperledger#1897 རིམ་སྒྲིག་ལས་ ལག་ལེན་འཐབ་ནི/བཏོན་ནི།
+- hyperledger#1955 I18NI000000503X ནང་ལུ་ `:` བརྒྱུད་དེ་འགྱོ་ནི་གི་འོས་འབབ་ཡོདཔ་ཨིན།
+- hyperledger#1943 ལས་འཆར་ལུ་ འདྲི་དཔྱད་འཛོལ་བ་ཁ་སྐོང་འབད།
+- hyperledger#1939 `iroha_config_derive` གི་དོན་ལུ་ ཁྱད་རྣམ་ཚུ་ ཁྱད་རྣམ་ཅན་ཨིན།
+- hyperledger#1908 ཊེ་ལི་མི་ཊི་དབྱེ་དཔྱད་ཡིག་ཚུགས་ཀྱི་དོན་ལུ་ གནས་གོང་ཀླད་ཀོར་འཛིན་སྐྱོང་ གཏན་བཟོས།
+- hyperledger##000 མངོན་གསལ་ཅན་སྦེ་ ཌོཀ་ཊེསི་-ཊེསི་ གསལ་རི་རི་སྦེ་ སྣང་མེད་བཞག་དགོ།
+- hyperledger#1848 མི་མང་ལྡེ་མིག་ཚུ་ ག་ནི་ཡང་མེནམ་ལས་ ག་ནི་ཡང་མ་འཚིག་པར་ བཀག་ཐབས་འབད།
+- hyperledger#1811 གིས་ བློ་གཏད་ཅན་གྱི་མཉམ་རོགས་ལྡེ་མིག་ཚུ་ལུ་ བརྟག་དཔྱད་དང་ བརྟག་དཔྱད་ཚུ་ ཁ་སྐོང་འབད་ཡོདཔ་ཨིན།
+- hyperledger#1821 MerkleTree དང་ VersionedValidBlock གི་དོན་ལུ་ ཁ་སྐོང་བཀོད་ནི། HashOf དང་ signat OOf ལས་རིམ་ཚུ་ བཅོ་ཁ་རྐྱབ།- hyperledger#1819 བདེན་དཔྱད་ནང་འཛོལ་བ་སྙན་ཞུ་ལས་ འཚོལ་ཞིབ་རྒྱབ་ལོག་བཏོན་གཏང་།
+- hyperledger#1774 བདེན་དཔྱད་འཐུས་ཤོར་གྱི་དོན་ལུ་ དྲན་ཐོ་ངེས་བདེན་ཨིན།
+- hyperledger#1714 ལྡེ་མིག་གིས་ པི་ཡར་ཨའི་ཌི་འདི་རྐྱངམ་ཅིག་ ག་བསྡུར་འབད།
+- hyperledger#1788 `Value` གི་དྲན་ཚད་རྐང་རྗེས་མར་ཕབ་འབད།
+- hyperledger#1804 HashOf, SignatureOf, ལས་འཆར་ཚུ་ མ་ཐོབ་པར་ ངེས་གཏན་བཟོ་ནིའི་དོན་ལུ་ བརྟག་དཔྱད་ཁ་སྐོང་འབད།
+- hyperledger#1802 ནང་བསྐྱོད་འབད་བཏུབ་པའི་ལེགས་བཅོས།
+  - བྱུང་ལས་དྲན་ཐོ་ཚུ་ རྗེས་འཚོལ་གནས་རིམ་ལུ་སྤོ་བཤུད་འབད་ཡོདཔ།
+  - ctx དྲན་དེབ་འཛིན་བཟུང་ལས་རྩ་བསྐྲད་གཏང་ཡོདཔ།
+  - ཊར་མི་ནཱལ་ཚོས་གཞི་ཚུ་གདམ་ཁ་ཅན་བཟོ་ཡོདཔ་ཨིན་ (ཡིག་སྣོད་ཚུ་ལུ་དྲན་དེབ་ཨའུཊི་པུཊི་ལེགས་ཤོམ་གྱི་དོན་ལུ་)
+- hyperledger#1783 ཊོ་རིའི་ཚད་གཞི་གཏན་འཁེལ་བཟོ་ཡོདཔ།
+- hyperledger#1772 #1764 གི་ཤུལ་ལས་ བདེ་སྒྲིག་འབད།
+- hyperledger#1755 ཆུང་བ་ཚུ་ #1743, #1725.
+  - ཇེ་ཨེསི་ཨོ་ཨེན་ཚུ་ #1743 `Domain` བཀོད་སྒྲིག་འགྱུར་བ།
+- hyperledger#1751 མོས་མཐུན་སྒྲིག་འཛུགས། #1715: མངོན་གསལ་མཐོ་བའི་མངོན་གསལ་ (#1746) ལུ་ མོས་མཐུན་བཟོཝ་ཨིན། (#1746)
+  - བསྒྱུར་བཅོས ་ བཅོ་ ་ བཅོ་ལ ་ བལྟ།
+  - དམིགས་བསལ་གྱི་ཚོང་འབྲེལ་ཧེ་ཤེ་ཚུ་ལས་རང་དབང་ཅན་གྱི་བསྒྱུར་བཅོས་བདེན་དཔང་ཚུ་བལྟ།
+  - བརྒྱུད་འཕྲིན་གཏང་ནི།
+  - འཕྲིན་དོན་ཚུ་ དེ་འཕྲོ་ལས་ གཏང་ནིའི་ཚབ་ལུ་ མཐོང་སྣང་བསྒྱུར་བཅོས་ཚོགས་རྒྱན་ཚུ་ བསྡུ་སྒྲིག་འབད།
+  - Sumeragi ནང་ ཆ་ཚང་ལག་ལེན་གྱི་ འཁྲབ་རྩེདཔ་གཞི་ཁྲམ་ (ལས་ཀ་བར་སྟོང་ཚུ་གི་ཚབ་ལུ་ རང་གིས་སྦེ་ འཕྲིན་དོན་ཚུ་)།
+  - I18NT0000006X དང་གཅིག་ཁར་བརྟག་དཔྱད་ཚུ་གི་དོན་ལུ་ འཛོལ་བ་བཙུགས་ཐངས་ཡར་དྲག་གཏངམ་ཨིན།
+  - ཐོན་སྐྱེད་ཨང་རྟགས་ལུ་ སྦོ་ལོགས་ཁར་ བྲིངས་བརྟག་དཔྱད་ཨང་རྟགས་ཚུ།
+  - མགུ་འགེལ་བའི་མགུ་རྙོག་ཅན་ཚུ་རྩ་བསྐྲད་གཏངམ་ཨིན།
+  - I18NT000000007X བརྟག་ཞིབ་ཨང་རྟགས་ནང་ འཁྲབ་རྩེདཔ་ལག་ལེན་འཐབ།
+- hyperledger#1734 ཌོ་མེན་བདེན་དཔྱད་གསརཔ་ལུ་མཐུན་སྒྲིག་འབད་ནི་ལུ་ རིགས་མཚན་དུས་མཐུན་བཟོ་ནི།
+- hyperledger#1742 འཛོལ་བ་ཚུ་ `core` བཀོད་རྒྱ་ནང་སླར་ལོག་འབད་ཡོདཔ་ཨིན།
+- hyperledger#1404 གཏན་བཟོས་བདེན་དཔྱད་འབད།
+- hyperledger#1636 `trusted_peers.json` དང་ `structopt` བཏོན་གཏང་།
+  #1636: `trusted_peers.json` བཏོན་གཏང་།
+- hyperledger#1706 ཊོ་པོ་ལོ་ཇི་དུས་མཐུན་བཟོ་མི་དང་གཅིག་ཁར་ `max_faults` དུས་མཐུན་འབད།
+- hyperledger#1698 མི་མང་ལྡེ་མིག་དང་ ཡིག་ཆ་ དེ་ལས་ འཛོལ་བའི་འཕྲིན་དོན་ཚུ་ གཏན་འཁེལ་བཟོ་ཡོདཔ།
+- ས་གཏེར་གྱི་གནད་དོན་ (༡༥༩༣ དང་ ༡༤༠༥) གི་གནད་དོན་ ༡༤༠༥།
 
-### Refactor
-
-- Extract functions from sumeragi main loop.
-- Refactor `ProofChain` to newtype.
-- Remove `Mutex` from `Metrics`
-- Remove adt_const_generics nightly feature.
-- hyperledger#3039 Introduce waiting buffer for the multisigs.
-- Simplify sumeragi.
-- hyperledger#3053 Fix clippy lints.
-- hyperledger#2506 Add more tests on block validation.
-- Remove `BlockStoreTrait` in Kura.
-- Update lints for `nightly-2022-12-22`
-- hyperledger#3022 Remove `Option` in `transaction_cache`
-- hyperledger#3008 Add niche value into `Hash`
-- Update lints to 1.65.
-- Add small tests to boost coverage.
-- Remove dead code from `FaultInjection`
-- Call p2p less often from sumeragi.
-- hyperledger#2675 Validate item names/ids without allocating Vec.
-- hyperledger#2974 Prevent block spoofing without full revalidation.
-- more efficient `NonEmpty` in combinators.
-- hyperledger#2955 Remove Block from BlockSigned message.
-- hyperledger#1868 Prevent validated transactions from being sent
-  between peers.
-- hyperledger#2458 Implement generic combinator API.
-- Add storage folder into gitignore.
-- hyperledger#2909 Hardcode ports for nextest.
-- hyperledger#2747 Change `LoadFromEnv` API.
-- Improve error messages on configuration failure.
-- Add extra examples to `genesis.json`
-- Remove unused dependencies before `rc9` release.
-- Finalise linting on new Sumeragi.
-- Extract subprocedures in the main loop.
-- hyperledger#2774 Change `kagami` genesis generation mode from flag to
-  subcommand.
-- hyperledger#2478 Add `SignedTransaction`
-- hyperledger#2649 Remove `byteorder` crate from `Kura`
-- Rename `DEFAULT_BLOCK_STORE_PATH` from `./blocks` to `./storage`
-- hyperledger#2650 Add `ThreadHandler` to shutdown iroha submodules.
-- hyperledger#2482 Store `Account` permission tokens in `Wsv`
-- Add new lints to 1.62.
-- Improve `p2p` error messages.
-- hyperledger#2001 `EvaluatesTo` static type checking.
-- hyperledger#2052 Make permission tokens registrable with definition.
-  #2052: Implement PermissionTokenDefinition
-- Ensure all feature combinations work.
-- hyperledger#2468 Remove debug supertrait from permission validators.
-- hyperledger#2419 Remove explicit `drop`s.
-- hyperledger#2253 Add `Registrable` trait to `data_model`
-- Implement `Origin` instead of `Identifiable` for the data events.
-- hyperledger#2369 Refactor permission validators.
-- hyperledger#2307 Make `events_sender` in `WorldStateView` non-optional.
-- hyperledger#1985 Reduce size of `Name` struct.
-- Add more `const fn`.
-- Make integration tests use `default_permissions()`
-- add permission token wrappers in private_blockchain.
-- hyperledger#2292 Remove `WorldTrait`, remove generics from `IsAllowedBoxed`
-- hyperledger#2204 Make Asset-related operations generic.
-- hyperledger#2233 Replace `impl` with `derive` for `Display` and `Debug`.
-- Identifiable structure improvements.
-- hyperledger#2323 Enhance kura init error message.
-- hyperledger#2238 Add peer builder for tests.
-- hyperledger#2011 More descriptive config params.
-- hyperledger#1896 Simplify `produce_event` implementation.
-- Refactor around `QueryError`.
-- Move `TriggerSet` to `data_model`.
-- hyperledger#2145 refactor client's `WebSocket` side, extract pure data logic.
-- remove `ValueMarker` trait.
-- hyperledger#2149 Expose `Mintable` and `MintabilityError` in `prelude`
-- hyperledger#2144 redesign client's http workflow, expose internal api.
-- Move to `clap`.
-- Create `iroha_gen` binary, consolidating docs, schema_bin.
-- hyperledger#2109 Make `integration::events::pipeline` test stable.
-- hyperledger#1982 encapsulate access to `iroha_crypto` structures.
-- Add `AssetDefinition` builder.
-- Remove unnecessary `&mut` from the API.
-- encapsulate access to data model structures.
-- hyperledger#2144 redesign client's http workflow, expose internal api.
-- Move to `clap`.
-- Create `iroha_gen` binary, consolidating docs, schema_bin.
-- hyperledger#2109 Make `integration::events::pipeline` test stable.
-- hyperledger#1982 encapsulate access to `iroha_crypto` structures.
-- Add `AssetDefinition` builder.
-- Remove unnecessary `&mut` from the API.
-- encapsulate access to data model structures.
-- Core, `sumeragi`, instance functions, `torii`
-- hyperledger#1903 move event emission to `modify_*` methods.
-- Split `data_model` lib.rs file.
-- Add wsv reference to queue.
-- hyperledger#1210 Split event stream.
-  - Move transaction-related functionality to data_model/transaction module
-- hyperledger#1725 Remove global state in Torii.
-  - Implement `add_state macro_rules` and remove `ToriiState`
-- Fix linter error.
-- hyperledger#1661 `Cargo.toml` cleanup.
-  - Sort out cargo dependencies
-- hyperledger#1650 tidy up `data_model`
-  - Move World to wsv, fix roles feature, derive IntoSchema for CommittedBlock
-- Organisation of `json` files and readme. Update Readme to conform to template.
-- 1529: structured logging.
-  - Refactor log messages
+### ལུ་བསྐྱར་བཟོ་འབད་ནི།- སུ་སེ་སེ་རེ་ཇི་ བསྐྱར་ལོག་ངོ་མ་ལས་ ལས་འགན་ཚུ་ ཕྱིར་བཏོན་འབད།
+- དབྱེ་བ་གསརཔ་ལུ་ བསྐྱར་བཟོ་ `ProofChain`.
+- `Mutex` འདི་ I18NI000000514X ལས་ བཏོན་གཏང་།
+- adt_const_generics མཚན་མོའི་ཁྱད་རྣམ་རྩ་བསྐྲད་གཏང་།
+- hyperledger #3039 སྣ་མང་སིག་ཚུ་གི་དོན་ལུ་ བསྒུག་སྡོད་མི་ བཱ་ཕར་ངོ་སྤྲོད།
+- བཅུད་བསྡུས་འཇམ་ཏོང་ཏོ་བཟོ།
+- ཧའི་པར་ལེ་ཇར་#3053 བཅོ་ཁ་བརྐྱབས་ཏེ་ ལིནཊི།
+- hyperledger#2506 སྡེབ་ཚན་བདེན་དཔྱད་གུ་བརྟག་དཔྱད་མངམ་ཁ་སྐོང་རྐྱབས།
+- ཀུ་ར་ནང་ `BlockStoreTrait` བཏོན་གཏང་།
+- `nightly-2022-12-22` གི་དོན་ལུ་ ལིནཊི་ཚུ་ དུས་མཐུན་བཟོ།
+- hyperledger#3022 `Option` `transaction_cache` ནང་བཏོན་གཏང་།
+- ཧའི་པར་ལེ་ཇར་#3008 `Hash` ནང་ལུ་ ནིཀ་གནས་གོང་ཁ་སྐོང་རྐྱབས།
+- ༡.༦༥ ལུ་ ལིནཊི་ཚུ་ དུས་མཐུན་བཟོ།
+- ཁྱབ་ཚད་ཡར་དྲག་གཏང་ནིའི་དོན་ལུ་ བརྟག་དཔྱད་ཆུང་ཀུ་ཚུ་ཁ་སྐོང་འབད།
+- བཏོན་གཏང་ཡོད་པའི་ཨང་རྟགས་འདི་ `FaultInjection` ལས་བཏོན་གཏང་།
+- p2p ལས་ཉུང་བའི་ suceeragi ལས་ཉུང་བ།
+- hyperledger#2675 རྣམ་གྲངས་མིང་/ཨའི་ཌི་ཚུ་ ཝེཀ་བགོ་བཀྲམ་མ་འབད་བར་ བདེན་དཔྱད་འབད།
+- hyperledger#2974 ཆ་མེད་མ་བཏང་པར་ རྫུས་མ་བཟོ་ནི་འདི་སྔོན་བཀག་འབད།
+- མཉམ་སྡེབ་འབད་མི་ཚུ་ནང་ `NonEmpty` འདི་ འཇོན་ཐངས་ཅན་ཅིག་ཨིན།
+- hyperledger#2955 བཀག་ཆ་མིང་རྟགས་བཀོད་ཡོད་པའི་འཕྲིན་དོན་ལས་ སྡེབ་ཚན་རྩ་བསྐྲད་གཏང་།
+- hyperledger#1868 བདེན་དཔྱད་འབད་ཡོད་པའི་ཚོང་འབྲེལ་ཚུ་ གཏང་ནི་ལས་ སྔོན་འགོག་འབད་ཡོདཔ།
+  མཉམ་རོགས་ཀྱི་བར་ན།
+- hyperledger#2458 བརྒྱུད་འཛིན་སྤྱིར་བཏང་མཉམ་བསྡོམས་ཨེ་པི་ཨའི་ལག་ལེན་འཐབ།
+- གསོག་འཇོག་སྣོད་འཛིན་ གི་ཊི་གཱོན་ནང་ ཁ་སྐོང་བརྐྱབ།
+- ཧའི་པར་ལེ་ཇར་#2909 ཤུལ་མམ་གྱི་དོན་ལུ་ཧརཌི་ཀོཌི་འདྲེན་ལམ་ཚུ།
+- hyperledger#2747 `LoadFromEnv` API བསྒྱུར་བཅོས་འབད།
+- རིམ་སྒྲིག་འཐུས་ཤོར་གྱི་ཐོག་ལུ་འཛོལ་བའི་འཕྲིན་དོན་ཚུ་ཡར་རྒྱས་གཏང་།
+- I18NI0000523X ལུ་དཔེ་ཁ་སྐོང་ཁ་སྐོང་རྐྱབས།
+- `rc9` གསར་བཏོན་མ་འབད་བའི་ཧེ་མར་ ལག་ལེན་མ་འཐབ་པའི་བརྟེན་པ་ཚུ་ རྩ་བསྐྲད་གཏང་།
+- I18NT0000008X གུ་ཡོད་པའི་ གྲལ་ཐིག་འདི་མཇུག་བསྡུ།
+- བསྐྱར་ལོག་གཙོ་བོ་ནང་ ཡན་ལག་བྱ་རིམ་ཚུ་ བཏོན་གཏང་།
+- hyperledger#2774 དར་ཆ་ལས་རྒྱལ་དར་ལས་རྟགས་བཀོད་པ་ལུ་ `kagami` རིགས་མཚན་བཟོ་ནི་གི་ཐབས་ལམ་བསྒྱུར་བཅོས་འབད་ནི།
+  ཡན་ལག་བཀོད་རྒྱ་།
+- hyperledger#2478 `SignedTransaction` ཁ་སྐོང་རྐྱབས།
+- hyperledger#2649 `Kura` ལས་ `byteorder` ཀེརེཊ་ བཏོན་གཏང་།
+- མིང་བསྒྱུར་ `DEFAULT_BLOCK_STORE_PATH` ལས་ I18NI000000530X ལས་ I18NI000000531X ལུ།
+- hyperledger#2650 ཨའི་རོ་ཧ་ཡན་ལག་ཚད་གཞི་ཚུ་སྒོ་བསྡམ་ནིའི་དོན་ལུ་ `ThreadHandler` ཁ་སྐོང་རྐྱབས།
+- hyperledger#2482 ཚོང་ཁང་ `Account` གནང་བ་གི་ཊོ་ཀེན་ཚུ་ `Wsv` ནང་ལུ།
+- གྲལ་ཐིག་གསརཔ་ ༡.༦༢ ལུ་ཁ་སྐོང་རྐྱབས།
+- I18NI000000535X འཛོལ་བའི་འཕྲིན་དོན་ཚུ་ཡར་རྒྱས་གཏང་།
+- ཧའི་པར་ལེ་ཇར་#2001 `EvaluatesTo` རྟག་བརྟན་དབྱེ་བ་ཞིབ་དཔྱད་འབད་ནི།
+- hyperledger#2052 ངེས་ཚིག་དང་གཅིག་ཁར་ཐོ་བཀོད་འབད་བཏུབ་པའི་གནང་བ་ཊོ་ཀེན་ཚུ་བཟོ།
+  #2052: ཆོག་ཐམ་ཊོ་ཀེན་ངེས་འཛིན་ལག་ལེན་འཐབ།
+- ཁྱད་རྣམ་མཉམ་བསྡོམས་ཚུ་ཆ་མཉམ་ལཱ་འབད་ནི་ལུ་ངེས་གཏན་བཟོ།
+- hyperledger#2468 གནང་བ་བདེན་དཔྱད་ཚུ་ལས་ རྐྱེན་སེལ་གྱི་ པར་རྐྱེན་སྦོམ་ཚུ་ རྩ་བསྐྲད་གཏང་།
+- hyperledger#2419 གསལ་རི་རི་ `drop` རྩ་བསྐྲད་གཏང་།
+- hyperledger#2253 `Registrable` `data_model` ལུ་ རང་གཤིས་ཁ་སྐོང་འབདཝ་ཨིན།
+- གནད་སྡུད་བྱུང་ལས་ཚུ་གི་དོན་ལུ་ I18NI000000541X གི་ཚབ་ལུ་ `Origin` ལག་ལེན་འཐབ།
+- hyperledger#2369 སླར་འབྱུང་གནང་བ་བདེན་དཔྱད་འབད་མི་ཚུ།
+- hyperledger#2307 `events_sender` ནང་ I18NI000000543X འདི་གདམ་ཁ་མ་རྐྱབ།
+- hyperledger#1985 ཚད་ `Name` གི་ཚད་མར་ཕབ་འབད།
+- `const fn` ཁ་སྐོང་རྐྱབས།
+- མཉམ་བསྡོམས་བརྟག་དཔྱད་ཚུ་ལག་ལེན་འཐབ། `default_permissions()`
+- ཁ་སྐོང་གནང་བ་ཊོ་ཀེན་གྱི་བཀབ་ཆ་ཚུ་ སྒེར་དོན་_བཀག་ཆ་ནང་།
+- hyperledger#2292 `WorldTrait` བཏོན་གཏང་ཞིནམ་ལས་ `IsAllowedBoxed` ལས་ རིགས་མཚན་ཚུ་བཏོན་གཏང་།
+- hyperledger#2204 རྒྱུ་དངོས་དང་འབྲེལ་བའི་བཀོལ་སྤྱོད་སྤྱིར་བཏང་བཟོཝ་ཨིན།
+- hyperledger#2233 I18NI000000550X དང་ I18NI000000551X དང་ `Display` དང་ Iroha གཉིས་ཚབ་བཙུགས།
+- ངོས་འཛིན་འབད་ཚུགས་པའི་ གཞི་བཀོད་ལེགས་བཅོས་ཚུ།
+- hyperledger#2323 ཀུ་ར་ཨིན་ཊི་འཛོལ་བའི་འཕྲིན་དོན།
+- hyperledger#2238 བརྟག་དཔྱད་ཚུ་གི་དོན་ལུ་ མཉམ་རོགས་ཁ་སྐོང་བརྐྱབ།
+- hyperledger#2011 འགྲེལ་བཤད་ཅན་གྱི་རིམ་སྒྲིག་པྲེམསི་མངམ་ཨིན།
+- hyperledger#1896 `produce_event` ལག་ལེན།
+- `QueryError` མཐའ་འཁོར་ལུ་བསྐྱར་བཟོ་འབད་ཡོདཔ།
+- `TriggerSet` Iroha ལུ་སྤོ་བཤུད་འབད།
+- hyperledger#2145 བསྐྱར་བཟོ་འབད་མི་ མཁོ་སྤྲོད་འབད་མི་གི་ I18NI0000057X གི་ཕྱོགས་ གནད་སྡུད་ཚད་མ་ཡང་དག་ཅིག་ བཏོན་གཏངམ་ཨིན།
+- `ValueMarker` རང་གཤིས་འདི་བཏོན་གཏང་།
+- hyperledger#2149 ཕྱིར་འཐེན་ `Mintable` དང་ I18NI000000560X ནང་ I18NI000000561X ལུ།
+- hyperledger#2144 མཁོ་སྤྲོད་པ་གི་ http ལས་དོན་འདི་ ལོག་བཟོ་བཀོད་འབད་, ནང་འཁོད་ཨེ་པི་འདི་ ཕྱིར་བཏོན་འབད།- `clap` ལུ་སྤོ་བཤུད་འབད།
+- `iroha_gen` གཉིས་ལྡན་བཟོ་བཅོས་འབད་ ཡིག་ཆ་ཚུ་མཉམ་བསྡོམས་འབད།
+- hyperledger#2109 `integration::events::pipeline` བརྟག་དཔྱད་གཏན་འཁེལ་བཟོཝ་ཨིན།
+- hyperledger#1982 གིས་ `iroha_crypto` གི་བཟོ་བཀོད་ཚུ་ འཛུལ་སྤྱོད་འབད་བཅུགཔ་ཨིན།
+- I18NI0000056X བཟོ་བསྐྲུན་པ་ཁ་སྐོང་འབད།
+- ཨེ་པི་ཨའི་ལས་ དགོས་མཁོ་མེད་པའི་ `&mut` བཏོན་གཏང་།
+- གནད་སྡུད་དཔེ་ཚད་གཞི་བཀོད་ཚུ་གི་ འཛུལ་སྤྱོད་ཚུ་ བསྡུ་སྒྲིག་འབད།
+- hyperledger#2144 མཁོ་སྤྲོད་པ་གི་ http ལས་དོན་འདི་ ལོག་བཟོ་བཀོད་འབད་, ནང་འཁོད་ཨེ་པི་འདི་ ཕྱིར་བཏོན་འབད།
+- `clap` ལུ་སྤོ་བཤུད་འབད།
+- `iroha_gen` གཉིས་ལྡན་གསར་བསྐྲུན་འབད།
+- hyperledger#2109 `integration::events::pipeline` བརྟག་དཔྱད་བརྟན་ཏོག་ཏོ་བཟོཝ་ཨིན།
+- hyperledger#1982 གིས་ `iroha_crypto` གི་བཟོ་བཀོད་ཚུ་ འཛུལ་སྤྱོད་འབད་བཅུགཔ་ཨིན།
+- `AssetDefinition` བཟོ་བསྐྲུན་པ་ཁ་སྐོང་འབད།
+- ཨེ་པི་ཨའི་ལས་ དགོས་མཁོ་མེད་པའི་ `&mut` བཏོན་གཏང་།
+- གནད་སྡུད་དཔེ་ཚད་གཞི་བཀོད་ཚུ་གི་ འཛུལ་སྤྱོད་ཚུ་ བསྡུ་སྒྲིག་འབད།
+- ཀོར་ `sumeragi`, དཔེ་མཚོན་ལས་འགན་ `torii`
+- hyperledger#1903 བྱུང་ལས་ཐོན་རླུང་འདི་ `modify_*` ཐབས་ལམ་ཚུ་ལུ་སྤོ་བཤུད་འབདཝ་ཨིན།
+- `data_model` lib.rs ཡིག་ཆ།
+- ཌབ་ལུ་སི་ཝི་ གྱལ་རིམ་ནང་ གཞི་བསྟུན་ཁ་སྐོང་འབད།
+- ཧའི་པར་ལེཌི་ཇར་#1210 བགོ་བཤའ་བྱུང་ལས་རྒྱུན་ལམ་།
+  - ཚོང་འབྲེལ་དང་འབྲེལ་བའི་ལཱ་འགན་འདི་ data_model/བརྒྱུད་འཕྲིན་ཚད་གཞི་ལུ་སྤོ་བཤུད་འབད།
+- hyperledger#1725 འཛམ་གླིང་གནས་སྟངས་ Torii ནང་བཏོན་གཏང་།
+  - `add_state macro_rules` ལག་ལེན་འཐབ་ཞིནམ་ལས་ `ToriiState` བཏོན་གཏང་།
+- ལྕུག་གུ་གི་ ལྐོག་ཤོང་འབད་མི་འཛོལ་བ།
+- ཧའི་པར་ལེ་ཇར་#1661 `Cargo.toml` གཙང་སྦྲ།
+  - ཅ་ཆས་ལུ་བརྟེན་པའི་དབང་ཆ་ཚུ་དབྱེ་སེལ་འབད།
+- ཧའི་པར་ལེ་ཇར་#1650 ཊི་ཌི་ཡར་ `data_model`
+  - འཛམ་གླིང་འདི་ wsv ལུ་སྤོ་བཤུད་འབད།
+- `json` ཡིག་སྣོད་དང་ རིཌ་མེའི་སྒྲིག་འཛུགས། ཊེམ་པེལེཊི་ལུ་མཐུན་སྒྲིག་འབད་ནི་ལུ་ རི་ཌི་མེ་དུས་མཐུན་བཟོ་ནི།
+- 1529: བཀོད་སྒྲིག་འབད་ཡོད་པའི་དྲན་ཐོ།
+  - དྲན་ཐོ་དྲན་ཐོ་ འཕྲིན་དོན་ཚུ།
 - `iroha_p2p`
-  - Add p2p privatisation.
+  - p2p སྒེར་སྡེ་ཁ་སྐོང་འབད།
 
-### Documentation
+### ཡིག་ཆ།
 
-- Update Iroha Client CLI readme.
-- Update tutorial snippets.
-- Add 'sort_by_metadata_key' into API spec.
-- Update links to documentation.
-- Extend tutorial with asset-related docs.
-- Remove outdated doc files.
-- Review punctuation.
-- Move some docs to the tutorial repository.
-- Flakyness report for staging branch.
-- Generate changelog for pre-rc.7.
-- Flakyness report for Jul 30.
-- Bump versions.
-- Update test flakyness.
-- hyperledger#2499 Fix client_cli error messages.
-- hyperledger#2344 Generate CHANGELOG for 2.0.0-pre-rc.5-lts.
-- Add links to the tutorial.
-- Update information on git hooks.
-- flakyness test writeup.
-- hyperledger#2193 Update Iroha client documentation.
-- hyperledger#2193 Update Iroha CLI documentation.
-- hyperledger#2193 Update README for macro crate.
- - hyperledger#2193 Update Norito Decoder Tool documentation.
-- hyperledger#2193 Update Kagami documentation.
-- hyperledger#2193 Update benchmarks documentation.
-- hyperledger#2192 Review contributing guidelines.
-- Fix broken in-code references.
-- hyperledger#1280 Document Iroha metrics.
-- hyperledger#2119 Add guidance on how to hot reload Iroha in a Docker container.
-- hyperledger#2181 Review README.
-- hyperledger#2113 Document features in Cargo.toml files.
-- hyperledger#2177 Clean up gitchangelog output.
-- hyperledger#1991 Add readme to Kura inspector.
-- hyperledger#2119 Add guidance on how to hot reload Iroha in a Docker container.
-- hyperledger#2181 Review README.
-- hyperledger#2113 Document features in Cargo.toml files.
-- hyperledger#2177 Clean up gitchangelog output.
-- hyperledger#1991 Add readme to Kura inspector.
-- generate latest changelog.
-- Generate changelog.
-- Update outdated README files.
-- Added missing docs to `api_spec.md`.
+- I18NT000000062X མཁོ་སྤྲོད་འབད་མི་ CLI readmem.
+- སློབ་སྟོན་གྱི་ ཆ་ཤས་ཚུ་ དུས་མཐུན་བཟོ།
+- ཨེ་པི་ཨའི་ སི་ཊིསི་ནང་ 'sort_by_metadata_ke' ཁ་སྐོང་འབད།
+- ཡིག་ཆ་ཚུ་ལུ་འབྲེལ་ལམ་ཚུ་དུས་མཐུན་བཟོ་ནི།
+- རྒྱུ་དངོས་དང་འབྲེལ་བའི་ ཡིག་ཆ་ཚུ་དང་གཅིག་ཁར་ སློབ་སྟོན་རྒྱ་སྐྱེད་འབད།
+- ཕྱིར་འགྱངས་འབད་ཡོད་པའི་ཌོཀ་ཡིག་སྣོད་ཚུ་རྩ་བསྐྲད་གཏང་།
+- མཚམས་ཐིག་བསྐྱར་ཞིབ་འབད་ནི།
+- ཡིག་ཆ་ལ་ལུ་ཅིག་ སློབ་སྟོན་མཛོད་ཁང་ནང་ སྤོ་བཤུད་འབད།
+- ཡན་ལག་ལས་རིམ་གྱི་དོན་ལུ་ ཕེལེཀ་ནེསི་སྙན་ཞུ།
+- pre-r-rc.7 གི་དོན་ལུ་ བསྒྱུར་བཅོས་ལོག་བཟོ་བཏོན་འབད།
+- སྤྱི་ཟླ་༧ པའི་ཚེས་༣༠ གི་དོན་ལུ་ ཕེལེཀ་ནེསི་སྙན་ཞུ།
+- བམཔ་ཐོན་རིམ་ཚུ།
+- བརྟག་དཔྱད་ཀྱི་ ཕྲང་ཕྲངམ་སྦེ་ དུས་མཐུན་བཟོ།
+- ཧའི་པར་ལེ་ཇར་#2499 མཉེན་ཆས་_cli འཛོལ་བའི་འཕྲིན་དོན་ཚུ་ བདེ་སྒྲིག་འབད།
+- hyperledger#2344 2.0.0-pre-rc.5-lts གི་དོན་ལུ་ CHANGELOG བཟོ་དགོ།
+- སློབ་སྟོན་ལུ་འབྲེལ་ལམ་ཁ་སྐོང་བརྐྱབ།
+- གིཊི་ཧུཀ་ཚུ་གི་སྐོར་ལས་ བརྡ་དོན་དུས་མཐུན་བཟོ་ནི།
+- ཕྲང་ཏང་ཏ་བརྟག་དཔྱད་ཡིག་ཆ།
+- hyperledger#2193 མཁོ་སྤྲོད་ཡིག་ཆ་ཚུ་ དུས་མཐུན་བཟོ་ནི།
+- ཧའི་པར་ལེ་ཇར་#2193 སི་ཨེལ་ཨའི་ཡིག་ཆ་ཚུ་ དུས་མཐུན་བཟོ་ནི།
+- ཧའི་པར་ལེ་ཇར་#2193 མེཀ་རོ་ཀེརེཊི་གི་དོན་ལུ་ README དུས་མཐུན་བཟོ་ནི།
+ - ཧའི་པར་ལེ་ཇར་#2193 ཌི་ཀོ་ཌར་ལག་ཆས་ཡིག་ཆ་ཚུ་ དུས་མཐུན་བཟོཝ་ཨིན།
+- ཧའི་པར་ལེ་ཇར་#2193 Kagami ཡིག་ཆ་དུས་མཐུན་བཟོ།
+- hyperledger#2193 བེན་ཀ་རྟགས་ཚུ་ཡིག་ཆ་དུས་མཐུན་བཟོ།
+- hyperledger#2192 བསྐྱར་ཞིབ་ཕན་འདེབས་ལམ་སྟོན།
+- ཆད་ཡོད་པའི་ གསང་གྲངས་གཞི་བསྟུན་ཚུ་ བཅོ་ཁ་རྐྱབས།
+- hyperledger#1280 ཡིག་ཆ་ I18NT0000065X མེ་ཊིགས།
+- hyperledger#2119 Docker དམ་སྦྱིས་ནང་ Iroha འདི་ ཚ་དྲོད་བཏང་ཐངས་ཀྱི་ ལམ་སྟོན་ཁ་སྐོང་འབད།
+- hyperledger#2181 བསྐྱར་ཞིབ་ README.
+- hyperledger#2113 Cargo.toml ཡིག་སྣོད་ཚུ་ནང་ ཡིག་ཆ་གི་ཁྱད་རྣམ་ཚུ།
+- hyperledger#2177 གིཊ་ཅེག་ལོག་ཨའུཊི་པུཊི་ གཙང་མ་བཟོ།
+- hyperledger#1991 ཀུ་ར་ཞིབ་དཔྱད་པ་ལུ་ readme ཁ་སྐོང་འབད།
+- hyperledger#2119 Docker དོས་ནང་ལུ་ Iroha འདི་ ག་དེ་སྦེ་ ཚ་དྲོད་བཏང་ནི་ཨིན་ན་གི་ལམ་སྟོན་ཁ་སྐོང་འབད།
+- hyperledger#2181 བསྐྱར་ཞིབ་ README.
+- hyperledger#2113 Cargo.toml ཡིག་སྣོད་ཚུ་ནང་ ཡིག་ཆ་གི་ཁྱད་རྣམ་ཚུ།
+- hyperledger#2177 གིཊ་ཅེག་ལོག་ཨའུཊི་པུཊི་ གཙང་མ་བཟོ།
+- hyperledger#1991 ཀུ་ར་ཞིབ་དཔྱད་པ་ལུ་ readme ཁ་སྐོང་འབད།
+- བསྒྱུར་བཅོས་གསརཔ་བཟོ་བཏོན་འབད།
+- བསྒྱུར་བཅོས་འབད།
+- README ཡིག་སྣོད་ཚུ་དུས་ཚོད་རྫོགས་ཡོད་མི་དུས་མཐུན་བཟོ།
+- `api_spec.md` ལུ་ ཡིག་ཆ་མེད་མི་ ཌོཀ་ཚུ་ཁ་སྐོང་འབད་ཡོདཔ།
 
-### CI/CD changes
+### CI/CD འགྱུར་བ།- རང་གིས་གཙོ་བོར་བསྟེན་མི་ རྒྱུག་མི་ལྔ་ཁ་སྐོང་རྐྱབས།
+- སོ་ར་མིཊི་སུའི་ཐོ་བཀོད་དོན་ལུ་ དུས་རྒྱུན་གཟུགས་བརྙན་ངོ་རྟགས་ཁ་སྐོང་བརྐྱབ།
+- libgit2-sys 0.5.0 གི་དོན་ལུ་ལཱ་ཤུགས་ཅན། ༠.༤.༤ ལུ་ལོག་གཏང་།
+- གཞུ་དབྱིབས་གཞི་བཞག་པའི་གཟུགས་བརྙན་ལག་ལེན་འཐབ་ནི་གི་དཔའ་བཅམ།
+- མཚན་མོ་རྐྱངམ་ཅིག་ཡོད་པའི་ དོ་དམ་པ་གསརཔ་གུ་ལཱ་འབད་ནིའི་དོན་ལུ་ ལཱ་གི་རྒྱུན་རིམ་ཚུ་ དུས་མཐུན་བཟོ་དགོ།
+- ཁྱབ་ཁོངས་ལས་ གཉིས་ལྡན་འཛུལ་སྒོ་ཚུ་ རྩ་བསྐྲད་གཏང་།
+- ཨེ་ཀི་ནིགསི་རང་གིས་ ཧོསཊི་རྒྱུག་མི་ཚུ་ལུ་ ཌི་ཝི་བརྟག་དཔྱད་ཚུ་ སོར་བསྒྱུར་འབད།
+- hyperledger#2865 `scripts/check.sh` ལས་ tmp ཡིག་སྣོད་ལག་ལེན་རྩ་བསྐྲད་གཏང་།
+- hyperledger#2781 ཁྱབ་ཚད་ཨོཕ་སེཊི་ཁ་སྐོང་རྐྱབས།
+- མགྱོགས་དྲགས་མཉམ་བསྡོམས་བརྟག་དཔྱད་ཚུ་ལྕོགས་མིན་བཟོ།
+- ཌོག་ཀར་འདྲ་མཛོད་དང་གཅིག་ཁར་གཞི་རྟེན་གཟུགས་བརྙན་ཚབ་བཙུགས།
+- hyperledger#2781 གསང་ཡིག་ཀོ་པི་ཕ་མའི་ཁྱད་རྣམ་ཁ་སྐོང་རྐྱབས།
+- གི་ཐུབ་རྒྱུག་མི་ཚུ་ལུ་ ལཱ་ཚུ་སྤོ་བཤུད་འབད།
+- ཧའི་པར་ལེ་ཇར་#2778 མཁོ་སྤྲོད་རིམ་སྒྲིག་ཞིབ་དཔྱད་འབད།
+- hyperledger#2732 ཨའི་རོ་ཧ་༢-གཞི་རྟེན་གཟུགས་བརྙན་ཚུ་དུས་མཐུན་བཟོ་ནི་དང་ཁ་སྐོང་བརྐྱབ་ནི་ལུ་ གནས་སྟངས་ཅིག་ཁ་སྐོང་བརྐྱབ།
+  PR ཁ་ཡིག་ཚུ།
+- མཚན་མོའི་གཟུགས་བརྙན་བཟོ་ནི།
+- `buildx` འཛོལ་བ་ `docker/build-push-action` དང་མཉམ་དུ།
+- ལཱ་འགན་མ་འཐབ་པའི་དོན་ལུ་ དང་པ་ `tj-actions/changed-files` ཚུ།
+- པར་རིས་ཚུ་ རིམ་མཐུན་དཔར་བསྐྲུན་འབད་ #༢༦༦༢ གི་ཤུལ་ལས་ པར་རིས་ཚུ་ ལྕོགས་ཅན་བཟོ།
+- མཚོ་འགྲམ་གྱི་ཐོ་བཀོད་ཁ་སྐོང་འབད།
+- རང་བཞིན་ཁ་ཡིག་ `api-changes` དང་ `config-changes`
+- ཧེཤ་གཟུགས་བརྙན་ནང་ ཧེཤ་ལུ་ ལག་ཆས་རིམ་སྒྲིག་ཡིག་སྣོད་ ཡུ་ཨའི་ ཟུར་གནས་ ཚུ་ བཀོད།
+  འཆར་གཞིའི་རྗེས་འདེད་དོ།
+- ལཱ་གི་རྒྱུན་རིམ་ཚུ་ རིམ་སྒྲིག་འབད་དེ་ #2427 ལུ་ ལྷན་ཐབས་ཚུ་ འབད་དགོ།
+- hyperledger#2309: སི་ཨའི་ནང་ ཌོཀ་བརྟག་དཔྱད་ཚུ་ ལོག་ལྕོགས་ཅན་བཟོ།
+- ཧའི་པར་ལེ་ཇར་#2165 ཀོཌེབ་བཙུགས་ རྩ་བསྐྲད་གཏང་།
+- ད་ལྟོའི་ལག་ལེན་པ་ཚུ་དང་གཅིག་ཁར་ འཁྲུག་རྩོད་ཚུ་བཀག་ཐབས་ལུ་ དོས་ཆས་གསརཔ་ལུ་སྤོ་བཤུད་འབད།
+ - hyperledger#2158 `parity_scale_codec` ཡར་འཕེལ་དང་གཞན་བརྟེན་པ་ཚུ། (Norito གསང་གྲངས་)
+- བཟོ་བཀོད།
+- hyperledger#2461 iroha2 CI ཡར་དྲག་གཏང་ནི།
+- I18NI000000592X དུས་མཐུན་བཟོ།
+- ཁྱབ་ཚད་འདི་ ལཱ་གི་རྒྱུན་རིམ་གསརཔ་ཅིག་ལུ་སྤོ་བཤུད་འབད།
+- ཕྱི་འགྱུར་ཌོག་ཀར་ནང་བསྐྱོད་ཝར་ ver.
+- `archlinux:base-devel` གི་ཐོན་རིམ་གྱི་ཁྱད་ཚད་བཏོན་གཏང་།
+- ཌོག་ཀར་ཡིག་སྣོད་ཚུ་དང་ ཀོཌི་ཀོབ་ཀྱི་སྙན་ཞུ་ཚུ་ ལོག་ལག་ལེན་དང་ མཉམ་མཐུན་དུས་མཐུན་བཟོ་ནི།
+- བསྒྱུར་བཅོས་འབད།
+- `cargo deny` ཡིག་སྣོད་ཁ་སྐོང་འབད།
+- `iroha2` ལས་ ལཱ་གི་རྒྱུན་རིམ་དང་གཅིག་ཁར་ `iroha2-lts` ཡན་ལག་ཁ་སྐོང་འབད།
+- hyperledger#2393 Docker གཞི་རྟེན་གཟུགས་བརྙན་གྱི་ཐོན་རིམ་འདི་བཤུད།
+- ཧའི་པར་ལེ་ཇར་#1658 ཡིག་ཆའི་ཞིབ་དཔྱད་ཁ་སྐོང་རྐྱབས།
+- ཀེར་ཊེསི་གི་ཐོན་རིམ་ བམ་དང་ ལག་ལེན་མ་འཐབ་པའི་ བརྟེན་མི་ཚུ་ བཏོན་གཏང་།
+- དགོས་མཁོ་མེད་པའི་ཁྱབ་ཁོངས་སྙན་ཞུ་ཚུ་ བཏོན་གཏང་།
+- hyperledger#2222 ཁྱབ་ཁོངས་ནང་ཚུད་ཡོདཔ་ཨིན་ན་མེན་ན་ བརྟག་དཔྱད་འབད་ནི།
+- ཧའི་པར་ལེ་ཇར་#2153 བཅོ་ཁ་ #2154.
+- ཐོན་རིམ་གྱིས་ ཀེརེཊ་ཚུ་ཆ་མཉམ་བམཔ་ཨིན།
+- བཀོལ་སྤྱོད་ཀྱི་པའིཔ་ལའིན་གཏན་འཁེལ།
+- hyperledger#2153 བདེ་སྒྲིག་ཁྱབ་ཁོངས།
+- རིགས་བརྒྱུད་ཞིབ་དཔྱད་དང་ཡིག་ཆ་དུས་མཐུན་བཟོ་ནི།
+- བམ་པ་ དང་ བཟོ་རྣམ་ དེ་ལས་ མཚན་མོ་ ༡.༦༠ དང་ ༡.༢.༠ དེ་ལས་ ༡.༦༢ ལུ་ ཟངས་བཏང་དགོ།
+- མངོན་གསལ་-s ཊི་རི་ཊིསི།
+- ཧའི་པར་ལེ་ཇར་#2153 བཅོ་ཁ་ #2154.
+- ཐོན་རིམ་གྱིས་ ཀེརེཊ་ཚུ་ཆ་མཉམ་བམཔ་ཨིན།
+- བཀོལ་སྤྱོད་ཀྱི་པའིཔ་ལའིན་གཏན་འཁེལ།
+- hyperledger#2153 བདེ་སྒྲིག་ཁྱབ་ཁོངས།
+- རིགས་བརྒྱུད་ཞིབ་དཔྱད་དང་ཡིག་ཆ་དུས་མཐུན་བཟོ་ནི།
+- བམ་པ་ ཟངས་དང་ བཟོ་རྣམ་ དེ་ལས་ མཚན་མོ་ལུ་ ༡.༦༠ དང་ ༡.༢.༠ དེ་ལས་ ༡.༦༢ ལུ་ བསྐྱར་ལོག་འབདཝ་ཨིན།
+- མངོན་གསལ་-s ཊི་རི་ཊིསི།
+- load-rs:ལཱ་གི་རྒྱུན་རིམ་ཚུ་ བཏོན་གཏང་།
+- ལཱ་འབད་ནིའི་རྒྱུན་རིམ་ཚུ་ བདེ་སྒྲིག་འབད་ནི།
+- སྔོན་སྒྲིག་ཁྱད་རྣམ་ཚུ་ལུ་ བརྒྱུད་འཕྲིན་ཁ་སྐོང་འབད།
+- ལཱ་གི་རྒྱུན་རིམ་ངོ་མ་གུ་ ཨེབ་གཏང་འབད་ནི་ལུ་ ངོ་རྟགས་འོས་འབབ་ཅན་ཁ་སྐོང་འབད།
+- བདེ་སྒྲིག་འབད་མ་ཚུགས་པའི་བརྟག་དཔྱད་ཚུ།
+- hyperledger#1657 གཟུགས་བརྙན་ ༡.༥༧ ལུ་ བརླག་སྟོར་ཞུགས་ནི་ལུ་ གཟུགས་བརྙན་དུས་མཐུན་བཟོ་ནི། #1630: རང་གིས་རང་ འགོ་འདྲེན་འཐབ་མི་ རྒྱུག་མི་ཚུ་ལུ་ ལོག་སྤོ་བཤུད་འབད།
+- CI ལེགས་བཅོས་ཚུ།
+- `lld` ལག་ལེན་འཐབ་ནིའི་དོན་ལུ་ སོར་བསྒྱུར་འབད་ཡོད་པའི་ཁྱབ་ཁོངས།
+- CI བརྟེན་པའི་ བདེ་སྒྲིག།
+- CI དབྱེ་ཁག་བཟོ་ནི།
+- སི་ཨའི་ནང་ གཏན་བཟོས་རཱསི་ཐོན་རིམ་ཅིག་ལག་ལེན་འཐབ་ཨིན།
+- Docker དཔར་བསྐྲུན་དང་ iroha2-dev གི་སྐུལ་སློང་ CI. ཁྱབ་ཚད་སྤོ་བཤུད་དང་ PR ནང་ལུ་བང་བཀོད།
+- སི་ཨའི་ཌོ་ཀར་བརྟག་དཔྱད་ནང་ དགོས་མཁོ་མེད་པའི་ I1NT00000068X བཟོ་བསྐྲུན་འདི་ བཏོན་གཏང་།
 
-- Add five more self-hosted runners.
-- Add regular image tag for Soramitsu registry.
-- Workaround for libgit2-sys 0.5.0. Revert to 0.4.4.
-- Attempt to use arch-based image.
-- Update workflows to work on new nightly-only-container.
-- Remove binary entrypoints from coverage.
-- Switch dev tests to Equinix self-hosted runners.
-- hyperledger#2865 Remove usage of tmp file from `scripts/check.sh`
-- hyperledger#2781 Add coverage offsets.
-- Disable slow integration tests.
-- Replace base image with docker cache.
-- hyperledger#2781 Add codecov commit parent feature.
-- Move jobs to github runners.
-- hyperledger#2778 Client config check.
-- hyperledger#2732 Add a conditions to update iroha2-base images and add
-  PR labels.
-- Fix nightly image build.
-- Fix `buildx` error with `docker/build-push-action`
-- First-aids for non-functioning `tj-actions/changed-files`
-- Enable sequential publish of images, after #2662.
-- Add harbor registry.
-- Auto-label `api-changes` and `config-changes`
-- Commit hash in image, toolchain file again, UI isolation,
-  schema tracking.
-- Make publishing workflows sequential, and complements to #2427.
-- hyperledger#2309: Re-enable doc tests in CI.
-- hyperledger#2165 Remove codecov install.
-- Move to new container to prevent conflicts with current users.
- - hyperledger#2158 Upgrade `parity_scale_codec` and other dependencies. (Norito codec)
-- Fix build.
-- hyperledger#2461 Improve iroha2 CI.
-- Update `syn`.
-- move coverage to a new workflow.
-- reverse docker login ver.
-- Remove the version specification of `archlinux:base-devel`
-- Update Dockerfiles & Codecov reports reuse & Concurrency.
-- Generate changelog.
-- Add `cargo deny` file.
-- Add `iroha2-lts` branch with workflow copied from `iroha2`
-- hyperledger#2393 Bump the version of the Docker base image.
-- hyperledger#1658 Add documentation check.
-- Version bump of crates and remove unused dependencies.
-- Remove unnecessary coverage reporting.
-- hyperledger#2222 Split tests by whether it involves coverage or not.
-- hyperledger#2153 Fix #2154.
-- Version bump all of the crates.
-- Fix deploy pipeline.
-- hyperledger#2153 Fix coverage.
-- Add genesis check and update documentation.
-- Bump rust, mold and nightly to 1.60, 1.2.0 and 1.62 respectively.
-- load-rs triggers.
-- hyperledger#2153 Fix #2154.
-- Version bump all of the crates.
-- Fix deploy pipeline.
-- hyperledger#2153 Fix coverage.
-- Add genesis check and update documentation.
-- Bump rust, mold and nightly to 1.60, 1.2.0 and 1.62respectively.
-- load-rs triggers.
-- load-rs:release workflow triggers.
-- Fix push workflow.
-- Add telemetry to default features.
-- add proper tag to push workflow on main.
-- fix failing tests.
-- hyperledger#1657 Update image to rust 1.57. #1630: Move back to self-hosted runners.
-- CI improvements.
-- Switched coverage to use `lld`.
-- CI Dependency Fix.
-- CI segmentation improvements.
-- Uses a fixed Rust version in CI.
-- Fix Docker publish and iroha2-dev push CI. Move coverage and bench into PR
-- Remove unnecessary full Iroha build in CI docker test.
+  ད་ལྟོ་ ཌོག་ཀར་པར་རིས་ནང་ འབད་ཡོདཔ་ལས་ Iroha བཟོ་བསྐྲུན་འདི་ ཕན་ཐོགས་ཅན་ཅིག་ལུ་ འགྱུར་ཡོདཔ་ཨིན། དེ་འབདཝ་ལས་ CI གིས་ བརྟག་དཔྱད་ཚུ་ནང་ལག་ལེན་འཐབ་མི་ མཁོ་སྤྲོད་འབད་མི་ cli རྐྱངམ་ཅིག་བཟོ་བསྐྲུན་འབདཝ་ཨིན།
+- སི་ཨའི་ མདོང་ལམ་ནང་ iroha2 ཡན་ལག་ལུ་རྒྱབ་སྐྱོར་ཁ་སྐོང་འབད།
+  - བརྟག་དཔྱད་རིང་པོ་ཚུ་ PR ལུ་ iroha2 ལུ་རྐྱངམ་ཅིག་རྒྱུག་ཡོདཔ་ཨིན།
+  - ཌོག་ཀར་པར་རིས་ཚུ་ ཨི་རོ་ཧ་༢༠ ལས་རྐྱངམ་ཅིག་དཔར་བསྐྲུན་འབདཝ་ཨིན།
+- ཁ་སྐོང་ CI མཛོད་ཁང་།
 
-  The Iroha build became useless as it is now done in docker image itself. So the CI only builds the client cli which is used in tests.
-- Add support for iroha2 branch in CI pipeline.
-  - long tests only ran on PR into iroha2
-  - publish docker images only from iroha2
-- Additional CI caches.
-
-### Web-Assembly
+######ཝེབ་ཚོགས་བཞུགས།
 
 
-### Version bumps
+### ཐོན་རིམ་གྱི་བབ།-
+- གོང་འཕེལ། སྔོན་འགྲོ། ༡༡.
+- RC.9 ལུ་ཐོན་རིམ།
+- ཐོན་རིམ་ RC.8.
+- ཐོན་རིམ་ཚུ་ RC7 ལུ་དུས་མཐུན་བཟོ་ནི།
+- སྔོན་འགྲོའི་གསར་བཏོན་འབད་ནི།
+- བཟོ་རྣམ་ ༡.༠ དུས་མཐུན་བཟོ་ནི།
+- བུམཔ་ལུ་བརྟེན་ནི།
+- apdate api_spec.md: བཅོ་ཁ་ཞུ་བ་/ལན་གསལ་གྱི་གཟུགས་པོ།
+- རསཊི་ཐོན་རིམ་ ༡.༥༦.༠ ལུ་དུས་མཐུན་བཟོ་དགོ།
+- ཕན་འདེབས་ལམ་སྟོན་དུས་མཐུན་བཟོ་ནི།
+- ཨེ་པི་ཨའི་གསརཔ་དང་ ཡུ་ཨར་ཨེལ་རྩ་སྒྲིག་གསརཔ་དང་མཐུན་སྒྲིག་འབད་ནི་ལུ་ README.md དང་ `iroha/config.json` དུས་མཐུན་བཟོ།
+- ཌོཀ་ཀར་ ཧའི་པར་ལེཌི་/ཨི་རོ་ཧ་༢ #1453 ལུ་དམིགས་གཏད་དཔར་བསྐྲུན་འབད་ནི་ དུས་མཐུན་བཟོ་ནི།
+- ལཱ་གི་རྒྱུན་རིམ་དུས་མཐུན་བཟོཝ་ལས་ དེ་གིས་ངོ་མ་མཐུན་སྒྲིག་འབདཝ་ཨིན།
+- api spec དུས་མཐུན་བཟོ་ནི་དང་ གསོ་བའི་མཇུག་བསྡུ།
+- Rust དུས་མཐུན་བཟོ་ནི་ ༡.༥༤ ལུ།
+- ཌོཀསི་(ཨའི་རོ་ཧ་_ཀིརིཔ་ཊོ་): དུས་མཐུན་བཟོ་ཡོདཔ། `Signature` docs དང་ ཕྲང་སྒྲིག་འབད་ནི།
+- ཨུར་ས་ཐོན་རིམ་ ༠.༣.༥ ལས་ ༠.༣.༦ ཚུན་ཨིན།
+- ལཱ་གི་རྒྱུན་རིམ་ཚུ་ རྒྱུག་མི་གསརཔ་ཚུ་ལུ་ དུས་མཐུན་བཟོ།
+- མཛོད་ཁང་དང་ མགྱོགས་དྲགས་སྦེ་ སི་བཟོ་བསྐྲུན་གྱི་དོན་ལུ་ ཌོཀ་ཀར་ཡིག་སྣོད་དུས་མཐུན་བཟོ་ནི།
+- libsl ཐོན་རིམ་དུས་མཐུན་བཟོ་ནི།
+- ཌོཀ་ཀར་ཡིག་སྣོད་ཚུ་ དུས་མཐུན་བཟོ།
+- དུས་མཐུན་བཟོ་ཡོད་པའི་ ཀིལིཔ་
+- རྒྱུ་དངོས་གཞི་བཀོད་དུས་མཐུན་བཟོཝ་ཨིན།
+  - རྒྱུ་དངོས་ནང་ ལྡེ་མིག་གནས་གོང་བཀོད་རྒྱ་ཚུ་གི་རྒྱབ་སྐྱོར།
+  - རྒྱུ་དངོས་དབྱེ་བ་འདི་ ཨེ་ནམ།
+  - རྒྱུ་དངོས་ཨའི་ཨེསི་ཨའི་ བཅོ་ཁ་ནང་ མང་དྲགས་པའི་ཉེན་ཁ་ཡོདཔ།
+- ཕན་འདེབས་ལམ་སྟོན་དུས་མཐུན་བཟོཝ་ཨིན།
+- ཚེས་གྲངས་འདི་གི་ལས་ ཕྱིར་འཐོན་དུས་མཐུན་བཟོ་ནི།
+- ཤོག་ལེབ་དཀརཔོ་དུས་མཐུན་བཟོ་ཞིནམ་ལས་ བཅོ་ཁ་རྐྱབ་ནིའི་གནད་དོན་ཚུ་ བཅོ་ཁ་རྐྱབ།
+- ཀུ་ཀུམ་བཱར་_རཱསི་ lib དུས་མཐུན་བཟོ་དགོ།
+- ལྡེ་མིག་མི་རབས་ཀྱི་དོན་ལུ་ README དུས་མཐུན་ཚུ།
+- གི་ཐུབ་བྱ་བ་ཚུ་ དུས་མཐུན་བཟོ་ནི།
+- གི་ཐུབ་བྱ་བ་ཚུ་ དུས་མཐུན་བཟོ་ནི།
+- དགོས་མཁོ་ དུས་མཐུན་བཟོ་ནི།
+- སྤྱིར་བཏང་.ཡམ་ལི།
+- ས་ར་ལས་ ཡིག་ཆ་དུས་མཐུན་ཚུ།
+- བསླབ་སྟོན་ཚད་མ་དུས་མཐུན་བཟོ་ནི།
+- ཤོག་གུ་དཀརཔོ་དུས་མཐུན་བཟོ།
+- ཡོངས་འབྲེལ་ལས་འགན་འགྲེལ་བཤད་ དུས་མཐུན་བཟོཝ་ཨིན།
+- བསམ་བཀོད་ཚུ་ལུ་གཞི་བཞག་སྟེ་ ཤོག་ལེབ་དཀརཔོ་དུས་མཐུན་བཟོ།
+- ཌབ་ལུ་ཨེསི་ཝི་དུས་མཐུན་བཟོ་ནི་དང་ འཇལ་ཚད་ལུ་གནས་སོར་འབད་ནི་ དབྱེ་བ་ཕྱེ་ནི།
+- དུས་མཐུན་གྱི་ གིཊི་གྷོ་ནོར།
+- WP ནང་ kura གི་འགྲེལ་བཤད་ དུམ་གྲ་ཅིག་དུས་མཐུན་བཟོ་དགོ།
+- ཤོག་གུ་དཀརཔོ་ནང་ ཀུ་ར་གི་སྐོར་ལས་ འགྲེལ་བཤད་དུས་མཐུན་བཟོ་ནི།
 
-- Version to pre-rc.13.
-- Version to pre-rc.11.
-- Version to RC.9.
-- Version to RC.8.
-- Update versions to RC7.
-- Pre-release preparations.
-- Update Mold 1.0.
-- Bump dependencies.
-- Update api_spec.md: fix request/response bodies.
-- Update rust version to 1.56.0.
-- Update contributing guide.
-- Update README.md and `iroha/config.json` to match new API and URL  format.
-- Update docker publish target to hyperledger/iroha2 #1453.
-- Updates workflow so that it matches main.
-- Update api spec and fix health endpoint.
-- Rust update to 1.54.
-- Docs(iroha_crypto): update `Signature` docs and align args of `verify`
-- Ursa version bump from 0.3.5 to 0.3.6.
-- Update workflows to new runners.
-- Update dockerfile for caching and faster ci builds.
-- Update libssl version.
-- Update dockerfiles and async-std.
-- Fix updated clippy.
-- Updates asset structure.
-  - Support for key-value instructions in asset
-  - Asset types as an enum
-  - Overflow vulnerability in asset ISI fix
-- Updates contributing guide.
-- Update out of date lib.
-- Update whitepaper and fix linting issues.
-- Update the cucumber_rust lib.
-- README updates for key generation.
-- Update Github Actions workflows.
-- Update Github Actions workflows.
-- Update requirements.txt.
-- Update common.yaml.
-- Docs updates from Sara.
-- Update instruction logic.
-- Update whitepaper.
-- Updates network functions description.
-- Update whitepaper based on comments.
-- Separation of WSV update and migration to Scale.
-- Update gitignore.
-- Update slightly description of kura in WP.
-- Update description about kura in whitepaper.
+### ལས་རིམ།
 
-### Schema
-
-- hyperledger#2114 Sorted collections support in schemas.
-- hyperledger#2108 Add pagination.
-- hyperledger#2114 Sorted collections support in schemas.
-- hyperledger#2108 Add pagination.
-- Make schema, version and macro no_std compatible.
-- Fix signatures in schema.
+- hyperledger#2114 ལས་འཆར་ཚུ་ནང་ དབྱེ་སེལ་འབད་ཡོད་པའི་བསྡུ་སྒྲིག་རྒྱབ་སྐྱོར།
+- hyperledger#2108 ཤོག་ལེབ་ཁ་སྐོང་རྐྱབས།
+- hyperledger#2114 ལས་འཆར་ཚུ་ནང་ དབྱེ་སེལ་འབད་ཡོད་པའི་བསྡུ་སྒྲིག་རྒྱབ་སྐྱོར།
+- hyperledger#2108 ཤོག་ལེབ་ཁ་སྐོང་རྐྱབས།
+- ལས་འཆར་དང་ ཐོན་རིམ་ དེ་ལས་ མེཀ་རོ་ནོ་_ཨེསི་ཊི་ཌི་ མཐུན་སྒྲིག་བཟོ།
+- ལས་འཆར་ནང་ མིང་རྟགས་ཚུ་ བདེ་སྒྲིག་འབད་ནི།
 - Altered  representation of `FixedPoint` in schema.
-- Added `RawGenesisBlock` to schema introspection.
-- Changed object-models to create schema IR-115.
+- ལས་རིམ་གྱི་ inturprection ལུ་ I18NI0000602X ཁ་སྐོང་བརྐྱབ་ཡོདཔ།
+- ལས་འཆར་ IR-115 གསར་བསྐྲུན་འབད་ནི་ལུ་ དངོས་པོའི་དཔེ་ཚད་ཚུ་བསྒྱུར་བཅོས་འབད་ཡོདཔ།
 
-### Tests
+### བརྟག་དཔྱད།
 
-- hyperledger#2544 Tutorial doctests.
-- hyperledger#2272 Add tests for 'FindAssetDefinitionById' query.
-- Add `roles` integration tests.
-- Standardise ui tests format, move derive ui tests to derive crates.
-- Fix mock tests (futures unordered bug).
-- Removed the DSL crate & moved tests to `data_model`
-- Ensure that unstable network tests pass for valid code.
-- Added tests to iroha_p2p.
-- Captures logs in tests unless test fails.
-- Add polling for tests and fix rarely breaking tests.
-- Tests parallel setup.
-- Remove root from iroha init and iroha_client tests.
-- Fix tests clippy warnings and adds checks to ci.
-- Fix `tx` validation errors during benchmark tests.
-- hyperledger#860: Iroha Queries and tests.
-- Iroha custom ISI guide and Cucumber tests.
-- Add tests for no-std client.
-- Bridge registration changes & tests.
-- Consensus tests with network mock.
-- Usage of temp dir for tests execution.
-- Benches tests positive cases.
-- Initial Merkle Tree functionality with tests.
-- Fixed tests and World State View initialization.
+- hyperledger#2544 སློབ་སྟོན་གྱི་གྲུབ་མཐའ་ཚུ།
+- hyperledger#2272 'FindAssetངེས་མེད་ById' འདྲི་དཔྱད་ཀྱི་དོན་ལུ་བརྟག་དཔྱད་ཁ་སྐོང་རྐྱབས།
+- `roles` མཉམ་བསྡོམས་བརྟག་དཔྱད་ཚུ་ཁ་སྐོང་འབད།
+- ui བརྟག་དཔྱད་རྩ་སྒྲིག་འདི་ ཚད་ལྡན་བཟོ་ནི།
+- གཏན་བཟོས་མོ་ཀ་བརྟག་དཔྱད་ (མ་འོངས་པ་ཚུ་ གོ་རིམ་མེད་པའི་ འཛོལ་བ་ཚུ་)།
+- ཌི་ཨེསི་ཨེལ་ཀརཊི་འདི་བཏོན་ཞིནམ་ལས་ བརྟག་དཔྱད་ཚུ་ `data_model` ལུ་སྤོ་བཤུད་འབད་ཡོདཔ་ཨིན།
+- བརྟན་མེད་ཡོངས་འབྲེལ་བརྟག་དཔྱད་ཚུ་ ནུས་ཅན་ཨང་རྟགས་ཀྱི་དོན་ལུ་ བརྒྱུད་དེ་ཡོདཔ་ངེས་གཏན་བཟོ།
+- iroha_p2p ལུ་བརྟག་དཔྱད་ཁ་སྐོང་བཀོད་ཡོདཔ།
+- བརྟག་དཔྱད་འཐུས་ཤོར་མ་བྱུང་ཚུན་ཚོད་ བརྟག་དཔྱད་ཚུ་ནང་ དྲན་ཐོ་ཚུ་ བཟུང་།
+- བརྟག་དཔྱད་ཀྱི་དོན་ལུ་ འོས་བསྡུའི་ཁ་སྐོང་འབད་དེ་ གཏན་འཇགས་སྦེ་ བརྟག་དཔྱད་ཚུ་ དཀོན་དྲགས་སྦེ་ བརྡལ་བཤིག་གཏངམ་ཨིན།
+- མཉམ་འགྲོས་གཞི་སྒྲིག་བརྟག་དཔྱད་འབདཝ་ཨིན།
+- ཨི་རོ་ཧ་ཨི་ནིཊི་དང་ ཨའི་རོ་ཧ་_མཁོ་སྤྲོད་པ་ལས་ རྩ་བའི་རྩ་བསྐྲད་གཏང་།
+- བརྟག་དཔྱད་ཚུ་ ཉེན་བརྡ་ཚུ་ བཅོ་ཁ་རྐྱབ་ནི་དང་ སི་ སི་ལུ་ ཞིབ་དཔྱད་ཚུ་ ཁ་སྐོང་བརྐྱབ་ཨིན།
+- བེན་ཇ་མཱརཀ་བརྟག་དཔྱད་སྐབས་ I18NI0000605X བདེན་དཔྱད་འཛོལ་བ་ཚུ་ བཅོ་ཁ་རྐྱབ་ཨིན།
+- hyperledger#860: Iroha འདྲི་དཔྱད་དང་བརྟག་དཔྱད།
+- I18NT000000071X སྲོལ་སྒྲིག་ཨའི་ཨེསི་ཨའི་ལམ་སྟོན་དང་ ཀུ་ཀམ་བར་བརྟག་དཔྱད།
+- ཨེསི་ཊི་ཌི་མེད་པའི་མཁོ་སྤྲོད་པ་གི་དོན་ལུ་ བརྟག་དཔྱད་ཁ་སྐོང་འབད།
+- ཟམ་གྱི་ཐོ་བཀོད་བསྒྱུར་བཅོས་དང་བརྟག་དཔྱད་ཚུ།
+- ཡོངས་འབྲེལ་མོཀ་དང་གཅིག་ཁར་ མོས་མཐུན་བརྟག་དཔྱད་ཚུ།
+- བརྟག་དཔྱད་ཀྱི་ལག་ལེན་དོན་ལུ་ ཊིམ་ཌིར་ལག་ལེན་འཐབ་ནི།
+- བེན་ཆི་ཚུ་གིས་ ནད་གཞི་ཐོབ་མི་ཚུ་ བརྟག་དཔྱད་འབད་ཡོདཔ།
+- བརྟག་དཔྱད་ཚུ་དང་གཅིག་ཁར་ འགོ་ཐོག་ཚོང་འབྲེལ་ཤིང་གི་ལས་འགན།
+- བརྟག་དཔྱད་དང་འཛམ་གླིང་མངའ་སྡེའི་མཐོང་སྣང་འགོ་བཙུགས་གཏན་འཁེལ།
 
-### Other
-
-- Move parametrization into traits and remove FFI IR types.
-- Add support for unions, introduce `non_robust_ref_mut` * implement conststring FFI conversion.
-- Improve IdOrdEqHash.
-- Remove FilterOpt::BySome from (de-)serialization.
-- Make Not transparent.
-- Make ContextValue transparent.
-- Make Expression::Raw tag optional.
-- Add transparency for some instructions.
-- Improve (de-)serialization of RoleId.
-- Improve (de-)serialization of validator::Id.
-- Improve (de-)serialization of PermissionTokenId.
-- Improve (de-)serialization of TriggerId.
-- Improve (de-)serialization of Asset(-Definition) Ids.
-- Improve (de-)serialization of AccountId.
-- Improve (de-)serialization of Ipfs and DomainId.
-- Remove logger config from client config.
-- Add support for transparent structs in FFI.
-- Refactor &Option<T> to Option<&T>
-- Fix clippy warnings.
-- Add more details in `Find` error description.
-- Fix `PartialOrd` and `Ord` implementations.
-- Use `rustfmt` instead of `cargo fmt`
-- Remove `roles` feature.
-- Use `rustfmt` instead of `cargo fmt`
-- Share workdir as a volume with dev docker instances.
-- Remove Diff associated type in Execute.
-- Use custom encoding instead of multival return.
-- Remove serde_json as iroha_crypto dependency.
-- Allow only known fields in version attribute.
-- Clarify different ports for endpoints.
-- Remove `Io` derive.
-- Initial documentation of key_pairs.
-- Move back to self-hosted runners.
-- Fix new clippy lints in the code.
-- Remove i1i1 from maintainers.
-- Add actor doc and minor fixes.
-- Poll instead of pushing latest blocks.
-- Transaction status events tested for each of 7 peers.
-- `FuturesUnordered` instead of `join_all`
-- Switch to GitHub Runners.
-- Use VersionedQueryResult vs QueryResult for /query endpoint.
-- Reconnect telemetry.
-- Fix dependabot config.
-- Add commit-msg git hook to include signoff.
-- Fix the push pipeline.
-- Upgrade dependabot.
-- Detect future timestamp on queue push.
-- hyperledger#1197: Kura handles errors.
-- Add Unregister peer instruction.
-- Add optional nonce to distinguish transactions. Close #1493.
-- Removed unnecessary `sudo`.
-- Metadata for domains.
-- Fix the random bounces in `create-docker` workflow.
-- Added `buildx` as suggested by the failing pipeline.
-- hyperledger#1454: Fix query error response with specific status code and hints.
-- hyperledger#1533: Find transaction by hash.
-- Fix `configure` endpoint.
-- Add boolean-based asset mintability check.
-- Addition of typed crypto primitives and migration to type-safe cryptography.
-- Logging improvements.
-- hyperledger#1458: Add actor channel size to config as `mailbox`.
-- hyperledger#1451: Add warning about misconfiguration if `faulty_peers = 0` and `trusted peers count > 1`
-- Add handler for getting specific block hash.
-- Added new query FindTransactionByHash.
-- hyperledger#1185: Change crates name and path.
-- Fix logs and general improvements.
-- hyperledger#1150: Group 1000 blocks into each file
-- Queue stress test.
-- Log level fix.
-- Add header specification to client library.
-- Queue panic failure fix.
-- Fixup queue.
-- Fixup dockerfile release build.
-- Https client fixup.
-- Speedup ci.
-- 1. Removed all ursa dependences, except for iroha_crypto.
-- Fix overflow when subtracting durations.
-- Make fields public in client.
-- Push Iroha2 to Dockerhub as nightly.
-- Fix http status codes.
-- Replace iroha_error with thiserror, eyre and color-eyre.
-- Substitute queue with crossbeam one.
-- Remove some useless lint allowences.
-- Introduces metadata for asset definitions.
-- Removal of arguments from test_network crate.
-- Remove unnecessary dependencies.
-- Fix iroha_client_cli::events.
-- hyperledger#1382: Remove old network implementation.
-- hyperledger#1169: Added precision for assets.
-- Improvements in peer start up:
-  - Allows loading genesis public key only from env
-  - config, genesis and trusted_peers path can now be specified in cli params
-- hyperledger#1134: Integration of Iroha P2P.
-- Change query endpoint to POST instead of GET.
-- Execute on_start in actor synchronously.
-- Migrate to warp.
-- Rework commit with broker bug fixes.
-- Revert "Introduces multiple broker fixes" commit(9c148c33826067585b5868d297dcdd17c0efe246)
-- Introduces multiple broker fixes:
-  - Unsubscribe from broker on actor stop
-  - Support multiple subscriptions from the same actor type (previously a TODO)
-  - Fix a bug where broker always put self as an actor id.
-- Broker bug (test showcase).
-- Add derives for data model.
-- Remove rwlock from torii.
-- OOB Query Permission Checks.
-- hyperledger#1272: Implementation of peer counts,
-- Recursive check for query permissions inside of instructions.
-- Schedule stop actors.
-- hyperledger#1165: Implementation of peer counts.
-- Check query permissions by account in torii endpoint.
-- Removed exposing CPU and memory usage in system metrics.
- - Replace JSON with Norito for WS messages.
-- Store proof of view changes.
-- hyperledger#1168: Added logging if transaction does not passed signature check condition.
-- Fixed small issues, added connection listen code.
-- Introduce network topology builder.
-- Implement P2P network for Iroha.
-- Adds block size metric.
-- PermissionValidator trait renamed to IsAllowed. and corresponding other name changes
-- API spec web socket corrections.
-- Removes unnecessary dependencies from docker image.
-- Fmt uses Crate import_granularity.
-- Introduces Generic Permission Validator.
-- Migrate to actor framework.
-- Change broker design and add some functionality to actors.
-- Configures codecov status checks.
-- Uses source based coverage with grcov.
-- Fixed multiple build-args format and redeclared ARG for intermediate build containers.
-- Introduces SubscriptionAccepted message.
-- Remove zero-value assets from accounts after operating upon.
-- Fixed docker build arguments format.
-- Fixed error message if child block not found.
-- Added vendored OpenSSL to build, fixes pkg-config dependency.
-- Fix repository name for dockerhub and coverage diff.
-- Added clear error text and filename if TrustedPeers could not be loaded.
-- Changed text entities to links in docs.
-- Fix wrong username secret in Docker publish.
-- Fix small typo in whitepaper.
-- Allows mod.rs usage for better file structure.
-- Move main.rs into separate crate and make permissions for public blockchain.
-- Add querying inside client cli.
-- Migrate from clap to structopts for cli.
-- Limit telemetry to unstable network test.
-- Move traits to smartcontracts module.
-- Sed -i "s/world_state_view/wsv/g"
-- Move smart contracts into separate module.
-- Iroha network content length bugfix.
-- Adds task local storage for actor id. Useful for deadlock detection.
-- Add deadlock detection test to CI
-- Add Introspect macro.
-- Disambiguates workflow names also formatting corrections
-- Change of query api.
-- Migration from async-std to tokio.
-- Add analyze of telemetry to ci.
-- Add futures telemetry for iroha.
-- Add iroha futures to every async function.
-- Add iroha futures for observability of number of polls.
-- Manual deploy and configuration added to README.
-- Reporter fixup.
-- Add derive Message macro.
-- Add simple actor framework.
-- Add dependabot configuration.
-- Add nice panic and error reporters.
-- Rust version migration to 1.52.1 and corresponding fixes.
-- Spawn blocking CPU intensive tasks in separate threads.
-- Use unique_port and cargo-lints from crates.io.
-- Fix for lockfree WSV:
-  - removes unnecessary Dashmaps and locks in API
-  - fixes bug with excessive number of blocks created (rejected transactions were not recorded)
-  - Displays full error cause for errors
-- Add telemetry subscriber.
-- Queries for roles and permissions.
-- Move blocks from kura to wsv.
-- Change to lock-free data structures inside wsv.
-- Network timeout fix.
-- Fixup health endpoint.
-- Introduces Roles.
-- Add push docker images from dev branch.
-- Add more agressive linting and remove panics from code.
-- Rework of Execute trait for instructions.
-- Remove old code from iroha_config.
-- IR-1060 Adds Grant checks for all the existing permissions.
-- Fix ulimit and timeout for iroha_network.
-- Ci timeout test fix.
-- Remove all assets when their definition was removed.
-- Fix wsv panic at adding asset.
-- Remove Arc and Rwlock for channels.
-- Iroha network fixup.
-- Permission Validators use references in checks.
-- Grant Instruction.
-- Added configuration for string length limits and validation of id's for NewAccount, Domain and AssetDefinition IR-1036.
-- Substitute log with tracing lib.
-- Add ci check for docs and deny dbg macro.
-- Introduces grantable permissions.
-- Add iroha_config crate.
-- Add @alerdenisov as a code owner to approve all incoming merge requests.
-- Fix of transaction size check during consensus.
-- Revert upgrading of async-std.
-- Replace some consts with power of 2 IR-1035.
-- Add query to retrieve transaction history IR-1024.
-- Add validation of permissions for store and restructure of permission validators.
-- Add NewAccount for account registration.
-- Add types for asset definition.
-- Introduces configurable metadata limits.
-- Introduces transaction metadata.
-- Add expressions inside queries.
-- Add lints.toml and fix warnings.
-- Separate trusted_peers from config.json.
-- Fix typo in URL to Iroha 2 community in Telegram.
-- Fix clippy warnings.
-- Introduces key-value metadata support for Account.
-- Add versioning of blocks.
-- Fixup ci linting repetitions.
-- Add mul,div,mod,raise_to expressions.
-- Add into_v* for versioning.
-- Substitute Error::msg with error macro.
-- Rewrite iroha_http_server and rework torii errors.
- - Upgrades Norito version to 2.
-- Whitepaper versioning description.
-- Infallable pagination. Fix the cases when pagination may unnecessary through errors, not returns empty collections instead.
-- Add derive(Error) for enums.
-- Fix nightly version.
-- Add iroha_error crate.
-- Versioned messages.
-- Introduces container versioning primitives.
-- Fix benchmarks.
-- Add pagination.
-- Add varint encoding decoding.
-- Change query timestamp to u128.
-- Add RejectionReason enum for pipeline events.
-- Removes outdated lines from genesis files. The destination was removed from register ISI in previous commits.
-- Simplifies register and unregister ISIs.
-- Fix commit timeout not being sent in 4 peer network.
-- Topology shuffle at change view.
-- Add other containers for FromVariant derive macro.
-- Add MST support for client cli.
-- Add FromVariant macro and cleanup codebase.
-- Add i1i1 to code owners.
-- Gossip transactions.
-- Add length for instructions and expressions.
-- Add docs to block time and commit time parameters.
-- Replaced Verify and Accept traits with TryFrom.
-- Introduce waiting only for the minimum number of peers.
-- Add github action to test api with iroha2-java.
-- Add genesis for docker-compose-single.yml.
-- Default signature check condition for account.
-- Add test for account with multiple signatories.
-- Add client API support for MST.
-- Build in docker.
-- Add genesis to docker compose.
-- Introduce Conditional MST.
-- Add wait_for_active_peers impl.
-- Add test for isahc client in iroha_http_server.
-- Client API spec.
-- Query execution in Expressions.
-- Integrates expressions and ISIs.
-- Expressions for ISI.
-- Fix account config benchmarks.
-- Add account config for client.
-- Fix `submit_blocking`.
-- Pipeline events are sent.
-- Iroha client web socket connection.
-- Events separation for pipeline and data events.
-- Integration test for permissions.
-- Add permission checks for burn and mint.
-- Unregister ISI permission.
-- Fix benchmarks for world struct PR.
-- Introduce World struct.
-- Implement the genesis block loading component.
-- Introduce genesis account.
-- Introduce permissions validator builder.
-- Add labels to Iroha2 PRs with Github Actions.
-- Introduce Permissions Framework.
-- Queue tx tx number limit and Iroha initialization fixes.
-- Wrap Hash in a struct.
-- Improve log level:
-  - Add info level logs to consensus.
-  - Mark network communication logs as trace level.
-  - Remove block vector from WSV as it is a duplication and it showed all the blockchain in logs.
-  - Set info log level as default.
-- Remove mutable WSV references for validation.
-- Heim version increment.
-- Add default trusted peers to the config.
-- Client API migration to http.
-- Add transfer isi to CLI.
-- Configuration of Iroha Peer related Instructions.
-- Implementation of missing ISI execute methods and test.
-- Url query params parsing
-- Add `HttpResponse::ok()`, `HttpResponse::upgrade_required(..)`
-- Replacement of old Instruction and Query models with Iroha DSL approach.
-- Add BLS signatures support.
-- Introduce http server crate.
-- Patched libssl.so.1.0.0 with symlink.
-- Verifies account signature for transaction.
-- Refactor transaction stages.
-- Initial domains improvements.
-- Implement DSL prototype.
-- Improve Torii Benchmarks: disable logging in benchmarks, add success ratio assert.
-- Improve test coverage pipeline: replaces `tarpaulin` with `grcov`, publish test coverage report to `codecov.io`.
-- Fix RTD theme.
-- Delivery artifacts for iroha subprojects.
-- Introduce `SignedQueryRequest`.
-- Fix a bug with signature verification.
-- Rollback transactions support.
-- Print generated key-pair as json.
-- Support `Secp256k1` key-pair.
-- Initial support for different crypto algorithms.
-- DEX Features.
-- Replace hardcoded config path with cli param.
-- Bench master workflow fix.
-- Docker event connection test.
-- Iroha Monitor Guide and CLI.
-- Events cli improvements.
-- Events filter.
-- Event connections.
-- Fix in master workflow.
-- Rtd for iroha2.
-- Merkle tree root hash for block transactions.
-- Publication to docker hub.
-- CLI functionality for Maintenance Connect.
-- CLI functionality for Maintenance Connect.
-- Eprintln to log macro.
-- Log improvements.
-- IR-802 Subscription to blocks statuses changes.
-- Events sending of transactions and blocks.
-- Moves Sumeragi message handling into message impl.
-- General Connect Mechanism.
-- Extract Iroha domain entities for no-std client.
-- Transactions TTL.
-- Max transactions per block configuration.
-- Store invalidated blocks hashes.
-- Synchronize blocks in batches.
-- Configuration of connect functionality.
-- Connect to Iroha functionality.
-- Block validation corrections.
-- Block synchronization: diagrams.
-- Connect to Iroha functionality.
-- Bridge: remove clients.
-- Block synchronization.
+### གཞན- རང་གཤིས་ནང་ལུ་ པེ་ར་མི་ཊི་རི་ཟེར་མི་འདི་ སྤོ་བཤུད་འབད་ཞིནམ་ལས་ ཨེཕ་ཨེཕ་ཨའི་ ཨའི་ཨར་ དབྱེ་བ་ཚུ་ བཏོན་གཏང་།
+- ཚོགས་པ་ཚུ་གི་དོན་ལུ་རྒྱབ་སྐྱོར་ཁ་སྐོང་འབད་, `non_robust_ref_mut` ངོ་སྤྲོད་འབད།
+- IdORdEqHash ཡར་དྲག་འབད།
+- ཚགས་མ་Opt::(de-)རིམ་སྒྲིག་ལས་ Some རྩ་བསྐྲད་གཏང་།
+- དྭངས་གསལ་མིན་པར་བཟོ།
+- སྐབས་དོན་གནས་གོང་དྭངས་གསལ་བཟོ།
+- གསལ་བརྗོད་བཟོ::ངོ་མ་ངོ་རྟགས་གདམ་ཁ་ཅན།
+- བཀོད་རྒྱ་ལ་ལུ་ཅིག་གི་དོན་ལུ་ དྭངས་གསལ་ཁ་སྐོང་བརྐྱབ།
+- རོ་ལི་ཨའི་ཌི་གི་ རིམ་སྒྲིག་ (de-)རིམ་སྒྲིག་ཡར་དྲག་གཏང་ནི།
+- བདེན་དཔྱད་ཀྱི་ རིམ་སྒྲིག་ (de-)རིམ་སྒྲིག་::Id.
+- ཆོག་ཐམ་ཊོ་ཀེན་ཨའི་ཌི་གི་ རིམ་སྒྲིག་ (de-)རིམ་སྒྲིག་ཡར་དྲག་གཏང་ནི།
+- ཊི་རི་གར་ཨའི་ཌི་གི་ རིམ་སྒྲིག་ (de-)རིམ་སྒྲིག་ཡར་དྲག་གཏང་ནི།
+- རྒྱུ་དངོས་(-ངེས་མེད་) Ids གི་ (de-)རིམ་སྒྲིག་ཡར་དྲག་གཏང་ནི།
+- རྩིས་ཐོ་ཨའི་ཌི་གི་ རིམ་སྒྲིག་ (de-)རིམ་སྒྲིག་ཡར་དྲག་གཏང་ནི།
+- Ipfs དང་ DomainId གི་ (de-)རིམ་སྒྲིག་ཡར་རྒྱས་གཏང་ནི།
+- མཁོ་སྤྲོད་པ་རིམ་སྒྲིག་ལས་ ནང་བསྐྱོད་རིམ་སྒྲིག་ རྩ་བསྐྲད་གཏང་།
+- ཨེཕ་ཨེཕ་ཨའི་ནང་ དྭངས་གསལ་གྱི་སྒྲིག་བཀོད་ཚུ་ལུ་རྒྱབ་སྐྱོར་ཁ་སྐོང་འབད།
+- བསྐྱར་བཟོ་དང་གདམ་ཁ་<T> གདམ་ཁ་ལུ་<&T>
+- ཉེན་བརྡ་ཚུ་ བཅོ་ཁ་རྐྱབ་ནི།
+- `Find` འཛོལ་བ་འགྲེལ་བཤད་ནང་ ཁ་གསལ་ཁ་སྐོང་རྐྱབས།
+- `PartialOrd` དང་ `Ord` ལག་ལེན་འཐབ་པ།
+- `cargo fmt` གི་ཚབ་ལུ་ `rustfmt` ལག་ལེན་འཐབ།
+- I18NI000000612X ཁྱད་རྣམ་རྩ་བསྐྲད་གཏང་།
+- `rustfmt` དེ་གི་ཚབ་ལུ་ `cargo fmt` ལག་ལེན་འཐབ།
+- ཌེབ་ཌོག་གི་གནས་སྟངས་ཚུ་དང་གཅིག་ཁར་ སྐད་ཤུགས་སྦེ་ལཱ་འབད་ནིའི་ལཱ་འབད།
+- ལག་ལེན་ནང་ ཌིསི་ཕི་འབྲེལ་བ་ཡོད་པའི་དབྱེ་བ་རྩ་བསྐྲད་གཏང་།
+- སྣ་མང་སླར་ལོག་གི་ཚབ་ལུ་ སྲོལ་སྒྲིག་ཨིན་ཀོ་ཌིང་ལག་ལེན་འཐབ།
+- serde_json འདི་ iroha_cripto བརྟེན་པའི་ བཏོན་གཏང་།
+- ཐོན་རིམ་ཁྱད་ཆོས་ནང་ ཤེས་རྟོགས་ཡོད་པའི་ས་སྒོ་ཚུ་རྐྱངམ་ཅིག་ འབད་བཅུག།
+- མཐའ་མཇུག་གི་དོན་ལུ་ འདྲེན་ལམ་སོ་སོ་ཚུ་ གསལ་ཏོག་ཏོ་བཟོ།
+- `Io` འབྱུང་ཁུངས་བཏོན་གཏང་།
+- ལྡེ་མིག་_ཆ་སྒྲིག་གི་ འགོ་ཐོག་ཡིག་ཆ་ཚུ།
+- རང་གིས་རང་ འགོ་འདྲེན་འཐབ་མི་ རྒྱུག་མི་ཚུ་ལུ་ ལོག་སྤོ་བཤུད་འབད།
+- གསང་གྲངས་ནང་ ཀི་ལིཔ་ལིན་ གསརཔ་ཚུ་ བདེ་སྒྲིག་འབད།
+- བདག་འཛིན་པ་ཚུ་ལས་ i1i1 བཏོན་གཏང་།
+- འཁྲབ་རྩེདཔ་གི་ཡིག་ཆ་དང་ བཅོ་ཁ་ཆུང་ཀུ་ཚུ་ཁ་སྐོང་རྐྱབས།
+- སྡེབ་ཚན་གསརཔ་ཚུ་ ཨེབ་གཏང་འབད་ནིའི་ཚབ་ལུ་ འོས་བསྡུ།
+- མཉམ་རོགས་ ༧ རེ་ལུ་བརྟག་དཔྱད་འབད་མི་ ཚོང་འབྲེལ་གནས་རིམ་གྱི་བྱུང་རིམ་ཚུ།
+- `FuturesUnordered` དེ་གི་ཚབ་ལུ་ `join_all`
+- གིཊི་ཧབ་གཡོག་བཀོལ་མི་ཚུ་ལུ་ སོར་བསྒྱུར་འབད།
+- ཐོན་རིམ་འདྲི་དཔྱད་གྲུབ་འབྲས་དང་ /འདྲི་དཔྱད་མཇུག་བསྡུའི་དོན་ལུ་ འདྲི་དཔྱད་བསྐྱར་ཞིབ་ལག་ལེན་འཐབ།
+- ཊེ་ལི་མི་ཊི་རི་ བསྐྱར་མཐུད་འབད།
+- བརྟེན་པའི་གནས་ཡུན་གཏན་འཁེལ་བཟོ་ནི།
+- མིང་རྟགས་བཀོད་ནིའི་དོན་ལུ་ ཁས་བླངས་-ཨེམ་སི་ཇི་གིཊི་ཧུཀ་ཁ་སྐོང་འབད།
+- ཨེབ་གཏང་མདོང་ལམ་འདི་ བདེ་སྒྲིག་འབད།
+- ཡར་འཕེལ་གྱི་ བརྟེན་པ་ཨིན།
+- གྱལ་རིམ་ཨེབ་གཏང་ནང་ མ་འོངས་པའི་དུས་ཚོད་ཀྱི་ བརྡ་བཀོད་ཚུ་ བརྟག་དཔྱད་འབད་ནི།
+- hyperledger#1197: ཀུ་ར་གིས་འཛོལ་བ་ཚུ་ འཛིན་སྐྱོང་འཐབ་ཨིན།
+- མཉམ་རོགས་ཀྱི་སློབ་སྟོན་ཁ་སྐོང་རྐྱབས།
+- ཚོང་འབྲེལ་ཚུ་དབྱེ་བ་ཕྱེ་ནིའི་དོན་ལུ་ གདམ་ཁ་ཅན་གྱི་ནོནསི་ཁ་སྐོང་བརྐྱབ། ཁ་བསྡམས། #1493.
+- དགོས་མཁོ་མེད་པའི་ `sudo` བཏོན་གཏང་ཡོདཔ།
+- མངའ་ཁོངས་ཚུ་གི་དོན་ལུ་ མེ་ཊ་ཌེ་ཊ་ཚུ།
+- `create-docker` ལཱ་གི་རྒྱུན་རིམ་ནང་ གང་བྱུང་བྱུང་རིམ་ཚུ་ བདེ་སྒྲིག་འབད།
+- འཐུས་ཤོར་བྱུང་མི་ པའིཔ་ལམ་གྱིས་ བསམ་འཆར་བཀོད་མི་དང་འཁྲིལ་ཏེ་ `buildx` ཁ་སྐོང་བརྐྱབ་ཡོདཔ།
+- hyperledger#1454: དམིགས་བསལ་གནས་རིམ་ཨང་རྟགས་དང་ བརྡ་སྟོན་ཚུ་དང་གཅིག་ཁར་ འདྲི་དཔྱད་འཛོལ་བ་ལན་གསལ་འབད།
+- hyperledger#1533: ཧ་ཤི་གིས་ཚོང་འབྲེལ་འཚོལ།
+- གཏན་བཟོས་ `configure` མཐའ།
+- བུ་ལིན་གཞི་བཞག་པའི་ བདོག་གཏད་ཞིབ་དཔྱད་ཁ་སྐོང་འབད།
+- ཡིག་དཔར་རྐྱབ་ཡོད་པའི་ ཀིརིཔ་ཊོ་པི་རི་ཊིབ་ཚུ་ ཁ་སྐོང་བརྐྱབ་སྟེ་ ཡིག་དཔར་གྱི་ཉེན་སྲུང་ཅན་གྱི་ ཀིརིཔ་ཊོ་གཱ་རཱ་ཕི་ལུ་ གནས་སྤོ་འགྱོ་ནི།
+- ནང་བསྐྱོད་ཚུ་ ནང་བསྐྱོད་འབད་ནི།
+- ཧའི་པར་ལེ་ཇར་#1458: འཁྲབ་རྩེདཔ་རྒྱུ་ལམ་ཚད་འདི་ I18NI000000622X སྦེ་རིམ་སྒྲིག་འབད་ནི་ལུ་ཁ་སྐོང་འབད།
+- hyperledger#1451: I18NI000000623X དང་ `trusted peers count > 1` གལ་སྲིད་ `faulty_peers = 0` གལ་སྲིད་ རིམ་སྒྲིག་ལོག་སྤྱོད་ཀྱི་སྐོར་ལས་ཉེན་བརྡ་ཁ་སྐོང་འབད།
+- དམིགས་བསལ་གྱི་བཀག་ཆ་ཧེཤ་ཐོབ་ནིའི་དོན་ལུ་ འཛིན་སྐྱོང་པ་ཁ་སྐོང་འབད།
+- འདྲི་དཔྱད་གསརཔ་ FindTransaccationByHas.
+- hyperledger#1185: ཀེརེཊིསི་མིང་དང་འགྲུལ་ལམ་བསྒྱུར་བཅོས་འབད།
+- དྲན་ཐོ་ཚུ་དང་སྤྱིར་བཏང་ཡར་རྒྱས་ཚུ།
+- ཧའི་པར་ལེ་ཇར་#༡༡༥༠: སྡེ་ཚན་༡༠༠༠ སྡེབ་ཚན་རེ་རེ་ནང་ལུ།
+- ཀིའུ་ཨུ་གི་གནོན་ཤུགས་བརྟག་དཔྱད།
+- དྲན་ཐོ་གནས་རིམ་བཟོ་ནི།
+- མཁོ་སྤྲོད་དཔེ་མཛོད་ནང་ མགོ་ཡིག་གསལ་བཀོད་ཁ་སྐོང་འབད།
+- ཀིའུ་པེ་ནིག་ འཐུས་ཤོར་གྱི་ བཅོ་ཁ་རྐྱབ་ནི།
+- ཕིགསི་གྱལ་རིམ་ཨིན།
+- ཕིགསི་ཌོག་ཀར་ཡིག་སྣོད་གསར་བཏོན་བཟོ་བསྐྲུན།
+- Https མཁོ་སྤྲོད་པ་ བཅོ་ཁ་།
+- ཡིག་སྡེབ་སི།
+- 1. iroha_crypto མ་གཏོགས་ ursa བརྟེན་པ་ཆ་མཉམ་བཏོན་གཏང་ཡོདཔ།
+- དུས་ཡུན་ཕབ་པའི་སྐབས་ འབབ་རྒྱུན་ཚུ་ བདེ་སྒྲིག་འབད།
+- ས་སྒོ་ཚུ་ མཁོ་སྤྲོད་ནང་ མི་མང་ལུ་བཟོ།
+- ཨི་རོ་ཧ་༢ ཌོག་ཀར་ཧབ་ལུ་ མཚན་མོ་སྦེ་ བཀལ་དགོ།
+- http གནས་ཚད་ཨང་རྟགས་ཚུ་བཀལ།
+- ཨའི་རོ་ཧ་_འཛོལ་བ། འདི་འཛོལ་བ་དང་མིག་ཏོ་དང་ཚོས་གཞི་-མིག་གིས་ཚབ་བཙུགས།
+- ཀོརསི་བིམ་གཅིག་དང་གཅིག་ཁར་ བང་རིམ་ཚབ་བཙུགས་ནི།- ཕན་ཐོགས་མེད་པའི་ ལིན་ཊི་ ཆོག་ཐམ་ཚུ་ བཏོན་གཏང་།
+- རྒྱུ་དངོས་ངེས་ཚིག་ཚུ་གི་དོན་ལུ་ མེ་ཊ་ཌེ་ཊ་ཚུ་ ངོ་སྤྲོད་འབདཝ་ཨིན།
+- test_network cret ལས་ སྒྲུབ་རྟགས་ཚུ་བཏོན་གཏང་།
+- དགོས་མཁོ་མེད་པའི་རྟེན་འབྲེལ་ཚུ་བཏོན་གཏང་།
+- iroha_client_cli::བྱུང་ལས་ཚུ་ བདེ་སྒྲིག་འབད།
+- hyperledger#1382: ཡོངས་འབྲེལ་རྙིང་པའི་ལག་ལེན་རྩ་བསྐྲད་གཏང་།
+- hyperledger#1169: རྒྱུ་དངོས་ཚུ་གི་དོན་ལུ་ གཏན་གཏན་ཁ་སྐོང་བཀོད་ཡོདཔ།
+- མཉམ་རོགས་ འགོ་བཙུགས་པའི་སྐབས་ ལེགས་བཅོས་འབད་ནི།
+  - རིགས་མཚན་ མི་མང་ལྡེ་མིག་ env ལས་རྐྱངམ་ཅིག་ མངོན་གསལ་འབད་བཅུགཔ་ཨིན།
+  - རིམ་སྒྲིག་དང་ རིགས་མཚན་ དེ་ལས་ བློ་གཏད་ཅན་གྱི་_པི་ཡར་གྱི་འགྲུལ་ལམ་འདི་ ད་ལྟོ་ ཀི་ལི་པཱརམ་ནང་ གསལ་བཀོད་འབད་ཚུགས།
+- hyperledger#1134: Iroha གི་མཉམ་བསྡོམས། P2P.
+- ཇི་ཨི་ཊི་གི་ཚབ་ལུ་ པི་ཨོ་ཨེསི་ཊི་ལུ་ འདྲི་དཔྱད་མཐའ་མཇུག་འདི་བསྒྱུར་བཅོས་འབད།
+- འཁྲབ་རྩེདཔ་ནང་ལུ་ on_start འདི་ མཉམ་དུ་ལག་ལེན་འཐབ།
+- ཝརཔ་ལུ་ གནས་སྤོ་ཨིན།
+- བར་ཚོང་པ་འབུཔ་བཅོ་ཁ་ཚུ་དང་གཅིག་ཁར་ ལཱ་འབདཝ་ཨིན།
+- "བར་ཚོང་པ་སྣ་ཚོགས་ཀྱི་བཅོ་ཁ་ཚུ་" ངོ་སྤྲོད་འབད་" ཁས་བླངས་(༩c༡༤༨c༣༣༨༢༦༠༦༧༥༨༥བ༥བ༥༨༨༦༨ཌི་༢༩༧ཌི་སི་ཌི་༡༧སི་༠ ཕི་ཕི་༢༤༦)།
+- བར་ཚོང་པ་སྣ་ཚོགས་ངོ་སྤྲོད་འབདཝ་ཨིན།
+  - འཁྲབ་རྩེདཔ་བཀག་ཆའི་ཐོག་ལུ་ བར་ཚོང་པ་ལས་ མཐུད་འཕྲིན།
+  - འཁྲབ་རྩེདཔ་དབྱེ་བ་གཅིག་པ་ལས་ (ཧེ་མ་ TODO ཅིག་) ལས་ སྣ་མང་མཁོ་མངགས་འབད་མི་ལུ་རྒྱབ་སྐྱོར་འབད་ནི།
+  - བར་ཚོང་པ་གིས་ འཁྲབ་རྩེདཔ་ཅིག་སྦེ་ རྟག་བུ་རང་ རང་གིས་རང་ བཙུགས་སའི་ འབུཔ་ཅིག་ བཅོ་ཁ་རྐྱབ།
+- བོར་ཀར་འབུཔ་ (བརྟག་དཔྱད་སྟོན་ཁང)།
+- གནད་སྡུད་དཔེ་ཚད་ཀྱི་དོན་ལས་ deives ཁ་སྐོང་རྐྱབས།
+- ཊོ་རི་ལས་ རྦོལཀ་ བཏོན་གཏང་།
+- OOB འདྲི་དཔྱད་གནང་བ་ཞིབ་དཔྱད་ཚུ།
+- hyperledger#1272: མཉམ་རོགས་ཀྱི་གྲངས་འབོར་ལག་ལེན་འཐབ་ནི།,
+- བཀོད་རྒྱ་གི་ནང་ན་ འདྲི་དཔྱད་གནང་བ་ཚུ་གི་དོན་ལུ་ བསྐྱར་ལོག་ཞིབ་དཔྱད་འབད།
+- ལས་རིམ་བཀག་མི་ འཁྲབ་རྩེདཔ་ཚུ་བཀག་དགོ།
+- hyperledger#1165: མཉམ་རོགས་ཀྱི་གྲངས་འབོར་ལག་ལེན་འཐབ་ནི།
+- torii མཐའ་མཚམས་ནང་ རྩིས་ཐོ་གིས་ འདྲི་དཔྱད་གནང་བ་ཚུ་ཞིབ་དཔྱད་འབད།
+- རིམ་ལུགས་མེ་ཊིགསི་ནང་ སི་པི་ཡུ་དང་ དྲན་ཚད་ལག་ལེན་ཚུ་ བཏོན་གཏང་ཡོདཔ།
+ - JSON འདི་ WS འཕྲིན་དོན་ཚུ་གི་དོན་ལུ་ Norito དང་གཅིག་ཁར་ཚབ་བཙུགས།
+- མཐོང་སྣང་བསྒྱུར་བཅོས་ཚུ་གི་བདེན་ཁུངས་གསོག་འཇོག་འབད་ནི།
+- hyperledger#1168: མིང་རྟགས་ཞིབ་དཔྱད་གནས་སྟངས་འདི་ ཚོང་འབྲེལ་འདི་གིས་ གཞི་བསྟུན་མ་འབད་བ་ཅིན་ ནང་བསྐྱོད་ཁ་སྐོང་བརྐྱབ་ཡོདཔ།
+- གནད་དོན་ཆུང་ཀུ་ཚུ་ བདེ་སྒྲིག་འབད་ཡོདཔ་ མཐུད་ལམ་ཉན་ནིའི་ཨང་རྟགས་ཁ་སྐོང་བརྐྱབ།
+- ཡོངས་འབྲེལ་ ཊོ་པོ་ལོ་ཇི་བཟོ་མི་ ངོ་སྤྲོད་འབད།
+- I18NT0000073X གི་དོན་ལུ་ P2P ཡོངས་འབྲེལ་ལག་ལེན་འཐབ།
+- སྡེབ་ཚན་གྱི་ཚད་མེ་ཊིག་ཁ་སྐོང་བརྐྱབ་ཨིན།
+- ཆོག་ཐམ་ནུས་ཅན་ རང་གཤིས་འདི་ མིང་བསྒྱུར་ IsALloed ལུ་ཡོདཔ་ཨིན། དང་ མིང་གཞན་བསྒྱུར་བཅོས་ཚུ་དང་མཐུན་པ།
+- ཨེ་པི་ཨའི་ ཝེབ་སོ་ཀེཊི་ནོར་བཅོས་ཚུ།
+- ཌོག་ཀར་གཟུགས་བརྙན་ལས་ དགོས་མཁོ་མེད་པའི་བརྟེན་པ་ རྩ་བསྐྲད་གཏངམ་ཨིན།
+- ཨེཕ་ཨེམ་ཊི་གིས་ ཀེར་ཊི་ནང་འདྲེན་_སྦོམ་ཆུང་ལག་ལེན་འཐབ་ཨིན།
+- སྤྱིར་བཏང་བཀག་ཆ་བདེན་བཤད་པ་ངོ་སྤྲོད་འབདཝ་ཨིན།
+- འཁྲབ་རྩེདཔ་གཞི་བཀོད་ལུ་ གནས་སྤོ་འབད།
+- བར་ཚོང་པ་བཟོ་བཀོད་འབད་དེ་ འཁྲབ་རྩེདཔ་ཚུ་ལུ་ ལས་འགན་ལ་ལོ་ཅིག་ཁ་སྐོང་འབད།
+- ཀོ་ཌེབ་གནས་རིམ་ཞིབ་དཔྱད་ཚུ་རིམ་སྒྲིག་འབདཝ་ཨིན།
+- grcov དང་གཅིག་ཁར་ འབྱུང་ཁུངས་གཞི་བཞག་པའི་ཁྱབ་ཚད་ལག་ལེན་འཐབ་ཨིན།
+- བར་མཚམས་བཟོ་བསྐྲུན་གྱི་དོས་ཚུ་གི་དོན་ལུ་ སྣ་མང་བཟོ་བཀོད་རྩ་སྒྲིག་དང་ ARG བསྐྱར་བཟོ་འབད་ཡོདཔ།
+- མཐུད་ལམ་ངོས་ལེན་འབད་ཡོད་པའི་འཕྲིན་དོན་ངོ་སྤྲོད་འབདཝ་ཨིན།
+- ལག་ལེན་འཐབ་པའི་ཤུལ་ལས་ རྩིས་ཐོ་ཚུ་ལས་ ཀླད་ཀོར་གནས་གོང་རྒྱུ་དངོས་ཚུ་ རྩ་བསྐྲད་གཏང་།
+- གཏན་བཟོས་འབད་ཡོད་པའི་ ཌོག་ཀར་བཟོ་བསྐྲུན་སྒྲུབ་རྟགས་རྩ་སྒྲིག་རྩ་སྒྲིག་འབད།
+- ཆུང་ཀུའི་བཀག་ཆ་མ་ཐོབ་པ་ཅིན་ འཛོལ་བའི་འཕྲིན་དོན་གཏན་བཟོས་འབད་ནི།
+- བཟོ་བསྐྲུན་འབད་ནི་ལུ་ ཚོང་བསྒྱུར་འབད་ཡོད་པའི་ OpenSSL ཁ་སྐོང་བརྐྱབ་ཡོདཔ་ད་ pkg-config བརྟེན་པའི་ བཅོ་ཁ་རྐྱབ་ཨིན།
+- ཌོག་ཀར་ཧབ་དང་ ཁྱབ་ཁོངས་ ཌིཕ་གི་དོན་ལུ་ མཛོད་ཁང་གི་མིང་ བདེ་སྒྲིག་འབད་ནི།
+- བློ་གཏད་ཅན་གྱི་པི་ཡར་ཚུ་མངོན་གསལ་འབད་མ་ཚུགས་པ་ཅིན་ འཛོལ་བ་ཅན་གྱི་འཛོལ་བ་ཚིག་ཡིག་དང་ཡིག་སྣོད་མིང་ཁ་སྐོང་འབད་ཡོདཔ།
+- ཡིག་ཆ་ཚུ་ནང་འབྲེལ་ལམ་ཚུ་ལུ་ ཚིག་ཡིག་ངོ་བོ་ཚུ་བསྒྱུར་བཅོས་འབད་ཡོདཔ།
+- Docker ནང་ལུ་ ལག་ལེན་པའི་མིང་འཛོལ་བ་ཚུ་ བདེ་སྒྲིག་འབད།
+- ཤོག་གུ་དཀརཔོ་ནང་ ཡིག་གཟུགས་ཆུང་ཀུ་ཚུ་ བདེ་སྒྲིག་འབད།
+- ཡིག་སྣོད་གཞི་བཀོད་ལེགས་ཤོམ་གྱི་དོན་ལུ་ mod.rs ལག་ལེན་འཐབ་བཅུགཔ་ཨིན།
+- གཙོ་བོར་ ཀེརེཊ་སོ་སོ་ནང་ སྤོ་བཤུད་འབད་དེ་ མི་མང་བཀག་ཆའི་དོན་ལུ་ གནང་བ་ཚུ་ འབད་དགོ།
+- མཁོ་སྤྲོད་པ་ cli ནང་ན་འདྲི་དཔྱད་ཁ་སྐོང་རྐྱབས།
+- ཀླད་ཀོར་ལས་ ཀི་ལི་གི་དོན་ལུ་ བཟོ་བསྐྲུན་ཚུན་ གནས་སྤོ་འགྱོ་ནི།
+- བརྟན་མེད་ཡོངས་འབྲེལ་བརྟག་དཔྱད་ལུ་ བརྒྱུད་འཕྲིན་ཚད་འཛིན་འབད།
+- གན་རྒྱ་ཚུ་ མཉམ་མཐུན་ཚད་གཞི་ལུ་ རང་གཤིས་ཚུ་ སྤོ་བཤུད་འབད།
+- སེནཌི་ -i "s/worl_state_view/wsv/g."
+- གན་རྒྱ་ཚུ་ སོ་སོ་ལུ་ སྤོ་བཤུད་འབད།
+- I18NT000000074X ཡོངས་འབྲེལ་ནང་དོན་རིང་ཚད་ཀྱི་བུག་ཕིགསི།
+- འཁྲབ་རྩེདཔ་ཨའི་ཌི་གི་དོན་ལུ་ ལས་འགན་ཉེ་གནས་གསོག་འཇོག་ཁ་སྐོང་འབདཝ་ཨིན། འཚིག་པའི་བརྟག་དཔྱད་ལུ་ཕན་ཐོགས་ཅན།
+- སི་ཨའི་ལུ་ མཐའ་མཚམས་བརྟག་དཔྱད་བརྟག་དཔྱད་ཁ་སྐོང་འབད།
+- ངོ་སྤྲོད་མེཀ་རོ་ཁ་སྐོང་རྐྱབས།
+- ལཱ་གི་རྒྱུན་རིམ་མིང་ཚུ་ཡང་ རྩ་སྒྲིག་འབད་ནིའི་ནོར་བཅོས་ཚུ་ མེདཔ་བཟོ།
+- འདྲི་དཔྱད་ཨེ་པི་བསྒྱུར་བཅོས་འབད་ནི།
+- async-std ལས་ tokio ལུ་གནས་སྤོ་འབད་ནི།
+- སི་ལུ་བརྡ་འཕྲིན་གྱི་དབྱེ་དཔྱད་ཁ་སྐོང་འབད།- ཨའི་རོ་ཧ་གི་དོན་ལུ་མ་འོངས་པའི་བརྡ་འཕྲིན་ཁ་སྐོང་འབད།
+- async ལས་འགན་ག་ར་ལུ་ iroha མ་འོངས་པའི་ཁ་སྐོང་རྐྱབས།
+- འོས་བསྡུའི་གྱངས་ཁ་བལྟ་རྟོག་འབད་ནིའི་དོན་ལུ་ ཨའི་རོ་ཧ་མ་འོངས་པ་ཁ་སྐོང་འབད།
+- README ལུ་ ལག་ཐོག་བཀྲམ་སྤེལ་དང་ རིམ་སྒྲིག་ཁ་སྐོང་འབད་ཡོདཔ།
+- གནས་ཚུལ་བསྡུ་ལེན་གྱི་ བཅོ་ཁ་རྐྱབ་ནི།
+- བརྡ་འཕྲིན་མེཀ་རོ་ ཁ་སྐོང་རྐྱབས།
+- འཁྲབ་རྩེདཔ་གཞི་བཀོད་འཇམ་ཏོང་ཏོ་ཁ་སྐོང་འབད།
+- བརྟེན་པའི་རིམ་སྒྲིག་ཁ་སྐོང་རྐྱབས།
+- འདྲོག་བྱེལ་དང་འཛོལ་བ་གསར་འགོད་པ་ལེགས་ཤོམ་ཚུ་ཁ་སྐོང་རྐྱབས།
+- ༡.༥༢.༡ དང་ དེ་དང་མཐུན་པའི་ བཅོས་སྒྲིག་ཚུ་ལུ་ རཱསིཊི་ཐོན་རིམ་གནས་སྤོ་འབད་ནི།
+- ཐགསཔ་སོ་སོ་ནང་ སི་པི་ཡུ་ ཤུགས་ཆེ་བའི་ལཱ་ཚུ་ བཀག་བཞག།
+- crattes.io ལས་གཞན་དང་མ་འདྲ་བའི་_port དང་ Cargo-lints ལག་ལེན་འཐབ།
+- ལྡེ་མིག་མེད་པའི་ WSV གི་དོན་ལུ་ བདེ་སྒྲིག་འབད།
+  - དགོས་མཁོ་མེད་པའི་ ཌེཤ་མེཔ་དང་ ལྡེ་མིག་ཚུ་ ཨེ་པི་ཨའི་ནང་ རྩ་བསྐྲད་གཏངམ་ཨིན།
+  - གསར་བསྐྲུན་འབད་ཡོད་པའི་སྡེབ་ཚན་ཚུ་ ཚད་ལས་བརྒལ་ཏེ་ (བཀག་ཆ་འབད་ཡོད་པའི་ཚོང་འབྲེལ་ཚུ་ ཐོ་བཀོད་མ་འབད་བར་ཡོདཔ་ཨིན།)
+  - འཛོལ་བའི་དོན་ལུ་ འཛོལ་བའི་ལམ་ལུགས་ཆ་ཚང་བཀྲམ་སྟོན་འབདཝ་ཨིན།
+- ཊེ་ལི་མི་ཊར་གྱི་ མཁོ་མངགས་འབད་མི་ ཁ་སྐོང་བརྐྱབ།
+- འགན་ཁུར་དང་གནང་བ་ཚུ་གི་དོན་ལུ་ འདྲི་དཔྱད་འབད་ནི།
+- ཀུ་ར་ལས་ wsv ལུ་ སྡེབ་ཚན་ཚུ་ སྤོ་བཤུད་འབད།
+- wsv ནང་འཁོད་ལུ་ ལྡེ་མིག་མེད་པའི་གནས་སྡུད་གཞི་བཀོད་ཚུ་ལུ་བསྒྱུར་བཅོས་འབད་ནི།
+- ཡོངས་འབྲེལ་དུས་ཚོད་གཏན་འཁེལ།
+- གཏན་འཇགས་གསོ་བའི་མཐའ་འཁོར།
+- འགན་ཁུར་ཚུ་ངོ་སྤྲོད་འབདཝ་ཨིན།
+- ཌེབ་ཡན་ལག་ལས་ ཌིབ་ཀྱི་པར་ཚུ་ ཁ་སྐོང་བརྐྱབ།
+- དྲག་ཤུགས་ཅན་གྱི་གྲལ་ཐིག་ཁ་སྐོང་བརྐྱབས་ཏེ་ གསང་ཡིག་ལས་ པར་ནིག་ཚུ་བཏོན་གཏང་།
+- བཀོད་རྒྱ་གི་དོན་ལུ་ རང་གཤིས་ལག་ལེན་འཐབ་ནི་གི་ལཱ་བསྐྱར་བཀོད།
+- iroha_config ལས་ གསང་ཡིག་རྙིངམ་འདི་བཏོན་གཏང་།
+- IR-1060 ད་ལྟོ་ཡོད་པའི་གནང་བ་ཚུ་ཆ་མཉམ་གྱི་དོན་ལུ་ གྲོགས་རམ་ཞིབ་དཔྱད་ཁ་སྐོང་འབདཝ་ཨིན།
+- iroha_network གི་དོན་ལུ་ ཐད་རི་འབའ་རི་དང་དུས་ཚོད་བཏོན་ནི།
+- Ci དུས་ཚོད་མཇུག་བསྡུ་བརྟག་དཔྱད་སྒྲིག་འཛུགས།
+- ཁོང་གི་ངེས་ཚིག་འདི་ བཏོན་གཏང་པའི་སྐབས་ རྒྱུ་དངོས་ཆ་མཉམ་བཏོན་གཏང་།
+- རྒྱུ་དངོས་ཁ་སྐོང་བརྐྱབ་པའི་སྐབས་ wsv པེ་ནིག་ བདེ་སྒྲིག་འབད།
+- རྒྱུན་ལམ་ཚུ་གི་དོན་ལུ་ གཞུ་དབྱིབས་དང་ རཝལོག་ རྩ་བསྐྲད་གཏང་།
+- I18NT000000075X དྲ་རྒྱ།
+- གནང་བ་བདེན་དཔྱད་འབད་མི་ཚུ་གིས་ ཞིབ་དཔྱད་ཚུ་ནང་ གཞི་བསྟུན་ཚུ་ལག་ལེན་འཐབ་ཨིན།
+- གྲོགས་རམ་བཀོད་རྒྱ་གནང་ནི།
+- ཡིག་རྒྱུན་རིང་ཚད་ཚད་གཞི་དང་ ཨིཌི་གི་ ཡིག་རྒྱུན་རིང་ཚད་ཚད་ཚུ་ རིམ་སྒྲིག་ཁ་སྐོང་འབད་ཡོདཔ།
+- རྗེས་འཚོལ་གྱི་གཡོན་ཁ་ཐུག་གི་རྗེས་འདེད་ཀྱི་ཚབ་འབད།
+- ཌོཀ་ཚུ་གི་དོན་ལུ་ སི་ཞིབ་དཔྱད་དང་ ཌི་བི་ཇི་མེཀ་རོ་ལུ་ ངོས་ལེན་འབད།
+- གནང་ཐབས་འབད་བཏུབ་པའི་གནང་བ་ཚུ་ ངོ་སྤྲོད་འབདཝ་ཨིན།
+- iroha_config cret ཁ་སྐོང་རྐྱབས།
+- ནང་འབྱོར་མཉམ་བསྡོམས་འབད་ནི་གི་ཞུ་བ་ཚུ་ཆ་མཉམ་ཆ་འཇོག་འབད་ནི་ལུ་ @alerdenisov འདི་ གསང་ཡིག་ཇོ་བདག་སྦེ་ཁ་སྐོང་རྐྱབས།
+- མོས་མཐུན་གྱི་སྐབས་ ཚོང་འབྲེལ་ཚད་གཞི་ཞིབ་དཔྱད་ཀྱི་ བདེ་སྒྲིག་འབད་ནི།
+- ཨ་ནི་སིང་-ཨེསི་ཊི་ཌི་ ཡར་འཕར་འབད་ནི་ བསྐྱར་ལོག་འབད།
+- ༢ IR-1035 གི་ནུས་ཤུགས་དང་གཅིག་ཁར་ མཐུད་ལམ་ལ་ལུ་ཅིག་ཚབ་བཙུགས།
+- ཚོང་འབྲེལ་གྱི་ལོ་རྒྱུས་ IR-1024 ལོག་ཐོབ་ནིའི་དོན་ལུ་ འདྲི་དཔྱད་ཁ་སྐོང་འབད།
+- ཚོང་ཁང་དང་ གནང་བ་བདེན་དཔྱད་འབད་མི་ཚུ་ བསྐྱར་བཟོ་འབད་ནིའི་དོན་ལུ་ གནང་བ་ཚུ་གི་ བདེན་དཔྱད་ཁ་སྐོང་རྐྱབས།
+- རྩིས་ཁྲའི་ཐོ་བཀོད་ཀྱི་དོན་ལུ་ ནིའུ་ཨེཀ་རྩིས་ཁྲ་ཁ་སྐོང་བརྐྱབ།
+- རྒྱུ་དངོས་ངེས་ཚིག་དོན་ལུ་ དབྱེ་བ་ཚུ་ཁ་སྐོང་བརྐྱབ།
+- རིམ་སྒྲིག་འབད་བཏུབ་པའི་མེ་ཊ་ཌེ་ཊ་ཚད་གཞི་ཚུ་ ངོ་སྤྲོད་འབདཝ་ཨིན།
+- ཚོང་འབྲེལ་མེ་ཊ་ཌེ་ཊ་ ངོ་སྤྲོད་འབདཝ་ཨིན།
+- འདྲི་དཔྱད་ཚུ་གི་ནང་འཁོད་ལུ་ གསལ་བརྗོད་ཁ་སྐོང་འབད།
+- lints.totml ཁ་སྐོང་བརྐྱབ་སྟེ་ ཉེན་བརྡ་ཚུ་ བཅོ་ཁ་རྐྱབས།
+- བློ་གཏད་ཅན་གྱི་_པ་ཚུ་ fig.json ལས་སོ་སོ་སྦེ་བཏབ།
+- ཡུ་ཨར་ཨེལ་ལུ་ ཊའི་པོ་འདི་ I18NT000000076X ལུ་ ཊེ་ལི་གཱརམ་ནང་ མི་སྡེ་།
+- ཉེན་བརྡ་ཚུ་ བཅོ་ཁ་རྐྱབ་ནི།
+- རྩིས་ཐོ་གི་དོན་ལུ་ ལྡེ་མིག་གནས་གོང་མེ་ཊ་ཌེ་ཊ་རྒྱབ་སྐྱོར་ཚུ་ ངོ་སྤྲོད་འབདཝ་ཨིན།
+- སྡེབ་ཚན་ཚུ་གི་ཐོན་རིམ་ཁ་སྐོང་རྐྱབས།
+- Fixup ci linting བསྐྱར་ལོག་ཚུ།
+- མལ་,ཌིབ་, མོ་ཌི་,ཡར་ གསལ་བརྗོད་ཚུ་ལུ་ ཁ་སྐོང་རྐྱབས།
+- ཐོན་རིམ་བཟོ་ནིའི་དོན་ལུ་ ནང་ན་ཁ་སྐོང་བརྐྱབ།
+- ཚབ་འཛིན::msg འཛོལ་བའི་མེཀ་རོ་དང་གཅིག་ཁར་།
+- iroha_http_server དང་ torii འཛོལ་བ་ཚུ་ ལོག་ལཱ་འབད་དགོ།
+ - Norito ཐོན་རིམ་ ༢ ལུ་ཡར་བསྐྱེད་འབདཝ་ཨིན།
+- ཝའིཊ་ཤོག་ལེབ་ཐོན་རིམ་འགྲེལ་བཤད།
+- མ་འགྲིག་པའི་ རིགས། འགྲུལ་བསྐྱོད་འདི་འཛོལ་བ་ཚུ་བརྒྱུད་དེ་ དགོས་མཁོ་མེད་པའི་སྐབས་ གནད་དོན་ཚུ་ བཅོ་ཁ་རྐྱབ་ཨིན་ དེ་གི་ཚབ་ལུ་ བསྡུ་སྒྲིག་སྟོངམ་ཚུ་སླར་ལོག་མི་འབད།
+- གྱངས་ཁ་ཚུ་གི་དོན་ལུ་ deive(འཛོལ་བ་) ཁ་སྐོང་འབད།
+- མཚན་མོའི་ཐོན་རིམ་གཏན་འཁེལ།
+- iroha_error cret ཁ་སྐོང་རྐྱབས།
+- ཐོན་རིམ་གྱི་འཕྲིན་དོན་ཚུ།
+- དོས་ཆས་ཐོན་རིམ་གྱི་ གནའ་དུས་ཚུ་ ངོ་སྤྲོད་འབདཝ་ཨིན།
+- ཚད་གཞི་ཚུ་ གཏན་འཁེལ་བཟོ་ནི།
+- ཤོག་ལེབ་ཁ་སྐོང་བརྐྱབ།
+- སོ་སོ་ཨིན་ཀོ་ཌིང་ ཌི་ཀོ་ཌིང་ཁ་སྐོང་འབད།
+- འདྲི་དཔྱད་དུས་ཚོད་མཚོན་རྟགས་འདི་ u128 ལུ་བསྒྱུར་བཅོས་འབད།
+- ཁ་སྐོང་བཀག་ཆ་འབད་ པའིཔ་ལའིན་བྱུང་ལས་ཚུ་གི་དོན་ལུ་ ཐོ་འགོད་འབད་དགོ།
+- རིགས་བརྒྱུད་ཡིག་སྣོད་ཚུ་ལས་ ཕྱིར་ཐོན་འབད་ཡོད་པའི་གྲལ་ཐིག་ཚུ་ རྩ་བསྐྲད་གཏངམ་ཨིན། འགྲོ་ཡུལ་འདི་ ཧེ་མའི་ཁས་བླངས་ནང་ ཐོ་བཀོད་ཨའི་ཨེསི་ཨའི་ལས་ བཏོན་བཏང་ཡོདཔ་ཨིན།
+- ཐོ་བཀོད་དང་ ཐོ་བཀོད་མ་འབད་བའི་ ISIs འཇམ་ཏོང་ཏོ་བཟོཝ་ཨིན།
+- མཉམ་རོགས་ ༤ ཡོངས་འབྲེལ་ནང་ མ་གཏང་པར་ དུས་ཚོད་མཇུག་བསྡུ་ནིའི་ ཁས་བླངས་ཚུ་ བདེ་སྒྲིག་འབད།
+- ཊོ་པོ་ལོ་ཇི་གིས་ བསྒྱུར་བཅོས་མཐོང་སྣང་ལུ་འགྱུར་ཡོདཔ།- Frof Variant གི་དོན་ལུ་ དོས་གཞན་ཚུ་ཁ་སྐོང་རྐྱབས།
+- མཁོ་སྤྲོད་པ་ cli གི་དོན་ལུ་ ཨེམ་ཨེསི་ཊི་རྒྱབ་སྐྱོར་ཁ་སྐོང་འབད།
+- From Variant Macro དང་ གཙང་སྦྲའི་གསང་ཡིག་གཞི་རྟེན་ ཁ་སྐོང་རྐྱབས།
+- གསང་ཡིག་ཇོ་བདག་ཚུ་ལུ་ i1i1 ཁ་སྐོང་འབད།
+- ཚོང་བསྒྱུར་ཚུ་ གཏམ་བཤད་འབད་ནི།
+- བཀོད་རྒྱ་དང་གསལ་བརྗོད་ཀྱི་དོན་ལུ་རིང་ཚད་ཁ་སྐོང་འབད།
+- དུས་ཚོད་དང་དུས་ཚོད་ཚད་གཞི་ཚུ་བཀག་ཆ་འབད་ནི་ལུ་ ཌོཀ་ཚུ་ཁ་སྐོང་འབད།
+- TryFrom དང་ཅིག་ཁར་ རང་གཤིས་ཚུ་ བདེན་དཔྱད་དང་ངོས་ལེན་འབད་ནི།
+- མཉམ་རོགས་ ཉུང་མཐའ་རྐྱངམ་གཅིག་བསྒུག་སྟེ་ བསྒུག་སྡོད་དགོ།
+- iroha2-java དང་མཉམ་དུ་ཨ་པི་བརྟག་དཔྱད་འབད་ནིའི་དོན་ལུ་ གི་ཐུབ་བྱ་བ་ཁ་སྐོང་འབད།
+- ཌོཀ་ཀར་-ཀོམ་པོ་སི་-སོ་སིལ་.yml གི་དོན་ལུ་ རིགས་མཚན་ཁ་སྐོང་བརྐྱབ།
+- རྩིས་ཐོ་གི་དོན་ལུ་ སྔོན་སྒྲིག་མིང་རྟགས་ཞིབ་དཔྱད་གནས་སྟངས།
+- མཚན་རྟགས་བཀོད་མི་སྣ་ཚོགས་དང་གཅིག་ཁར་ རྩིས་ཐོ་གི་དོན་ལུ་ བརྟག་དཔྱད་ཁ་སྐོང་རྐྱབས།
+- ཨེམ་ཨེསི་ཊི་གི་དོན་ལུ་ མཁོ་སྤྲོད་པ་ཨེ་པི་ཨའི་རྒྱབ་སྐྱོར་ཁ་སྐོང་འབད།
+- ཌོག་ཀར་ནང་བཟོ་བསྐྲུན་འབད་ནི།
+- ཌོག་ཀར་བརྩམ་ནིའི་དོན་ལུ་ རིགས་མཚན་ཁ་སྐོང་འབད།
+- ངོ་སྤྲོད་གནས་སྟངས་ཀྱི་ཨེམ་ཨེསི་ཊི་།
+- བསྒུག་_དོན་ལུ་_དོན་ལུ་_for_active_peers འདི་ཁ་སྐོང་རྐྱབས།
+- ཨི་རོ་ཧ་_http_serar ནང་ལུ་ isahc མཁོ་སྤྲོད་འབད་མི་གི་དོན་ལུ་ བརྟག་དཔྱད་ཁ་སྐོང་འབད།
+- མཁོ་སྤྲོད་པ་ཨེ་པི་ཨའི་ སའི།
+- གསལ་བརྗོད་ཚུ་ནང་ འདྲི་དཔྱད་འབད་ནི།
+- གསལ་བརྗོད་ཚུ་དང་ཨའི་ཨེསི་ཨའི་མཉམ་བསྡོམས་འབདཝ་ཨིན།
+- ISI གི་དོན་ལུ་ གསལ་བརྗོད་ཚུ།
+- རྩིས་ཐོ་རིམ་སྒྲིག་ཚད་གཞི་ཚུ་ གཏན་བཟོས་འབད།
+- མཁོ་སྤྲོད་འབད་མི་དོན་ལུ་ རྩིས་ཐོའི་རིམ་སྒྲིག་ཁ་སྐོང་འབད།
+- གཏན་བཟོས་ `submit_blocking`.
+- པའིཔ་ལའིན་བྱུང་རིམ་ཚུ་གཏངམ་ཨིན།
+- Sumeragi མཁོ་མངགས་འབད་མི་ ཝེབ་སོ་ཀེཊི་མཐུད་ལམ་།
+- མདོང་ལམ་དང་ གནད་སྡུད་བྱུང་ལས་ཚུ་གི་དོན་ལུ་ བྱུང་ལས་ཚུ་ དབྱེ་བ་ཕྱེ་ནི།
+- གནང་བ་ཚུ་གི་དོན་ལུ་ མཉམ་བསྡོམས་བརྟག་དཔྱད།
+- མེ་རྐྱེན་དང་ མིཊི་གི་དོན་ལུ་ གནང་བ་ཞིབ་དཔྱད་ཚུ་ཁ་སྐོང་འབད།
+- ཐོ་བཀོད་མ་འབད་བའི་ ISI གནང་བ་།
+- འཛམ་གླིང་སྒྲིག་བཀོད་ PR གི་དོན་ལུ་ ཚད་གཞི་ཚུ་ བཅོ་ཁ་རྐྱབ་ནི།
+- འཛམ་གླིང་གི་སྒྲིག་བཀོད་ངོ་སྤྲོད་འབད་ནི།
+- རིགས་མཚན་སྡེབ་ཚན་མངོན་གསལ་ཆ་ཤས་ལག་ལེན་འཐབ།
+- རིགས་མཚན་གྱི་རྩིས་ཁྲ་ངོ་སྤྲོད་འབད་ནི།
+- ངོ་སྤྲོད་གནང་བ་ བདེན་དཔྱད་འབད་མི་བཟོ་མི།
+- གི་ཐུབ་བྱ་བ་ཚུ་དང་གཅིག་ཁར་ ཨའི་རོ་ཧ་༢ པི་ཨར་ཚུ་ལུ་ ཁ་ཡིག་ཚུ་ཁ་སྐོང་འབད།
+- གནང་བ་ཚུ་ ངོ་སྤྲོད་གཞི་ཁྲམ།
+- ཀིའུ་ཊི་ཨེགསི་ ཊི་ཨེགསི་ཨང་གྲངས་ཚད་དང་ Iroha འགོ་བཙུགས་གཏན་བཟོས་ཚུ།
+- ཧ་ཤི་ བཀོད་སྒྲིག་ནང་བསྒྱིར་དགོ།
+- ལོག་གནས་རིམ་ཡར་དྲག་གཏང་།
+  - མོས་མཐུན་ལུ་ བརྡ་དོན་གནས་རིམ་དྲན་ཐོ་ཚུ་ཁ་སྐོང་འབད།
+  - མརཀ་ཡོངས་འབྲེལ་བརྒྱུད་འབྲེལ་དྲན་ཐོ་ཚུ་ འཚོལ་ཞིབ་གནས་རིམ་སྦེ་ཨིན།
+  - ཌབ་ལུ་ཨེསི་ཝི་ལས་ སྡེབ་ཚན་གྱི་བཀག་ཆ་འདི་ འདྲ་བཤུས་ཨིནམ་ལས་ དྲན་ཐོ་ཚུ་ནང་ བཀག་ཆ་འབད་མི་ཆ་མཉམ་སྟོན་ཡོདཔ་ཨིན།
+  - སྔོན་སྒྲིག་སྦེ་བརྡ་དོན་དྲན་ཐོ་གནས་རིམ་གཞི་སྒྲིག་འབད།
+- བདེན་དཔྱད་ཀྱི་དོན་ལུ་ འགྱུར་ཅན་ WSV གཞི་བསྟུན་ཚུ་ རྩ་བསྐྲད་གཏང་།
+- ཧེམ་ཐོན་རིམ་ཡར་སེང་།
+- སྔོན་སྒྲིག་བློ་གཏད་ཅན་ཚུ་ རིམ་སྒྲིག་ལུ་ཁ་སྐོང་འབད།
+- མཁོ་སྤྲོད་འབད་མི་ཨེ་པི་ཨའི་ http.
+- སི་ཨེལ་ཨའི་ལུ་ ཨའི་སྤོ་བཤུད་འབད་ཡོདཔ།
+- I18NT000000079X པི་ཡར་དང་འབྲེལ་བའི་བཀོད་རྒྱ་ཚུ་ རིམ་སྒྲིག་འབད་ནི།
+- བརླག་སྟོར་ཤོར་བའི་ ISI ཐབས་ལམ་ཚུ་ ལག་ལེན་འཐབ་ནི་དང་ བརྟག་དཔྱད་འབད།
+- འདྲི་དཔྱད་པ་རམ་ཚུ་དབྱེ་དཔྱད་འབད་དོ།
+- `HttpResponse::ok()`, `HttpResponse::upgrade_required(..)`, ཁ་སྐོང་འབད།
+- བཀོད་རྒྱ་དང་འདྲི་དཔྱད་དཔེ་ཚད་ཚུ་ I18NT0000080X DSL ཐབས་ལམ་དང་གཅིག་ཁར་ ཚབ་བཙུགས་ནི།
+- བི་ཨེལ་ཨེསི་མིང་རྟགས་རྒྱབ་སྐྱོར་ཁ་སྐོང་འབད།
+- http སར་བར་གྱི་ ཀེརེཊ་ ངོ་སྤྲོད་འབད།
+- libsl.sol.1.0.0 གིས་ synlink དང་མཉམ་དུ།
+- ཚོང་འབྲེལ་གྱི་དོན་ལུ་ རྩིས་ཐོ་མིང་རྟགས་བདེན་དཔྱད་འབད།
+- བསྐྱར་བཟོ་ཚོང་འབྲེལ་གནས་རིམ་ཚུ།
+- འགོ་ཐོག་མངའ་ཁོངས་ཡར་རྒྱས་ཚུ།
+- ཌི་ཨེསི་ཨེལ་ བཟོ་དཔེ་ལག་ལེན་འཐབ།
+- Torii བེན་ཀ་མཱརཀ་ཚུ་ ཡར་དྲག་གཏང་ནི་: བེན་ཀ་མཱརཀ་ནང་ ནང་བསྐྱོད་ལྕོགས་མིན་བཟོ་སྟེ་ མཐར་འཁྱོལ་གྱི་ཆ་ཚད་ཁ་སྐོང་བརྐྱབ།
+- བརྟག་དཔྱད་ཁྱབ་ཚད་ཀྱི་ མདོང་ལམ་ཡར་རྒྱས་: `tarpaulin` གིས་ I18NI000000629X དང་ཅིག་ཁར་ ཚབ་བཙུགས་ཏེ་ བརྟག་དཔྱད་ཁྱབ་ཚད་སྙན་ཞུ་ I18NI000000630X ལུ་དཔར་བསྐྲུན་འབདཝ་ཨིན།
+- ཨར་ཊི་ཌི་བརྗོད་དོན་གཏན་བཟོས།
+- ཨི་རོ་ཧ་ལས་འགུལ་འོག་མ་ཚུ་གི་དོན་ལུ་ བཀྲམ་སྤེལ་འབད་ནིའི་ཅ་ཆས།
+- ངོ་སྤྲོད་ `SignedQueryRequest`.
+- མཚན་རྟགས་བདེན་དཔྱད་དང་གཅིག་ཁར་ འཛོལ་བ་ཅིག་ བདེ་སྒྲིག་འབད།
+- རོལ་བེཀ་ཚོང་འབྲེལ་ཚུ་གིས་རྒྱབ་སྐྱོར་འབདཝ་ཨིན།
+- བཟོ་བཏོན་འབད་ཡོད་པའི་ལྡེ་མིག་ཆ་འདི་ json བཟུམ་སྦེ་དཔར་བསྐྲུན་འབད།
+- རྒྱབ་སྐྱོར་ `Secp256k1` ལྡེ་མིག་ཆ་སྒྲིག་འབད་ནི།
+- ཀིརིཔ་ཊོ་ཨཱལ་གོ་རི་དམ་སོ་སོའི་དོན་ལུ་ འགོ་ཐོག་རྒྱབ་སྐྱོར་།
+- DEX ཁྱད་ཆོས་ཚུ།
+- ཀི་ལི་པ་རམ་དང་གཅིག་ཁར་ ཧརཌ་ཀོཌི་རིམ་སྒྲིག་འགྲུལ་ལམ་ཚབ་བཙུགས།
+- བེན་ཇི་ མཁས་མཆོག་ལཱ་གི་རྒྱུན་རིམ་གཏན་འཁེལ་བཟོ་ནི།
+- Docker བྱུང་ལས་མཐུད་ལམ་བརྟག་དཔྱད།
+- I18NT000000081X ལྟ་རྟོག་ལམ་སྟོན་དང་སི་ཨེལ་ཨའི་
+- བྱུང་རིམ་ཚུ་ ཀླད་ཀོར་ཡར་རྒྱས་གཏང་ནི།
+- བྱུང་ལས་ཚུ་ཚགས་མ།
+- བྱུང་ལས་མཐུད་ལམ་ཚུ།
+- ལཱ་གི་རྒྱུན་རིམ་གཙོ་བོ་ནང་ བདེ་སྒྲིག་འབད།
+- iroha2 གི་དོན་ལུ་ Rtd.
+- སྡེབ་ཚན་ཚོང་འབྲེལ་གྱི་དོན་ལུ་ མེར་ཀལ་ཤིང་རྩ་བ་ཧེ་ཤི་།
+- ཌོག་ཀར་ལྟེ་བ་ལུ་དཔེ་བསྐྲུན་འབད་ནི།
+- རྒྱུན་སྐྱོང་མཐུད་ནིའི་དོན་ལུ་ སི་ཨེལ་ཨའི་ ལཱ་འགན་ཡོདཔ།
+- རྒྱུན་སྐྱོང་མཐུད་ནིའི་དོན་ལུ་ སི་ཨེལ་ཨའི་ ལཱ་འགན་ཡོདཔ།
+- མེཀ་རོ་ནང་བསྐྱོད་འབད་ནི་ལུ་ པར་སྐྲུན་འབད།- དྲན་ཐོ་ལེགས་བཅོས་ཚུ།
+- IR-802 སྡེབ་ཚན་ཚུ་ལུ་ མཁོ་མངགས་འབད་ནི།
+- ཚོང་འབྲེལ་དང་ བཀག་ཆ་ཚུ་ གཏང་མི་ བྱུང་རིམ་ཚུ།
+- འཕྲིན་དོན་ནང་ལུ་ འཛིན་སྐྱོང་འཐབ་མི་ Sumeragi འཕྲིན་དོན་འདི་ ཨེཔ་ལཱ།
+- སྤྱིར་བཏང་མཐུད་སྦྲེལ་ཐབས་ལམ།
+- ཨེསི་ཊི་ཌི་མེད་པའི་ མཁོ་སྤྲོད་འབད་མི་ཚུ་གི་དོན་ལུ་ I1NT0000082X ཌོ་མེན་ངོ་བོ་ཚུ་ ཕྱིར་འཐེན་འབད།
+- ཚོང་འབྲེལ་ TTL.
+- སྡེབ་ཚན་རིམ་སྒྲིག་རེ་ལུ་ མཐོ་ཤོས་ཚོང་འབྲེལ་ཚུ།
+- ཆ་མེད་བཏང་ཡོད་པའི་སྡེབ་ཚན་ཚུ་ ཧ་སི་ཚུ་གསོག་འཇོག་འབདཝ་ཨིན།
+- སྡེ་ཚན་ནང་ སྡེབ་ཚན་ཚུ་ མཉམ་འབྱུང་འབད།
+- མཐུད་བྱེད་ལས་འགན་གྱི་རིམ་སྒྲིག་འབད་ནི།
+- Iroha ལས་འགན་ལུ་མཐུད།
+- སྡེབ་ཚན་བདེན་དཔྱད་ནོར་བཅོས་ཚུ།
+- སྡེབ་ཚན་མཉམ་འབྱུང་: རི་མོ།
+- Iroha ལས་འགན་ལུ་མཐུད།
+- ཟམ་: མཁོ་སྤྲོད་པ་ཚུ་བཏོན་གཏང་།
+- མཉམ་སྒྲིག་འབད་ནི།
 - AddPeer ISI.
-- Commands to Instructions renaming.
-- Simple metrics endpoint.
-- Bridge: get registered bridges and external assets.
-- Docker compose test in pipeline.
-- Not enough votes Sumeragi test.
-- Block chaining.
-- Bridge: manual external transfers handling.
-- Simple Maintenance endpoint.
-- Migration to serde-json.
-- Demint ISI.
-- Add bridge clients, AddSignatory ISI, and CanAddSignatory permission.
-- Sumeragi: peers in set b related TODO fixes.
-- Validates the block before signing in Sumeragi.
-- Bridge external assets.
-- Signature validation in Sumeragi messages.
-- Binary asset-store.
-- Replace PublicKey alias with type.
-- Prepare crates for publishing.
-- Minimum votes logic inside NetworkTopology.
-- TransactionReceipt validation refactoring.
-- OnWorldStateViewChange trigger change: IrohaQuery instead of Instruction.
-- Separate construction from initialization in NetworkTopology.
-- Add Iroha Special Instructions related to Iroha events.
-- Block creation timeout handling.
-- Glossary and How-to add Iroha Module docs.
-- Replace hardcoded bridge model with origin Iroha model.
-- Introduce NetworkTopology struct.
-- Add Permission entity with transformation from Instructions.
-- Sumeragi Messages in the message module.
-- Genesis Block functionality for Kura.
-- Add README files for Iroha crates.
-- Bridge and RegisterBridge ISI.
-- Initial work with Iroha changes listeners.
-- Injection of Permission checks into OOB ISI.
-- Docker multiple peers fix.
-- Peer to peer docker example.
-- Transaction Receipt handling.
-- Iroha Permissions.
-- Module for Dex and crates for Bridges.
-- Fix integration test with asset creation with several peers.
-- Re-implement of Asset model into EC-S-.
-- Commit timeout handling.
-- Block header.
-- ISI related methods for domain entities.
-- Kura Mode enumeration and Trusted Peers configuration.
-- Documentation linting rule.
-- Add CommittedBlock.
-- Decoupling kura from `sumeragi`.
-- Check that transactions are not empty before block creation.
-- Re-implement Iroha Special Instructions.
-- Benchmarks for transactions and blocks transitions.
-- Transactions lifecycle and states reworked.
-- Blocks lifecycle and states.
-- Fix validation bug, `sumeragi` loop cycle synced with block_build_time_ms configuration parameter.
-- Encapsulation of Sumeragi algorithm inside `sumeragi` module.
-- Mocking module for Iroha Network crate implemented via channels.
-- Migration to async-std API.
-- Network mock feature.
-- Asynchronous related code clean up.
-- Performance optimizations in transaction processing loop.
-- Generation of key pairs was extracted from Iroha start.
-- Docker packaging of Iroha executable.
-- Introduce Sumeragi basic scenario.
-- Iroha CLI client.
-- Drop of iroha after bench group execution.
-- Integrate `sumeragi`.
-- Change `sort_peers` implementation to rand shuffle seeded with previous block hash.
-- Remove Message wrapper in peer module.
-- Encapsulate network-related information inside `torii::uri` and `iroha_network`.
-- Add Peer instruction implemented instead of hardcode handling.
-- Peers communication via trusted peers list.
-- Encapsulation of network requests handling inside Torii.
-- Encapsulation of crypto logic inside crypto module.
-- Block sign with timestamp and previous block hash as payload.
-- Crypto functions placed on top of the module and work with ursa signer encapsulated into Signature.
-- Sumeragi initial.
-- Validation of transaction instructions on world state view clone before commit to store.
-- Verify signatures on transaction acceptance.
-- Fix bug in Request deserialization.
-- Implementation of Iroha signature.
-- Blockchain entity was removed to clean up codebase.
-- Changes in Transactions API: better creation and work with requests.
-- Fix the bug that would create blocks with empty vector of transaction
-- Forward pending transactions.
- - Fix bug with missing byte in u128 Norito encoded TCP packet.
-- Attribute macros for methods tracing.
-- P2p module.
-- Usage of iroha_network in torii and client.
-- Add new ISI info.
-- Specific type alias for network state.
-- Box<dyn Error> replaced with String.
-- Network listen stateful.
-- Initial validation logic for transactions.
-- Iroha_network crate.
-- Derive macro for Io, IntoContract and IntoQuery traits.
-- Queries implementation for Iroha-client.
-- Transformation of Commands into ISI contracts.
-- Add proposed design for conditional multisig.
-- Migration to Cargo workspaces.
-- Modules migration.
-- External configuration via environment variables.
-- Get and Put requests handling for Torii.
-- Github ci correction.
-- Cargo-make cleans up blocks after test.
-- Introduce `test_helper_fns` module with a function to cleanup directory with blocks.
-- Implement validation via merkle tree.
-- Remove unused derive.
-- Propagate async/await and fix unawaited `wsv::put`.
-- Use join from `futures` crate.
-- Implement parallel store execution: writing to disk and updating WSV are happening in parallel.
-- Use references instead of ownership for (de)serialization.
-- Code ejection from  files.
-- Use ursa::blake2.
-- Rule about mod.rs in Contributing guide.
-- Hash 32 bytes.
-- Blake2 hash.
-- Disk accepts references to block.
-- Refactoring of commands module and Initial Merkle Tree.
-- Refactored modules structure.
-- Correct formatting.
-- Add doc comments to read_all.
-- Implement `read_all`, reorganize storage tests, and turn tests with async functions into async tests.
-- Remove unnecessary mutable capture.
-- Review issue, fix clippy.
-- Remove dash.
-- Add format check.
-- Add token.
-- Create rust.yml for github actions.
-- Introduce disk storage prototype.
-- Transfer asset test and functionality.
-- Add default initializer to structs.
-- Change name of MSTCache struct.
-- Add forgotten borrow.
-- Initial outline of iroha2 code.
-- Initial Kura API.
-- Add some basic files and also release the first draft of the whitepaper outlining the vision for iroha v2.
-- Basic iroha v2 branch.
+- བཀོད་རྒྱ་ཚུ་ལུ་ བརྡ་བཀོད།
+- འཇམ་སམ་མེཊིག་ཚུ་ མཇུག་བསྡུ།
+- ཟམ་: ཐོ་བཀོད་འབད་ཡོད་པའི་ཟམ་དང་ཕྱི་ཁའི་རྒྱུ་དངོས་ཚུ་ཐོབ་དགོ།
+- Docker མདོང་ལམ་ནང་ བརྩམ་སྒྲིག་བརྟག་དཔྱད།
+- ཚོགས་རྒྱན་ལངམ་སྦེ་མ་ཐོབ། Sumeragi བརྟག་དཔྱད།
+- སྡེབ་ཚན་རིམ་སྒྲིག་འབད་ནི།
+- ཟམ་: ལག་ཐོག་ཕྱི་ཁའི་སྤོ་བཤུད་ཚུ་འཛིན་སྐྱོང་འཐབ་ནི།
+- འཇམ་ཏོང་ཏོ་ བདག་འཛིན་མཐའ་འཁོར།
+- སེར་ཌི་-ཇེ་སོན་ལུ་གནས་སྤོ་འབད་ནི།
+- ISI གཏན་འབེབས་བཟོ་ནི།
+- ཟམ་གྱི་མཁོ་མངགས་ཚུ་ ཁ་སྐོང་བརྐྱབ་ནི་ ཨེཌ་སིག་ནིཊ་ཨའི་ཨེསི་ཨའི་ དེ་ལས་ ཀེན་ཨེཌ་སིག་ནིར་གནང་བ།
+- I18NT000000011X: མཉམ་རོགས་ b འབྲེལ་མཐུད་ཡོད་པའི་ TODO བཅོས་སྒྲིག་ཚུ།
+- I18NT0000012X ནང་ མཚན་རྟགས་མ་བཀོད་པའི་ཧེ་མ་ སྡེབ་ཚན་འདི་བདེན་དཔྱད་འབདཝ་ཨིན།
+- ཟམ་གྱི་ཕྱི་ཁའི་རྒྱུ་དངོས།
+- Sumeragi འཕྲིན་དོན་ནང་ མཚན་རྟགས་བདེན་དཔྱད།
+- གཉིས་ལྡན་རྒྱུ་དངོས་ཚོང་ཁང་།
+- མི་མང་གི་མིང་གཞན་ཚུ་ དབྱེ་བ་དང་གཅིག་ཁར་ཚབ་བཙུགས་འབད།
+- དཔེ་སྐྲུན་འབད་ནིའི་དོན་ལུ་ ཀེརེསི་གྲ་སྒྲིག་འབད།
+- ཡོངས་འབྲེལ་ཊོ་པོ་ལོ་ཇི་ནང་ ཉུང་མཐའི་ཚོགས་རྒྱན་བཙུགས་ཡོདཔ།
+- ཚོང་འབྲེལ་དྲན་ཐོ་བདེན་དཔྱད་སླར་བྱོས།
+- World StateViewCange གི་ གློག་ཤུགས་བསྒྱུར་བཅོས་: བཀོད་རྒྱ་གི་ཚབ་ལུ་ IrohaQuery.
+- ཡོངས་འབྲེལ་ཊོ་པོ་ལོ་ཇི་ནང་ འགོ་བཙུགས་ལས་ བཟོ་བསྐྲུན་སོ་སོ་འབད།
+- ཁ་སྐོང་ I18NT0000085X I18NT0000086X བྱུང་ལས་དང་འབྲེལ་བའི་དམིགས་བསལ་བཀོད་རྒྱ།
+- བཀག་ཆ་གསར་བསྐྲུན་དུས་ཚོད་འཛིན་སྐྱོང་།
+- ཚིག་མཛོད་དང་ག་དེ་སྦེ་འབད་ནི་ཨིན་ན་ Iroha Module docs.
+- འབྱུང་ཁུངས་ I18NT000008X དཔེ་སྟོན་དང་གཅིག་ཁར་ ཧརཌ་ཀོཌ་ཟམ་དཔེ་ཚད་ཚབ་བཙུགས།
+- ཡོངས་འབྲེལ་ཊོ་པོ་ལོ་ཇི་སྒྲིག་བཀོད་ངོ་སྤྲོད་འབད།
+- བཀོད་རྒྱ་ལས་བསྒྱུར་བཅོས་འབད་མི་དང་གཅིག་ཁར་ གནང་བ་གི་ངོ་བོ་ཁ་སྐོང་བརྐྱབ།
+- I18NT000000014X འཕྲིན་དོན་ཚད་གཞི་ནང་འཕྲིན་དོན་ཚུ།
+- Genesis ཀུ་ར་གི་དོན་ལུ་བཀག་ཆ་འབད་ནིའི་ལས་འགན།
+- I18NT0000089X crats གི་དོན་ལུ་ README ཡིག་སྣོད་ཚུ་ཁ་སྐོང་འབད།
+- ཟམ་དང་ཐོ་བཀོད་ཟམ་པ་ ISI.
+- I18NT000000090X དང་ཅིག་ཁར་ འགོ་ཐོག་ལཱ་འདི་གིས་ ཉན་མི་ཚུ་བསྒྱུར་བཅོས་འབདཝ་ཨིན།
+- OOB ISI ནང་ལུ་ གནང་བ་ཞིབ་དཔྱད་ཚུ་ བཙུགས་ནི།
+- Docker མཉམ་རོགས་སྣ་མང་གིས་ བཅོ་ཁ་རྐྱབ་ཨིན།
+- མཉམ་རོགས་ ཌོག་ཀར་དཔེ་མཚོན་ལུ་ མཉམ་མཐུན་འབད་ནི།
+- བརྒྱུད་འཕྲིན་གྱི་ལེན་འཛིན་འཛིན་སྐྱོང་།
+- I18NT000000091X ཆོག་མཆན།
+- ཌེགསི་གི་དོན་ལུ་ མོ་ཌུལ་དང་ ཟམ་གྱི་དོན་ལུ་ ཀེརཊ།
+- མཉམ་རོགས་ལེ་ཤ་ཅིག་དང་གཅིག་ཁར་ རྒྱུ་དངོས་གསར་བསྐྲུན་དང་གཅིག་ཁར་ མཉམ་བསྡོམ་བརྟག་དཔྱད་སྒྲིག་ནི།
+- EC-S- ནང་ལུ་ རྒྱུ་དངོས་དཔེ་ཚད་འདི་ ལོག་ལག་ལེན་འཐབ།
+- དུས་ཚོད་མཇུག་བསྡུ་ནིའི་ ཁས་ལེན་འབད།
+- སྡེབ་ཚན་གྱི་མགོ་ཡིག་།
+- མངའ་ཁོངས་ངོ་བོ་ཚུ་གི་དོན་ལུ་ ཨའི་ཨེསི་ཨའི་དང་འབྲེལ་བའི་ཐབས་ལམ།
+- ཀུ་ར་ཐབས་ལམ་ཨང་རྩིས་དང་བློ་གཏད་མཉམ་རོགས་རིམ་སྒྲིག་།
+- ཡིག་ཆ་བཟོ་ནིའི་ ལིན་ཊིང་སྒྲིག་གཞི།
+- བཀའ་ཁྲིམས་ཁ་སྐོང་རྐྱབས།
+- I18NI0000063X ལས་ ཌི་ཀོབ་ལིང་ཀུ་ར་།
+- གསར་བསྐྲུན་མ་འབད་བའི་ཧེ་མ་ ཚོང་འབྲེལ་ཚུ་ སྟོངམ་མེདཔ་སྦེ་ ཞིབ་དཔྱད་འབད།
+- Iroha དམིགས་བསལ་བརྡ་སྟོན།
+- ཚོང་འབྲེལ་དང་བཀག་ཆ་ཚུ་གི་དོན་ལུ་ ཚད་གཞི་ཚུ།
+- ཚོང་འབྲེལ་མི་ཚེ་འཁོར་རིམ་དང་ མངའ་སྡེ་ཚུ་ ལོག་སྟེ་ལཱ་འབད་ཡོདཔ།
+- སྲོག་ལྡན་གྱི་འཁོར་རིམ་དང་མངའ་སྡེ་ཚུ།
+- བདེན་དཔྱད་འཛོལ་བ་ བཅོ་ཁ་རྐྱབ་ནི་ `sumeragi` ལོབ་འཁོར་རིམ་འདི་ block_build_time_ms རིམ་སྒྲིག་ཚད་བཟུང་དང་གཅིག་ཁར་མཉམ་མཐུད་འབད།
+- I18NI000000635X ཚད་གཞི་ནང་ལུ་ Sumeragi གི་ཨཱལ་གོ་རི་དམ་གྱི་ བཀོད་སྒྲིག་འབད་ནི།
+- Iroha རྒྱུན་ལམ་བརྒྱུད་དེ་ལག་ལེན་འཐབ་མི་ ཡོངས་འབྲེལ་ཡོངས་འབྲེལ་ཀེརེཊ་གི་དོན་ལུ་ མོ་ཀིང་ཚད་གཞི་།
+- ཨ་སིན་ཀ་-ཨེསི་ཊི་ཌི་ཨེ་པི་ཨའི་ ལུ་གནས་སྤོ་འབད་ནི།
+- ཡོངས་འབྲེལ་མོག་གི་ཁྱད་ཆོས།
+- དུས་མཉམ་མེན་པའི་འབྲེལ་བའི་ཨང་རྟགས་གཙང་མ་བཟོ་ནི།
+- ཚོང་འབྲེལ་བྱ་རིམ་བསྐྱར་འཁོར་ནང་ ལཱ་འགན་ཡར་དྲག་གཏང་ནི།
+- ལྡེ་མིག་ཆ་གཅིག་གི་ མི་རབས་འདི་ I18NT0000094X འགོ་བཙུགས་ལས་ བཏོན་ཡོདཔ་ཨིན།
+- Docker གི་ ཐུམ་སྒྲིལ་ I18NT0000095X བཀོལ་སྤྱོད་འབད་བཏུབ།- Sumeragi གཞི་རྟེན་གནས་སྟངས་ངོ་སྤྲོད།
+- Iroha CLI མཁོ་སྤྲོད་པ།
+- བེན་ཇི་སྡེ་ཚན་ལག་ལེན་འཐབ་པའི་ཤུལ་ལས་ ཨའི་རོ་ཧ་གི་བཀོ་ནི།
+- `sumeragi` མཉམ་བསྡོམས།
+- ཧེ་མའི་སྡེབ་ཚན་ཧེཤ་དང་གཅིག་ཁར་ རན་ཌི་ཤཱཕལ་བཙུགས་ནིའི་དོན་ལུ་ `sort_peers` ལག་ལེན་འཐབ་ཐངས་འདི་བསྒྱུར་བཅོས་འབད།
+- མཉམ་རོགས་ཚད་གཞི་ནང་ འཕྲིན་དོན་གྱི་ བཀབ་ཆ་ བཏོན་གཏང་།
+- `torii::uri` དང་ I18NI000000639X ནང་ལུ་ ཡོངས་འབྲེལ་དང་འབྲེལ་བའི་བརྡ་དོན་ཚུ་ བཙུགས་དགོ།
+- ཧརཌ་ཀོཌི་འཛིན་སྐྱོང་གི་ཚབ་ལུ་ པི་ཡར་བཀོད་རྒྱ་ལག་ལེན་འཐབ་ཁ་སྐོང་རྐྱབས།
+- བློ་གཏད་ཅན་གྱི་མཉམ་རོགས་ཐོ་ཡིག་བརྒྱུད་དེ་ པི་ཡར་ཚུ་ བརྒྱུད་འབྲེལ་འཐབ་ཨིན།
+- Torii ནང་ལུ་ ཡོངས་འབྲེལ་གྱི་ཞུ་བ་ཚུ་ བཙུགས་ནི།
+- ཀིརིཔ་ཊོ་ཚད་གཞི་ནང་ ཀིརིཔ་ཊོ་ལོ་ཇིག་གི་ བཀོད་སྒྲིག་འབད་ནི།
+- དུས་ཚོད་མཚོན་རྟགས་དང་ཧེ་མའི་བཀག་ཆ་ཧེ་ཤི་འདི་ པེ་ལོཌི་སྦེ་བཀག་ཆ་འབད་མི་དང་གཅིག་ཁར་ བཀག་ཆ་འབད།
+- མཐུད་ལམ་གྱི་གུ་བཀལ་ཡོད་པའི་ ཀིརིཔ་ཊོ་ལས་འགན་ཚུ་ མཚན་རྟགས་ནང་ བཙུགས་ཏེ་ཡོད་མི་ ursa མཚན་རྟགས་བཀོད་མི་དང་གཅིག་ཁར་ ལཱ་འབད་དགོ།
+- I18NT000000017X འགོ་ཐོག་.
+- གསོག་འཇོག་འབད་ནིའི་ཁས་ལེན་མ་འབད་བའི་ཧེ་མ་ འཛམ་གླིང་མངའ་སྡེའི་མཐོང་སྣང་རིགས་མཚུངས་བཟོ་བཅོས་ནང་ ཚོང་འབྲེལ་བཀོད་རྒྱ་ཚུ་བདེན་དཔྱད་འབད་ནི།
+- ཚོང་འབྲེལ་ངོས་ལེན་ལུ་ མཚན་རྟགས་ཚུ་ བདེན་དཔྱད་འབད།
+- ཞུ་བ་ རིམ་སྒྲིག་མེདཔ་བཟོ་ནིའི་ནང་ རྐྱེན་སེལ་ཡོདཔ།
+- མིང་རྟགས་ I18NT0000097X ལག་ལེན་འཐབ་ནི།
+- བཀག་ཆའི་ངོ་བོ་འདི་ ཡར་འཕེལ་གྱི་གསང་ཡིག་གཞི་བཞག་ནིའི་དོན་ལུ་ བཏོན་བཏང་ཡོདཔ་ཨིན།
+- ཚོང་འབྲེལ་ཨེ་པི་ཨའི་ བསྒྱུར་བཅོས་ཚུ་: གསར་བསྐྲུན་ལེགས་ཤོམ་དང་ ཞུ་བ་ཚུ་དང་གཅིག་ཁར་ལཱ་འབད།
+- ཚོང་འབྲེལ་གྱི་ཝེཀ་ཊར་སྟོངམ་དང་གཅིག་ཁར་ སྡེབ་ཚན་ཚུ་གསར་བསྐྲུན་འབད་མི་ རྐྱེན་སེལ་འབད།
+- མདུན་སྐྱོད་ཀྱི་ བསྒུལ་བཟོའི་ ཚོང་འབྲེལ་ཚུ།
+ - u128 Norito ཨིན་ཀོ་ཌི་ཊི་ཊི་སི་པི་ཐུམ་སྒྲིལ་ནང་ བརླག་སྟོར་ཞུགས་ཡོད་པའི་བཱའིཊི་དང་གཅིག་ཁར་ རྐྱེན་སེལ་འབད།
+- ཐབས་ལམ་འཚོལ་ཞིབ་ཀྱི་དོན་ལུ་ མེཀ་རོ་ཚུ་ ངོས་འཛིན་འབད།
+- P2p ཚད་གཞི་།
+- torii དང་ མཁོ་སྤྲོད་ནང་ iroha_network གི་ལག་ལེན།
+- ISI བརྡ་དོན་གསརཔ་ཁ་སྐོང་རྐྱབས།
+- ཡོངས་འབྲེལ་གནས་སྟངས་ཀྱི་དོན་ལུ་ དམིགས་བསལ་དབྱེ་བ་གཞན་ཚུ།
+- བོགསི་<dyn འཛོལ་བ> ཡིག་རྒྱུན་དང་གཅིག་ཁར་ཚབ་བཙུགསཔ་ཨིན།
+- ཡོངས་འབྲེལ་ཉན་པའི་ཡོངས་འབྲེལ་ཚུ།
+- ཚོང་འབྲེལ་ཚུ་གི་དོན་ལུ་ འགོ་ཐོག་བདེན་དཔྱད་ཚད་མ་ཚུ།
+- ཨའི་རོ་ཧ་_ཡོངས་འབྲེལ་གྱི་ཤོག་སྒམ།
+- ཨའི་ཨོ་དང་ མཉམ་བསྡོམས་ དེ་ལས་ འདྲི་དཔྱད་ནང་ལུ་ དྲི་དཔྱད་ནང་ལུ་ མེཀ་རོ་ལས་ བཏོན་ནི།
+- Iroha-client གི་དོན་ལུ་ འདྲི་དཔྱད་འབད་ནི།
+- ISI གན་རྒྱ་ནང་ བརྡ་བཀོད་ཚུ་ བསྒྱུར་བཅོས་འབད་ནི།
+- ཆ་རྐྱེན་ཅན་གྱི་སྣ་མང་དོན་ལུ་ གྲོས་འཆར་བཀོད་མི་བཟོ་བཀོད་ཁ་སྐོང་འབད།
+- སྐྱེལ་འདྲེན་ལས་ སྐྱེལ་འདྲེན་ལས་ཀའི་ས་སྒོ།
+- ཚད་གཞིའི་གནས་སྤོ་ཚུ།
+- མཐའ་འཁོར་འགྱུར་ཅན་ཚུ་བརྒྱུད་དེ་ ཕྱིའི་རིམ་སྒྲིག་ཚུ།
+- I18NT0000110X གི་དོན་ལུ་ ཞུ་བ་ཚུ་ ལེན་ཞིནམ་ལས་ བཙུགས།
+- གི་ཐུབ་ཅི་གི་ནོར་བཅོས་འབད་ནི།
+- ཀར་གོ་གིས་ བརྟག་དཔྱད་འབད་བའི་ཤུལ་ལས་ བཀག་ཆ་ཚུ་ གཙང་མ་བཟོཝ་ཨིན།
+- སྡེབ་ཚན་ཚུ་དང་གཅིག་ཁར་ ལས་འགན་ཅིག་དང་གཅིག་ཁར་ `test_helper_fns` ཚད་གཞི་འདི་ངོ་སྤྲོད་འབད།
+- མར་ཀལ་ཤིང་བརྒྱུད་དེ་ བདེན་དཔྱད་འབད་ནི།
+- ལག་ལེན་མ་འཐབ་པའི་འབྱུང་ཁུངས་བཏོན་གཏང་།
+- async/བསྒུག་སྟེ་ མ་བསྒུག་པའི་ `wsv::put` འདི་ ཁྱབ་སྤེལ་འབད།
+- `futures` crate ལས་ལག་ལེན་འཐབ།
+- མཉམ་བསྡོམས་ཚོང་ཁང་ལག་ལེན་འཐབ་ནིའི་ལག་ལེན་པ་ལག་ལེན་འཐབ།: ཌིཀསི་དང་ དུས་མཐུན་བཟོ་ནི་ ཌབ་ལུ་ཨེསི་ཝི་ལུ་འབྲི་ནི་དང་ མཉམ་དུ་འབྱུང་དོ་ཡོདཔ་ཨིན།
+- (de)རིམ་སྒྲིག་དོན་ལུ་ བདག་དབང་གི་ཚབ་ལུ་ གཞི་བསྟུན་ཚུ་ལག་ལེན་འཐབ།
+- ཡིག་སྣོད་ཚུ་ནང་ལས་ ཕྱིར་བཏོན་ཨང་རྟགས་བཀོད།
+- ursa::blake2.
+- ཕན་འདེབས་ལམ་སྟོན་ནང་ mod.rs སྐོར་གྱི་ཁྲིམས་ལུགས།
+- ཧཤ་ ༣༢ བཱའིཊིསི།
+- Blake2 ཧེ།
+- ཌིཀསི་གིས་ སྡེབ་ཚན་ལུ་གཞི་བསྟུན་ཚུ་དང་ལེན་འབདཝ་ཨིན།
+- བརྡ་བཀོད་ཚད་གཞི་དང་ འགོ་ཐོག་མར་ཀེལ་ཤིང་ཚུ་ བསྐྱར་བཟོ་འབད་ནི།
+- བསྐྱར་བཟོ་འབད་ཡོད་པའི་ ཚད་གཞི་ཚུ་གི་གཞི་བཀོད།
+- རྩ་སྒྲིག་འབད་ནི་ནོར་བཅོས་འབད།
+- doc བསམ་བཀོད་ཚུ་ read_all ལུ་ཁ་སྐོང་འབད།
+- `read_all` ལག་ལེན་འཐབ་ཞིནམ་ལས་ གསོག་འཇོག་བརྟག་དཔྱད་ཚུ་ ལོག་སྒྲིག་འཛུགས་འབད་ཞིནམ་ལས་ async ལས་འགན་ཚུ་ async བརྟག་དཔྱད་ནང་ བསྒྱིར་དགོ།
+- དགོས་མཁོ་མེད་པའི་ འགྱུར་བཅོས་ཅན་གྱི་འཛིན་བཟུང་བཏོན་གཏང་།
+- བསྐྱར་ཞིབ་གནད་དོན་, བཅོ་ཁ་བརྐྱབ།
+- ཌེཤ་བཏོན་གཏང་།
+- རྩ་སྒྲིག་ཞིབ་དཔྱད་ཁ་སྐོང་འབད།
+- ཊོ་ཀེན་ཁ་སྐོང་འབད།
+- གི་ཐུབ་བྱ་བ་ཚུ་གི་དོན་ལུ་ rus.yml གསར་བསྐྲུན་འབད།
+- ཌིཀསི་གསོག་འཇོག་དཔེ་ཚད་ངོ་སྤྲོད་འབད།
+- སྤོ་བཤུད་རྒྱུ་དངོས་བརྟག་དཔྱད་དང་ལས་འགན་ཚུ།
+- བཟོ་བཀོད་ཚུ་ལུ་ སྔོན་སྒྲིག་འགོ་བཙུགས་མི་འདི་ཁ་སྐོང་འབད།
+- ཨེམ་ཨེསི་ཊི་སི་ཆི་སྒྲིག་བཀོད་ཀྱི་མིང་བསྒྱུར་བཅོས་འབད།
+- བརྗེད་སོང་བའི་སྐྱིན་འགྲུལ་ཁ་སྐོང་འབད།
+- iroha2 གི་ཨང་རྟགས་འགོ་བཙུགས་པའི་ བཀོད་རིས་ཚུ།
+- འགོ་ཐོག་ཀུ་ར་ཨེ་པི་ཨའི་.
+- གཞི་རྟེན་ཡིག་སྣོད་དག་པ་ཅིག་ཁ་སྐོང་འབད་ཞིནམ་ལས་ iroha v2 གི་དོན་ལུ་ མཐོང་ཚུལ་འདི་ ཤོག་ལེབ་དཀརཔོ་གི་ཟིན་བྲིས་འགོ་དང་པ་ཡང་ གསར་བཏོན་འབད།
+- གཞི་རྩའི་ iroha v2 ཡན་ལག་།
 
-## [1.5.0] - 2022-04-08
+## [༡.༥.༠] - ༢༠༢༢-༠༤-༠༨
 
-### CI/CD changes
-- Remove Jenkinsfile and JenkinsCI.
+### CI/CD འགྱུར་བ།
+- ཇེན་ཀིནསི་ཕའིལ་དང་ ཇེན་ཀིནསི་སི་ཨའི་ བཏོན་གཏང་།
 
-### Added
+### ཁ་སྐོང་རྐྱབ།- བཱ་རོ་གི་དོན་ལུ་ རོཀ་ཌི་བི་ གསོག་འཇོག་ལག་ལེན་ཁ་སྐོང་འབད།
+- བུལུམ་ཚགས་མ་དང་གཅིག་ཁར་ འགྲིམ་འགྲུལ་ཡར་འཕེལ་འབད་ནི་ ངོ་སྤྲོད་འབད།
+- I18NI000000644X ཚད་གཞི་འདི་ `OS` ཚད་གཞི་ནང་ I18NI000000646X ལུ་གནས་ཏེ་ཡོདཔ་ཨིན།
+- འགྲིམ་འགྲུལ་ཡར་འཕེལ་གྱི་གྲོས་འཆར་བཀོད།
 
-- Add RocksDB storage implementation for Burrow.
-- Introduce traffic optimization with Bloom-filter
-- Update `MST` module network to be located in `OS` module in `batches_cache`.
-- Propose traffic optimization.
+### ཡིག་ཆ།
 
-### Documentation
+- བཟོ་བཀོད། ཌི་བི་ཁྱད་པར་དང་ གནས་སྤོ་བའི་སྦྱོང་བརྡར་ གསོ་ཅེག་མཐའ་མཚམས་ ཨའི་རོ་ཧ་-སྭར་ ལག་ཆས་སྐོར་ལས་ བརྡ་དོན་ཚུ་ཁ་སྐོང་བརྐྱབ།
 
-- Fix build. Add DB differences, migration practice, healthcheck endpoint, information about iroha-swarm tool.
+### གཞན
 
-### Other
+- doc བཟོ་བསྐྲུན་གྱི་དོན་ལུ་ དགོས་མཁོ།
+- ལྷག་ལུས་སྐྱོན་བརྗོད་རྗེས་འཇུག་རྣམ་གྲངས་ལྷག་ལུས་ཚུ་ གསལ་སྟོན་འབད་ནི་ལུ་ གསར་བཏོན་ཡིག་ཆ་ཚུ་ བཤུབ་གཏང་།
+- ཌོཀ་ཀར་གཟུགས་བརྙན་འདི་ཡོད་པ་ཅིན་ 'ཞིབ་དཔྱད་འབད་' སེལ་འཐུ་འབད།
+- / skip_testing ཆ་མཉམ་བཟོ་དགོ།
+- /build skip_བརྟག་དཔྱད་འབད་ནི།; དེ་ལས་ ཡིག་ཆ་མངམ་ཅིག།
+- `.github/_README.md` ཁ་སྐོང་འབད།
+- `.packer` བཏོན་གཏང་།
+- བརྟག་དཔྱད་ཚད་བཟུང་གུ་བསྒྱུར་བཅོས་ཚུ་རྩ་བསྐྲད་གཏང་།
+- བརྟག་དཔྱད་གནས་རིམ་གོམ་འགྱོ་ནི་ལུ་ ཚད་བཟུང་གསརཔ་ལག་ལེན་འཐབ།
+- ལཱ་གི་རྒྱུན་རིམ་ལུ་ཁ་སྐོང་འབད།
+- མཛོད་ཁང་ནང་ལས་ བཏོན་གཏང་ནི།
+- མཛོད་ཁང་ནང་ བཀྲམ་སྤེལ་འབད།
+- བརྟག་དཔྱད་པ་ཚུ་གི་དོན་ལུ་ ཚད་བཟུང་ཁ་སྐོང་བརྐྱབ།
+- `proposal_delay` དུས་ཚོད་བཏོན་གཏང་།
 
-- Requirement fix for doc build.
-- Trim release documentation to spotlight the remaining critical follow-up item.
-- Fix 'check if docker image exists' /build all skip_testing.
-- /build all skip_testing.
-- /build skip_testing; And more docs.
-- Add `.github/_README.md`.
-- Remove `.packer`.
-- Remove changes on test parameter.
-- Use new parameter to skip test stage.
-- Add to workflow.
-- Remove repository dispatch.
-- Add repository dispatch.
-- Add parameter for testers.
-- Remove `proposal_delay` timeout.
+## [༡.༤.༠] - ༢༠༢༢-༠༡-༣༡
 
-## [1.4.0] - 2022-01-31
+### ཁ་སྐོང་རྐྱབ།
 
-### Added
+- མཉམ་མཐུད་ནའུཊི་གནས་སྟངས་ཁ་སྐོང་རྐྱབས།
+- རོཀ་ཌི་བི་གི་དོན་ལུ་ མེ་ཊིགསི་ཁ་སྐོང་བརྐྱབ་ཨིན།
+- http དང་ metrics བརྒྱུད་དེ་ གསོ་བའི་འཕྲོད་བསྟེན་གྱི་ངོས་འདྲ་བ་ཚུ་ཁ་སྐོང་འབད།
 
-- Add syncing node state
-- Adds metrics for RocksDB
-- Add healthcheck interfaces via http and metrics.
+### བདེ་ཐང་།
 
-### Fixes
+- Iroha v1.4-rc.2 ནང་ ཀེར་ཐིག་བཟའ་ཚང་ཚུ་ བདེ་སྒྲིག་འབད།
+- Iroha v1.4-rc.1 ནང་ 10-bit མེ་ཏོག་ཚགས་མ་ཁ་སྐོང་འབད།
 
-- Fix column families in Iroha v1.4-rc.2
-- Add 10-bit bloom filter in Iroha v1.4-rc.1
+### ཡིག་ཆ།
 
-### Documentation
+- བཟོ་བསྐྲུན་ཌིཔ་གི་ཐོ་ཡིག་ལུ་ ཟིཔ་དང་པི་ཀེ་ཇི་-ཀོན་རནམ་ཁ་སྐོང་འབད།
+- དུས་མཐུན་བཟོ་ནི་: གནས་རིམ་བཟོ་ནི་དང་ བཟོ་བསྐྲུན་ལམ་སྟོན་ དེ་ལས་ དེ་བཟུམ་མའི་དོན་ལུ་ ཆད་ཡོད་པའི་འབྲེལ་ལམ་ཚུ་ བཅོ་ཁ་རྐྱབས།
+- གཏན་བཟོས་གཏན་འཁེལ་དང་ Docker མེ་ཊིཀསི།
 
-- Add zip and pkg-config to list of build deps.
-- Update readme: fix broken links to build status, build guide, and so on.
-- Fix Config and Docker Metrics.
+### གཞན
 
-### Other
-
-- Update GHA docker tag.
-- Fix Iroha 1 compile errors when compiling with g++11.
-- Replace `max_rounds_delay` with `proposal_creation_timeout`.
-- Update sample config file to remove old DB connection params.
+- དུས་མཐུན་ ག་ཨེཆ་ཨེ་ཌོག་ཀར་ཊེག་།
+- g++11 དང་གཅིག་ཁར་ བསྡུ་སྒྲིག་འབད་བའི་སྐབས་ I18NT000010101 1 བསྡུ་སྒྲིག་འབད་བའི་འཛོལ་བ་ཚུ་ བདེ་སྒྲིག་འབད།
+- `max_rounds_delay` འདི་ I18NI000000651X དང་ཅིག་ཁར་ཚབ་བཙུགས་དགོ།
+- ཌི་བི་མཐུད་ལམ་པརམ་རྙིངམ་ཚུ་རྩ་བསྐྲད་གཏང་ནི་ལུ་ དཔེ་ཚད་རིམ་སྒྲིག་ཡིག་སྣོད་ དུས་མཐུན་བཟོ།

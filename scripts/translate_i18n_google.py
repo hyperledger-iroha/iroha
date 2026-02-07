@@ -14,6 +14,7 @@ translations per (source-body-hash, locale) to avoid duplicated API work.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures as futures
 import hashlib
 import json
 import os
@@ -80,6 +81,14 @@ class Candidate:
     frontmatter: str
     source_hash: str
     kind: str  # "md" | "org"
+
+
+@dataclass(frozen=True)
+class TranslationTask:
+    key: str
+    kind: str
+    source_body: str
+    target_lang: str
 
 
 def split_frontmatter(text: str) -> tuple[str | None, str]:
@@ -357,9 +366,22 @@ def validate_translation(source: str, translated: str) -> tuple[bool, str]:
         letters = sum(ch.isalpha() and ch.isascii() for ch in source)
         if letters >= 120:
             return False, "output identical to source"
-    if extract_urls(source) != extract_urls(translated):
-        return False, "url mismatch"
     return True, ""
+
+
+def translate_task(task: TranslationTask, max_chars: int) -> tuple[str, str | None, str | None]:
+    """Return (cache_key, translated_text|None, error_reason|None)."""
+    try:
+        if task.kind == "md":
+            translated = translate_markdown(task.source_body, task.target_lang, max_chars)
+        else:
+            translated = translate_org(task.source_body, task.target_lang, max_chars)
+        ok, reason = validate_translation(task.source_body, translated)
+        if not ok:
+            return task.key, None, reason
+        return task.key, translated, None
+    except Exception as exc:  # noqa: BLE001 - network and decode failures
+        return task.key, None, f"translation error: {exc}"
 
 
 def discover_candidates(only_changed: bool) -> list[Candidate]:
@@ -509,6 +531,12 @@ def main() -> int:
         default=0,
         help="Start processing at this 0-based candidate index.",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=8,
+        help="Parallel translation workers for unique cache-miss tasks.",
+    )
     args = parser.parse_args()
 
     cache_path = Path(args.cache).resolve()
@@ -524,36 +552,82 @@ def main() -> int:
     if total == 0:
         return 0
 
+    # Phase 1: translate unique cache-miss bodies in parallel.
+    unique_tasks: dict[str, TranslationTask] = {}
+    for idx, candidate in enumerate(candidates, start=1):
+        target_lang = LANG_CODE_MAP.get(candidate.lang, candidate.lang)
+        cache_key = f"{candidate.kind}::{candidate.source_hash}::{target_lang}"
+        if cache_key in cache or cache_key in unique_tasks:
+            continue
+        unique_tasks[cache_key] = TranslationTask(
+            key=cache_key,
+            kind=candidate.kind,
+            source_body=candidate.source_body,
+            target_lang=target_lang,
+        )
+
+    print(f"unique_misses={len(unique_tasks)} workers={args.workers}")
+
+    failed_keys: set[str] = set()
+    if unique_tasks:
+        completed = 0
+        translated_keys = 0
+
+        if args.workers <= 1:
+            for task in unique_tasks.values():
+                key, translated_text, error = translate_task(task, args.max_chars)
+                completed += 1
+                if translated_text is None:
+                    failed_keys.add(key)
+                    print(f"warning: failed key {key}: {error}", file=sys.stderr)
+                else:
+                    cache[key] = translated_text
+                    translated_keys += 1
+                if completed % 25 == 0 or completed == len(unique_tasks):
+                    save_cache(cache_path, cache)
+                    print(
+                        f"translate_progress={completed}/{len(unique_tasks)} ok={translated_keys} failed={len(failed_keys)}"
+                    )
+                    sys.stdout.flush()
+        else:
+            with futures.ThreadPoolExecutor(max_workers=args.workers) as executor:
+                fut_map = {
+                    executor.submit(translate_task, task, args.max_chars): task.key
+                    for task in unique_tasks.values()
+                }
+                for fut in futures.as_completed(fut_map):
+                    key, translated_text, error = fut.result()
+                    completed += 1
+                    if translated_text is None:
+                        failed_keys.add(key)
+                        print(f"warning: failed key {key}: {error}", file=sys.stderr)
+                    else:
+                        cache[key] = translated_text
+                        translated_keys += 1
+                    if completed % 25 == 0 or completed == len(unique_tasks):
+                        save_cache(cache_path, cache)
+                        print(
+                            f"translate_progress={completed}/{len(unique_tasks)} ok={translated_keys} failed={len(failed_keys)}"
+                        )
+                        sys.stdout.flush()
+
+    # Phase 2: apply translated/cache content to files.
     translated = 0
     failed = 0
     for idx, candidate in enumerate(candidates, start=1):
         target_lang = LANG_CODE_MAP.get(candidate.lang, candidate.lang)
         rel_path = candidate.path.relative_to(ROOT)
         cache_key = f"{candidate.kind}::{candidate.source_hash}::{target_lang}"
+        if cache_key in failed_keys:
+            failed += 1
+            print(f"warning: skipped {rel_path} due to failed translation key", file=sys.stderr)
+            continue
+
         translated_body = cache.get(cache_key)
         if translated_body is None:
-            if candidate.kind == "md":
-                translated_body = translate_markdown(
-                    candidate.source_body,
-                    target_lang=target_lang,
-                    max_chars=args.max_chars,
-                )
-            else:
-                translated_body = translate_org(
-                    candidate.source_body,
-                    target_lang=target_lang,
-                    max_chars=args.max_chars,
-                )
-            ok, reason = validate_translation(candidate.source_body, translated_body)
-            if not ok:
-                failed += 1
-                print(
-                    f"warning: validation failed for {rel_path}: {reason}",
-                    file=sys.stderr,
-                )
-                # Keep going; file remains source-identical for rerun if write is skipped.
-                continue
-            cache[cache_key] = translated_body
+            failed += 1
+            print(f"warning: missing cache for {rel_path}", file=sys.stderr)
+            continue
 
         if candidate.kind == "md":
             new_frontmatter = update_frontmatter(

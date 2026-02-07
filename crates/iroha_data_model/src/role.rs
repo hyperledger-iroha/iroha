@@ -68,6 +68,7 @@ mod model {
         /// Permission tokens.
         pub permissions: Permissions,
         /// Permission grant epochs (block heights), keyed by permission.
+        #[norito(default)]
         pub permission_epochs: BTreeMap<Permission, u64>,
     }
 

@@ -7,72 +7,73 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 71baf5d038cbe6518fd294fcc1b279dff8aaf092e4a83f6159b699a378e51467
 source_last_modified: "2025-12-29T18:16:34.772429+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Contributing Guide
+# ཕན་འདེབས་ལམ་སྟོན།
 
-Thank you for taking the time to contribute to Iroha 2!
+Iroha ལུ་ཕན་འདེབས་འབད་ནི་ལུ་དུས་ཚོད་བཏང་མི་ལུ་བཀའ་དྲིན་ཆེ།
 
-Please read this guide to learn how you can contribute and which guidelines we expect you to follow. This includes the guidelines about code and documentation as well as our conventions regarding git workflow.
+ཁྱོད་ཀྱིས་ ག་དེ་སྦེ་ ཕན་ཐོགས་འབྱུང་ཚུགས་ག་དང་ ཁྱོད་ཀྱིས་ ལམ་སྟོན་ག་ཅི་ རྗེས་སུ་འཇུག་དགོཔ་ཨིན་ན་ ཤེས་ནིའི་དོན་ལུ་ ལམ་སྟོན་འདི་ལྷག་གནང་། འདི་ནང་ གསང་ཡིག་དང་ཡིག་ཆའི་སྐོར་ལས་ ལམ་སྟོན་དང་ དེ་ལས་ ལཱ་གི་རྒྱུན་རིམ་གྱི་སྐོར་ལས་ ང་བཅས་ཀྱིས་ ཆིངས་ཡིག་ཚུ་ཚུདཔ་ཨིན།
 
-Reading these guidelines will save you time later.
+ལམ་སྟོན་འདི་ཚུ་ལྷག་མི་འདི་གིས་ ཤུལ་ལས་ དུས་ཚོད་བསྲུང་འོང་།
 
-## How Can I Contribute?
+### ཕན་ཐབས་གང་འདྲ་འདུག་གམ།
 
-There are a lot of ways you could contribute to our project:
+ང་བཅས་ཀྱི་ལས་འགུལ་ལུ་ ཁྱོད་ཀྱིས་ ཕན་ཐོགས་འབད་ཚུགས་པའི་ ཐབས་ལམ་ལེ་ཤ་ཅིག་རང་ཡོདཔ་ཨིན།
 
-- Report [bugs](#reporting-bugs) and [vulnerabilities](#reporting-vulnerabilities)
-- [Suggest improvements](#suggesting-improvements) and implement them
-- [Ask questions](#asking-questions) and engage with the community
+- [bugs](I18NU0000043X)དང་ [ཉེན་ཁ་](I18NU0000044X)
+- [#suggesting-improvements) དང་དེ་དག་ལག་ལེན།
+- [དྲི་བ་དྲིས་ལན་](I18NU0000046X) དང་མི་སྡེ་དང་མཉམ་ཞུགས།
 
-New to our project? [Make your first contribution](#your-first-code-contribution)!
+ང་བཅས་ཀྱི་ལས་འགུལ་ནང་གསར? [ཁྱོད་ཀྱི་ཕན་འདེབས་དང་པོ་བཟོ](I18NU000004X)!
 
 ### TL;DR
 
-- Find [ZenHub](https://app.zenhub.com/workspaces/iroha-v2-60ddb820813b9100181fc060/board?repos=181739240).
-- Fork [Iroha](https://github.com/hyperledger-iroha/iroha/tree/main).
-- Fix your issue of choice.
-- Ensure you follow our [style guides](#style-guides) for code and documentation.
-- Write [tests](https://doc.rust-lang.org/cargo/commands/cargo-test.html). Ensure they all pass (`cargo test --workspace`). If you touch the SM cryptography stack, also run `cargo test -p iroha_crypto --features "sm sm_proptest"` to execute the optional fuzz/property harness.
-  - Note: Tests that exercise the IVM executor will automatically synthesize a minimal, deterministic executor bytecode if `defaults/executor.to` is not present. No pre-step is required to run tests. To generate the canonical bytecode for parity, you can run:
+- [ཟེན་ཧུབ་](I18NU0000048X)ལས་འཚོལ།
+- ཕོརཀ་ [Iroha](https://github.com/hyperledger-iroha/iroha/tree/main).
+- ཁྱོད་རའི་གདམ་ཁ་གི་གནད་དོན་འདི་ བདེ་སྒྲིག་འབད།
+- གསང་ཡིག་དང་ཡིག་ཆ་ཚུ་གི་དོན་ལུ་ ང་བཅས་ཀྱི་ [Ityle ལམ་སྟོན་](I18NU0000050X) ལུ་ རྗེས་སུ་འཇུག་དགོཔ་ངེས་གཏན་བཟོ།
+- བྲིས། [བརྟག་དཔྱད་](I18NU0000051X). དེ་ཚུ་ག་ར་འགྱོ་དགོཔ་ངེས་གཏན་བཟོ།(`cargo test --workspace`) ཁྱོད་ཀྱིས་ ཨེསི་ཨེམ་ ཀིརིཔ་ཊོ་གཱ་ར་ཕི་ བང་རིམ་ལུ་ ལགཔ་བརྐྱབ་པ་ཅིན་ གདམ་ཁ་ཅན་གྱི་ ཕཱཛ་/རྒྱུ་དངོས་ཀྱི་ ལག་ཆས་ཚུ་ ལག་ལེན་འཐབ་ནི་ལུ་ `cargo test -p iroha_crypto --features "sm sm_proptest"` ཡང་ གཡོག་བཀོལ།
+  - དྲན་འཛིན་: `defaults/executor.to` འདི་མེད་པ་ཅིན་ IVM ལག་ལེན་འཐབ་མི་འདི་གིས་ རང་བཞིན་གྱིས་ ཉུང་མཐའ་ཉུང་ཤོས་ཅིག་ མཉམ་བསྡོམས་འབད་འོང་། བརྟག་དཔྱད་ཚུ་གཡོག་བཀོལ་ནིའི་དོན་ལུ་ སྔོན་འགྲོའི་གོམ་པ་མེད། ཆ་སྙོམས་ཀྱི་དོན་ལུ་ ཀེ་ནོ་ནིག་བཱའིཊི་ཀོཌི་འདི་བཟོ་བཏོན་འབད་ནི་ལུ་ ཁྱོད་ཀྱིས་གཡོག་བཀོལ་ཚུགས།
     - `cargo run --manifest-path scripts/generate_executor_to/Cargo.toml`
     - `cargo run --manifest-path scripts/regenerate_codec_samples/Cargo.toml`
-- If you change derive/proc-macro crates, run the trybuild UI suites via
-  `make check-proc-macro-ui` (or
-  `PROC_MACRO_UI_CRATES="crate1 crate2" make check-proc-macro-ui`) and refresh
-  `.stderr` fixtures when diagnostics change to keep messages stable.
-- Run `make dev-workflow` (wrapper around `scripts/dev_workflow.sh`) to execute fmt/clippy/build/test with `--locked` plus `swift test`; expect `cargo test --workspace` to take hours and use `--skip-tests` only for quick local loops. See `docs/source/dev_workflow.md` for the full runbook.
-- Enforce guardrails with `make check-agents-guardrails` to block `Cargo.lock` edits and new workspace crates, `make check-dependency-discipline` to fail on new dependencies unless explicitly allowed, and `make check-missing-docs` to prevent new `#[allow(missing_docs)]` shims, missing crate-level docs on touched crates, or new public items without doc comments (the guard refreshes `docs/source/agents/missing_docs_inventory.{json,md}` via `scripts/inventory_missing_docs.py`). Add `make check-tests-guard` so changed functions fail unless unit tests reference them (inline `#[cfg(test)]`/`#[test]` blocks or crate `tests/`; existing coverage counts) and `make check-docs-tests-metrics` so roadmap changes are paired with docs, tests, and metrics/dashboards. Keep TODO enforcement via `make check-todo-guard` so TODO markers are not dropped without accompanying docs/tests. `make check-env-config-surface` regenerates the env-toggle inventory and now fails when new **production** env shims appear relative to `AGENTS_BASE_REF`; set `ENV_CONFIG_GUARD_ALLOW=1` only after documenting intentional additions in the migration tracker. `make check-serde-guard` refreshes the serde inventory and fails on stale snapshots or new production `serde`/`serde_json` hits; set `SERDE_GUARD_ALLOW=1` only with an approved migration plan. Keep large deferrals visible via TODO breadcrumbs and follow-up tickets instead of deferring silently. Run `make check-std-only` to catch `no_std`/`wasm32` cfgs and `make check-status-sync` to ensure `roadmap.md` open items remain open-only and that roadmap/status changes land together; set `STATUS_SYNC_ALLOW_UNPAIRED=1` only for rare status-only typo fixes after pinning `AGENTS_BASE_REF`. For a single invocation, use `make agents-preflight` to run all guardrails together.
-- Run local serialization guards before pushing: `make guards`.
-  - This denies direct `serde_json` in production code, disallows new direct serde deps outside allowlist, and prevents ad‑hoc AoS/NCB helpers outside `crates/norito`.
-- Optionally dry-run Norito feature matrix locally: `make norito-matrix` (uses a fast subset).
-  - For full coverage, run `scripts/run_norito_feature_matrix.sh` without `--fast`.
-  - To include a downstream smoke per combo (default crate `iroha_data_model`): `make norito-matrix-downstream` or `scripts/run_norito_feature_matrix.sh --fast --downstream [crate]`.
-- For proc-macro crates, add a `trybuild` UI harness (`tests/ui.rs` + `tests/ui/pass`/`tests/ui/fail`) and commit `.stderr` diagnostics for the failing cases. Keep diagnostics stable and non-panicking; refresh fixtures with `TRYBUILD=overwrite cargo test -p <crate> -F trybuild-tests` and guard them with `cfg(all(feature = "trybuild-tests", not(coverage)))`.
-- Perform pre-commit routine like formatting & artifacts regeneration (see [`pre-commit.sample`](./hooks/pre-commit.sample))
-- With the `upstream` set to track [Hyperledger Iroha repository](https://github.com/hyperledger-iroha/iroha), `git pull -r upstream main`, `git commit -s`, `git push <your-fork>`, and [create a pull request](https://github.com/hyperledger-iroha/iroha/compare) to the `main` branch. Ensure it follows the [pull request guidelines](#pull-request-etiquette).
+- ཁྱོད་ཀྱིས་ derive/proc-macro crets བསྒྱུར་བཅོས་འབད་བ་ཅིན་ trybuild UI ཆ་སྙོམས་ཚུ་ བརྒྱུད་དེ་ གཡོག་བཀོལ།
+  `make check-proc-macro-ui` (ཡང་ན་
+  `PROC_MACRO_UI_CRATES="crate1 crate2" make check-proc-macro-ui`) དང་གསར་བསྐྲུན།
+  འཕྲིན་དོན་ཚུ་ བརྟན་ཏོག་ཏོ་སྦེ་བཞག་ནི་ལུ་ ནད་བརྟག་བསྒྱུར་བཅོས་འབད་བའི་སྐབས་ `.stderr` བརྟན་བཞུགས་ཚུ།
+- I18NI0000000000123X གཡོག་བཀོལ། (I18NI000000124X གི་མཐའ་འཁོར་ལུ་ Wrapper) fmt/clippy/build/test ལག་ལེན་འཐབ་ནིའི་དོན་ལུ་ I18NI0000000X དང་ཅིག་ཁར་ I18NI000000126X; རེ་བ་འདི་ `cargo test --workspace` ལུ་ ཆུ་ཚོད་འགོར་ནི་དང་ `--skip-tests` འདི་ ས་གནས་ཀྱི་བསྐྱར་འཁོར་མགྱོགས་དྲགས་ཚུ་གི་དོན་ལུ་རྐྱངམ་ཅིག་ ལག་ལེན་འཐབ་དགོ། རན་དེབ་ཆ་ཚང་གི་དོན་ལུ་ `docs/source/dev_workflow.md` ལུ་བལྟ།
+- Enforce guardrails with `make check-agents-guardrails` to block `Cargo.lock` edits and new workspace crates, `make check-dependency-discipline` to fail on new dependencies unless explicitly allowed, and `make check-missing-docs` to prevent new `#[allow(missing_docs)]` shims, missing crate-level docs ལུ་ཐུག་པའི་ ཀྲེཊ་ ཡང་ན་ མི་མང་གི་ཅ་ཆས་གསརཔ་ ཡིག་ཆ་ཚུ་ བསམ་འཆར་མེད་པར་ (སྲུང་སྐྱོབ་པ་གིས་ I18NI000000135X བརྒྱུད་དེ་ I18NI000000000136X བརྒྱུད་དེ་ གསར་བསྐྲུན་འབདཝ་ཨིན།) Add `make check-tests-guard` so changed functions fail unless unit tests reference them (inline `#[cfg(test)]`/`#[test]` blocks or crate `tests/`; existing coverage counts) and `make check-docs-tests-metrics` so roadmap changes are paired with docs, tests, and མེ་ཊིགསི་/ཌེཤ་བོརཌི་ཚུ། `make check-todo-guard` བརྒྱུད་དེ་ TODO བསྟར་སྤྱོད་འབད་བཞག་དགོཔ་ལས་ TODO རྟགས་ཚུ་ ཌོཀ་/བརྟག་དཔྱད་ཚུ་ མཉམ་སྦྲགས་མེད་པར་ བཀོག་བཞག་མི་བཏུབ། I18NI000000143X གིས་ env-topggle inutormory འདི་ བསྐྱར་བཟོ་འབདཝ་ཨིནམ་དང་ ད་ལྟོ་ **ཐོན་སྐྱེད་** env ཤིམ་ཚུ་ I18NI000000144X དང་འབྲེལ་བའི་ གསརཔ་ཐོན་པའི་སྐབས་ འཐུས་ཤོར་བྱུངམ་ཨིན། set `ENV_CONFIG_GUARD_ALLOW=1` གནས་སྤོ་འཚོལ་ཞིབ་ནང་ དམིགས་ཡུལ་ཅན་གྱི་ཁ་སྐོང་ཚུ་ ཡིག་ཐོག་ལུ་བཀོད་པའི་ཤུལ་ལས་རྐྱངམ་ཅིག་ཨིན། I18NI000000146X སར་ཌི་ཐོ་གཞུང་འདི་ གསར་བསྐྲུན་འབད་ཞིནམ་ལས་ ཐོན་སྐྱེད་གསརཔ་ I18NI000000147X/`serde_json` གི་ ཧིཊ་ཚུ་ གསར་བསྐྲུན་འབདཝ་ཨིན། གཞི་སྒྲིག་ `SERDE_GUARD_ALLOW=1` ཆ་འཇོག་གྲུབ་པའི་ གནས་སྤོ་འཆར་གཞི་ཅིག་དང་གཅིག་ཁར་རྐྱངམ་ཅིག་ཨིན། ཕར་འགྱངས་སྦོམ་ཚུ་ TODO བག་ལེབ་བརྒྱུད་དེ་ མཐོང་ཚུགསཔ་མ་ཚད་ ཁུ་སིམ་སིམ་སྦེ་ ཕར་འགྱངས་འབད་ནིའི་ཚབ་ལུ་ རྗེས་འཇུག་གི་ཤོག་བྱང་ཚུ་ མཐོང་ཚུགསཔ་ཨིན། I18NI000000000000150X འདི་ `no_std`/`wasm32` དང་ I18NI000000153X ཁ་ཕྱེ་ནིའི་དོན་ལུ་ I18NI0000000154X ཁ་ཕྱེ་ཡོད་པའི་རྣམ་གྲངས་ཚུ་ ཁ་ཕྱེ་མ་ཚུགས་པར་ལུས་ཡོདཔ་དང་ ལམ་གྱི་ས་ཁྲ་འདི་གཅིག་ཁར་བསྒྱུར་བཅོས་འབད་ཡོདཔ་ཨིན། set `STATUS_SYNC_ALLOW_UNPAIRED=1` I18NI0000156X བཙུགས་པའི་ཤུལ་ལས་ དཀོན་དྲགས་ཅན་གྱི་གནས་ཚད་རྐྱངམ་གཅིག་གི་ ཡིག་གཟུགས་བཟོ་ནིའི་དོན་ལུ་རྐྱངམ་ཅིག་ཨིན། འབོད་བརྡ་གཅིག་གི་དོན་ལུ་ `make agents-preflight` ལག་ལེན་འཐབ།
+- བསྐུལ་མ་མ་འབད་བའི་ཧེ་མ་ ས་གནས་ཀྱི་རིམ་སྒྲིག་སྲུང་སྐྱོབ་པ་ཚུ་ གཡོག་བཀོལ།: I18NI000000158X.
+  - འདི་གིས་ བཟོ་བསྐྲུན་གྱི་གསང་ཡིག་ནང་ ཐད་ཀར་དུ་ `serde_json` གིས་ ཐད་ཀར་གྱི་ སར་རིམ་ཌི་པིཔ་གསརཔ་ བཀག་ཆ་འབད་བཅུག་དོ་ཡོདཔ་མ་ཚད་ I18NI000000160X གི་ཕྱི་ཁར་ AoS/NCB གྲོགས་རམ་པ་ཚུ་ བཀག་ཆ་འབདཝ་ཨིན།
+- གདམ་ཁ་ཅན་སྦེ་སྐམ་ཡོད་མི་ Norito ཁྱད་རྣམ་མེ་ཊིགསི་ས་གནས་: I18NI000000161X (མགྱོགས་དྲགས་སྦེ་ཆ་ཚན་འོག་མ་ཅིག་ལག་ལེན་འཐབ་ཨིན།)
+  - ཁྱབ་ཚད་ཆ་ཚང་གི་དོན་ལུ་ `scripts/run_norito_feature_matrix.sh` མེད་པར་ I18NI000000163X གཡོག་བཀོལ།
+  - ཀོམ་བོ་རེ་ལུ་ མར་ཁུའི་དུ་བ་ཅིག་བཙུགས་ནིའི་དོན་ལུ་ (སྔོན་སྒྲིག་ཀྲེ་ `iroha_data_model`): I18NI000000165X ཡང་ན་ I18NI000000166X.
+- proc-macro crets གི་དོན་ལུ་ I18NI000000167X UI ཧར་ནེསི་ (`tests/ui.rs` + `tests/ui/pass`/I18NI000000000000X) དང་ ཁས་བླངས་པ་ I18NI0000170X ཁ་སྐོང་འབད། བརྟག་དཔྱད་ཚུ་ བརྟན་ཏོག་ཏོ་དང་ ཚ་གྱང་མེདཔ་སྦེ་བཞག་དགོ། I18NI000000172X དང་བཅས་པའི་སྒྲིག་བཀོད་ཚུ་ བསྐྱར་བཟོ་འབད་དེ་ `cfg(all(feature = "trybuild-tests", not(coverage)))` གིས་ དེ་ཚུ་ལུ་སྲུང་སྐྱོབ་འབད།
+- རྩ་སྒྲིག་དང་ ཅ་རྙིང་ཚུ་བཟུམ་གྱི་ སྔོན་འགྲོའི་ཁས་བླངས་རྒྱུན་རིམ་འབད་ནི།( [`pre-commit.sample`](./hooks/pre-commit.sample) བལྟ།)
+- With the `upstream` set to track [Hyperledger Iroha repository](https://github.com/hyperledger-iroha/iroha), `git pull -r upstream main`, `git commit -s`, `git push <your-fork>`, and [create a འདྲུད་པའི་ཞུ་བ་](I18NU0000054X) I18NI000000179X ཡན་ལག་ལུ། [pull ཞུ་བ་ལམ་སྟོན་](I18NU0000055X) གི་རྗེས་སུ་འབྲང་བའི་ངེས་གཏན་བཟོ།
 
-### AGENTS workflow quickstart
+### AGENTS ལཱ་གི་རྒྱུན་རིམ་མགྱོགས་པ།
 
-- Run `make dev-workflow` (wrapper around `scripts/dev_workflow.sh`, documented in `docs/source/dev_workflow.md`). It wraps `cargo fmt --all`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo build/test --workspace --locked` (tests can take several hours), and `swift test`.
-- Use `scripts/dev_workflow.sh --skip-tests` or `--skip-swift` for faster iterations; rerun the full sequence before opening a pull request.
-- Guardrails: avoid touching `Cargo.lock`, adding new workspace members, introducing new dependencies, adding new `#[allow(missing_docs)]` shims, omitting crate-level docs, skipping tests when changing functions, dropping TODO markers without docs/tests, or reintroducing `no_std`/`wasm32` cfgs without approval. Run `make check-agents-guardrails` (or `AGENTS_BASE_REF=origin/main bash ci/check_agents_guardrails.sh`) plus `make check-dependency-discipline`, `make check-missing-docs` (refreshes `docs/source/agents/missing_docs_inventory.{json,md}`), `make check-tests-guard` (fails when production functions change without unit-test evidence—either tests change in the diff or existing tests must reference the function), `make check-docs-tests-metrics` (fails when roadmap changes lack docs/tests/metrics updates), `make check-todo-guard`, `make check-env-config-surface` (fails on stale inventories or new production env toggles; override with `ENV_CONFIG_GUARD_ALLOW=1` only after updating docs), and `make check-serde-guard` (fails on stale serde inventories or new production serde hits; override with `SERDE_GUARD_ALLOW=1` only with an approved migration plan) locally for early signal, `make check-std-only` for the std-only guard, and keep `roadmap.md`/`status.md` in sync with `make check-status-sync` (set `STATUS_SYNC_ALLOW_UNPAIRED=1` only for rare status-only typo fixes after pinning `AGENTS_BASE_REF`). Use `make agents-preflight` if you want a single command to run all guards before opening a PR.
+- `make dev-workflow` གཡོག་བཀོལ་ (I18NI000000181X གི་མཐའ་འཁོར་ལུ་ Wrapper, `docs/source/dev_workflow.md`) དེ་གིས་ `cargo fmt --all`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, I18NI0000000185X (བརྟག་དཔྱད་ཚུ་ཆུ་ཚོད་ལེ་ཤ་ཅིག་འགོར་ཚུགས།) དེ་ལས་ `swift test` ཚུ་ཨིན།
+- བསྐྱར་བརྗོད་མགྱོགས་དྲགས་ཀྱི་དོན་ལུ་ `scripts/dev_workflow.sh --skip-tests` ཡང་ན་ `--skip-swift` ལག་ལེན་འཐབ། འཐེན་ནི་གི་ཞུ་བ་ཁ་ཕྱེ་པའི་ཧེ་མ་ གོ་རིམ་ཆ་ཚང་འདི་ ལོག་གཡོག་བཀོལ།
+- གཱར་ཌི་རེལསི་: `Cargo.lock` ལུ་ ལགཔ་བརྐྱབ་ནི་ལས་ འཛེམ་སྟེ་ ལཱ་གི་ས་སྒོ་འཐུས་མི་གསརཔ་ཚུ་ ཁ་སྐོང་བརྐྱབ་ནི་དང་ བརྟེན་གསརཔ་ངོ་སྤྲོད་འབད་ནི་ `#[allow(missing_docs)]` གི་གདོང་གསརཔ་ཁ་སྐོང་ ལས་འགན་ཚུ་བསྒྱུར་བཅོས་འབད་བའི་སྐབས་ ཀེརེ་ཊི་གནས་རིམ་གྱི་ ཌོཀ་ཚུ་ བཀོདཔ་ཨིན། `no_std`/`wasm32` ཆ་འཇོག་མེད་པར་ cfgs. `make check-agents-guardrails` (ཡང་ན་ `AGENTS_BASE_REF=origin/main bash ci/check_agents_guardrails.sh`) དང་ I18NI000000195X, `make check-missing-docs` (Refreshes I18NI000000197X), `make check-tests-guard` (བཟོ་བསྐྲུན་ལས་འགན་ཚུ་ བསྒྱུར་བཅོས་འབད་བའི་སྐབས་ འཐུད་པའི་སྐབས་ ཆ་སྙོམས་བརྟག་དཔྱད་ཚུ་—ཚད་གཞི་བརྟག་དཔྱད་ཚུ་ བསྒྱུར་བཅོས་འབད་ཡོདཔ་ཨིན། དབྱེ་བ་ཡང་ན་ ད་ལྟོ་ཡོད་པའི་བརྟག་དཔྱད་ཚུ་ ལཱ་འགན་ལུ་གཞི་བསྟུན་འབད་དགོ།) `make check-docs-tests-metrics` (ལམ་ཐིག་བསྒྱུར་བཅོས་འབད་བའི་སྐབས་ ཡིག་ཆ་/བརྟག་དཔྱད་/མེ་ཊིག་དུས་མཐུན་ཚུ་མེད་པའི་སྐབས་) I18NI0000000201X (ལམ་ཐིག་གསརཔ་ ཡང་ན་ ཐོན་སྐྱེད་ en en en en en enbytogges དང་ I18NI0000202020202019 docs དུས་མཐུན་བཟོ་བའི་ཤུལ་ལས་ `make check-serde-guard` (Serde གི་ཐོ་གཞུང་གསརཔ་དང་ ཡང་ན་ བཟོ་བསྐྲུན་སར་ཌི་གསརཔ་གི་ རྐང་རིལ་ཚུ་ ཆ་འཇོག་འབད་མི་ གནས་སྤོ་འཆར་གཞི་དང་གཅིག་ཁར་རྐྱངམ་ཅིག་ བཀག་ཆ་འབད་ཡོདཔ་ཨིན། `roadmap.md`/`status.md` ནང་ I18NI000000208X (I18NI000000009X གཞི་སྒྲིག་འབད་ (`STATUS_SYNC_ALLOW_UNPAIRED=1` གཞི་སྒྲིག་འབད་ཡོདཔ་ཨིན་ དཀོན་དྲགས་ཅན་གྱི་གནས་ཚད་རྐྱངམ་ཅིག་གི་ཡིག་གཟུགས་ཚུ་གི་དོན་ལུ་རྐྱངམ་ཅིག་ `AGENTS_BASE_REF`) ཁྱོད་ཀྱིས་ པི་ཨར་ ཁ་ཕྱེ་མ་ཚར་བའི་ཧེ་མ་ བརྡ་བཀོད་གཅིག་གིས་ བརྡ་བཀོད་ཅིག་ གཡོག་བཀོལ་ནི་ལུ་ བརྡ་བཀོད་གཅིག་ གཡོག་བཀོལ་ནི་ལུ་ `make agents-preflight` ལག་ལེན་འཐབ།
 
-### Reporting Bugs
+### སྙན་ཞུ།
 
-A *bug* is an error, design flaw, failure or fault in Iroha that causes it to produce an incorrect, unexpected, or unintended result or behaviour.
+A *bug* འདི་ འཛོལ་བ་དང་ བཟོ་བཀོད་ཀྱི་སྐྱོན་ འཐུས་ཤོར་ ཡང་ན་ འཛོལ་བ་ཨིན། Iroha དེ་གིས་ འཛོལ་བ་དང་ རེ་བ་མེད་པའི་ ཡང་ན་ མནོ་མེད་ཀྱི་གྲུབ་འབྲས་ ཡང་ན་ སྤྱོད་ལམ་ཚུ་ བཏོན་བཅུགཔ་ཨིན།
 
-We track Iroha bugs via [GitHub Issues](https://github.com/hyperledger-iroha/iroha/issues?q=is%3Aopen+is%3Aissue+label%3ABug) labeled with the `Bug` tag.
+ང་བཅས་ཀྱིས་ I18NT000000008X འདི་ [GitHub Issuesues](I18NU0000000066X) བརྒྱུད་དེ་ `Bug` རྟགས་བཀལ་ཡོད་པའི་རྟགས་བཀལ་ཡོདཔ་ཨིན།
 
-When you create a new issue, there is a template for you to fill in. Here's the checklist of what you should do when you are reporting bugs:
-- [ ] Add the `Bug` tag
-- [ ] Explain the issue
-- [ ] Provide a minimum working example
-- [ ] Attach a screenshot
+ཁྱོད་ཀྱིས་གནད་དོན་གསརཔ་ཅིག་གསར་བསྐྲུན་འབད་བའི་སྐབས་ ཁྱོད་ཀྱིས་བཀང་ནིའི་དོན་ལུ་ ཊེམ་པེལེཊི་ཅིག་ཡོདཔ་ཨིན།
+- [ ] `Bug` ངོ་རྟགས་བསྣན་ཡོད།
+- [ ] དོན་འགྲེལ་བྱེད་པ།
+- [ ] [ ] ལས་ཉུང་བ་ཉུང་མཐའི་ལས་ཀ་དཔེ་གཞི།
+- [ ] གསལ་གཞིའི་པར་བཤུས་པ།
 
-<details> <summary>Minimum working example</summary>
+<ཞིབ་ཕྲན> <བསྡོམས་རྩིས་>ལས་ཉུང་པའི་དཔེ་</m་མ་རི>།
 
-For each bug, you should provide a [minimum working example](https://en.wikipedia.org/wiki/Minimal_working_example). For example:
+རྐྱེན་རེ་རེ་གི་དོན་ལུ་ ཁྱོད་ཀྱིས་ [ཉུང་མཐའ་ལཱ་འབད་བའི་དཔེ་](I18NU0000057X) བྱིན་དགོ། དཔྱེ༌འབད༌བ༌ཅིན:
 
 ```
 # Minting negative Assets with value spec `Numeric`.
@@ -98,30 +99,30 @@ not to be able to mint negative values
 </details>
 
 ---
-**Note:** Issues such as outdated documentation, insufficient documentation, or feature requests should use the `Documentation` or `Enhancement` labels. They are not bugs.
+**དྲན་འཛིན་:** ཕྱིར་འཐོན་ཡིག་ཆ་མ་ལང་པའི་ཡིག་ཆ་དང་ཡིག་ཆ་ལངམ་སྦེ་མེད་མི་ ཡང་ན་ ཁྱད་རྣམ་ཞུ་བ་ཚུ་བཟུམ་གྱི་གནད་དོན་ཚུ་ I18NI000000214X ཡང་ན་ I18NI000000215X ཁ་ཡིག་ཚུ་ལག་ལེན་འཐབ་དགོ། དེ་ཚུ་འབུཔ་མེན།
 
 ---
 
-### Reporting Vulnerabilities
+### སྙན་ཞུའི་ཉེན་ཁ་ཅན།
 
-While we are proactive in preventing security problems, it is possible that you might come across a security vulnerability before we do.
+ང་བཅས་ཀྱིས་ ཉེན་སྲུང་གི་དཀའ་ངལ་ཚུ་ བཀག་ཐབས་ལུ་ བརྩོན་ཤུགས་བསྐྱེད་དོ་ཡོད་རུང་ ང་བཅས་ཀྱིས་ མ་འབད་བའི་ཧེ་མ་ ཉེན་སྲུང་གི་ ཉེན་ཁ་ཅན་ཅིག་ འཐོན་འོང་མནོ་བའི་ འོས་འབབ་ཡོདཔ་ཨིན།
 
-- Before the First Major Release (2.0) all vulnerabilities are considered bugs, so feel free to submit them as bugs [following the instructions above](#reporting-bugs).
-- After the First Major Release, use our [bug bounty program](https://hackerone.com/hyperledger) to submit vulnerabilities and get your reward.
+- དང་པ་ གསར་བཏོན་འབད་མི་ (༢.༠) གི་ཧེ་མ་ ཉེན་ཁ་ཆ་མཉམ་རང་ འཛོལ་བ་སྦེ་ བརྩི་དོ་ཡོདཔ་ལས་ དེ་ཚུ་ འབུཔ་བཟུམ་སྦེ་ བཙུགས་དགོཔ་ཨིན།
+- དང་པ་ གསར་བཏོན་འབད་བའི་ཤུལ་ལས་ ང་བཅས་རའི་ [bug bounty ལས་རིམ་](https://hackerone.com/hyperledger) འདི་ ཉེན་ཁ་ཅན་ཚུ་ བཙུགས་ཞིནམ་ལས་ ཁྱོད་རའི་ གསོལ་རས་ཐོབ་ནིའི་དོན་ལུ་ ལག་ལེན་འཐབ།
 
-:exclamation: To minimize the damage caused by an unpatched security vulnerability, you should disclose the vulnerability directly to Hyperledger as soon as possible and **avoid disclosing the same vulnerability publicly** for a reasonable period of time.
+:exclament: གནོད་སྐྱོན་བྱུང་བའི་གནོད་སྐྱོན་འདི་ མར་ཕབ་འབད་ནིའི་དོན་ལུ་ ཁྱོད་ཀྱིས་ ཉེན་ཁ་འདི་ ག་དེ་དྲག་དྲག་ Hyperledger ལུ་ ཐད་ཀར་དུ་ གསལ་བསྒྲགས་འབད་དགོཔ་ཨིན།
 
-If you have any questions regarding our handling of security vulnerabilities, please feel free to contact any of the currently active maintainers in Rocket.Chat private messages.
+ང་བཅས་ཀྱིས་ ཉེན་སྲུང་གི་ཉེན་ཁ་ཚུ་ འཛིན་སྐྱོང་འཐབ་མི་དང་འབྲེལ་བའི་ དྲི་བ་ཚུ་ཡོད་པ་ཅིན་ ད་ལྟོ་ཡོད་པའི་ བདག་འཛིན་འཐབ་མི་ཚུ་ རོ་ཀེཊ་.ཁ་བརྡ་སྒེར་གྱི་འཕྲིན་དོན་ཚུ་ནང་ འབྲེལ་བ་འཐབ་གནང་།
 
-### Suggesting Improvements
+### ལེགས་བཅོས་བསམ་པ།
 
-Create [an issue](https://github.com/hyperledger-iroha/iroha/issues/new) on GitHub with the appropriate tags (`Optimization`, `Enhancement`) and describe the improvement you are suggesting. You may leave this idea for us or someone else to develop, or you may implement it yourself.
+གིཊི་ཧབ་ནང་ འོས་འབབ་ཅན་གྱི་ངོ་རྟགས་ཚུ་དང་གཅིག་ཁར་ [I18NU0000060X) གསར་བསྐྲུན་འབད་ཞིནམ་ལས་ ཁྱོད་ཀྱིས་བསམ་འཆར་བཀོད་མི་ ཡར་རྒྱས་ཚུ་ འགྲེལ་བཤད་རྐྱབ་དགོ། ཁྱོད་ཀྱིས་ བསམ་འཆར་འདི་ ང་བཅས་ལུ་ཡང་ན་ གཞན་མི་ཅིག་ལུ་ གོང་འཕེལ་གཏང་ནིའི་དོན་ལུ་ བཞག་འོང་ ཡང་ན་ ཁྱོད་ར་གིས་ ལག་ལེན་འཐབ་ཚུགས།
 
-If you intend to implement the suggestion yourself, do the following:
+ཁྱོད་ཀྱིས་བསམ་འཆར་འདི་ རང་གིས་རང་ ལག་ལེན་འཐབ་ནི་གི་མནོ་བསམ་བཏང་པ་ཅིན་ གཤམ་གསལ་གྱི་ལཱ་ཚུ་འབད་དགོ།
 
-1. Assign the issue you created to yourself **before** you start working on it.
-2. Work on the feature you suggested and follow our [guidelines for code and documentation](#style-guides).
-3. When you are ready to open a pull request, make sure you follow the [pull request guidelines](#pull-request-etiquette) and mark it as implementing the previously created issue:
+༡ ཁྱོད་ཀྱིས་ཁྱོད་རང་ལུ་བཟོ་ཡོད་པའི་གནད་དོན་འདི་ **ཧེ་མའི་** ཁྱོད་ཀྱིས་ལཱ་འབད་ནི་འགོ་བཙུགསཔ་ཨིན།
+༢ ཁྱོད་ཀྱིས་བསམ་འཆར་བཀོད་པའི་ཁྱད་རྣམ་དང་ ང་བཅས་ཀྱི་ལམ་སྟོན་ཚུ་ [#style-guides) གུ་ལཱ་འབད།
+༣ ཁྱོད་ཀྱིས་ འཐེན་ནི་གི་ཞུ་བ་ཁ་ཕྱེ་ནི་ལུ་ གྲ་སྒྲིག་འབད་བའི་སྐབས་ ཁྱོད་ཀྱིས་ [pull ཞུ་བ་ལམ་སྟོན་](#pull-request-etiquette) འདི་ ཧེ་མ་ལས་གསར་བསྐྲུན་འབད་ཡོད་པའི་གནད་དོན་འདི་ ལག་ལེན་འཐབ་ནིའི་དོན་ལུ་ རྟགས་བཀལ་དགོ།
 
    ```
    feat: Description of the feature
@@ -131,157 +132,153 @@ If you intend to implement the suggestion yourself, do the following:
    Closes #1234
    ```
 
-4. If your change requires an API change, use the `api-changes` tag.
+༤ ཁྱོད་ཀྱི་བསྒྱུར་བཅོས་ལུ་ ཨེ་པི་ཨའི་བསྒྱུར་བཅོས་དགོ་པ་ཅིན་ `api-changes` ངོ་རྟགས་ལག་ལེན་འཐབ།
 
-   **Note:** features that require API changes may take longer to implement and approve as they require Iroha library makers to update their code.
+   **དྲན་འཛིན་:** ཁྱད་རྣམ་ཚུ་གིས་ API བསྒྱུར་བཅོས་འབད་དགོ་པའི་ ཁྱད་རྣམ་ཚུ་ ལག་ལེན་འཐབ་ནི་ལུ་ དུས་ཡུན་རིངམ་འགོརཝ་དང་ ཆ་འཇོག་འབད་ནི་ལུ་ ཆ་འཇོག་འབད་དགོ།### དྲི་བ་དྲིས་བ།
 
-### Asking Questions
+དྲི་བ་འདི་ གྲོས་བསྟུན་ག་ཅི་རང་འབད་རུང་ འཛོལ་བ་དང་ ཁྱད་རྣམ་ ཡང་ན་ ཡར་འཕེལ་གྱི་ཞུ་བ་ཡང་མེན།
 
-A question is any discussion that is neither a bug nor a feature or optimization request.
+<ཁ་གསལ་> <summary> དྲི་བ་གང་འདྲ་དྲིས་དགོས་སམ། </sumary>
 
-<details> <summary> How do I ask a question? </summary>
+ཁྱོད་རའི་དྲི་བ་ཚུ་ [ང་བཅས་ཀྱི་འཕྲལ་འཕྲལ་གྱི་བརྡ་འཕྲིན་གྱི་སྟེགས་བུ་གཅིག་](#contact) མི་སྡེ་གི་ལས་བྱེདཔ་དང་འཐུས་མི་ཚུ་གིས་ དུས་ཚོད་ཁར་ ཁྱོད་ལུ་ གྲོགས་རམ་འབད་ཚུགས།
 
-Please post your questions to [one of our instant messaging platforms](#contact) so that the staff and members of the community could help you in a timely manner.
-
-You, as part of the aforementioned community, should consider helping others too. If you decide to help, please do so in a [respectful manner](CODE_OF_CONDUCT.md).
+ཁྱོད་ཀྱིས་ གོང་འཁོད་མི་སྡེ་གི་ཆ་ཤས་ཅིག་སྦེ་ གཞན་ལུ་ཡང་ གྲོགས་རམ་འབད་ནི་ལུ་ བསམ་ཞིབ་འབད་དགོ། ཁྱོད་ཀྱིས་གྲོགས་རམ་འབད་ནི་ལུ་ཐག་བཅད་པ་ཅིན་ [གུས་ཞབས་འབད་ནི](I18NU0000064X) འབད་གནང་།
 
 </details>
 
-## Your First Code Contribution
+## ཁྱོད་ཀྱི་སྒྲིག་གཞི་དང་པོ་འཕྲུལ།
 
-1. Find a beginner-friendly issue among issues with the [good-first-issue](https://github.com/hyperledger-iroha/iroha/labels/good%20first%20issue) label.
-2. Make sure that no one else is working on the issues you have chosen by checking that it is not assigned to anybody.
-3. Assign the issue to yourself so that others can see that someone is working on it.
-4. Read our [Rust Style Guide](#rust-style-guide) before you start writing code.
-5. When you are ready to commit your changes, read the [pull request guidelines](#pull-request-etiquette).
+༡ [I18NU0000065X) མིང་ཚིག་ [I18NU0000065X) ཡོད་པའི་གནད་དོན་ཚུ་གི་གྲལ་ལས་ འགོ་བཙུགས་པའི་མཐུན་འབྲེལ་གྱི་གནད་དོན་ཅིག་འཚོལ།
+༢ ཁྱོད་ཀྱིས་གདམ་ཁ་རྐྱབ་མི་གནད་དོན་ཚུ་ལུ་ གཞན་གྱིས་ལཱ་འབད་མི་བཏུབ་ཟེར་ ངེས་གཏན་བཟོ།
+༣ གནད་དོན་འདི་གིས་ མི་གཞན་གྱིས་ ལཱ་འབད་དོ་ཡོདཔ་སྦེ་ མཐོང་ཚུགས་ནིའི་དོན་ལུ་ གནད་དོན་འདི་ རང་གིས་རང་ལུ་ འགན་སྤྲོད་འབད་དགོ།
+4. ཁྱོད་ཀྱིས་ཨང་རྟགས་འབྲི་ནི་འགོ་མ་བཙུགས་པའི་ཧེ་མ་ ང་བཅས་ཀྱི་ [Rust Style Guide](I18NU0000066X) ལྷག།
+༥ ཁྱོད་རའི་བསྒྱུར་བཅོས་ཚུ་འབད་ནི་ལུ་གྲ་སྒྲིག་ཡོད་པའི་སྐབས་ [pull ཞུ་བ་ལམ་སྟོན་](#pull-request-etiquette) ལྷག་དགོ།
 
-## Pull Request Etiquette
+## པུལ་བསྐྱར་གསོའི་གནས་ཚུལ།
 
-Please [fork](https://docs.github.com/en/get-started/quickstart/fork-a-repo) the [repository](https://github.com/hyperledger-iroha/iroha/tree/main) and [create a feature branch](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-and-deleting-branches-within-your-repository) for your contributions. When working with **PRs from forks**, check [this manual](https://help.github.com/articles/checking-out-pull-requests-locally).
+ཁྱོད་ཀྱི་ཕན་འདེབས་ཚུ་གི་དོན་ལུ་ [fork](I18NU0000068X) [https://github.com/hyperledger-iroha/iroha/tree/main༽ དང་ [ཁྱད་རྣམ་ཡན་ལག་](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-and-deleting-branches-within-your-repository) དང་ [https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-and-deleting-branches-within-your-repository) འདི་ཁྱོད་ཀྱི་ཕན་འདེབས་ཚུ་གི་དོན་ལུ་ཨིན། **PRs དང་ཅིག་ཁར་ལཱ་འབད་བའི་སྐབས་ [https://help.github.com/articles/checking-out-pull-requests-locally) [I18NU0000071X).
 
-#### Working on code contribution:
-- Follow the [Rust Style Guide](#rust-style-guide) and the [Documentation Style Guide](#documentation-style-guide).
-- Ensure that the code you've written is covered by tests. If you fixed a bug, please turn the minimum working example that reproduces the bug into a test.
-- When touching derive/proc-macro crates, run `make check-proc-macro-ui` (or
-  filter with `PROC_MACRO_UI_CRATES="crate1 crate2"`) so trybuild UI fixtures
-  stay in sync and diagnostics remain stable.
-- Document new public APIs (crate-level `//!` and `///` on new items), and run
-  `make check-missing-docs` to verify the guardrail. Call out the docs/tests you
-  added in your pull request description.
+#### གསང་ཡིག་ཕན་འདེབས་གུ་ལཱ་འབད་དོ།
+- [Rust བཟོ་རྣམ་ལམ་སྟོན་](#rust-style-guide) དང་ [ཡིག་ཆའི་བཟོ་རྣམ་ལམ་སྟོན་](#documentation-style-guide) ལུ་རྗེས་སུ་འཇུག་།
+- ཁྱོད་ཀྱིས་བྲིས་ཡོད་པའི་གསང་ཡིག་འདི་ བརྟག་དཔྱད་ཚུ་གིས་ཁྱབ་སྟེ་ཡོདཔ་ངེས་གཏན་བཟོ། ཁྱོད་ཀྱིས་ འཛོལ་བ་ཅིག་ གཏན་བཟོས་འབད་བ་ཅིན་ འཛོལ་བ་འདི་ བརྟག་དཔྱད་ཅིག་ལུ་ བསྐྱར་བཟོ་འབད་མི་ ལཱ་གི་དཔེ་ཉུང་ཤོས་འདི་ བསྒྱིར་གནང་།
+- འབྱུང་ཁུངས་/proc-macro crets ལུ་ ལགཔ་བརྐྱབ་པའི་སྐབས་ `make check-proc-macro-ui` གཡོག་བཀོལ།
+  ཚགས་མ་ `PROC_MACRO_UI_CRATES="crate1 crate2"`) དེ་འབདཝ་ལས་ trybaild UI གི་སྒྲིག་བཀོད་ཚུ།
+  མཉམ་འབྱུང་དང་བརྟག་དཔྱད་ཚུ་ བརྟན་ཏོག་ཏོ་སྦེ་རང་ ལུས་དགོ།
+- མི་མང་ཨེ་པི་ཨའེ་གསརཔ་ (ཀེརེ་ཊི་-གནས་རིམ་ I18NI0000021X དང་ I18NI0000022X རྣམ་གྲངས་གསརཔ་གུ་) དང་ གཡོག་བཀོལ།
+  `make check-missing-docs` སྲུང་འཁོར་བདེན་དཔྱད་འབད་ནིའི་དོན་ལུ་ཨིན། ཡིག་ཆ་/བརྟག་དཔྱད་ཚུ་ བཏོན་གཏང་།
+  ཁྱོད་ཀྱི་འཐེན་པའི་ཞུ་བ་འགྲེལ་བཤད་ནང་ལུ་ཁ་སྐོང་འབད་ཡི།
 
-#### Committing your work:
-- Follow the [Git Style Guide](#git-workflow).
-- Squash your commits [either before](https://www.git-tower.com/learn/git/faq/git-squash/) or [during the merge](https://rietta.com/blog/github-merge-types/).
-- If during the preparation of your pull request your branch got out of date, rebase it locally with `git pull --rebase upstream main`. Alternatively, you may use the drop-down menu for the `Update branch` button and choose the `Update with rebase` option.
+#### ཁྱོད་རའི་ལཱ་ལུ་བརྩོན་ནི།
+- [Git Style Guide](I18NU0000074X) ལུ་རྗེས་སུ་འབྲང་།
+- ཁྱོད་ཀྱི་ཁས་བླངས་ [ཧེ་མ་](I18NU0000075X) ཡང་ན་ [མཉམ་བསྡོམས་](I18NU0000000076X) གི་སྐབས་སུ་ བསྡུ་སྒྲིག་འབད།
+- ཁྱོད་རའི་འཐེན་འཕྲུལ་གྱི་ཞུ་བ་འདི་ གྲ་སྒྲིག་འབད་བའི་སྐབས་ ཁྱོད་རའི་ཡན་ལག་འདི་ ཚེས་གྲངས་ལས་ཕྱི་ཁར་ཐོན་པ་ཅིན་ ས་གནས་ནང་ I18NI0000024X དང་ཅིག་ཁར་ ལོག་སྟེ་གཞི་བསྟུན་འབད། གདམ་ཁ་གཞན་ཅིག་སྦེ་ ཁྱོད་ཀྱིས་ `Update branch` ཨེབ་རྟ་གི་དོན་ལུ་ བཀོག་བཞག་ཐོ་ཡིག་འདི་ལག་ལེན་འཐབ་སྟེ་ `Update with rebase` གདམ་ཁ་འདི་གདམ་ཁ་རྐྱབས།
 
-  In the interest of making this process easier for everyone, try not to have more than a handful of commits for a pull request, and avoid re-using feature branches.
+  བྱ་རིམ་འདི་ ག་ར་ལུ་འཇམ་ཏོང་ཏོ་བཟོ་ནིའི་དོན་ལུ་ འཐེན་དགོ་པའི་ཞུ་བ་འབད་ནིའི་དོན་ལུ་ ཁས་བླངས་འབད་མི་ ལགཔ་གཅིག་ལས་ལྷག་སྟེ་ མ་འགྱོ་བར་ ཁྱད་རྣམ་ཡན་ལག་ཚུ་ ལོག་སྟེ་ལག་ལེན་འཐབ་ནི་ལས་ འཛེམ་དགོ།
 
-#### Creating a pull request:
-- Use an appropriate pull request description by following the guidance in the [Pull Request Etiquette](#pull-request-etiquette) section. Avoid deviating from these guidelines if possible.
-- Add an appropriately formatted [pull request title](#pull-request-titles).
-- If you feel like your code isn't ready to merge, but you want the maintainers to look through it, create a draft pull request.
+#### འཐེན་འཐེན་ཞུ་བ་གསར་བསྐྲུན་འབད་དོ།
+- [Pull Repered Etiquette](#pull-request-etiquette) དབྱེ་ཚན་ནང་ ལམ་སྟོན་ལུ་གཞི་བཞག་སྟེ་ འོས་འབབ་ཅན་གྱི་ འཐེན་འཐེན་ཞུ་བ་འགྲེལ་བཤད་ལག་ལེན་འཐབ། འབད་ཚུགས་པ་ཅིན་ ལམ་སྟོན་འདི་ཚུ་ལས་ ཐ་དད་འབད་ནི་ལས་འཛེམ་དགོ།
+- འོས་འབབ་ལྡན་པའི་རྩ་སྒྲིག་འབད་ཡོད་པའི་ [pull ཞུ་བ་མགོ་མིང་](#pull-request-titles) ཁ་སྐོང་རྐྱབས།
+- ཁྱོད་ཀྱིས་ ཁྱོད་རའི་གསང་ཡིག་འདི་ མཉམ་བསྡོམས་འབད་ནི་ལུ་ གྲ་སྒྲིག་མེདཔ་སྦེ་ མནོ་བ་ཅིན་ བདག་འཛིན་པ་ཚུ་གིས་ དེ་བརྒྱུད་དེ་ བལྟ་དགོཔ་ཨིན་ ཟིན་བྲིས་འཐེན་ནི་གི་ ཞུ་བ་ཅིག་ བཟོ་དགོ།
 
-#### Merging your work:
-- A pull request must pass all automated checks before being merged. At a minimum, the code must be formatted, passing all tests, as well as having no outstanding `clippy` lints.
-- A pull request cannot be merged without two approving reviews from the active maintainers.
-- Each pull request will automatically notify the code owners. An up to date list of current maintainers can be found in [MAINTAINERS.md](MAINTAINERS.md).
+#### ཁྱོད་རའི་ལཱ་མཉམ་བསྡོམས་འབད་ནི།
+- འཐེན་དགོ་པའི་ཞུ་བ་ཅིག་གིས་ མཉམ་བསྡོམས་མ་འབད་བའི་ཧེ་མ་ རང་བཞིན་གྱི་ཞིབ་དཔྱད་ཚུ་ཆ་མཉམ་སྤྲོད་དགོ། ཉུང་མཐའ་ལུ་ གསང་ཡིག་འདི་ རྩ་སྒྲིག་འབད་དགོཔ་དང་ བརྟག་དཔྱད་ཆ་མཉམ་སྤྲོད་དགོཔ་མ་ཚད་ `clippy` lints ཚུ་ ཕྱིར་ཐོན་མེདཔ་ཨིན།
+- ཤུགས་ལྡན་བདག་འཛིན་འཐབ་མི་ཚུ་ལས་ བསྐྱར་ཞིབ་གཉིས་ ཆ་འཇོག་འབད་མ་དགོ་པར་ འཐེན་དགོ་པའི་ཞུ་བ་ཅིག་ མཉམ་བསྡོམས་འབད་མི་ཚུགས།
+- འདྲུད་ནིའི་ཞུ་བ་རེ་རེ་གིས་ རང་བཞིན་གྱིས་ གསང་ཡིག་ཇོ་བདག་ཚུ་ལུ་ བརྡ་སྤྲོད་འབད་འོང་། ད་ལྟའི་རྒྱུན་སྐྱོང་འབད་མི་ཚུ་གི་ ཚེས་གྲངས་ཐོ་ཡིག་འདི་ [MaINTAINERS.md](MAINTAINERS.md) ནང་ལུ་ཐོབ་ཚུགས།
 
-#### Review etiquette:
-- Do not resolve a conversation on your own. Let the reviewer make a decision.
-- Acknowledge review comments and engage with the reviewer (agree, disagree, clarify, explain, etc.). Do not ignore comments.
-- For simple code change suggestions, if you apply them directly, you can resolve the conversation.
-- Avoid overwriting your previous commits when pushing new changes. It obfuscates what changed since the last review and forces the reviewer to start from scratch. Commits are squashed before merging automatically.
+#### དཔྱད་གཞིའི་གོམས་གཤིས་:
+- ཁྱོད་རའི་ཐོག་ལས་ ཁ་སླབ་ཅིག་ ཐག་མ་བཅད། བསྐྱར་ཞིབ་འབད་མི་གིས་ ཐག་བཅད་བཅུག།
+- བསྐྱར་ཞིབ་ཀྱི་བསམ་འཆར་ཚུ་ངོས་ལེན་འབད་དེ་ བསྐྱར་ཞིབ་འབད་མི་དང་གཅིག་ཁར་ འབྲེལ་གཏོགས་འབད་དགོ། བསམ་བཀོད་ཚུ་སྣང་མེད་མ་བཞག།
+- གསང་ཡིག་བསྒྱུར་བཅོས་ཀྱི་བསམ་འཆར་འཇམ་ཏོང་ཏོ་ཚུ་གི་དོན་ལུ་ ཁྱོད་ཀྱིས་ཁོང་ཚུ་ལུ་ཐད་ཀར་དུ་འཇུག་སྤྱོད་འབད་བ་ཅིན་ ཁྱོད་ཀྱིས་ ཁ་སླབ་འདི་སེལ་འཐུ་འབད་ཚུགས།
+- བསྒྱུར་བཅོས་གསརཔ་ཚུ་ བསྐུལ་མ་འབད་བའི་སྐབས་ ཁྱོད་རའི་ཧེ་མའི་ཁས་བླངས་ཚུ་ བསྐྱར་འབྲི་འབད་ནི་ལས་འཛེམ་དགོ། བསྐྱར་ཞིབ་འདི་ མཇུག་བསྡུ་ཞིནམ་ལས་ ག་ཅི་འགྱུར་བཅོས་འགྱོ་ཡི་ག་ མ་ཤེས་པར་ བསྐྱར་ཞིབ་འབད་མི་འདི་ འགོ་ཐོག་ལས་ འགོ་བཙུགས་དགོཔ་སྦེ་ བཀག་ཆ་འབདཝ་ཨིན། ཁས་བླངས་ཚུ་ རང་བཞིན་གྱིས་མཉམ་བསྡོམས་མ་འབད་བའི་ཧེ་མ་ མཚམས་འཇོག་འབད་ཡོདཔ་ཨིན།
 
-### Pull Request Titles
+### པུལ་བསྣན་པའི་མིང་།
 
-We parse the titles of all the merged pull requests to generate changelogs. We also check that the title follows the convention via the *`check-PR-title`* check.
+ང་བཅས་ཀྱིས་ བསྒྱུར་བཅོས་དྲན་དེབ་ཚུ་བཟོ་བཏོན་འབད་ནི་ལུ་ མཉམ་བསྡོམས་འཐེན་པའི་ཞུ་བ་ཆ་མཉམ་གྱི་མགོ་མིང་ཚུ་དབྱེ་དཔྱད་འབདཝ་ཨིན། ང་བཅས་ཀྱིས་ མགོ་མིང་འདི་ *I18NI0000028X* ཞིབ་དཔྱད་བརྒྱུད་དེ་ ཆིངས་ཡིག་གི་རྗེས་སུ་འབྲང་དོ་ཡོདཔ་ཨིན་ན་ བརྟག་ཞིབ་འབདཝ་ཨིན།
 
-To pass the *`check-PR-title`* check, the pull request title must adhere to the following guidelines:
+*`check-PR-title`* ཞིབ་དཔྱད་འདི་བརྒྱུད་དེ་ འཐེན་དགོ་པའི་ཞུ་བ་མགོ་མིང་འདི་ འོག་གི་ལམ་སྟོན་ཚུ་ལུ་གནས་དགོཔ་ཨིན།
 
-<details> <summary> Expand to read the detailed title guidelines</summary>
+<རྒྱས་པ> <བསྡོམས་རྩིས་> རྒྱས་བཤད་ཀྱི་མགོ་བརྗོད་ལམ་སྟོན་</summary> རྒྱ་བསྐྱེད་འབད་ནི།
 
-1. Follow the [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/#commit-message-with-multi-paragraph-body-and-multiple-footers) format.
+1. [སྔར་སྲོལ་གྱི་ཁས་བླངས་](I18NU0000080X) རྩ་སྒྲིག་ལུ་རྗེས་སུ་འབྲང་།
 
-2. If the pull request has a single commit, the PR title should be the same as the commit message.
-
-</details>
-
-### Git Workflow
-
-- [Fork](https://docs.github.com/en/get-started/quickstart/fork-a-repo) the [repository](https://github.com/hyperledger-iroha/iroha/tree/main) and [create a feature branch](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-and-deleting-branches-within-your-repository) for your contributions.
-- [Configure the remote](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/configuring-a-remote-repository-for-a-fork) to sync your fork with the [Hyperledger Iroha repository](https://github.com/hyperledger-iroha/iroha/tree/main).
-- Use the [Git Rebase Workflow](https://git-rebase.io/). Avoid using `git pull`. Use `git pull --rebase` instead.
-- Use the provided [git hooks](./hooks/) to ease the development process.
-
-Follow these commit guidelines:
-
-- **Sign-off every commit**. If you don't, [DCO](https://github.com/apps/dco) will not let you merge.
-
-  Use `git commit -s` to automatically add `Signed-off-by: $NAME <$EMAIL>` as the final line of your commit message. Your name and email should be the same as specified in your GitHub account.
-
-  We also encourage you to sign your commits with GPG key using `git commit -sS` ([learn more](https://docs.github.com/en/authentication/managing-commit-signature-verification/signing-commits)).
-
-  You may use [the `commit-msg` hook](./hooks/) to automatically sign-off your commits.
-
-- Commit messages must follow [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/#commit-message-with-multi-paragraph-body-and-multiple-footers) and the same naming schema as for [pull request titles](#pull-request-titles). This means:
-  - **Use present tense** ("Add feature", not "Added feature")
-  - **Use imperative mood** ("Deploy to docker..." not "Deploys to docker...")
-- Write a meaningful commit message.
-- Try keeping a commit message short.
-- If you need to have a longer commit message:
-  - Limit the first line of your commit message to 50 characters or less.
-  - The first line of your commit message should contain the summary of the work you've done. If you need more than one line, leave a blank line between each paragraph and describe your changes in the middle. The last line must be the sign-off.
-- If you modify the Schema (check by generating the schema with `kagami schema` and diff), you should make all changes to the schema in a separate commit with the message `[schema]`.
-- Try to stick to one commit per meaningful change.
-  - If you fixed several issues in one PR, give them separate commits.
-  - As mentioned previously, changes to the `schema` and the API should be done in appropriate commits separate from the rest of your work.
-  - Add tests for functionality in the same commit as that functionality.
-
-## Tests and Benchmarks
-
-- To run the source-code based tests, execute [`cargo test`](https://doc.rust-lang.org/cargo/commands/cargo-test.html) in the Iroha root. Note that this is a long process.
-- To run benchmarks, execute [`cargo bench`](https://doc.rust-lang.org/cargo/commands/cargo-bench.html) from the Iroha root. To help debug benchmark outputs, set the `debug_assertions` environment variable like so: `RUSTFLAGS="--cfg debug_assertions" cargo bench`.
-- If you are working on a particular component, be mindful that when you run `cargo test` in a [workspace](https://doc.rust-lang.org/cargo/reference/workspaces.html), it will only run the tests for that workspace, which usually doesn't include any [integration tests](https://www.testingxperts.com/blog/what-is-integration-testing).
-- If you want to test your changes on a minimal network, the provided [`docker-compose.yml`](defaults/docker-compose.yml) creates a network of 4 Iroha peers in docker containers that can be used to test consensus and asset propagation-related logic. We recommend interacting with that network using either [`iroha-python`](https://github.com/hyperledger-iroha/iroha-python), or the included Iroha client CLI.
-- Do not remove failing tests. Even tests that are ignored will be run in our pipeline eventually.
-- If possible, please benchmark your code both before and after making your changes, as a significant performance regression can break existing users' installations.
-
-### Serialization guard checks
-
-Run `make guards` to validate repository policies locally:
-
-- Deny-list direct `serde_json` in production sources (prefer `norito::json`).
-- Forbid direct `serde`/`serde_json` dependencies/imports outside the allowlist.
-- Prevent reintroduction of ad‑hoc AoS/NCB helpers outside `crates/norito`.
-
-### Debugging tests
-
-<details> <summary> Expand to learn how to change the log level or write logs to a JSON.</summary>
-
-If one of your tests is failing, you may want to decrease the maximum logging level. By default, Iroha only logs `INFO` level messages, but retains the ability to produce both `DEBUG` and `TRACE` level logs. This setting can be changed either using the `LOG_LEVEL` environment variable for code-based tests, or using the `/configuration` endpoint on one of the peers in a deployed network.
-
-While logs printed in the `stdout` are sufficient, you may find it more convenient to produce `json`-formatted logs into a separate file and parse them using either [node-bunyan](https://www.npmjs.com/package/bunyan) or [rust-bunyan](https://crates.io/crates/bunyan).
-
-Set the `LOG_FILE_PATH` environment variable to an appropriate location to store the logs and parse them using the above packages.
+༢ འདྲུད་ནིའི་ཞུ་བ་ལུ་ ཁས་བླངས་གཅིག་ཡོད་པ་ཅིན་ པི་ཨར་ མགོ་མིང་འདི་ ཁས་བླངས་འཕྲིན་དོན་དང་འདྲཝ་སྦེ་འོང་དགོ།
 
 </details>
 
-### Debugging using tokio console
+### གིཊི།
 
-<details> <summary> Expand to learn how to compile Iroha with tokio console support.</summary>
+- [Fork](I18NU000081X) དང་ [I18NU0000082X) དང་ [I18NU0000082X) དང་ [I18NU000000083X) ཁྱོད་ཀྱི་ཕན་འདེབས་ཚུ་གི་དོན་ལུ་ [https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-and-deleting-branches-within-your-repository) དང་།
+- [ཐག་རིང་ཐུང་འདི་རིམ་སྒྲིག་འབད།](I18NU0000084X) ཕོརཀ་འདི་ [I18NT0000002X Iroha མཛོད་ཁང་](I18NU000000085X) དང་ཅིག་ཁར་མཉམ་འབྱུང་འབད་ནི་ལུ་ མཉམ་འབྱུང་འབད་ནིའི་དོན་ལུ་] (https://github.com/hyperledger-iroha/iroha/tree/main)
+- [Git rebase ལཱ་གི་རྒྱུན་རིམ་](I18NU0000086X)ལག་ལེན་འཐབ། `git pull` ལག་ལེན་འཐབ་ནི་ལས་འཛེམ་དགོ། དེ་གི་ཚབ་ལུ་ `git pull --rebase` ལག་ལེན་འཐབ།
+- གོང་འཕེལ་གྱི་བྱ་རིམ་འདི་ འཇམ་ཏོང་ཏོ་བཟོ་ནིའི་དོན་ལུ་ བྱིན་ཡོད་པའི་ [git hooks](I18NU0000087X) ལག་ལེན་འཐབ་དགོ།
 
-Sometimes it might be helpful for debugging to analyze tokio tasks using [tokio-console](https://github.com/tokio-rs/console).
+འ་ནི་ཁས་བླངས་ལམ་སྟོན་ཚུ་ལུ་གཞི་བཞག་སྟེ་ཨིན།
 
-In this case you should compile Iroha with support of tokio console like that:
+- **ཁས་བླངས་རེ་རེ་བཞིན་** ག་ར་ལུ་ཐོ་བཀོད་འབད། ཁྱོད་ཀྱིས་མ་འབད་བ་ཅིན་ [DCO](https://github.com/apps/dco) མཉམ་བསྡོམས་འབད་མི་བཏུབ།
+
+  ཁྱོད་ཀྱི་ཁས་བླངས་འཕྲིན་དོན་གྱི་མཐའ་མཇུག་གྲལ་ཐིག་སྦེ་ `Signed-off-by: $NAME <$EMAIL>` ཁ་སྐོང་བརྐྱབ་ནི་ལུ་ `git commit -s` ལག་ལེན་འཐབ། ཁྱོད་ཀྱི་མིང་དང་གློག་འཕྲིན་འདི་ ཁྱོད་ཀྱི་ཇི་ཊི་ཧབ་རྩིས་ཐོ་ནང་གསལ་བཀོད་འབད་ཡོད་པའི་དང་འདྲཝ་སྦེ་དགོ།
+
+  ང་བཅས་ཀྱིས་ ཁྱོད་ལུ་ ཇི་པི་ཇི་ལྡེ་མིག་དང་གཅིག་ཁར་ `git commit -sS` ལག་ལེན་འཐབ་སྟེ་ མཚན་རྟགས་བཀོད་ནི་ལུ་ སེམས་ཤུགས་བྱིནམ་ཨིན།
+
+  ཁྱོད་ཀྱིས་ [`commit-msg` hook](I18NU000000090X) འདི་ ཁྱོད་རའི་ཁས་བླངས་འདི་ རང་བཞིན་གྱིས་ མཚན་རྟགས་བཀོད་ནིའི་དོན་ལུ་ ལག་ལེན་འཐབ་བཏུབ།
+
+- འཕྲིན་དོན་ཚུ་ [I18NU0000091X) དང་ [འཐེན་ཞུ་བ་མགོ་མིང་ཚུ་](I18NU000092X) གི་དོན་ལུ་ མིང་བཏགས་ནིའི་ལས་རིམ་འདི་ རྗེས་སུ་འཇུག་དགོ། འདིའི་དོན་ནི།
+  - **ད་ལྟོའི་དུས་ཡུན་** ("ཁ་སྐོང་ཁྱད་རྣམ་" ལག་ལེན་འཐབ།", "Added fart" མེན།)
+  - **སེམས་ཁམས་ཀྱི་སེམས་ཁམས་** ("ཌོག་ཀར་ལུ་བཀྲམ་སྤེལ་འབད་...."
+- དོན་དག་ཅན་གྱི་བརྡ་འཕྲིན་ཅིག་བྲིས།
+- ཁས་བླངས་འཕྲིན་དོན་ཐུང་ཀུ་ཅིག་བཞག་ནིའི་དཔའ་བཅམ།
+- ཁྱོད་ལུ་ ཁས་བླངས་འཕྲིན་དོན་རིངམོ་ཅིག་དགོ་པ་ཅིན་།
+  - ཁྱོད་རའི་ཁས་བླངས་འཕྲིན་དོན་གྱི་གྲལ་ཐིག་དང་པ་འདི་ ཡིག་འབྲུ་༥༠ ཡང་ན་ དེ་ལས་ཉུངམ་ལུ་ཚད་འཛིན་འབད།
+  - ཁྱོད་རའི་ཁས་བླངས་འཕྲིན་དོན་གྱི་གྲལ་ཐིག་དང་པ་ནང་ ཁྱོད་ཀྱིས་འབད་མི་ལཱ་གི་བཅུད་བསྡུས་འདི་ བཀོད་དགོ། ཁྱོད་ལུ་གྲལ་ཐིག་གཅིག་ལས་ལྷག་སྟེ་དགོ་པ་ཅིན་ དོན་མཚམས་རེ་རེ་གི་བར་ན་ གྲལ་ཐིག་སྟོངམ་ཅིག་བཞག་ཞིནམ་ལས་ སྦུག་ལུ་ཁྱོད་ཀྱི་བསྒྱུར་བཅོས་ཚུ་འགྲེལ་བཤད་རྐྱབས། མཇུག་གི་གྲལ་ཐིག་འདི་ མཚན་རྟགས་བཀོད་དགོཔ་ཨིན།
+- ཁྱོད་ཀྱིས་ ལས་འཆར་འདི་ ལེགས་བཅོས་འབད་བ་ཅིན་ (`kagami schema` དང་ diff དང་གཅིག་ཁར་ ལས་རིམ་འདི་ ལེགས་བཅོས་འབད་ཐོག་ལས་) ཁྱོད་ཀྱིས་ འཕྲིན་དོན་ `[schema]` དང་ཅིག་ཁར་ ཁས་བླངས་སོ་སོ་ཅིག་ནང་ བསྒྱུར་བཅོས་ཆ་མཉམ་འབད་དགོ།
+- དོན་དག་ཅན་གྱི་འགྱུར་བ་རེ་ལུ་ ཁས་བླངས་གཅིག་ལུ་ འབད་རྩོལ་བསྐྱེད།
+  - ཁྱོད་ཀྱིས་ PR གཅིག་ནང་ གནད་དོན་ལེ་ཤ་ཅིག་ གཏན་འབེབས་བཟོ་བ་ཅིན་ ཁས་བླངས་སོ་སོ་སྦེ་བྱིན།
+  - ཧེ་མ་བཀོད་དོ་བཟུམ་སྦེ་ `schema` དང་ API ལུ་བསྒྱུར་བཅོས་འབད་མི་ཚུ་ འོས་འབབ་ཅན་གྱི་ཁས་བླངས་ནང་ ཁྱོད་རའི་ལཱ་གཞན་ལས་ སོ་སོ་སྦེ་འབད་དགོ།
+  - ལས་འགན་དེ་བཟུམ་སྦེ་ ཁས་བླངས་གཅིག་ནང་ ལས་འགན་གྱི་དོན་ལུ་ བརྟག་དཔྱད་ཁ་སྐོང་རྐྱབས།
+
+## བརྟག་དཔྱད་དང་ཚད་གཞི་ཚུ།
+
+- འབྱུང་ཁུངས་-ཨང་རྟགས་གཞི་བཞག་པའི་བརྟག་དཔྱད་ཚུ་གཡོག་བཀོལ་ནིའི་དོན་ལུ་ [`cargo test`](https://doc.rust-lang.org/cargo/commands/cargo-test.html) ནང་ I18NT0000012X རྩ་བ་ནང་ ལག་ལེན་འཐབ་ཨིན། འདི་ བྱ་རིམ་རིངམོ་ཅིག་ཨིནམ་དྲན་འཛིན་འབད།
+- བེན་ཀ་མཱརཀ་གཡོག་བཀོལ་ནིའི་དོན་ལུ་ [`cargo bench`](I18NU000000094X) རྩ་བའི་ Iroha རྩ་བ་ལས་ ལག་ལེན་འཐབ་ཨིན། རྐྱེན་སེལ་འབད་ཡོད་པའི་ བེན་ཇ་མཱརཀ་ཨའུཊི་པུཊི་ཚུ་ལུ་གྲོགས་རམ་འབད་ནི་ལུ་ `debug_assertions` མཐའ་འཁོར་འགྱུར་ཅན་འདི་བཟུམ་: I18NI000000242X.
+- ཁྱོད་ཀྱིས་ ཆ་ཤས་གཅིག་གུ་ལཱ་འབད་བ་ཅིན་ ཁྱོད་ཀྱིས་ `cargo test` གཡོག་བཀོལ་བའི་སྐབས་ [ལཱ་གི་ས་སྒོ་](I18NU0000095X) ནང་ལུ་ གཡོག་བཀོལ་བའི་སྐབས་ ལཱ་གི་ས་སྒོ་དེ་གི་དོན་ལུ་ བརྟག་དཔྱད་ཚུ་རྐྱངམ་ཅིག་ གཡོག་བཀོལ་འོང་ དེ་ཡང་ སྤྱིར་བཏང་ལུ་ [གཅིག་བསྡོམས་བརྟག་དཔྱད་](I18NU0000096X)
+- ཁྱོད་ཀྱིས་ ཁྱོད་རའི་བསྒྱུར་བཅོས་ཚུ་ ཉུང་མཐའ་ཡོངས་འབྲེལ་གུ་བརྟག་དཔྱད་འབད་དགོ་པ་ཅིན་ བྱིན་ཡོད་པའི་ [`docker-compose.yml`](I18NU0000097X) གིས་ མོས་མཐུན་དང་ བསག་བཞག་ནི་དང་འབྲེལ་བའི་ཚད་མ་བརྟག་དཔྱད་འབད་ནི་ལུ་ ལག་ལེན་འཐབ་བཏུབ་པའི་ ཌོག་ཀར་ ཤོ་ཊརསི་ནང་ 4 defaults/docker-compose.yml) གིས་ ཡོངས་འབྲེལ་འདི་ གསར་བསྐྲུན་འབདཝ་ཨིན། ང་བཅས་ཀྱིས་ ཡོངས་འབྲེལ་དེ་དང་གཅིག་ཁར་ འབྲེལ་བ་འཐབ་དགོཔ་སྦེ་ གྲོས་འཆར་བཀོད་དེ་ཡོདཔ་ཨིན།
+- འཐུས་ཤོར་བརྟག་དཔྱད་ཚུ་ རྩ་བསྐྲད་མ་གཏང་། ང་བཅས་རའི་ ཆུ་དུང་ནང་ སྣང་མེད་བཞག་མི་ བརྟག་དཔྱད་ཚུ་ཡང་ མཐའ་མཇུག་ལུ་ གཡོག་བཀོལ་འོང་།
+- འབད་ཚུགས་པ་ཅིན་ ཁྱོད་རའི་བསྒྱུར་བཅོས་ཚུ་འབད་བའི་ཧེ་མ་དང་ ཤུལ་ལས་ ཁྱོད་རའི་གསང་ཡིག་འདི་ རྟགས་བཀལ་གནང་།
+
+### རིམ་སྒྲིག་སྲུང་སྐྱོབ་བརྟག་དཔྱད།
+
+མཛོད་ཁང་གི་སྲིད་བྱུས་ཚུ་ ནང་འཁོད་ལས་ བདེན་དཔྱད་འབད་ནི་ལུ་ `make guards` གཡོག་བཀོལ།
+
+- ཐོན་སྐྱེད་འབྱུང་ཁུངས་ནང་ ཐད་ཀར་ `serde_json` X (དགའ་མོས་ཅན་ I18NI00000000248X).
+- ཐད་ཀར་ `serde`/`serde_json` བརྟེན་པ་/ནང་འདྲེན་འབད་ཆོག་པའི་ཐོ་ཡིག་གི་ཕྱི་ཁར་བཞག་དགོ།
+- ཁྱབ་བསྒྲགས་ AoS/NCB གྲོགས་རམ་འབད་མི་ཚུ་ `crates/norito` གི་ཕྱི་ཁར་ བསྐྱར་འཛུལ་འབད་ནི་ལས་ བཀག་ཐབས་འབད།
+
+### རྐྱེན་སེལ་བྱས།
+
+<ཁ་གསལ་> <summary> དྲན་ཐོ་གནས་རིམ་བསྒྱུར་བཅོས་འབད་ཐངས་ ཡང་ན་ དྲན་ཐོ་ཚུ་ JSON ལུ་འབྲི་ནི་ལུ་ རྒྱ་སྐྱེད་འབད།</summary>
+
+ཁྱོད་ཀྱི་བརྟག་དཔྱད་ཚུ་གི་གྲལ་ལས་གཅིག་འཐུས་ཤོར་བྱུང་པ་ཅིན་ ཁྱོད་ཀྱིས་ དྲན་ཐོ་གནས་རིམ་མཐོ་ཤོས་འདི་མར་ཕབ་འབད་དགོཔ་འོང་། སྔོན་སྒྲིག་གིས་ Iroha རྐྱངམ་ཅིག་ `INFO` གནས་རིམ་གྱི་འཕྲིན་དོན་ཚུ་རྐྱངམ་ཅིག་དྲན་ཐོ་ཚུ་ཨིན་རུང་ I18NI000000253X དང་ `TRACE` གནས་རིམ་དྲན་ཐོ་ཚུ་གཉིས་ཆ་རང་བཟོ་བསྐྲུན་འབད་ནི་གི་ལྕོགས་གྲུབ་འདི་ བཞགཔ་ཨིན། འ་ནི་སྒྲིག་སྟངས་འདི་ གསང་ཡིག་གཞི་བཞག་པའི་བརྟག་དཔྱད་ཚུ་གི་དོན་ལུ་ `LOG_LEVEL` མཐའ་འཁོར་འགྱུར་ཅན་ལག་ལེན་འཐབ་སྟེ་ ཡང་ན་ བཀྲམ་སྤེལ་འབད་ཡོད་པའི་ཡོངས་འབྲེལ་ནང་ མཉམ་བསྡོམ་གཅིག་གུ་ `/configuration` མཐའ་མཚམས་ལག་ལེན་འཐབ་ཐོག་ལས་ བསྒྱུར་བཅོས་འབད་ཚུགས།`stdout` ནང་ལུ་དཔར་བསྐྲུན་འབད་ཡོད་པའི་དྲན་ཐོ་ཚུ་ ལངམ་སྦེ་ཡོད་རུང་ ཁྱོད་ཀྱིས་ `json`-formatted དྲན་ཐོ་ཚུ་ ཡིག་སྣོད་སོ་སོ་ཅིག་ནང་ བཟོ་བསྐྲུན་འབད་ནི་ལུ་ སྟབས་བདེ་ཏོག་ཏོ་སྦེ་མཐོང་ཚུགས་ནི་ཨིནམ་དང་ [node-bunyan](https://www.npmjs.com/package/bunyan) ཡང་ན་ [rust-bunyan](I18NU000100X) ལག་ལེན་འཐབ་ཐོག་ལས་ མིང་དཔྱད་འབད་འོང་།
+
+དྲན་ཐོ་ཚུ་གསོག་འཇོག་འབད་ནི་ལུ་ འོས་འབབ་ཅན་གྱི་ས་གནས་ཅིག་ལུ་ `LOG_FILE_PATH` མཐའ་འཁོར་འགྱུར་ཅན་འདི་གཞི་སྒྲིག་འབད་དེ་ གོང་འཁོད་ཐུམ་སྒྲིལ་ཚུ་ལག་ལེན་འཐབ་ཐོག་ལས་ མིང་དཔྱད་འབད།
+
+</details>
+
+### ཊོ་ཀིའོ་ཀོན་སོལ་ལག་ལེན་འཐབ་སྟེ་ རྐྱེན་སེལ་འབད་དོ།
+
+<details> <summary> ཊོ་ཀི་ཨོ་ཀོན་སོལ་རྒྱབ་སྐྱོར་དང་གཅིག་ཁར་ I18NT0000017X འདི་ བསྡུ་སྒྲིག་འབད་ཐངས་ཤེས་ནི་ རྒྱ་སྐྱེད་འབད།</summary>
+
+རེ་ཅིག་སྐབས་ [tokio-coconsole](https://github.com/tokio-rs/console) ལག་ལེན་འཐབ་སྟེ་ tokio ལས་འགན་ཚུ་ དབྱེ་དཔྱད་འབད་ནི་ལུ་ རྐྱེན་སེལ་འབད་ནི་ལུ་ ཕན་ཐོགས་འབྱུང་འོང་།
+
+གནད་དོན་འདི་ནང་ ཁྱོད་ཀྱིས་ Iroha འདི་ tokio consolo ལུ་རྒྱབ་སྐྱོར་འབད་དེ་ བསྡུ་སྒྲིག་འབད་དགོ།
 
 ```bash
 RUSTFLAGS="--cfg tokio_unstable" cargo build --features tokio-console
 ```
 
-Port for tokio console can by configured through `LOG_TOKIO_CONSOLE_ADDR` configuration parameter (or environment variable).
-Using tokio console require log level to be `TRACE`, can be enabled through configuration parameter or environment variable `LOG_LEVEL`.
+tokio console གི་དོན་ལུ་འདྲེན་ལམ་འདི་ `LOG_TOKIO_CONSOLE_ADDR` རིམ་སྒྲིག་ཚད་བཟུང་ (ཡང་ན་མཐའ་འཁོར་འགྱུར་ཅན་) བརྒྱུད་དེ་ རིམ་སྒྲིག་འབད་བཏུབ།
+tokio ཀོན་སོལ་ལག་ལེན་འཐབ་ནིའི་དོན་ལུ་ `TRACE` ལུ་ དྲན་ཐོ་གནས་རིམ་དགོཔ་ཨིན་ རིམ་སྒྲིག་ཚད་བཟུང་བརྒྱུད་དེ་ ཡང་ན་ འགྱུར་ཅན་ `LOG_LEVEL` བརྒྱུད་དེ་ ལྕོགས་ཅན་བཟོ་ཚུགས།
 
-Example of running Iroha with tokio console support using `scripts/test_env.sh`:
+`scripts/test_env.sh` ལག་ལེན་འཐབ་སྟེ་ tokio ཀོན་སོལ་རྒྱབ་སྐྱོར་དང་གཅིག་ཁར་ I18NT000000019X གཡོག་བཀོལ་བའི་དཔེ།
 
 ```bash
 # 1. Compile Iroha
@@ -294,27 +291,27 @@ tokio-console http://127.0.0.1:5555
 
 </details>
 
-### Profiling
+### གསལ་སྡུད།
 
-<details> <summary> Expand to learn how to profile Iroha. </summary>
+<details> <summary> I18NT0000023X གསལ་སྡུད་འབད་ཐངས་ཤེས་པར་འབད། </sumary>
 
-To optimize performance it's useful to profile Iroha.
+ལཱ་འགན་ཡར་དྲག་གཏང་ནིའི་དོན་ལུ་ I18NT0000024X གསལ་སྡུད་འབད་ནི་ལུ་ཕན་ཐོགས་ཡོདཔ་ཨིན།
 
-Profiling builds currently require a nightly toolchain. To prepare one, compile Iroha with the `profiling` profile and feature using `cargo +nightly`:
+ད་ལྟོ་བཟོ་བསྐྲུན་འབད་ནི་ལུ་ མཚན་མོའི་ལག་ཆས་ཅིག་དགོཔ་ཨིན། གཅིག་གྲ་སྒྲིག་འབད་ནིའི་དོན་ལུ་ I18NI000000264X གསལ་སྡུད་དང་གཅིག་ཁར་ བསྡུ་སྒྲིག་འབད་དེ་ I18NI000000265X ལག་ལེན་འཐབ་སྟེ་ ཁྱད་རྣམ་ཚུ་:
 
 ```bash
 RUSTFLAGS="-C force-frame-pointers=on" cargo +nightly -Z build-std build --target your-desired-target --profile profiling --features profiling
 ```
 
-Then start Iroha and attach profiler of your choice to the Iroha pid.
+དེ་ལས་ I18NT000000026X འགོ་བཙུགས། དེ་ལས་ ཁྱོད་རའི་གདམ་ཁ་གི་གསལ་སྡུད་འདི་ Iroha pid ལུ་མཉམ་སྦྲགས་འབད།
 
-Alternatively it's possible to build Iroha inside docker with profiler support and profile Iroha this way.
+གཞན་ཡང་ གསལ་སྡུད་རྒྱབ་སྐྱོར་དང་ གསལ་སྡུད་ I18NT000000029X འདི་བཟུམ་སྦེ་ Docker ནང་ལུ་ Iroha བཟོ་བསྐྲུན་འབད་ཚུགས།
 
 ```bash
 docker build -f Dockerfile.glibc --build-arg="PROFILE=profiling" --build-arg='RUSTFLAGS=-C force-frame-pointers=on' --build-arg='FEATURES=profiling' --build-arg='CARGOFLAGS=-Z build-std' -t iroha:profiling .
 ```
 
-E.g. using perf (available only on linux):
+དཔེར་ན་ . serf use (linux ནང་རྐྱངམ་གཅིག་ཐོབ་ཚུགས):
 
 ```bash
 # to capture profile
@@ -323,15 +320,15 @@ sudo perf record -g -p <PID>
 sudo perf report
 ```
 
-To be able to observe profile of the executor during Iroha profiling, executor should be compiled without stripping symbols.
-It can be done by running:
+Iroha གི་གསལ་སྡུད་སྐབས་ ལག་ལེན་འཐབ་མི་གི་གསལ་སྡུད་འདི་ བལྟ་ཚུགས་ནིའི་དོན་ལུ་ ལག་ལེན་འཐབ་མི་འདི་ བརྡ་མཚོན་ཚུ་ བཏོན་གཏང་ནི་མེད་པར་ བསྡུ་སྒྲིག་འབད་དགོ།
+འདི་གཡོག་བཀོལ་ཐོག་ལས་འབད་ཚུགས།
 
 ```bash
 # compile executor without optimizations
 cargo run --bin kagami -- ivm build ./path/to/executor --out-file executor.to
 ```
 
-With profiling feature enabled Iroha exposes endpoint to scrap pprof profiles:
+གསལ་སྡུད་ཁྱད་རྣམ་ལྕོགས་ཅན་བཟོ་ཡོད་མི་ Iroha གིས་ སི་རེཔ་པི་པོརཕ་གསལ་སྡུད་ཚུ་ལུ་ མཐའ་མཚམས་ཕྱིར་བཏོན་འབདཝ་ཨིན།
 
 ```bash
 # profile Iroha for 30 seconds and download the profile data
@@ -342,92 +339,92 @@ go tool pprof -web profile.pb
 
 </details>
 
-## Style Guides
+## བཟོ་རྣམ་ལམ་སྟོན།
 
-Please follow these guidelines when you make code contributions to our project:
+ང་བཅས་ཀྱི་ལས་འགུལ་ནང་ གསང་ཡིག་ཕན་འདེབས་འབད་བའི་སྐབས་ ལམ་སྟོན་འདི་ཚུ་ ལག་ལེན་འཐབ་གནང་།
 
-### Git Style Guide
+### གིཏ་བཟོ་རྣམ་ལམ་སྟོན།
 
-:book: [Read git guidelines](#git-workflow)
+: bounce: [གུག་པའི་ལམ་སྟོན།](I18NU0000102X)
 
-### Rust Style Guide
+### རསཊ་བཟོ་རྣམ་ལམ་སྟོན།
 
-<details> <summary> :book: Read code guidelines</summary>
+5
 
-- Use `cargo fmt --all` (edition 2024) to format code.
+- གསང་ཡིག་རྩ་སྒྲིག་འབད་ནིའི་དོན་ལུ་ `cargo fmt --all` (edition 2024) ལག་ལེན་འཐབ།
 
-Code guidelines:
+སྒྲིག་གཞི་ལམ་སྟོན་:
 
-- Unless otherwise specified, refer to [Rust best practices](https://github.com/mre/idiomatic-rust).
-- Use the `mod.rs` style. [Self-named modules](https://rust-lang.github.io/rust-clippy/master/) will not pass static analysis, except as [`trybuild`](https://crates.io/crates/trybuild) tests.
-- Use a domain-first modules structure.
+- དེ་མེན་པ་ཅིན་ གསལ་བཀོད་འབད་དེ་མེད་པ་ཅིན་ [ལག་ལེན་དྲག་ཤོས་](https://github.com/mre/idiomatic-rust) ལུ་བལྟ།
+- `mod.rs` བཟོ་རྣམ་ལག་ལེན་འཐབ། རང་གིས་མིང་བཏགས་ཡོད་པའི་མཐུད་ལམ་ཚུ་](https://rust-lang.github.io/rust-clippy/master/) བརྟག་དཔྱད་ [`trybuild`](I18NU000000105X) བརྟག་དཔྱད་ཚུ་མ་གཏོགས་ དཔྱད་ཞིབ་འབད་མི་ཚུགས།
+- མངའ་ཁོངས་-དང་པ་ མཐུད་ལམ་གཞི་བཀོད་ཅིག་ལག་ལེན་འཐབ།
 
-  Example: don't do `constants::logger`. Instead, invert the hierarchy, putting the object for which it is used first: `iroha_logger::constants`.
-- Use [`expect`](https://learning-rust.github.io/docs/unwrap-and-expect/) with an explicit error message or proof of infallibility instead of `unwrap`.
-- Never ignore an error. If you can't `panic` and can't recover, it at least needs to be recorded in the log.
-- Prefer to return a `Result` instead of `panic!`.
-- Group related functionality spatially, preferably inside appropriate modules.
+  དཔེར་ན་ `constants::logger` མ་འབད། དེ་གི་ཚབ་ལུ་ གོ་རིམ་འདི་ ཕྱི་འགྱུར་འབད་ དངོས་པོ་འདི་ དང་པ་རང་ དང་པ་རང་ བཙུགས་ཏེ་: I18NI000000270X.
+- [`expect`](https://learning-rust.github.io/docs/unwrap-and-expect/) གསལ་རི་རི་འཛོལ་བའི་འཕྲིན་དོན་ ཡང་ན་ `unwrap` གི་ཚབ་ལུ་ འཛོལ་བ་མེད་པའི་བདེན་ཁུངས་དང་གཅིག་ཁར་ ལག་ལེན་འཐབ།
+- འཛོལ་བ་ཅིག་ ནམ་ཡང་ སྣང་མེད་མ་བཞག། ཁྱོད་ཀྱིས་ `panic` འབད་མ་ཚུགས་མི་དང་ ལོག་ཐོབ་མ་ཚུགས་པ་ཅིན་ ཉུང་མཐའ་ལུ་ དྲན་དེབ་ནང་ སྒྲ་བཟུང་འབད་དགོཔ་ཨིན།
+- `panic!` གི་ཚབ་ལུ་ `Result` སླར་ལོག་འབད་ནི་ལུ་དགའ་བ།
+- སྡེ་ཚན་དང་འབྲེལ་བའི་ལཱ་འགན་འདི་ ས་སྟོང་ཐོག་ལས་ གལ་ཆེ་ཤོས་ཅིག་ཨིན།
 
-  For example, instead of having a block with `struct` definitions and then `impl`s for each individual struct, it is better to have the `impl`s related to that `struct` next to it.
-- Declare before implementation: `use` statements and constants at the top, unit tests at the bottom.
-- Try to avoid `use` statements if the imported name is used only once. This makes moving your code into a different file easier.
-- Do not silence `clippy` lints indiscriminately. If you do, explain your reasoning with a comment (or `expect` message).
-- Prefer  `#[outer_attribute]` to `#![inner_attribute]` if either is available.
-- If your function doesn't mutate any of its inputs (and it shouldn't mutate anything else), mark it as `#[must_use]`.
-- Avoid `Box<dyn Error>` if possible (we prefer strong typing).
-- If your function is a getter/setter, mark it `#[inline]`.
-- If your function is a constructor (i.e., it's creating a new value from the input parameters and calls `default()`), mark it `#[inline]`.
-- Avoid tying your code to concrete data structures; `rustc` is smart enough to turn a `Vec<InstructionExpr>` into `impl IntoIterator<Item = InstructionExpr>` and vice versa when it needs to.
+  དཔེར་ན་ `struct` ངེས་ཚིག་དང་ དེ་ལས་ `impl`s ཚུ་ཡོད་པའི་ སྡེབ་ཚན་ཅིག་དང་ དེ་ལས་ དེ་གི་ཤུལ་ལས་ `struct` དང་འབྲེལ་བའི་ `struct` ཚུ་ཡོད་མི་འདི་ ལེགས་ཤོམ་ཨིན།
+- ལག་ལེན་འཐབ་པའི་ཧེ་མ་གསལ་བསྒྲགས་: `use` གསལ་བཤད་དང་ མགོ་ལུ་ མཇུག་ལུ་ཡོད་པའི་ ཡན་ལག་བརྟག་དཔྱད་ཚུ།
+- ནང་འདྲེན་འབད་ཡོད་པའི་མིང་འདི་ཚར་གཅིག་རྐྱངམ་ཅིག་ལག་ལེན་འཐབ་པ་ཅིན་ `use` གསལ་བཤད་ཚུ་སྤང་ནི་ལུ་འབད་རྩོལ་བསྐྱེད། འདི་གིས་ ཁྱོད་ཀྱི་གསང་ཡིག་འདི་ ཡིག་སྣོད་སོ་སོ་ཅིག་ནང་ སྤོ་བཤུད་འབད་ནི་ལུ་ འཇམ་ཏོང་ཏོ་བཟོཝ་ཨིན།
+- ཁུ་སིམ་སིམ་སྦེ་མ་བཞག `clippy` དབྱེ་བ་མེད་པར་ lints lints. ཁྱོད་ཀྱིས་འབད་བ་ཅིན་ ཁྱོད་རའི་རྒྱུ་མཚན་འདི་ བསམ་འཆར་ཅིག་དང་གཅིག་ཁར་ འགྲེལ་བཤད་རྐྱབ། (ཡང་ན་ `expect` འཕྲིན་དོན་)
+- འཐོབ་ཚུགས་པ་ཅིན་ `#[outer_attribute]` ལས་ `#![inner_attribute]` ལུ་གདམ་ཁ་རྐྱབས།
+- ཁྱོད་ཀྱི་ལས་འགན་འདི་གིས་ དེ་གི་ཨིན་པུཊི་ཚུ་ འགྱུར་བཅོས་འགྱོ་མ་ཚུགས་པ་ཅིན་ (དེ་ལས་ གཞན་ག་ནི་ཡང་ འགྱུར་བཅོས་འབད་མི་ཆོག) `#[must_use]` ཟེར་རྟགས་བཀལ།
+- འབད་ཚུགས་པ་ཅིན་ `Box<dyn Error>` སྤང་ནི་ལས་འཛེམ་དགོ།
+- ཁྱོད་ཀྱི་ལས་འགན་འདི་ རྩེད་ཆས་/གཞི་སྒྲིག་འབད་བ་ཅིན་ `#[inline]` རྟགས་བཀལ།
+- ཁྱོད་ཀྱི་ལས་འགན་འདི་ བཟོ་བསྐྲུན་པ་ཅིག་ཨིན་པ་ཅིན་ (དེ་ཡང་ ཨིན་པུཊི་ཚད་གཞི་དང་ འབོད་བརྡ་ཚུ་ལས་ གནས་གོང་གསརཔ་ཅིག་གསར་བསྐྲུན་འབད་དོ་ཡོདཔ་ཨིན་) འདི་ `#[inline]` རྟགས་བཀོད།
+- ཁྱོད་རའི་ཨང་རྟགས་འདི་ གནས་སྡུད་གཞི་བཀོད་ཚུ་ལུ་ བསྡམ་བཞག་ནི་ལས་འཛེམ་དགོ། `rustc` འདི་ I18NI00000000292X འདི་ `impl IntoIterator<Item = InstructionExpr>` ལུ་བསྒྱུར་བཅོས་འབད་ཚུགས་པའི་ རིག་པ་ཅན་ཅིག་ཨིན།
 
-Naming guidelines:
-- Use only full words in *public* structure, variable, method, trait, constant, and module names. However, abbreviations are allowed if:
-  - The name is local (e.g. closure arguments).
-  - The name is abbreviated by Rust convention (e.g. `len`, `typ`).
-  - The name is an accepted abbreviation (e.g. `tx`, `wsv` etc); see the [project glossary](https://docs.iroha.tech/reference/glossary.html) for canonical abbreviations.
-  - The full name would have been shadowed by a local variable (e.g. `msg <- message`).
-  - The full name would have made the code cumbersome with more than 5-6 words in it (e.g. `WorldStateViewReceiverTrait -> WSVRecvTrait`).
-- If you change naming conventions, make sure that the new name that you've chosen is _much_ clearer than what we had before.
+མིང་བཏགས་པའི་ལམ་སྟོན།
+- མིང་ཚིག་ཆ་ཚང་ * མི་མང་གཞི་བཀོད་དང་ འགྱུར་ཅན་ ཐབས་ལམ་ རང་གཤིས་ དུས་རྒྱུན་ དེ་ལས་ ཚད་གཞི་མིང་ཚུ་ནང་ མིང་ཚིག་ཆ་ཚང་ལག་ལེན་འཐབ། དེ་འབདཝ་ད་ བསྡུ་ཡིག་ཚུ་ གལ་སྲིད་:
+  - མིང་འདི་ ཉེ་གནས་ (དཔེར་ན་ ཁ་བསྡམས་སྒྲུབ་རྟགས་) ཨིན།
+  - མིང་འདི་ རསཊ་ཆིངས་ཡིག་ (དཔེར་ན་ `len`, `typ`) གིས་ བསྡུ་སྒྲིག་འབདཝ་ཨིན།
+  - མིང་འདི་ ངོས་ལེན་འབད་ཡོད་པའི་ བསྡུ་ཡིག་ (དཔེར་ན་ `tx`, `wsv` ལ་སོགས་པ་ཚུ་) ཨིན། ཀེནོ་ནིག་བསྡུ་ཡིག་ཚུ་གི་དོན་ལུ་ [ལས་འགུལ་གྱི་ཚིག་མཛོད་](https://docs.iroha.tech/reference/glossary.html) བལྟ།
+  - མིང་ཆ་ཚང་འདི་ ས་གནས་ཀྱི་འགྱུར་ཅན་གྱིས་ གྱིབ་མ་བཟོ་འོང་ (དཔེར་ན་ `msg <- message`).
+  - མིང་ཆ་ཚང་འདི་གིས་ མིང་ཚིག་༥-༦ ལས་ལྷག་སྟེ་ཡོད་མི་ གསང་ཡིག་འདི་ བསྡུ་སྒྲིག་འབད་ཡོདཔ་ཨིན་ (དཔེར་ན་ `WorldStateViewReceiverTrait -> WSVRecvTrait`)
+- ཁྱོད་ཀྱིས་མིང་བཏགས་ནིའི་ཆིངས་ཡིག་ཚུ་བསྒྱུར་བཅོས་འབད་བ་ཅིན་ ཁྱོད་ཀྱིས་གདམ་ཁ་རྐྱབ་མི་མིང་གསརཔ་འདི་ ཧེ་མ་ང་བཅས་ལུ་ཡོད་མི་ལས་ _much_ གསལ་རི་རི་ཨིནམ་ངེས་གཏན་བཟོ།
 
-Comment guidelines:
-- When writing non-doc comments, instead of describing *what* your function does, try to explain *why* it does something in a particular way. This will save you and the reviewer time.
-- You may leave `TODO` markers in code as long as you reference an issue that you created for it. Not creating an issue means it doesn't get merged.
+བསམ་བཀོད་ཀྱི་ལམ་སྟོན།
+- ཌོཀ་མེན་པའི་བསམ་བརྗོད་ཚུ་བྲིས་པའི་སྐབས་ *ག་ཅི་* ཁྱོད་རའི་ལས་འགན་འདི་ག་ཅི་འབདཝ་ཨིན་ན་ འགྲེལ་བཤད་རྐྱབ་ནིའི་ཚབ་ལུ་ * ག་ཅི་འབད་* ག་ཅི་འབད་* འདི་དམིགས་བསལ་གྱི་ཐབས་ལམ་ཅིག་ནང་འབདཝ་ཨིན་ན་ འགྲེལ་བཤད་རྐྱབ་ནི་ལུ་དཔའ་བཅམ། འདི་གིས་ ཁྱོད་དང་བསྐྱར་ཞིབ་པ་གི་དུས་ཚོད་བསྲུང་འོང་།
+- ཁྱོད་ཀྱིས་ `TODO` རྟགས་ཚུ་ གསང་ཡིག་ནང་བཞག་ཚུགས། གནད་དོན་ཅིག་མ་བཟོ་ཟེར་མི་འདི་ མཉམ་བསྡོམས་འབད་མི་ཚུགས་ཟེར་བའི་དོན་དག་ཨིན།
 
-We use pinned dependencies. Follow these guidelines for versioning:
+ང་བཅས་ཀྱིས་ བརྟེན་པའི་རྟེན་འབྲེལ་ཚུ་ལག་ལེན་འཐབ་ཨིན། ཐོན་རིམ་བཟོ་ནིའི་ལམ་སྟོན་འདི་ཚུ་རྗེས་སུ་འཇུག་ནི།
 
-- If your work depends on a particular crate, see if it wasn't already installed using [`cargo tree`](https://doc.rust-lang.org/cargo/commands/cargo-tree.html) (use `bat` or `grep`), and try to use that version, instead of the latest version.
-- Use the full version "X.Y.Z" in `Cargo.toml`.
-- Provide version bumps in a separate PR.
-
-</details>
-
-### Documentation Style Guide
-
-<details> <summary> :book: Read documentation guidelines</summary>
-
-
-- Use the [`Rust Docs`](https://doc.rust-lang.org/cargo/commands/cargo-doc.html) format.
-- Prefer the single-line comment syntax. Use `///` above inline modules and `//!` for file-based modules.
-- If you can link to a structure/module/function's docs, do it.
-- If you can provide an example of usage, do it. This [is also a test](https://doc.rust-lang.org/rustdoc/documentation-tests.html).
-- If a function can error or panic, avoid modal verbs. Example: `Fails if disk IO fails` instead of `Can possibly fail, if disk IO happens to fail`.
-- If a function can error or panic for more than one reason, use a bulleted list of failure conditions, with the appropriate `Error` variants (if any).
-- Functions *do* things. Use imperative mood.
-- Structures *are* things. Get to the point. For example `Log level for reloading from the environment` is better than `This struct encapsulates the idea of logging levels, and is used for reloading from the environment`.
-- Structures have fields, which also *are* things.
-- Modules *contain* things, and we know that. Get to the point. Example: use `Logger-related traits.` instead of `Module which contains logger-related logic`.
-
+- ཁྱོད་རའི་ལཱ་འདི་ དམིགས་བསལ་གྱི་ཀེརེ་ཊི་ཅིག་ལུ་རག་ལསཔ་ཨིན་པ་ཅིན་ [`cargo tree`](I18NU000000108X) (I18NI000000302X) ལག་ལེན་འཐབ་སྟེ་ ཐོན་རིམ་འདི་ ཐོན་རིམ་འདི་གི་ཚབ་ལུ་ ལག་ལེན་འཐབ་ནིའི་དཔའ་བཅམ་དགོ།
+- `Cargo.toml` ནང་ ཐོན་རིམ་ཆ་ཚང་ "X.Y.Z" ལག་ལེན་འཐབ།
+- PR སོ་སོ་ཅིག་ནང་ ཐོན་རིམ་ bumps བྱིན།
 
 </details>
 
-## Contact
+### ཡིག་ཆའི་བཟོ་རྣམ་ལམ་སྟོན།
 
-Our community members are active at:
+5
 
-| Service       | Link                                                               |
-|---------------|--------------------------------------------------------------------|
-| StackOverflow | https://stackoverflow.com/questions/tagged/hyperledger-iroha       |
-| Mailing List  | https://lists.lfdecentralizedtrust.org/g/iroha                     |
-| Telegram      | https://t.me/hyperledgeriroha                                      |
-| Discord       | https://discord.com/channels/905194001349627914/905205848547155968 |
+
+- [`Rust Docs`](https://doc.rust-lang.org/cargo/commands/cargo-doc.html) རྩ་སྒྲིག་ལག་ལེན་འཐབ།
+- གྲལ་ཐིག་རྐྱང་པའི་བསམ་བཀོད་ཚིག་སྦྱོར་འདི་གདམ་ཁ་རྐྱབས། ཡིག་སྣོད་གཞི་བཞག་པའི་ཚད་གཞི་ཚུ་གི་དོན་ལུ་ `///` ལག་ལེན་འཐབ།
+- ཁྱོད་ཀྱིས་ གཞི་བཀོད་/ཚད་གཞི་/ལས་འགན་གྱི་ ཡིག་ཆ་ཚུ་ལུ་ འབྲེལ་མཐུད་འབད་ཚུགས་པ་ཅིན་ འབད་དགོ།
+- ལག་ལེན་གྱི་དཔེ་ཅིག་བྱིན་ཚུགས་པ་ཅིན་ འབད་དགོ། འདི་ཡང་ [https://doc.rust-lang.org/rustdoc/documentation-tests.html).
+- ལས་འགན་ཅིག་གིས་ འཛོལ་བ་ཡང་ན་ ཚ་གྱང་ཅན་ཅིག་ཨིན་པ་ཅིན་ མོ་ཌལ་བྱ་ཚིག་ཚུ་ སྤང་དགོ། དཔེར་ན་: `Fails if disk IO fails` གི་ཚབ་ལུ་ I18NI000000309X.
+- ལས་འགན་ཅིག་གིས་ རྒྱུ་མཚན་གཅིག་ལས་ལྷག་སྟེ་ འཛོལ་བ་ཡང་ན་ ཚ་གྱང་ཚུགས་པ་ཅིན་ འོས་འབབ་ཅན་གྱི་ `Error` འགྱུར་ཅན་ཚུ་དང་གཅིག་ཁར་ འཐུས་ཤོར་གྱི་གནས་སྟངས་ཀྱི་ བརྡ་རྟགས་ཐོ་ཡིག་ཅིག་ལག་ལེན་འཐབ།
+- ལས་འགན་ཚུ་ *Do* དངོས་པོ་ཚུ་ཨིན། ནུས་པའི་སེམས་ཁམས་ལག་ལེན་འཐབ།
+- གཞི་བཀོད་ *are* དངོས་པོ་ཚུ་ཨིན། དོན་ཚན་ལུ་འགྱོ། དཔེར་ན་ `Log level for reloading from the environment` འདི་ I18NI000000312X ལས་ལེགས་ཤོམ་ཨིན།
+- གཞི་བཀོད་ཚུ་ལུ་ ས་སྒོ་ཚུ་ཡོདཔ་ཨིན་ དེ་ཡང་ *are* དངོས་པོ་ཚུ་ཨིན།
+- མཐུད་ལམ་ * དངོས་པོ་ཚུ་ཨིན་, དང་ ང་བཅས་ཀྱིས་ཤེས་ཚུགས། དོན་ཚན་ལུ་འགྱོ། དཔེར་ན་: `Module which contains logger-related logic` གི་ཚབ་ལུ་ `Logger-related traits.` ལག་ལེན་འཐབ།
+
+
+</details>
+
+## འབྲེལ༌བ༌འཐབ༌ནི
+
+ང་བཅས་ཀྱི་མི་སྡེ་འཐུས་མི་ཚུ་ ལཱ་འབད་དོ་ཡོདཔ་ཨིན།
+
+| ཞབས་ཏོག་ | འབྲེལ་མཐུད་ |
+| |
+| StackOverflow | https://stackoverflow.com/questions/tagged/hyperledger-iroha |
+| ཡིག་འཕྲིན་ཐོ་ཡིག་ | https://lists.lfdecentralizedtrust.org/g/iroha |
+| ཊེ་ལི་གཱ་རམ་ | https://t.me/hyperledgeriroha |
+| ཌིསི་ཀོརཌ་ | https://discord.com/channels/905194001349627914/905205848547155968 |
 
 ---

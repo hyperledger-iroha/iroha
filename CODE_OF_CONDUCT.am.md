@@ -7,51 +7,52 @@ generator: scripts/sync_docs_i18n.py
 source_hash: ece3b82ce3096e15d3cc4524fbb6033ab3fa5119da561a1aec40306564ba0193
 source_last_modified: "2025-12-29T18:16:34.771616+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Contributor Covenant Code of Conduct
+# የአስተዋጽዖ አበርካች የኪዳን ሥነ ምግባር ደንብ
 
-## Our Pledge
+#ቃል ኪዳናችን
 
-In the interest of fostering an open and welcoming environment, we as contributors and maintainers pledge to making participation in our project and our community a harassment-free experience for everyone, regardless of age, body size, disability, ethnicity, gender identity and expression, level of experience, nationality, personal appearance, race, religion, or sexual identity and orientation.
+ክፍት እና እንግዳ ተቀባይ አካባቢን ለማፍራት ሲባል እኛ እንደ አስተዋጾ አድራጊዎች እና ጠባቂዎች በፕሮጀክታችን እና በማህበረሰባችን ውስጥ ተሳትፎን ለሁሉም ሰው ከትንኮሳ የጸዳ ልምድ ለማድረግ ቃል እንገባለን፣ እድሜ፣ የአካል መጠን፣ የአካል ጉዳት፣ ጎሳ፣ የፆታ ማንነት እና አገላለጽ፣ የልምድ ደረጃ፣ ዜግነት፣ ግላዊ መልክ፣ ዘር፣ ሀይማኖት ወይም ጾታዊ ማንነት እና ዝንባሌ ሳይወሰን።
 
-## Our Standards
+#የእኛ ደረጃ
 
-Examples of behavior that contributes to creating a positive environment include:
+አወንታዊ አካባቢን ለመፍጠር አስተዋፅኦ የሚያደርጉ የባህሪ ምሳሌዎች የሚከተሉትን ያካትታሉ፡-
 
-* Using welcoming and inclusive language
-* Being respectful of differing viewpoints and experiences
-* Gracefully accepting constructive criticism
-* Focusing on what is best for the community
-* Showing empathy towards other community members
+* እንግዳ ተቀባይ እና አካታች ቋንቋን መጠቀም
+* ለተለያዩ አመለካከቶች እና ልምዶች አክብሮት ማሳየት
+* ገንቢ ትችቶችን በጸጋ መቀበል
+* ለማህበረሰቡ የሚበጀው ላይ ማተኮር
+* ለሌሎች የማህበረሰብ አባላት ርህራሄ ማሳየት
 
-Examples of unacceptable behavior by participants include:
+በተሳታፊዎች ተቀባይነት የሌለው ባህሪ ምሳሌዎች የሚከተሉትን ያካትታሉ:
 
-* The use of sexualized language or imagery and unwelcome sexual attention or advances
-* Trolling, insulting/derogatory comments, and personal or political attacks
-* Public or private harassment
-* Publishing others' private information, such as a physical or electronic address, without explicit permission
-* Other conduct which could reasonably be considered inappropriate in a professional setting
+* ወሲባዊ ቋንቋን ወይም ምስሎችን እና ያልተፈለገ የግብረ-ሥጋ ግንኙነት ትኩረትን ወይም እድገቶችን መጠቀም
+* ማንገላታት፣ ስድብ/አዋራጅ አስተያየቶች እና የግል ወይም የፖለቲካ ጥቃቶች
+* የህዝብ ወይም የግል ትንኮሳ
+* ያለ ግልጽ ፍቃድ የሌሎችን የግል መረጃ እንደ አካላዊ ወይም ኤሌክትሮኒክ አድራሻ ማተም
+* በፕሮፌሽናል ሁኔታ ውስጥ በምክንያታዊነት አግባብነት የሌላቸው ተብለው የሚወሰዱ ሌሎች ድርጊቶች
 
-## Our Responsibilities
+## ኃላፊነታችን
 
-Project maintainers are responsible for clarifying the standards of acceptable behavior and are expected to take appropriate and fair corrective action in response to any instances of unacceptable behavior.
+የፕሮጀክት ጠባቂዎች ተቀባይነት ያለውን የባህሪ ደረጃዎችን የማብራራት ሃላፊነት አለባቸው እና ለማንኛውም ተቀባይነት ላልሆነ ባህሪ ምላሽ ተገቢውን እና ፍትሃዊ የእርምት እርምጃ እንዲወስዱ ይጠበቃሉ።
 
-Project maintainers have the right and responsibility to remove, edit, or reject comments, commits, code, wiki edits, issues, and other contributions that are not aligned to this Code of Conduct, or to ban temporarily or permanently any contributor for other behaviors that they deem inappropriate, threatening, offensive, or harmful.
+የፕሮጀክት ጠባቂዎች አስተያየቶችን የማስወገድ፣ የማርትዕ ወይም ውድቅ የማድረግ፣ የመፈጸም፣ ኮድ፣ የዊኪ አርትዖቶችን፣ ጉዳዮችን እና ሌሎች ከዚህ የስነ ምግባር ደንብ ጋር የማይጣጣሙ አስተዋጾዎችን ወይም ሌሎች አግባብ ያልሆኑ፣ አስጊ፣ አጸያፊ ወይም ጎጂ ናቸው የሚሏቸውን ሌሎች ባህሪያትን ለጊዜው ወይም እስከመጨረሻው የማገድ መብት እና ሃላፊነት አለባቸው።
 
-## Scope
+## ወሰን
 
-This Code of Conduct applies both within project spaces and in public spaces when an individual is representing the project or its community. Examples of representing a project or community include using an official project e-mail address, posting via an official social media account, or acting as an appointed representative at an online or offline event. Representation of a project may be further defined and clarified by project maintainers.
+ይህ የስነምግባር ህግ አንድ ግለሰብ ፕሮጀክቱን ወይም ማህበረሰቡን በሚወክልበት ጊዜ በፕሮጀክት ቦታዎች እና በህዝባዊ ቦታዎች ላይ ተፈጻሚ ይሆናል። ፕሮጄክትን ወይም ማህበረሰብን የመወከል ምሳሌዎች ኦፊሴላዊ የፕሮጀክት ኢ-ሜይል አድራሻን መጠቀም፣ በኦፊሴላዊ የማህበራዊ ሚዲያ መለያ መለጠፍ ወይም በመስመር ላይ ወይም ከመስመር ውጭ ክስተት ላይ እንደ የተሾመ ተወካይ መሆንን ያካትታሉ። የፕሮጀክት ውክልና በፕሮጀክት ጠባቂዎች የበለጠ ሊገለጽ እና ሊገለጽ ይችላል።
 
-## Enforcement
+## ማስፈጸም
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported by contacting the project team [here](./CONTRIBUTING.md#contact). All complaints will be reviewed and investigated and will result in a response that is deemed necessary and appropriate to the circumstances. The project team is obligated to maintain confidentiality with regard to the reporter of an incident. Further details of specific enforcement policies may be posted separately.
+የማጎሳቆል፣ ትንኮሳ ወይም ሌላ ተቀባይነት የሌለው ባህሪ የፕሮጀክት ቡድኑን [እዚህ](./CONTRIBUTING.md#contact) በማነጋገር ሪፖርት ሊደረግ ይችላል። ሁሉም ቅሬታዎች ይገመገማሉ እና ይመረመራሉ እና ለሁኔታዎች አስፈላጊ እና ተገቢ ሆኖ የተገኘ ምላሽ ይሰጣሉ. የፕሮጀክት ቡድኑ ስለ አንድ ክስተት ዘጋቢ ምስጢራዊነትን የመጠበቅ ግዴታ አለበት። የተወሰኑ የማስፈጸሚያ ፖሊሲዎች ተጨማሪ ዝርዝሮች በተናጥል ሊለጠፉ ይችላሉ።
 
-Project maintainers who do not follow or enforce the Code of Conduct in good faith may face temporary or permanent repercussions as determined by other members of the project's leadership.
+የሥነ ምግባር ደንቡን በቅን ልቦና የማይከተሉ የፕሮጀክት ጠባቂዎች በሌሎች የፕሮጀክቱ አመራር አባላት በሚወስኑት ጊዜያዊ ወይም ዘላቂ መዘዞች ሊደርስባቸው ይችላል።
 
-## Attribution
+## ባህሪ
 
-This Code of Conduct is adapted from the [Contributor Covenant][homepage], version 1.4, available at [http://contributor-covenant.org/version/1/4][version]
+ይህ የስነምግባር ህግ ከ[የአስተዋጽዖ አበርካች ቃል ኪዳን][መነሻ ገጽ]፣ ስሪት 1.4፣ በ[http://contributor-covenant.org/version/1/4] ላይ ይገኛል [ስሪት] የተስተካከለ ነው።
 
 [homepage]: http://contributor-covenant.org
 [version]: http://contributor-covenant.org/version/1/4/
