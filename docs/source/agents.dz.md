@@ -7,111 +7,110 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 7f35a28d00188a3e1f3db76b56e6b29c708dbb75afa3dd009d416b7cd4314754
 source_last_modified: "2025-12-29T18:16:35.916241+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Automation Agent Execution Guide
+# རང་འགུལ་ལས་ཚབ་ལག་བསྟར་ལམ་སྟོན།
 
-This page summarizes the operational guardrails for any automation agent
-working inside the Hyperledger Iroha workspace. It mirrors the canonical
-`AGENTS.md` guidance and the roadmap references so build, documentation, and
-telemetry changes all look the same whether they were produced by a human or
-an automated contributor.
+ཤོག་ལེབ་འདི་གིས་ རང་བཞིན་ལས་ཚབ་གང་རུང་ཅིག་གི་དོན་ལུ་ ལག་ལེན་འཐབ་བཏུབ་པའི་སྲུང་སྐྱོབ་པ་ཚུ་ བཅུད་བསྡུས་འབདཝ་ཨིན།
+Hyperledger Iroha ལཱ་གི་ས་སྒོ་ནང་ལུ་ལཱ་འབད་ནི། འདི་གིས་ ཁྲིམས་ལུགས་འདི་ གསལ་སྟོན་འབདཝ་ཨིན།
+`AGENTS.md` ལམ་སྟོན་དང་ ལམ་སྟོན་གྱི་གཞི་བསྟུན་ཚུ་ དེ་འབདཝ་ལས་ ཡིག་ཆ་བཟོ་ནི་དང་ བཟོ་བསྐྲུན་འབདཝ་ཨིན།
+བརྡ་བརྒྱུདཔ་ཚུ་ མི་གིས་ བཟོ་བསྐྲུན་འབད་རུང་ གཅིག་མཚུངས་སྦེ་མཐོངམ་ཨིན།
+རང་བཞིན་གྱིས་ཕན་འདེབས་འབད་མི་ཅིག།
 
-Each task is expected to land deterministic code plus matching docs, tests,
-and operational evidence. Treat the sections below as a ready reference before
-touching `roadmap.md` items or replying to behaviour questions.
+ལཱ་རེ་རེ་གིས་ ཐག་བཅད་ཀྱི་ཨང་རྟགས་དང་ མཐུན་སྒྲིག་ཡིག་ཆ་ དེ་ལས་ བརྟག་དཔྱད་ཚུ་ ལེན་ནི་གི་རེ་བ་ཡོདཔ་ཨིན།
+དང་ ལག་ལེན་གྱི་ སྒྲུབ་བྱེད་ཚུ། འོག་གི་དབྱེ་ཚན་ཚུ་ ཧེ་མ་ལས་ གྲ་སྒྲིག་ཡོད་པའི་གཞི་བསྟུན་སྦེ་ བརྩི་འཇོག་འབད།
+`roadmap.md` རྣམ་གྲངས་ཚུ་ལུ་ ཡང་ན་ སྤྱོད་ལམ་གྱི་དྲི་བ་ཚུ་ལུ་ལན་རྐྱབ་ནི།
 
-## Quickstart Commands
+## མགྱོགས་མྱུར་བརྡ་བཀོད་ཚུ།
 
-| Action | Command |
-|--------|---------|
-| Build the workspace | `cargo build --workspace` |
-| Run the full test suite | `cargo test --workspace` *(typically takes several hours)* |
-| Run clippy with deny-by-default warnings | `cargo clippy --workspace --all-targets -- -D warnings` |
-| Format Rust code | `cargo fmt --all` *(edition 2024)* |
-| Test a single crate | `cargo test -p <crate>` |
-| Run one test | `cargo test -p <crate> <test_name> -- --nocapture` |
-| Swift SDK tests | From `IrohaSwift/`, run `swift test` |
+| བྱ་བ་ | བརྡ་བཀོད་ |
+|----------|--------------------------------------------------------------------
+| ལཱ་གི་ས་སྒོ་འདི་བཟོ་བསྐྲུན་འབད། | `cargo build --workspace` |
+| བརྟག་དཔྱད་ཀྱི་ཆ་ཤས་ཆ་ཚང་རྒྱུགས་ | `cargo test --workspace` *(སྤྱིར་བཏང་ལུ་ཆུ་ཚོད་ལེ་ཤ་ཅིག་འགོརཝ་ཨིན།)* |
+| གཡོག་བཀོལ་ མ་བཏུབ་པའི་-སྔོན་སྒྲིག་ཉེན་བརྡ་ | `cargo clippy --workspace --all-targets -- -D warnings` |
+| རྩ་སྒྲིག་ རཱསི་ཨང་རྟགས་ | `cargo fmt --all` *(པར་སྐྲུན་ ༢༠༢༤)* |
+| ཀྲེཊ་གཅིག་བརྟག་དཔྱད་འབད། | `cargo test -p <crate>` |
+| བརྟག་དཔྱད་གཅིག་རྒྱུག | `cargo test -p <crate> <test_name> -- --nocapture` |
+| Swift ཨེསི་ཌི་ཀེ་བརྟག་དཔྱད་ཚུ་ | `IrohaSwift/` ལས་ `swift test` གཡོག་བཀོལ། |
 
-## Workflow Fundamentals
+## ཝའི་ཀ་སི་ རྒྱུན་རིམ་གྱི་གཞི་རྩ།
 
-- Read the relevant code paths before answering questions or changing logic.
-- Break large roadmap items into tractable commits; never reject work outright.
-- Stay inside the existing workspace membership, reuse internal crates, and do
-  **not** alter `Cargo.lock` unless explicitly instructed.
-- Use feature flags and capability toggles only where mandated by hardware
-  accelerators; keep deterministic fallbacks available on every platform.
-- Update documentation and Markdown references alongside any functional change
-  so docs always describe current behaviour.
-- Add at least one unit test for every new or modified function. Prefer inline
-  `#[cfg(test)]` modules or the crate’s `tests/` folder depending on scope.
-- After finishing work, update `status.md` with a short summary and reference
-  relevant files; keep `roadmap.md` focused on items that still need work.
+- དྲི་བ་ཚུ་ལུ་ལན་མ་བཏབ་པའི་ཧེ་མ་དང་ ཡང་ན་ ཚད་མ་བསྒྱུར་བཅོས་མ་འབད་བའི་ཧེ་མ་ འབྲེལ་ཡོད་ཨང་རྟགས་འགྲུལ་ལམ་ཚུ་ལྷག།
+- ལམ་གྱི་ས་ཁྲ་སྦོམ་ཚུ་ བརྡབ་གསིག་ཅན་གྱི་ཁས་བླངས་ནང་ བརྡལ་བཀོད། ལཱ་འདི་ ཐད་ཀར་དུ་ ངོས་ལེན་མི་འབད།
+- ད་ལྟོ་ཡོད་པའི་ལཱ་གི་ས་སྒོ་འཐུས་མིའི་ནང་ན་སྡོད་ཞིནམ་ལས་ ནང་འཁོད་ཀྱི་ཀེརེསི་ཚུ་ལོག་ལག་ལེན་འཐབ།
+  **not** བསྒྱུར་བཅོས་འབད་དེ་ `Cargo.lock` གསལ་ཏོག་ཏོ་སྦེ་ གསལ་ཏོག་ཏོ་སྦེ་བཀོད་དགོ།
+- མཉེན་ཆས་ཀྱིས་བཀའ་རྒྱ་གནང་མི་རྐྱངམ་ཅིག་ ཁྱད་རྣམ་གྱི་དར་ཆ་དང་ ལྕོགས་གྲུབ་ཚུ་ སོར་བསྒྱུར་འབདཝ་ཨིན།
+  མགྱོགས་ཚད་ཚུ། སྟེགས་བུ་རེ་རེ་ནང་ ཡོད་པའི་ ཐག་བཅད་ཀྱི་ མར་ཕབ་ཚུ་ བཞག་དགོ།
+- ཡིག་ཆ་དང་ ལས་འགན་བསྒྱུར་བཅོས་གང་རུང་མཉམ་དུ་ ཡིག་ཆ་དང་ མར་ཀ་ཌའོན་གཞི་བསྟུན་ཚུ་ དུས་མཐུན་བཟོ།
+  དེ་འབདཝ་ལས་ docs གིས་ ད་ལྟོའི་སྤྱོད་ལམ་འདི་ རྟག་བུ་རང་ འགྲེལ་བཤད་རྐྱབ་ཨིན།
+- ཡང་ན་ ལེགས་བཅོས་འབད་ཡོད་པའི་ལས་འགན་གསརཔ་རེ་རེ་གི་དོན་ལུ་ ཉུང་མཐའ་གཅིག་ ཉུང་མཐའ་གཅིག་ཁ་སྐོང་རྐྱབས། ནང་ཐིག་ལུ་ གདམ་འཐུ་འབད་ནི།
+  `#[cfg(test)]` མཐུད་ལམ་ཚུ་ ཡང་ན་ ཀེརེཊ་གི་ ཀོརེཊ་གི་ `tests/` སྣོད་འཛིན་འདི་ ཁྱབ་ཚད་གུ་བརྟེན་ཏེ་ཨིན།
+- ལཱ་མཇུག་བསྡུ་བའི་ཤུལ་ལས་ བཅུད་བསྡུས་དང་ གཞི་བསྟུན་ཐུང་ཀུ་ཅིག་གིས་ `status.md` དུས་མཐུན་བཟོ་དགོ།
+  འབྲེལ་ཡོད་ཡིག་སྣོད་ཚུ། ད་ལྟོ་ཡང་ ལཱ་འབད་དགོ་པའི་ ཅ་ཆས་ཚུ་ལུ་གཙོ་བོར་བསྟེན་ཏེ་ `roadmap.md` ལུ་གཙོ་བོར་བཏོནམ་ཨིན།
 
-## Implementation Guardrails
+## བཀོལ་སྤྱོད་ཁང་།
 
-### Serialization & Data Models
-- Use the Norito codec everywhere (binary via `norito::{Encode, Decode}`,
-  JSON via `norito::json::*`). Do not add direct serde/`serde_json` usage.
-- Norito payloads must advertise their layout (version byte or header flags),
-  and new formats require corresponding documentation updates (e.g.,
+### རིམ་སྒྲིག་དང་གནས་སྡུད་དཔེ་སྟོན།
+- ག་སྟེ་ཡང་ Norito གསང་ཡིག་ལག་ལེན་འཐབ། (`norito::{Encode, Decode}`,
+  JSON བརྒྱུད་དེ་ `norito::json::*`). ཐད་ཀར་གྱི་སར་de/`serde_json` ལག་ལེན་ཁ་སྐོང་མ་འབད།
+- Norito གླ་ཆ་ཚུ་གིས་ ཁོང་རའི་སྒྲིག་བཀོད་ (ཐོན་རིམ་བཱའིཊི་ཡང་ན་ མགོ་ཡིག་དར་ཆ་ཚུ་) ཁྱབ་བསྒྲགས་འབད་དགོ།
+  དང་ རྩ་སྒྲིག་གསརཔ་ཚུ་ལུ་ མཐུན་སྒྲིག་ཡིག་ཆ་དུས་མཐུན་བཟོ་དགོཔ་ཨིན། (དཔེར་ན་,
   `norito.md`, `docs/source/da/*.md`).
-- Genesis data, manifests, and networking payloads should remain deterministic
-  so two peers with the same inputs produce identical hashes.
+- འབྱུང་ཁུངས་གནས་སྡུད་དང་ གསལ་སྟོན་ དེ་ལས་ ཡོངས་འབྲེལ་གྱི་ འཐུས་ཚུ་ ཐག་བཅད་བཞག་དགོ།
+  དེ་འབདཝ་ལས་ ཨིན་པུཊ་གཅིག་མཚུངས་ཡོད་མི་ ཆ་རོགས་གཉིས་ཀྱིས་ འདྲ་མཚུངས་ཀྱི་ ཧ་ཤེ་ཚུ་ བཏོནམ་ཨིན།
 
-### Configuration & Runtime Behaviour
-- Prefer knobs living in `crates/iroha_config` over new environment variables.
-  Thread values explicitly through constructors or dependency injection.
-- Never gate IVM syscalls or opcode behaviour—ABI v1 ships everywhere.
-- When new config options are added, update defaults, docs, and any related
-  templates (`peer.template.toml`, `docs/source/configuration*.md`, etc.).
+### རིམ་སྒྲིག་དང་བང་རྒྱུག་སྤྱོད་ལམ།
+- མཐའ་འཁོར་འགྱུར་ལྡོག་གསརཔ་ཚུ་ལུ་ `crates/iroha_config` ནང་སྡོད་མི་ མཛུབ་མོ་ཚུ་ དགའ་གདམ་འབད།
+  བཟོ་བསྐྲུན་པ་ཚུ་ཡང་ན་ བརྟེན་པའི་སྨན་ཁབ་བརྒྱུད་དེ་ ཐགཔ་གི་གནས་གོང་ཚུ།
+- ནམ་ཡང་ IVM གི་ལམ་ལུགས་ཡང་ན་ opcode གི་སྤྱོད་ལམ་—ABI v གྲུ་གཟིངས་ཚུ་ ག་སྟེ་ཡང་ མ་གཏོགས།
+- རིམ་སྒྲིག་གདམ་ཁ་གསརཔ་ཚུ་ཁ་སྐོང་བརྐྱབ་པའི་སྐབས་ དུས་མཐུན་སྔོན་སྒྲིག་དང་ ཡིག་ཆ་ཚུ་ དེ་ལས་ འབྲེལ་བ་ཡོད་མི་གང་རུང་ཅིག་ཨིན།
+  ཊེམ་པེལེཊི་ (`peer.template.toml`, `docs/source/configuration*.md`, ལ་སོགས་པ་ཚུ།)### ABI, སི་ཀཱལ་, དང་ དཔག་བྱེད་དབྱེ་བ།
+- ABI སྲིད་བྱུས་འདི་ ཆ་རྐྱེན་མེདཔ་སྦེ་ བརྩི་འཇོག་འབད་དགོ། སི་སི་ཀཱལ་ཡང་ན་ དཔག་བྱེད་དབྱེ་བ་ཚུ་ཁ་སྐོང་/རྩ་བསྐྲད་གཏང་དོ།
+  དུས་མཐུན་བཟོ་དགོཔ་ཨིན།
+  - `ivm::syscalls::abi_syscall_list` དང་ `crates/ivm/tests/abi_syscall_list_golden.rs`
+  - `ivm::pointer_abi::PointerType` དང་གསེར་གྱི་བརྟག་དཔྱད།
+  - ཨེ་བྷི་ཨའི་ཧེ་ཤི་འདི་འགྱུར་བའི་སྐབས་ `crates/ivm/tests/abi_hash_versions.rs`
+- མ་ཤེས་པའི་སི་ཀཱལ་ཚུ་གིས་ `VMError::UnknownSyscall` ལུ་སབ་ཁྲ་བཟོ་དགོཔ་དང་ གསལ་སྟོན་ཚུ་དགོཔ་ཨིན།
+  མཚན་རྟགས་བཀོད་ཡོད་པའི་ `abi_hash` འཛུལ་ཞུགས་བརྟག་དཔྱད་ནང་ འདྲ་མཉམ་གྱི་བརྟག་དཔྱད་ཚུ་ བཞག་ཡོདཔ་ཨིན།
 
-### ABI, Syscalls, and Pointer Types
-- Treat ABI policy as unconditional. Adding/removing syscalls or pointer types
-  requires updating:
-  - `ivm::syscalls::abi_syscall_list` and `crates/ivm/tests/abi_syscall_list_golden.rs`
-  - `ivm::pointer_abi::PointerType` plus the golden tests
-  - `crates/ivm/tests/abi_hash_versions.rs` whenever the ABI hash changes
-- Unknown syscalls must map to `VMError::UnknownSyscall`, and manifests must
-  retain signed `abi_hash` equality checks in admission tests.
+### མཐུན་རྐྱེན་གྱི་མགྱོགས་ཚད་དང་གཏན་འབེབས་རིང་ལུགས་
+- ཀིརིཔ་ཊོ་གཱ་ར་ཕིག་གི་ དང་ཕུའི་ དང་ཕུའི་ཨང་རྩིས་ ཡང་ན་ ལྗིད་ཅན་གྱི་ཨང་རྩིས་ སྲ་ཀྲག་ཚུ་ མགྱོགས་དྲག་སྦེ་ སྐྱེལ་འདྲེན་འབད་དགོ།
+  ལམ་ལུགས་ (METAL/NEON/SIMD/CUDA) འདི་ གཏན་འབེབས་ཀྱི་ མར་ཕབ་ཚུ་ རྒྱུན་སྐྱོང་འབད་བའི་སྐབས་ཨིན།
+- གཏན་འབེབས་མེན་པའི་ མཉམ་འགྲོས་མར་ཕབ་ཚུ་ སྤང་དགོ། གཙོ་རིམ་འདི་ ཅོག་འཐདཔ་གི་ཐོན་འབྲས་ཚུ་ཨིན།
+  མཐུན་རྐྱེན་ཚུ་ ཁྱད་པར་ཡོད་རུང་ མཉམ་རོགས་རེ་རེ་བཞིན་དུ།
+- Norito དང་ FASTPQ བསྐྱར་བཟོ་འབད་ཚུགས་པའི་ བསྐྱར་བཟོ་འབད་ཚུགསཔ་ལས་ SRE གིས་ གྲུ་གཟིངས་རྩིས་ཞིབ་འབད་ཚུགས།
+  telementy.
 
-### Hardware Acceleration & Determinism
-- New cryptographic primitives or heavy math must ship hardware-accelerated
-  paths (METAL/NEON/SIMD/CUDA) while maintaining deterministic fallbacks.
-- Avoid non-deterministic parallel reductions; priority is identical outputs on
-  every peer even when hardware differs.
-- Keep the Norito and FASTPQ fixtures reproducible so SRE can audit fleet-wide
-  telemetry.
+### ཡིག་ཆ་དང་སྒྲུབ་བྱེད།
+- དྲྭ་ཚིགས་ནང་ མི་མང་ལུ་གདོང་ལེན་འབད་མི་ ཌོག་བསྒྱུར་བཅོས་གང་རུང་ཅིག་ (`docs/portal/...`) ན།
+  འཇུག་སྤྱོད་འབད་ཚུགསཔ་ལས་ ཌོཀ་ས་ཁོངས་འདི་ མརཀ་ཌའོན་འབྱུང་ཁུངས་ཚུ་དང་གཅིག་ཁར་ ད་ལྟོའི་གནས་སྟངས་ནང་སྡོད་ཚུགས།
+- ལཱ་གི་རྒྱུན་རིམ་གསརཔ་ཚུ་ འགོ་བཙུགས་པའི་སྐབས་ རན་བུག་ཚུ་ ཁ་སྐོང་བརྐྱབས་ཏེ་ གཞུང་སྐྱོང་དྲན་ཐོ་, ཡང་ན།
+  བརྟག་ཞིབ་ཐོ་ཡིག་ཚུ་ བསྐྱར་སྦྱོང་འབད་ཐངས་དང་ ལོག་སྟེ་བསྐོར་ནི་ དེ་ལས་ སྒྲུབ་བྱེད་ཚུ་ བཟུང་ཐངས་སྐོར་ལས་ འགྲེལ་བཤད་རྐྱབ་ཨིན།
+- ནང་དོན་ Akkadian ནང་སྐད་སྒྱུར་འབད་བའི་སྐབས་ ཡིག་བརྡ་ཡིག་བརྡ་བཀོད་ནི།
+  སྐད་ཡིག་སྐད་སྒྱུར་ལས་ ཀིའུ་ནེ་ཕོརམ་ནང་།
 
-### Documentation & Evidence
-- Mirror any public-facing doc change in the portal (`docs/portal/...`) when
-  applicable so the docs site stays current with the Markdown sources.
-- When new workflows are introduced, add runbooks, governance notes, or
-  checklists explaining how to rehearse, rollback, and capture evidence.
-- When translating content into Akkadian, provide semantic renderings written
-  in cuneiform rather than phonetic transliterations.
+### བརྟག་དཔྱད་དང་ལག་ཆས་ཀྱི་རེ་བ།
+- ས་གནས་ནང་ (`cargo test`, `swift test` གཡོག་བཀོལ།
+  མཉམ་བསྡོམ་གྱི་ ཧར་ནིསི་ཚུ་) དང་ བརྡ་བཀོད་ཚུ་ PR བརྟག་དཔྱད་དབྱེ་ཚན་ནང་ ཡིག་ཐོག་ལུ་བཀོད་དགོ།
+- སི་ཨའི་ ཉེན་སྲུངཔ་ (`ci/*.sh`) དང་ ཌེཤ་བོརཌི་ཚུ་ ཊེ་ལི་མི་ཊི་གསརཔ་དང་གཅིག་ཁར་ མཉམ་འབྱུང་འབད།
+- proc-macros གི་དོན་ལུ་ བརྟག་དཔྱད་ཚུ་ བསྡམ་བཞག་ནིའི་དོན་ལུ་ `trybuild` UI བརྟག་དཔྱད་དང་གཅིག་ཁར་ ཆ་སྒྲིག་ཅན་གྱི་བརྟག་དཔྱད་ཚུ་འབད།
 
-### Testing & Tooling Expectations
-- Run the relevant test suites locally (`cargo test`, `swift test`,
-  integration harnesses) and document the commands in the PR testing section.
-- Keep CI guard scripts (`ci/*.sh`) and dashboards in sync with new telemetry.
-- For proc-macros, pair unit tests with `trybuild` UI tests to lock diagnostics.
+## དཀའ་བརྙན་ཐོ་འགོད།
 
-## Ready-to-Ship Checklist
+1. གསང་གྲངས་བསྡུ་སྒྲིག་འབད་མི་དང་ `cargo fmt` གིས་ ཁྱད་པར་མ་ཐོན་པས།
+2. དུས་མཐུན་བཟོ་ཡོད་པའི་ཡིག་ཆ་ (ལས་ཀས་རྟགས་ཌའོན་དང་ དྲྭ་ཚིགས་མེ་ལོང་) གསར་པ་འགྲེལ་བཤད་རྐྱབ།
+   སྤྱོད་ལམ་དང་ སི་ཨེལ་ཨའི་ དར་གསརཔ་ ཡང་ན་ རིམ་སྒྲིག་འབད་ནིའི་ མཛུབ་མོ་ཚུ།
+༣ བརྟག་དཔྱད་ཚུ་གིས་ གསང་ཡིག་འགྲུལ་ལམ་གསརཔ་ག་ར་ ཁྱབ་ཚུགསཔ་ཨིནམ་དང་ ལོག་ལྟ་བའི་སྐབས་ གཏན་འབེབས་བཟོ་མ་ཚུགས།
+   འཐོན་ནི།
+༤ ཊེ་ལི་མི་ཊི་རི་ ཌེཤ་བོརཌི་ དེ་ལས་ ཉེན་བརྡའི་ངེས་ཚིག་ཚུ་གིས་ མེ་ཊིག་གསརཔ་ག་ཅི་ར་ཨིན་རུང་ ཡང་ན་ གཞི་བསྟུན་འབདཝ་ཨིན།
+   འཛོལ་བའི་ཨང་རྟགས་ཚུ།
+5. `status.md` འབྲེལ་ཡོད་ཡིག་སྣོད་ཚུ་གཞི་བསྟུན་འབད་མི་ བཅུད་བསྡུས་ཐུང་ཀུ་ཅིག་ཚུདཔ་ཨིན།
+   ལམ་སྟོན་གྱི་དབྱེ་ཚན་།
 
-1. Code compiles and `cargo fmt` produced no diffs.
-2. Updated docs (workspace Markdown plus portal mirrors) describe the new
-   behaviour, new CLI flags, or config knobs.
-3. Tests cover every new code path and fail deterministically when regressions
-   appear.
-4. Telemetry, dashboards, and alert definitions reference any new metrics or
-   error codes.
-5. `status.md` includes a short summary referencing the relevant files and
-   roadmap section.
-
-Following this checklist keeps roadmap execution auditable and ensures every
-agent contributes evidence that other teams can trust.
+འདི་གི་ཤུལ་ལས་ བརྟག་ཞིབ་ཐོ་ཡིག་འདི་ ལམ་སྟོན་གྱི་ ལག་ཆས་ཚུ་ རྩིས་ཞིབ་འབད་བཞག་ཞིནམ་ལས་ ག་ར་ལུ་ ངེས་གཏན་བཟོཝ་ཨིན།
+ལས་ཚབ་འདི་གིས་ སྡེ་ཚན་གཞན་ཚུ་གིས་ བློ་གཏད་ཚུགས་པའི་ སྒྲུབ་བྱེད་ལུ་ ཕན་ཐོགས་དོ་ཡོདཔ་ཨིན།

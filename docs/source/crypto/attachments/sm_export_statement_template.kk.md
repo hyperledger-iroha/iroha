@@ -7,50 +7,50 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 6742d2b87b8fbbc1493c5ae2704147b0f8d5d23af78004c2c9a112fe881efb11
 source_last_modified: "2025-12-29T18:16:35.937402+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Export-Control Statement Template
-% Hyperledger Iroha Compliance Working Group
+% SM2/SM3/SM4 Экспортты басқару мәлімдемесінің үлгісі
+% Hyperledger Iroha Сәйкестік жөніндегі жұмыс тобы
 % 2026-05-06
 
-# Usage
+# Қолдану
 
-Embed this statement in release notes, manifests, or legal correspondence when
-distributing SM-enabled artefacts. Update the placeholders to match the release,
-jurisdiction, and applicable license exceptions. Retain a signed copy with the
-release checklist.
+Бұл мәлімдемені шығарылым жазбаларына, манифесттерге немесе заңды хат алмасуға ендіріңіз
+SM қолдайтын артефактілерді тарату. Шығарылымға сәйкес келетін толтырғыштарды жаңартыңыз,
+юрисдикция және қолданылатын лицензиялық ерекшеліктер. Қол қойылған көшірмені сақтаңыз
+бақылау парағын шығару.
 
-# Statement
+# Мәлімдеме
 
-> **Product:** Hyperledger Iroha {{ RELEASE_VERSION }} (`{{ ARTEFACT_ID }}`)
+> **Өнім:** Hyperledger Iroha {{ RELEASE_VERSION }} (`{{ ARTEFACT_ID }}`)
 >
-> **Algorithms Included:** SM2 digital signature, SM3 hashing, SM4 symmetric
-> encryption (GCM/CCM)
+> **Қамтылған алгоритмдер:** SM2 сандық қолтаңба, SM3 хэштеу, SM4 симметриялы
+> шифрлау (GCM/CCM)
 >
-> **Export Classification:** United States EAR Category 5, Part 2 (5D002.c.1);
-> European Union Regulation 2021/821 Annex 1, 5D002.
+> **Экспорт классификациясы:** Америка Құрама Штаттарының EAR 5-санаты, 2-бөлім (5D002.c.1);
+> Еуропалық Одақ ережесі 2021/821 1-қосымша, 5D002.
 >
-> **License Exception(s):** {{ LICENSE_EXCEPTION }} (e.g., ENC §740.17(b)(2),
-> TSU §740.13 for source distribution).
+> **Лицензияның ерекше жағдайлары:** {{ LICENSE_EXCEPTION }} (мысалы, ENC §740.17(b)(2),
+> TSU §740.13 дереккөзді тарату үшін).
 >
-> **Distribution Scope:** {{ DISTRIBUTION_SCOPE }} (e.g., “Global, excluding
-> embargoed territories listed in 15 CFR 746”).
+> **Тарату ауқымы:** {{ DISTRIBUTION_SCOPE }} (мысалы, «Жаһандық, қоспағанда
+> 15 CFR 746 тізімінде көрсетілген эмбаргоға ұшыраған аумақтар»).
 >
-> **Operator Obligations:** Recipients must comply with applicable export,
-> import, and usage regulations. Deployments within the People’s Republic of
-> China require product and usage filings with the State Cryptography
-> Administration and adherence to mainland data residency requirements.
+> **Оператордың міндеттемелері:** Алушылар экспортқа сәйкес келуге тиіс,
+> импорттау және пайдалану ережелері. Халық Республикасының аумағында орналастырулар
+> Қытай мемлекеттік криптографиямен өнім мен пайдалану құжаттарын талап етеді
+> Басқару және материктік деректердің резиденттік талаптарын сақтау.
 >
-> **Contact:** {{ LEGAL_CONTACT_NAME }} — {{ LEGAL_CONTACT_EMAIL }} /
+> **Байланыс:** {{ LEGAL_CONTACT_NAME }} — {{ LEGAL_CONTACT_EMAIL }} /
 > {{ LEGAL_CONTACT_PHONE }}
 >
-> This statement accompanies the cryptography compliance checklist and filing
-> templates provided in `docs/source/crypto/sm_compliance_brief.md`. Retain this
-> document and associated filings for a minimum of three years.
+> Бұл мәлімдеме криптографиялық сәйкестікті тексеру тізімімен және файлмен бірге жүреді
+> `docs/source/crypto/sm_compliance_brief.md` ішінде берілген үлгілер. Осыны сақтаңыз
+> кем дегенде үш жылға арналған құжат және оған қатысты өтінімдер.
 
-# Signature
+#Қолтаңба
 
-- Authorised representative: ________________________
-- Title: ________________________
-- Date: ________________________
-
+- уәкілетті өкіл: ________________________
+- Атауы: ______________________
+- Күні: ______________________

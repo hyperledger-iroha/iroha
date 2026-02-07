@@ -6,58 +6,57 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 8ef338a20104dc5d15094e28a1332a604b68bdcfef1ff82fea784d43fdbd10b5
 source_last_modified: "2026-01-03T18:07:59.202230+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# GDPR DPIA Summary — Android SDK Telemetry (AND7)
+# GDPR DPIA 概要 — Android SDK テレメトリ (AND7)
 
-| Field | Value |
-|-------|-------|
-| Assessment Date | 2026-02-12 |
-| Processing Activity | Android SDK telemetry export to shared OTLP backends |
-| Controllers / Processors | SORA Nexus Ops (controller), partner operators (joint controllers), Hyperledger Iroha Contributors (processor) |
-| Reference Docs | `docs/source/sdk/android/telemetry_redaction.md`, `docs/source/android_support_playbook.md`, `docs/source/android_runbook.md` |
+|フィールド |値 |
+|------|------|
+|評価日 | 2026-02-12 |
+|処理アクティビティ | Android SDK テレメトリを共有 OTLP バックエンドにエクスポート |
+|コントローラー/プロセッサー | SORA Nexus 運用 (コントローラー)、パートナー オペレーター (共同コントローラー)、Hyperledger Iroha 貢献者 (プロセッサ) |
+|参考資料 | `docs/source/sdk/android/telemetry_redaction.md`、`docs/source/android_support_playbook.md`、`docs/source/android_runbook.md` |
 
-## 1. Processing Description
+## 1. 処理内容
 
-- **Purpose:** Provide operational telemetry needed to support AND7 observability (latency, retries, attestation health) while mirroring the Rust node schema (§2 of `telemetry_redaction.md`).
-- **Systems:** Android SDK instrumentation -> OTLP exporter -> shared telemetry collector managed by SRE (see Support Playbook §8).
-- **Data subjects:** Operator staff using Android SDK-based apps; downstream Torii endpoints (authority strings are hashed per telemetry policy).
+- **目的:** Rust ノード スキーマ (`telemetry_redaction.md` の §2) をミラーリングしながら、AND7 可観測性 (レイテンシ、再試行、構成証明の健全性) をサポートするために必要な運用テレメトリを提供します。
+- **システム:** Android SDK インストルメンテーション -> OTLP エクスポーター -> SRE によって管理される共有テレメトリ コレクター (サポート プレイブック §8 を参照)。
+- **データ主体:** Android SDK ベースのアプリを使用するオペレーター スタッフ。ダウンストリーム Torii エンドポイント (権限文字列はテレメトリ ポリシーごとにハッシュされます)。
 
-## 2. Data Inventory & Mitigations
+## 2. データのインベントリと軽減策
 
-| Channel | Fields | PII Risk | Mitigation | Retention |
-|---------|--------|----------|------------|-----------|
-| Traces (`android.torii.http.request`, `android.torii.http.retry`) | Route, status, latency | Low (no PII) | Authority hashed with Blake2b + rotating salt; no payload bodies exported. | 7–30 days (per telemetry doc). |
-| Events (`android.keystore.attestation.result`) | Alias label, security level, attestation digest | Medium (operational data) | Alias hashed (`alias_label`), `actor_role_masked` recorded for overrides with Norito audit tokens. | 90 days for success, 365 days for overrides/failures. |
-| Metrics (`android.pending_queue.depth`, `android.telemetry.export.status`) | Queue counts, exporter status | Low | Aggregated counts only. | 90 days. |
-| Device profile gauges (`android.telemetry.device_profile`) | SDK major, hardware tier | Medium | Bucketing (emulator/consumer/enterprise), no OEM or serial numbers. | 30 days. |
-| Network context events (`android.telemetry.network_context`) | Network type, roaming flag | Medium | Carrier name dropped entirely; supports compliance requirement to avoid subscriber data. | 7 days. |
+|チャンネル |フィールド | PII リスク |緩和 |保持 |
+|-----------|----------|----------|-----------|-----------|
+|トレース (`android.torii.http.request`、`android.torii.http.retry`) |ルート、ステータス、遅延 |低 (PII なし) | Blake2b + 回転ソルトでハッシュ化された権限。ペイロード本体はエクスポートされません。 | 7 ～ 30 日 (テレメトリ ドキュメントごと)。 |
+|イベント (`android.keystore.attestation.result`) |エイリアス ラベル、セキュリティ レベル、証明書ダイジェスト |中 (運用データ) |ハッシュされたエイリアス (`alias_label`)、`actor_role_masked` は、Norito 監査トークンによるオーバーライド用に記録されます。 |成功の場合は 90 日、オーバーライド/失敗の場合は 365 日です。 |
+|メトリクス (`android.pending_queue.depth`、`android.telemetry.export.status`) |キュー数、エクスポーターのステータス |低い |集計された数のみ。 | 90日。 |
+|デバイス プロファイル ゲージ (`android.telemetry.device_profile`) | SDK メジャー、ハードウェア層 |中 |バケット化 (エミュレータ/コンシューマ/エンタープライズ)、OEM またはシリアル番号はありません。 | 30日。 |
+|ネットワーク コンテキスト イベント (`android.telemetry.network_context`) |ネットワーク タイプ、ローミング フラグ |中 |キャリア名は完全に削除されました。加入者データを回避するためのコンプライアンス要件をサポートします。 | 7日間。 |
 
-## 3. Lawful Basis & Rights
+## 3. 法的根拠と権利
 
-- **Lawful basis:** Legitimate interest (Art. 6(1)(f)) — ensuring reliable operation of regulated ledger clients.
-- **Necessity test:** Metrics limited to operational health (no user content); hashed authority ensures parity with Rust nodes through reversible mapping available only to authorised support personnel (via override workflow).
-- **Balancing test:** Telemetry is scoped to operator-controlled devices, not end-user data. Overrides require signed Norito artefacts reviewed by Support + Compliance (Support Playbook §3 + §9).
-- **Data subject rights:** Operators contact Support Engineering (playbook §2) to request telemetry export/delete. Redaction overrides and logs (telemetry doc §Signal Inventory) enable fulfilment within 30 days.
+- **法的根拠:** 正当な利益 (第 6 条(1)(f)) - 規制された台帳クライアントの信頼できる運用を保証します。
+- **必要性テスト:** 運用の健全性に限定されたメトリクス (ユーザー コンテンツなし)。ハッシュされた権限は、認可されたサポート担当者のみが利用できる可逆マッピングを通じて (オーバーライド ワークフロー経由で) Rust ノードとの同等性を保証します。
+- **バランシング テスト:** テレメトリの範囲は、エンドユーザー データではなく、オペレーターが制御するデバイスに限定されます。オーバーライドには、サポート + コンプライアンスによってレビューされた署名済みの Norito アーティファクトが必要です (サポート プレイブック §3 + §9)。
+- **データ主体の権利:** オペレーターはサポート エンジニアリング (プレイブック §2) に連絡して、テレメトリのエクスポート/削除をリクエストします。リダクション オーバーライドとログ (テレメトリ ドキュメント §Signal Inventory) により、30 日以内のフルフィルメントが可能になります。
 
-## 4. Risk Assessment
+## 4. リスク評価|リスク |可能性 |影響 |残留軽減 |
+|-----|----------|----------|---------------------|
+|ハッシュ化された権限による再識別 |低い |中 | `android.telemetry.redaction.salt_version` を通じて記録されたソルトローテーション。塩は安全な保管庫に保管されます。四半期ごとに監査されるものを上書きします。 |
+|プロファイルバケットを介したデバイスのフィンガープリンティング |低い |中 |ティア + SDK メジャーのみがエクスポートされます。サポート ハンドブックでは、OEM/シリアル データのエスカレーション リクエストが禁止されています。 |
+|漏洩した PII の誤用を無効にする |非常に低い |高 | Norito オーバーライド要求は記録され、24 時間以内に期限切れになり、SRE の承認が必要です (`docs/source/android_runbook.md` §3)。 |
+| EU 外のテレメトリ ストレージ |中 |中 |コレクターは EU + JP 地域に展開されます。 OTLP バックエンド構成を介して適用される保持ポリシー (サポート プレイブック §8 に記載)。 |
 
-| Risk | Likelihood | Impact | Residual Mitigation |
-|------|------------|--------|---------------------|
-| Re-identification via hashed authorities | Low | Medium | Salt rotation recorded through `android.telemetry.redaction.salt_version`; salts stored in secure vault; overrides audited quarterly. |
-| Device fingerprinting via profile buckets | Low | Medium | Only tier + SDK major exported; Support Playbook prohibits escalation requests for OEM/serial data. |
-| Override misuse leaking PII | Very Low | High | Norito override requests logged, expire within 24h, require SRE approval (`docs/source/android_runbook.md` §3). |
-| Telemetry storage outside EU | Medium | Medium | Collectors deployed in EU + JP regions; retention policy enforced via OTLP backend configuration (documented in Support Playbook §8). |
+上記の管理と継続的なモニタリングを考慮すると、残留リスクは許容できると見なされます。
 
-Residual risk is deemed acceptable given the controls above and ongoing monitoring.
+## 5. アクションとフォローアップ
 
-## 5. Actions & Follow-ups
-
-1. **Quarterly review:** Validate telemetry schemas, salt rotations, and override logs; document in `docs/source/sdk/android/telemetry_redaction_minutes_YYYYMMDD.md`.
-2. **Cross-SDK alignment:** Coordinate with Swift/JS maintainers to maintain consistent hashing/bucketing rules (tracked in roadmap AND7).
-3. **Partner comms:** Include DPIA summary in partner onboarding kits (Support Playbook §9) and link to this document from `status.md`.
+1. **四半期レビュー:** テレメトリ スキーマ、ソルト ローテーション、およびオーバーライド ログを検証します。 `docs/source/sdk/android/telemetry_redaction_minutes_YYYYMMDD.md` のドキュメント。
+2. **SD​​K 間の調整:** Swift/JS メンテナと調整して、一貫したハッシュ/バケット ルールを維持します (ロードマップ AND7 で追跡)。
+3. **パートナー コミュニケーション:** パートナー オンボーディング キット (サポート ハンドブック §9) に DPIA の概要を含め、`status.md` からこのドキュメントへのリンクを追加します。

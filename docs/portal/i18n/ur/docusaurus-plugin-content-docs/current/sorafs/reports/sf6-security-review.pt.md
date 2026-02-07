@@ -4,76 +4,74 @@ direction: rtl
 source: docs/portal/docs/sorafs/reports/sf6-security-review.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Revisao de seguranca SF-6
-summary: Achados e itens de acompanhamento da avaliacao independente de keyless signing, proof streaming e pipelines de envio de manifests.
+عنوان: SF-6 سیکیورٹی جائزہ
+خلاصہ: کیلیس پر دستخط کرنے ، پروف اسٹریمنگ اور مینی فیسٹ جمع کرانے کی پائپ لائنوں کی آزادانہ تشخیص سے پائے جانے والے نتائج اور فالو اپ آئٹمز۔
 ---
 
-# Revisao de seguranca SF-6
+# SF-6 سیکیورٹی جائزہ
 
-**Janela de avaliacao:** 2026-02-10 -> 2026-02-18  
-**Lideres da revisao:** Security Engineering Guild (`@sec-eng`), Tooling Working Group (`@tooling-wg`)  
-**Escopo:** SoraFS CLI/SDK (`sorafs_cli`, `sorafs_car`, `sorafs_manifest`), proof streaming APIs, Torii manifest handling, integracao Sigstore/OIDC, CI release hooks.  
-**Artefactos:**  
-- Fonte do CLI e tests (`crates/sorafs_car/src/bin/sorafs_cli.rs`)  
-- Torii manifest/proof handlers (`crates/iroha_torii/src/sorafs/api.rs`)  
-- Release automation (`ci/check_sorafs_cli_release.sh`, `scripts/release_sorafs_cli.sh`)  
-- Deterministic parity harness (`crates/sorafs_car/tests/sorafs_cli.rs`, [SoraFS Orchestrator GA Parity Report](./orchestrator-ga-parity.md))
+** تشخیص ونڈو: ** 2026-02-10-> 2026-02-18  
+** جائزہ لیڈر: ** سیکیورٹی انجینئرنگ گلڈ (`@sec-eng`) ، ٹولنگ ورکنگ گروپ (`@tooling-wg`)  
+** دائرہ کار: ** SoraFS CLI/SDK (`sorafs_cli` ، `sorafs_car` ، `sorafs_manifest`) ، پروف اسٹریمنگ APIs ، Torii مینی فیسٹ ہکنگ ، انضمام Sigstore/Sigstore  
+** نمونے: **  
+- CLI ماخذ اور ٹیسٹ (`crates/sorafs_car/src/bin/sorafs_cli.rs`)  
+- Torii مینی فیسٹ/پروف ہینڈلرز (`crates/iroha_torii/src/sorafs/api.rs`)  
+- ریلیز آٹومیشن (`ci/check_sorafs_cli_release.sh` ، `scripts/release_sorafs_cli.sh`)  
+- تعصب کی برابری کا استعمال
 
-## Metodologia
+## طریقہ کار
 
-1. **Threat modelling workshops** mapearam capacidades de ataque para workstations de developers, sistemas CI e nodes Torii.  
-2. **Code review** focou em credential surfaces (OIDC token exchange, keyless signing), validacao de Norito manifests e back-pressure em proof streaming.  
-3. **Dynamic testing** reexecutou fixture manifests e simulou failure modes (token replay, manifest tampering, proof streams truncados) usando parity harness e fuzz drives sob medida.  
-4. **Configuration inspection** validou defaults `iroha_config`, CLI flag handling e release scripts para garantir runs deterministicas e auditaveis.  
-5. **Process interview** confirmou remediation flow, escalation paths e captura de audit evidence com os release owners do Tooling WG.
+1. ** دھمکی ماڈلنگ ورکشاپس ** ڈویلپر ورک سٹیشنوں ، سی آئی سسٹم اور Torii نوڈس کے لئے حملے کی صلاحیتوں کا نقشہ تیار کریں۔  
+2. ** کوڈ کا جائزہ ** اسناد کی سطحوں (OIDC ٹوکن ایکسچینج ، کیلیس سائننگ) ، Norito کی توثیق اور پروف اسٹریمنگ میں بیک پریشر کی توثیق۔  
+3.  
+4.  
+5. ** عمل انٹرویو ** تصدیق شدہ تدارک کے بہاؤ ، بڑھتی ہوئی راہیں اور آڈٹ شواہد کو ٹولنگ ڈبلیو جی کی رہائی کے مالکان کے ساتھ گرفتاری کی تصدیق کی گئی۔
 
-## Findings Summary
+## نتائج کا خلاصہ| ID | شدت | علاقہ | تلاش | قرارداد |
+| ---- | ---------- | ------ | --------- | -------------- |
+| SF6-SR-01 | اعلی | کیلیس سائننگ | OIDC ٹوکن سامعین ڈیفالٹس CI ٹیمپلیٹس میں شامل تھے ، جس میں کراس ٹینینٹ ری پلے کا خطرہ تھا۔ | ریلیز ہکس اور سی آئی ٹیمپلیٹس ([رہائی کے عمل] (../developer-releases.md) ، `docs/examples/sorafs_ci.md`) میں `--identity-token-audience` کے واضح نفاذ کو شامل کیا گیا۔ جب سامعین کو چھوڑ دیا جاتا ہے تو CI اب ناکام ہوجاتا ہے۔ |
+| SF6-SR-02 | میڈیم | پروف اسٹریمنگ | بیک دباؤ والے راستوں نے لامحدود صارفین کو قبول کیا ، جس سے میموری کی تھکن کی اجازت دی جاسکتی ہے۔ | `sorafs_cli proof stream` محدود چینل کے سائز کا اطلاق کرتا ہے جس میں ڈٹرمینسٹک تراشیں ، ریکارڈز Norito خلاصے کا خلاصہ ہوتا ہے اور ندی کو ختم کرتا ہے۔ Torii آئینے کو رسپانس حصوں (`crates/iroha_torii/src/sorafs/api.rs`) کو محدود کرنے کے لئے اپ ڈیٹ کیا گیا ہے۔ |
+| SF6-SR-03 | میڈیم | منشور جمع کرانا | جب `--plan` غائب تھا تو سی ایل آئی نے ایمبیڈڈ حصوں کے منصوبوں کی جانچ کیے بغیر ظاہر کیا۔ | `sorafs_cli manifest submit` اب کار ہاضموں کی بحالی اور موازنہ کرتا ہے جب تک کہ `--expect-plan-digest` فراہم نہیں کیا جاتا ہے ، مماثلت کو مسترد کرتے ہیں اور تدارک کے اشارے کی نمائش کرتے ہیں۔ ٹیسٹ میں کامیابی/ناکامی کے معاملات (`crates/sorafs_car/tests/sorafs_cli.rs`) کا احاطہ کیا گیا ہے۔ |
+| SF6-SR-04 | کم | آڈٹ ٹریل | ریلیز چیک لسٹ میں سیکیورٹی جائزے کے لئے دستخط شدہ منظوری لاگ ان نہیں تھا۔ | GA سے پہلے [ریلیز کے عمل] (../developer-releases.md) میں ایک سیکشن شامل کیا گیا ہے جس میں جائزہ میمو ہیشس اور سائن آف آف ٹکٹ URL کو شامل کرنے کی ضرورت ہوتی ہے۔ |
 
-| ID | Severity | Area | Finding | Resolution |
-|----|----------|------|---------|------------|
-| SF6-SR-01 | High | Keyless signing | OIDC token audience defaults estavam implicitos em CI templates, com risco de cross-tenant replay. | Foi adicionada enforcement explicita de `--identity-token-audience` em release hooks e CI templates ([release process](../developer-releases.md), `docs/examples/sorafs_ci.md`). O CI agora falha quando a audience e omitida. |
-| SF6-SR-02 | Medium | Proof streaming | Back-pressure paths aceitavam buffers de subscribers sem limite, permitindo memory exhaustion. | `sorafs_cli proof stream` aplica channel sizes limitados com truncation deterministico, registra Norito summaries e aborta o stream; o Torii mirror foi atualizado para limitar response chunks (`crates/iroha_torii/src/sorafs/api.rs`). |
-| SF6-SR-03 | Medium | Manifest submission | O CLI aceitava manifests sem verificar embedded chunk plans quando `--plan` estava ausente. | `sorafs_cli manifest submit` agora recomputa e compara CAR digests a menos que `--expect-plan-digest` seja fornecido, rejeitando mismatches e exibindo remediation hints. Tests cobrem casos de sucesso/falha (`crates/sorafs_car/tests/sorafs_cli.rs`). |
-| SF6-SR-04 | Low | Audit trail | O release checklist nao tinha um signed approval log para a revisao de seguranca. | Foi adicionada uma secao em [release process](../developer-releases.md) exigindo anexar hashes do review memo e URL do ticket de sign-off antes de GA. |
+جائزہ ونڈو کے دوران تمام اعلی/درمیانے درجے کے نتائج کو درست کیا گیا تھا اور موجودہ برابری کے ذریعہ اس کی توثیق کی گئی تھی۔ کوئی دیرپا تنقیدی مسائل باقی نہیں ہیں۔
 
-Todos os achados high/medium foram corrigidos durante a janela de revisao e validados pelo parity harness existente. Nenhum issue critico latente permanece.
+## کنٹرول کی توثیق
 
-## Control Validation
+- ** اسناد کا دائرہ: ** سی آئی ٹیمپلیٹس کو اب واضح سامعین اور جاری کرنے والے کی ضرورت ہے۔ سی ایل آئی اور ریلیز ہیلپر تیزی سے ناکام ہوجاتا ہے جب تک کہ `--identity-token-audience` `--identity-token-provider` کی پیروی نہیں کرتا ہے۔  
+۔  
+۔  
+۔  
+۔
 
-- **Credential scope:** CI templates agora exigem audience e issuer explicitos; o CLI e o release helper falham rapido a menos que `--identity-token-audience` acompanhe `--identity-token-provider`.  
-- **Deterministic replay:** Tests atualizados cobrem fluxos positivos/negativos de manifest submission, garantindo que mismatched digests continuem sendo falhas nao deterministicas e sejam expostas antes de tocar a rede.  
-- **Proof streaming back-pressure:** Torii agora faz stream de itens PoR/PoTR em canais limitados, e o CLI reten apenas latency samples truncados + cinco failure exemplars, prevenindo crescimento sem limite e mantendo summaries deterministicas.  
-- **Observability:** Proof streaming counters (`torii_sorafs_proof_stream_*`) e CLI summaries capturam abort reasons, fornecendo audit breadcrumbs aos operadores.  
-- **Documentation:** Developer guides ([developer index](../developer-index.md), [CLI reference](../developer-cli.md)) destacam flags sensiveis a seguranca e escalation workflows.
+## جاری چیک لسٹ کے اضافے
 
-## Release Checklist Additions
+ریلیز مینیجرز ** لازمی طور پر ** جی اے امیدوار کو فروغ دیتے وقت درج ذیل شواہد کو منسلک کریں:1. حالیہ سیکیورٹی جائزہ میمو (اس دستاویز) کا ہیش۔  
+2. ٹریک شدہ تدارک کے ٹکٹ سے لنک (جیسے: `governance/tickets/SF6-SR-2026.md`)۔  
+3. `scripts/release_sorafs_cli.sh --manifest ... --bundle-out ... --signature-out ...` کا آؤٹ پٹ واضح سامعین/جاری کرنے والے دلائل کو ظاہر کرتا ہے۔  
+4. نباتات کو برابری سے حاصل کردہ (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`) سے لیا گیا ہے۔  
+5. تصدیق کہ Torii ریلیز نوٹوں میں پابند پروف اسٹریمنگ ٹیلی میٹری کاؤنٹرز شامل ہیں۔
 
-Release managers **devem** anexar a seguinte evidencia ao promover um GA candidate:
+مذکورہ بالا نمونے بلاکس جی اے سائن آف جمع نہیں کرنا۔
 
-1. Hash do security review memo mais recente (este documento).  
-2. Link para o remediation ticket rastreado (ex.: `governance/tickets/SF6-SR-2026.md`).  
-3. Output de `scripts/release_sorafs_cli.sh --manifest ... --bundle-out ... --signature-out ...` mostrando argumentos audience/issuer explicitos.  
-4. Logs capturados do parity harness (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`).  
-5. Confirmacao de que as release notes do Torii incluem bounded proof streaming telemetry counters.
-
-Nao coletar os artefactos acima bloqueia o sign-off de GA.
-
-**Reference artefact hashes (sign-off 2026-02-20):**
+** حوالہ نمونے والے ہیش (سائن آف 2026-02-20): **
 
 - `sf6_security_review.md` - `66001d0b53d8e7ed5951a07453121c075dea931ca44c11f1fcd1571ed827342a`
 
-## Outstanding Follow-ups
+## بقایا فالو اپ
 
-- **Threat model refresh:** Repita esta revisao trimestralmente ou antes de grandes adicoes de CLI flags.  
-- **Fuzzing coverage:** Proof streaming transport encodings sao fuzzed via `fuzz/proof_stream_transport`, cobrindo payloads identity, gzip, deflate e zstd.  
-- **Incident rehearsal:** Agende um exercicio de operadores simulando token compromise e manifest rollback, garantindo que a documentacao reflita procedimentos praticados.
+- ** دھمکی ماڈل ریفریش: ** اس جائزے کو سہ ماہی یا بڑے سی ایل آئی پرچم اضافے سے پہلے دہرائیں۔  
+۔  
+۔
 
-## Approval
+## منظوری
 
-- Security Engineering Guild representative: @sec-eng (2026-02-20)  
-- Tooling Working Group representative: @tooling-wg (2026-02-20)
+-سیکیورٹی انجینئرنگ گلڈ کا نمائندہ: @سیکنڈ-اینگ (2026-02-20)  
+-ٹولنگ ورکنگ گروپ کے نمائندے: @ٹولنگ-ڈبلیو جی (2026-02-20)
 
-Guarde approvals assinados junto ao release artefact bundle.
+ریلیز آرٹ فیکٹ بنڈل کے ساتھ اسٹور پر دستخط شدہ منظورییں۔

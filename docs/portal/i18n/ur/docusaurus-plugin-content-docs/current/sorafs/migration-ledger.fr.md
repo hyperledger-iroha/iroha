@@ -4,41 +4,43 @@ direction: rtl
 source: docs/portal/docs/sorafs/migration-ledger.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Registre de migration SoraFS
-description: Journal des changements canonique qui suit chaque jalon de migration, les responsables et les suivis requis.
+عنوان: منتقلی رجسٹر SoraFS
+تفصیل: کیننیکل چینجلوگ جو ہر منتقلی کے سنگ میل ، دیکھ بھال کرنے والے ، اور مطلوبہ فالو اپس کو ٹریک کرتا ہے۔
 ---
 
-> Adapte de [`docs/source/sorafs/migration_ledger.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_ledger.md).
+> [`docs/source/sorafs/migration_ledger.md`] (https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_ledger.md) سے موافقت پذیر۔
 
-# Registre de migration SoraFS
+# منتقلی رجسٹر SoraFS
 
-Ce registre reprend le journal des migrations capture dans le RFC d'architecture
-SoraFS. Les entrees sont groupees par jalon et indiquent la fenetre effective,
-les equipes impactees et les actions requises. Les mises a jour du plan de
-migration DOIVENT modifier cette page et le RFC
-(`docs/source/sorafs_architecture_rfc.md`) pour garder les consommateurs en aval
-alignes.
+اس رجسٹر میں آرکیٹیکچر آر ایف سی میں پکڑے جانے والے ہجرت لاگ شامل ہیں
+SoraFS۔ اندراجات کو سنگ میل کے ذریعہ گروپ کیا جاتا ہے اور موثر ونڈو کی نشاندہی کرتے ہیں ،
+ٹیموں نے متاثر کیا اور درکار اقدامات۔ منصوبے کی تازہ کاری
+ہجرت کو اس صفحے اور آر ایف سی میں ترمیم کرنا ہوگی
+(`docs/source/sorafs_architecture_rfc.md`) صارفین کو بہاو رکھنے کے لئے
+منسلک
 
-| Jalon | Fenetre effective | Resume du changement | Equipes impactees | Actions | Statut |
-|-------|-------------------|---------------------|------------------|---------|--------|
-| M1 | Semaines 7–12 | Le CI impose des fixtures deterministes; les preuves d'alias sont disponibles en staging; le tooling expose des flags d'attente explicites. | Docs, Storage, Governance | S'assurer que les fixtures restent signees, enregistrer les alias dans le registry de staging, mettre a jour les checklists de release avec l'exigence `--car-digest/--root-cid`. | ⏳ En attente |
+| سنگ میل | موثر ونڈو | تبدیلی کا خلاصہ | متاثرہ ٹیمیں | اعمال | حیثیت |
+| ------- | --------- | ------------------------ | ---------------------- | --------- | -------- |
+| M1 | ہفتے 7–12 | سی آئی نے عزم فکسچر مسلط کیا ہے۔ عرف ثبوت اسٹیجنگ میں دستیاب ہیں۔ ٹولنگ واضح انتظار کے جھنڈوں کو بے نقاب کرتی ہے۔ | دستاویزات ، اسٹوریج ، گورننس | اس بات کو یقینی بنائیں کہ فکسچر پر دستخط رہیں ، اسٹیجنگ رجسٹری میں عرفی رجسٹر کریں ، ریلیز چیک لسٹ کو ضرورت کے ساتھ `--car-digest/--root-cid` کے ساتھ اپ ڈیٹ کریں۔ | ⏳ انتظار |
 
-Les minutes du plan de controle de gouvernance qui referencent ces jalons vivent sous
-`docs/source/sorafs/`. Les equipes doivent ajouter des puces datees sous chaque ligne
-lorsque des evenements notables surviennent (ex: nouveaux enregistrements d'alias,
-retrospectives d'incidents du registry) afin de fournir une trace auditable.
+گورننس کنٹرول پلان کے منٹ جو ان سنگ میل کا حوالہ دیتے ہیں
+`docs/source/sorafs/`۔ ٹیموں کو ہر لائن کے نیچے ڈیٹڈ بلٹ پوائنٹس شامل کرنا چاہئے
+جب قابل ذکر واقعات پیش آتے ہیں (جیسے عرف کی نئی رجسٹریشن ،
+رجسٹری کے واقعے کی پسپائی) آڈٹیبل ٹریس فراہم کرنے کے لئے۔
 
-## Mises a jour recentes
+## حالیہ تازہ کارییں
 
-- 2025-11-01 — Diffusion de `migration_roadmap.md` au conseil de gouvernance et aux listes
-  operateurs pour revision; en attente de validation lors de la prochaine session du
-  conseil (ref: suivi `docs/source/sorafs/council_minutes_2025-10-29.md`).
-- 2025-11-02 — L'ISI d'enregistrement du Pin Registry applique desormais la validation
-  partagee chunker/politique via les helpers `sorafs_manifest`, gardant les chemins
-  on-chain alignes avec les checks Torii.
-- 2026-02-13 — Ajout des phases de rollout de provider advert (R0–R3) au registre et
-  publication des dashboards et de la guidance operateur associes
-  (`provider_advert_rollout.md`, `grafana_sorafs_admission.json`).
+-2025-11-01-گورننس کونسل اور فہرستوں میں `migration_roadmap.md` کی تقسیم
+  نظرثانی کے لئے آپریٹرز ؛ کے اگلے سیشن کے دوران توثیق کے منتظر
+  مشورہ (ریف: فالو اپ `docs/source/sorafs/council_minutes_2025-10-29.md`)۔
+-2025-11-02-پن رجسٹری رجسٹریشن ISI اب توثیق کا اطلاق کرتا ہے
+  مشترکہ چنکر/پالیسی برائے مددگار `sorafs_manifest` کے ذریعے ، راستوں کو برقرار رکھتے ہوئے
+  آن چین چیک کے ساتھ منسلک Torii۔
+-2026-02-13-رجسٹری میں فراہم کنندہ ایڈورٹ رول آؤٹ مراحل (R0-R3) اور
+  ڈیش بورڈز اور اس سے وابستہ آپریٹر رہنمائی کی اشاعت
+  (`provider_advert_rollout.md` ، `grafana_sorafs_admission.json`)۔

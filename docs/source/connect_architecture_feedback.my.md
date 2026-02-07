@@ -7,82 +7,79 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 097ea58d49f48d059cda762cd719bc62f0b2d6f6ddecedef3f9bac030ae46aec
 source_last_modified: "2025-12-29T18:16:35.934098+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-#! Connect Architecture Feedback Checklist
+#! ဗိသုကာဆိုင်ရာ အကြံပြုချက် စစ်ဆေးရန်စာရင်းကို ချိတ်ဆက်ပါ။
 
-This checklist captures the open questions from the Connect Session Architecture
-strawman that require input from the Android and JavaScript leads before the
-Feb 2026 cross-SDK workshop. Use it to collect comments asynchronously, track
-ownership, and unblock the workshop agenda.
+ဤစစ်ဆေးချက်စာရင်းသည် ချိတ်ဆက်စက်ရှင်ဗိသုကာမှဖွင့်ထားသောမေးခွန်းများကို ဖမ်းယူပါသည်။
+Android နှင့် JavaScript တို့မှ ထည့်သွင်းမှု လိုအပ်သော strawman သည် ရှေ့မှ ဦးဆောင်သည်။
+Feb 2026 ဖြတ်ကျော် SDK အလုပ်ရုံဆွေးနွေးပွဲ။ မှတ်ချက်များကို တပြိုင်တည်း စုဆောင်း၊ ခြေရာခံရန် ၎င်းကို အသုံးပြုပါ။
+ပိုင်ဆိုင်မှု၊ အလုပ်ရုံဆွေးနွေးပွဲ အစီအစဉ်ကို ပိတ်ဆို့ပါ။
 
-> Status / Notes column captured final responses from Android and JS leads as of
-> the Feb 2026 pre-workshop sync; link new follow-up issues inline if decisions
-> evolve.
+> Status / Notes ကော်လံသည် Android မှ နောက်ဆုံးတုံ့ပြန်ချက်များကို ဖမ်းယူထားပြီး JS မှ ဦးဆောင်သည်။
+> Feb 2026 အလုပ်ရုံဆွေးနွေးပွဲအကြို စင့်ခ်လုပ်ခြင်း၊ ဆုံးဖြတ်ချက်များရှိပါက နောက်ဆက်တွဲပြဿနာအသစ်များကို ချိတ်ဆက်ပါ။
+> တိုးတက်သည်။
 
 ## Session Lifecycle & Transport
 
-| Topic | Android owner | JS owner | Status / Notes |
-|-------|---------------|----------|----------------|
-| WebSocket reconnect back-off strategy (exponential vs. capped linear) | Android Networking TL | JS Lead | ✅ Agreed on exponential back-off with jitter, capped at 60 s; JS mirrors same constants for browser/node parity. |
-| Offline buffer capacity defaults (current strawman: 32 frames) | Android Networking TL | JS Lead | ✅ Confirmed 32-frame default with config override; Android persists via `ConnectQueueConfig`, JS respects `window.connectQueueMax`. |
-| Push-style reconnect notifications (FCM/APNS vs. polling) | Android Networking TL | JS Lead | ✅ Android will expose optional FCM hook for wallet apps; JS remains polling-based with exponential back-off, noting browser push constraints. |
-| Ping/pong cadence guardrails for mobile clients | Android Networking TL | JS Lead | ✅ Standardised 30 s ping with 3× miss tolerance; Android balances Doze impact, JS clamps to ≥15 s to avoid browser throttling. |
+| ခေါင်းစဉ် | Android ပိုင်ရှင် | JS ပိုင်ရှင် | အဆင့်အတန်း / မှတ်စုများ |
+|--------|----------------|----------------|----------------|
+| WebSocket ပြန်လည်ချိတ်ဆက်ရန်-အပိတ်နည်းဗျူဟာ (exponential vs. capped linear) | Android ကွန်ရက်ချိတ်ဆက်ခြင်း TL | JS ဦးဆောင် | ✅ 60s တွင် ကန့်သတ်ထားသော တုန်လှုပ်ချောက်ချားမှုဖြင့် ကိန်းဂဏန်းပြန်ပိတ်ခြင်းကို သဘောတူသည်။ JS သည် browser/node parity အတွက် တူညီသောကိန်းသေများကို ထင်ဟပ်စေသည်။ |
+| အော့ဖ်လိုင်းကြားခံစွမ်းရည် ပုံသေများ (လက်ရှိ strawman: 32 frames) | Android ကွန်ရက်ချိတ်ဆက်ခြင်း TL | JS ဦးဆောင် | ✅ config override ဖြင့် 32-frame default ကိုအတည်ပြုခဲ့သည် Android သည် `ConnectQueueConfig` မှတစ်ဆင့် ဆက်ရှိနေသည်၊ JS သည် `window.connectQueueMax` ကို လေးစားပါသည်။ |
+| တွန်းအားပေးပုံစံ ပြန်လည်ချိတ်ဆက်မှု သတိပေးချက်များ (FCM/APNS နှင့် မဲရုံများ) | Android ကွန်ရက်ချိတ်ဆက်ခြင်း TL | JS ဦးဆောင် | ✅ Android သည် ပိုက်ဆံအိတ်အက်ပ်များအတွက် စိတ်ကြိုက်ရွေးချယ်နိုင်သော FCM ချိတ်ကို ဖော်ထုတ်ပါမည်။ JS သည် browser push ကန့်သတ်ချက်များကို သတိပြုမိပြီး exponential back-off ဖြင့် မဲရုံကိုအခြေခံထားသည်။ |
+| မိုဘိုင်း သုံးစွဲသူများအတွက် ပင်း/ပေါင် အကာအရံများ | Android ကွန်ရက်ချိတ်ဆက်ခြင်း TL | JS ဦးဆောင် | ✅ 3× miss tolerance ဖြင့် စံသတ်မှတ်ထားသော 30s ping၊ Android သည် Doze သက်ရောက်မှုကို ချိန်ခွင်လျှာညှိပေးသည်၊ JS သည် ဘရောက်ဆာအဟန့်အတားမဖြစ်စေရန် ≥15s သို့ ကုပ်ထားသည်။ |
 
-## Encryption & Key Management
+## ကုဒ်ဝှက်ခြင်းနှင့် သော့စီမံခန့်ခွဲမှု
 
-| Topic | Android owner | JS owner | Status / Notes |
-|-------|---------------|----------|----------------|
-| X25519 key storage expectations (StrongBox, WebCrypto secure contexts) | Android Crypto TL | JS Lead | ✅ Android stores X25519 in StrongBox when available (falls back to TEE); JS mandates secure-context WebCrypto for dApps, falling back to the native `iroha_js_host` bridge in Node. |
-| ChaCha20-Poly1305 nonce management sharing across SDKs | Android Crypto TL | JS Lead | ✅ Adopt shared `sequence` counter API with 64-bit wrap guard and shared tests; JS uses BigInt counters to match Rust behaviour. |
-| Hardware-backed attestation payload schema | Android Crypto TL | JS Lead | ✅ Schema finalised: `attestation { platform, evidence_b64, statement_hash }`; JS optional (browser), Node uses HSM plug-in hook. |
-| Recovery flow for lost wallets (key rotation handshake) | Android Crypto TL | JS Lead | ✅ Wallet rotation handshake accepted: dApp issues `rotate` control, wallet replies with new pubkey + signed acknowledgment; JS re-keys WebCrypto material immediately. |
+| ခေါင်းစဉ် | Android ပိုင်ရှင် | JS ပိုင်ရှင် | အဆင့်အတန်း / မှတ်စုများ |
+|--------|----------------|----------------|----------------|
+| X25519 သော့သိုလှောင်မှုမျှော်လင့်ချက်များ (StrongBox၊ WebCrypto လုံခြုံသောအကြောင်းအရာများ) | Android Crypto TL | JS ဦးဆောင် | ✅ Android သည် X25519 ကိုရရှိနိုင်သောအခါ StrongBox တွင်သိမ်းဆည်းထားသည် (TEE သို့ပြန်သွားသည်); JS သည် dApps အတွက် လုံခြုံသောအကြောင်းအရာ WebCrypto ကို ပြဌာန်းထားပြီး Node ရှိ မူရင်း `iroha_js_host` တံတားသို့ ပြန်လည်ရောက်ရှိသွားပါသည်။ |
+| ChaCha20-Poly1305 SDKs | Android Crypto TL | JS ဦးဆောင် | ✅ မျှဝေထားသော `sequence` ကောင်တာ API ကို 64-bit wrap guard နှင့် shared tests များလက်ခံပါ။ JS သည် Rust အပြုအမူနှင့်ကိုက်ညီရန် BigInt ကောင်တာများကိုအသုံးပြုသည်။ |
+| ဟာ့ဒ်ဝဲ-ကျောထောက်နောက်ခံပြု သက်သေပြခြင်း payload schema | Android Crypto TL | JS ဦးဆောင် | ✅ အစီအစဉ် အပြီးသတ်- `attestation { platform, evidence_b64, statement_hash }`; JS ရွေးချယ်နိုင်သော (ဘရောက်ဆာ)၊ Node သည် HSM plug-in ချိတ်ကို အသုံးပြုသည်။ |
+| ဆုံးရှုံးသွားသော ပိုက်ဆံအိတ်များအတွက် ပြန်လည်ရယူခြင်း (သော့လှည့်ခြင်း လက်ဆွဲနှုတ်ဆက်ခြင်း) | Android Crypto TL | JS ဦးဆောင် | ✅ ပိုက်ဆံအိတ်လည်ပတ်မှုကို လက်ဆွဲနှုတ်ဆက်ခြင်းကို လက်ခံသည်- dApp ပြဿနာများ `rotate` ထိန်းချုပ်မှု၊ pubkey အသစ် + အသိအမှတ်ပြုလက်မှတ်ထိုးထားသော ပိုက်ဆံအိတ်မှ ပြန်စာများ၊ JS သည် WebCrypto ပစ္စည်းကို ချက်ခြင်းပြန်လုပ်သည်။ |
 
-## Permissions & Proof Bundles
-
-| Topic | Android owner | JS owner | Status / Notes |
-|-------|---------------|----------|----------------|
-| Minimum permission schema (methods/events/resources) for GA | Android Data Model TL | JS Lead | ✅ GA baseline: `methods`, `events`, `resources`, `constraints`; JS aligns TypeScript types with Rust manifest. |
-| Wallet rejection payload (`reason_code`, localized messages) | Android Networking TL | JS Lead | ✅ Codes finalised (`user_declined`, `permissions_mismatch`, `compliance_failed`, `internal_error`) plus optional `localized_message`. |
-| Proof bundle optional fields (compliance/KYC attachments) | Android Data Model TL | JS Lead | ✅ All SDKs accept optional `attachments[]` (Norito `AttachmentRef`) and `compliance_manifest_id`; no behaviour change required. |
-| Alignment on Norito JSON schema vs. bridge-generated structs | Android Data Model TL | JS Lead | ✅ Decision: prefer bridge-generated structs; JSON path remains for debugging only, JS keeps `Value` adapter. |
+## ခွင့်ပြုချက်များနှင့် သက်သေအစုအဝေးများ| ခေါင်းစဉ် | Android ပိုင်ရှင် | JS ပိုင်ရှင် | အဆင့်အတန်း / မှတ်စုများ |
+|--------|----------------|----------------|----------------|
+| GA | အတွက် အနည်းဆုံးခွင့်ပြုချက်အစီအစဉ် (နည်းလမ်းများ/ဖြစ်ရပ်များ/အရင်းအမြစ်များ) Android Data Model TL | JS ဦးဆောင် | ✅ GA အခြေခံလိုင်း- `methods`, `events`, `resources`, `constraints`; JS သည် TypeScript အမျိုးအစားများကို Rust manifest ဖြင့် ချိန်ညှိပေးသည်။ |
+| ပိုက်ဆံအိတ် ပယ်ချခံရသော ဝန်ဆောင်ခ (`reason_code`၊ ပြောင်းပြန်လှန်ထားသော စာတိုများ) | Android ကွန်ရက်ချိတ်ဆက်ခြင်း TL | JS ဦးဆောင် | ✅ အပြီးသတ် ကုဒ်များ (`user_declined`, `permissions_mismatch`, `compliance_failed`, `internal_error`) နှင့် ရွေးချယ်နိုင်သော `localized_message`။ |
+| အထောက်အထား အတွဲလိုက် ရွေးချယ်နိုင်သော အကွက်များ (လိုက်နာမှု/KYC ပူးတွဲပါဖိုင်များ) | Android Data Model TL | JS ဦးဆောင် | ✅ SDK များအားလုံးသည် ရွေးချယ်နိုင်သော `attachments[]` (Norito `AttachmentRef`) နှင့် `compliance_manifest_id` လက်ခံပါသည်။ အပြုအမူပြောင်းလဲရန်မလိုအပ်ပါ။ |
+| Norito JSON schema နှင့် ပေါင်းကူးထုတ်လုပ်ထားသော တည်ဆောက်ပုံများ | Android Data Model TL | JS ဦးဆောင် | ✅ ဆုံးဖြတ်ချက်- တံတားတည်ဆောက်ပုံများကို နှစ်သက်သည်။ JSON လမ်းကြောင်းသည် အမှားရှာပြင်ခြင်းအတွက်သာ ကျန်ရှိနေသည်၊ JS သည် `Value` အဒက်တာကို ထိန်းသိမ်းထားသည်။ |
 
 ## SDK Facades & API Shape
 
-| Topic | Android owner | JS owner | Status / Notes |
-|-------|---------------|----------|----------------|
-| High-level async interfaces (`Flow`, async iterators) parity | Android Networking TL | JS Lead | ✅ Android exposes `Flow<ConnectEvent>`; JS uses `AsyncIterable<ConnectEvent>`; both map to shared `ConnectEventKind`. |
-| Error taxonomy mapping (`ConnectError`, typed subclasses) | Android Networking TL | JS Lead | ✅ Adopt shared enum {`Transport`, `Codec`, `Authorization`, `Timeout`, `QueueOverflow`, `Internal`} with platform-specific payload details. |
-| Cancellation semantics for in-flight sign requests | Android Networking TL | JS Lead | ✅ Introduced `cancelRequest(hash)` control; both SDKs surface cancellable coroutines/promises respecting wallet acknowledgment. |
-| Shared telemetry hooks (events, metrics naming) | Android Networking TL | JS Lead | ✅ Metric names aligned: `connect.queue_depth`, `connect.latency_ms`, `connect.reconnects_total`; sample exporters documented. |
+| ခေါင်းစဉ် | Android ပိုင်ရှင် | JS ပိုင်ရှင် | အဆင့်အတန်း / မှတ်စုများ |
+|--------|----------------|----------------|----------------|
+| အဆင့်မြင့် async interfaces (`Flow`၊ async iterators) parity | Android ကွန်ရက်ချိတ်ဆက်ခြင်း TL | JS ဦးဆောင် | ✅ Android သည် `Flow<ConnectEvent>` ကိုဖော်ထုတ်သည်။ JS သည် `AsyncIterable<ConnectEvent>` ကို အသုံးပြုသည်။ မြေပုံနှစ်ခုလုံးကို `ConnectEventKind` မျှဝေသည်။ |
+| အမျိုးအစားခွဲခွဲခြားသတ်မှတ်မှုမြေပုံအမှား (`ConnectError`၊ ရိုက်ထည့်ထားသော အတန်းခွဲများ) | Android ကွန်ရက်ချိတ်ဆက်ခြင်း TL | JS ဦးဆောင် | ✅ ပေးဆောင်မှုအသေးစိတ်အချက်အလက်များနှင့်အတူ မျှဝေထားသော enum {`Transport`၊ `Codec`၊ `Authorization`၊ `Timeout`၊ `QueueOverflow`၊ `Internal`} ကို ပေးဆောင်ရန် အသေးစိတ်အချက်များ။pecific |
+| လေယာဉ်ပျံသန်းမှု နိမိတ်လက္ခဏာ တောင်းဆိုချက်များ အတွက် ပယ်ဖျက်ခြင်း သဘောတရားများ | Android ကွန်ရက်ချိတ်ဆက်ခြင်း TL | JS ဦးဆောင် | ✅ `cancelRequest(hash)` ထိန်းချုပ်မှုကို မိတ်ဆက်ခဲ့သည်။ SDK နှစ်ခုစလုံးသည် ပိုက်ဆံအိတ်အသိအမှတ်ပြုမှုကို လေးစားသောအားဖြင့် ပယ်ဖျက်နိုင်သော ကော်ရိုးရှင်များ/ကတိများ ပေါ်နေပါသည်။ |
+| မျှဝေထားသော တယ်လီမီတာချိတ်များ (ဖြစ်ရပ်များ၊ မက်ထရစ်များအမည်ပေးခြင်း) | Android ကွန်ရက်ချိတ်ဆက်ခြင်း TL | JS ဦးဆောင် | ✅ မက်ထရစ်အမည်များကို ချိန်ညှိထားသည်- `connect.queue_depth`, `connect.latency_ms`, `connect.reconnects_total`; နမူနာတင်ပို့သူများ မှတ်တမ်းတင်ထားသည်။ |
 
-## Offline Persistence & Journaling
+## အော့ဖ်လိုင်း ဇွဲလုံ့လနှင့် ဂျာနယ်ထုတ်ဝေခြင်း။
 
-| Topic | Android owner | JS owner | Status / Notes |
-|-------|---------------|----------|----------------|
-| Storage format for queued frames (binary Norito vs. JSON) | Android Data Model TL | JS Lead | ✅ Store binary Norito (`.to`) everywhere; JS uses IndexedDB `ArrayBuffer`. |
-| Journal retention policy & size caps | Android Networking TL | JS Lead | ✅ Default retention 24 h and 1 MiB per session; configurable via `ConnectQueueConfig`. |
-| Conflict resolution when both sides replay frames | Android Networking TL | JS Lead | ✅ Use `sequence` + `payload_hash`; duplicates ignored, conflicts trigger `ConnectError.Internal` with telemetry event. |
-| Telemetry for queue depth and replay success | Android Networking TL | JS Lead | ✅ Emit `connect.queue_depth` gauge and `connect.replay_success_total` counter; both SDKs hook into shared Norito telemetry schema. |
+| ခေါင်းစဉ် | Android ပိုင်ရှင် | JS ပိုင်ရှင် | အဆင့်အတန်း / မှတ်စုများ |
+|--------|----------------|----------------|----------------|
+| တန်းစီထားသောဘောင်များအတွက် သိုလှောင်မှုဖော်မတ် (binary Norito vs. JSON) | Android Data Model TL | JS ဦးဆောင် | ✅ နေရာတိုင်းတွင် binary Norito (`.to`) ကို သိမ်းဆည်းပါ။ JS သည် IndexedDB `ArrayBuffer` ကိုအသုံးပြုသည်။ |
+| ဂျာနယ်ထိန်းသိမ်းမှုမူဝါဒ & အရွယ်အစားထုပ်များ | Android ကွန်ရက်ချိတ်ဆက်ခြင်း TL | JS ဦးဆောင် | ✅ စက်ရှင်တစ်ခုလျှင် ပုံသေထိန်းသိမ်းမှု 24 နာရီနှင့် 1MiB; `ConnectQueueConfig` မှတစ်ဆင့် ပြင်ဆင်နိုင်သည်။ |
+| ဘောင်များ | နှစ်ဘက်စလုံး ပြန်ဖွင့်သောအခါ ပဋိပက္ခဖြေရှင်းခြင်း။ Android ကွန်ရက်ချိတ်ဆက်ခြင်း TL | JS ဦးဆောင် | ✅ `sequence` + `payload_hash` ကိုအသုံးပြုပါ။ ထပ်တူများကို လျစ်လျူရှုလိုက်သည်၊ ပဋိပက္ခများသည် `ConnectError.Internal` ကို telemetry ဖြစ်ရပ်ဖြင့် အစပျိုးသည်။ |
+| တန်းစီခြင်းအတိမ်အနက်နှင့် ပြန်လည်ဖွင့်ခြင်းအောင်မြင်မှုအတွက် Telemetry | Android ကွန်ရက်ချိတ်ဆက်ခြင်း TL | JS ဦးဆောင် | ✅ `connect.queue_depth` gauge နှင့် `connect.replay_success_total` ကောင်တာကို ထုတ်လွှတ်သည်။ SDK နှစ်ခုစလုံးသည် မျှဝေထားသော Norito တယ်လီမီတာစနစ်တွင် ချိတ်ထားသည်။ |
 
-## Implementation Spikes & References
+## အကောင်အထည်ဖော်မှု Spikes & References- ** သံချေးတက်နေသောတံတားများ-** `crates/connect_norito_bridge/src/lib.rs` နှင့် ဆက်စပ်စစ်ဆေးမှုများသည် SDKတိုင်းအသုံးပြုသည့် canonical encode/decode လမ်းကြောင်းများကို အကျုံးဝင်ပါသည်။
+- ** လျင်မြန်သောသရုပ်ပြကြိုး-** `examples/ios/NoritoDemoXcode/NoritoDemoXcodeTests/ConnectViewModelTests.swift` လေ့ကျင့်ခန်းများသည် ပုံသဏ္ဍာန်ပို့ဆောင်မှုများဖြင့် စက်ရှင်စီးဆင်းမှုများကို ချိတ်ဆက်ပါ။
+- **Swift CI gating-** သည် အခြား SDK များနှင့် မမျှဝေမီ ချိတ်ဆက်မှုဆိုင်ရာ အထောက်အထားများကို တရားဝင်အောင်မွမ်းမံသည့်အခါတွင် `make swift-ci` ကို run ပါ။
+- **JavaScript SDK ပေါင်းစပ်စစ်ဆေးမှုများ-** `javascript/iroha_js/test/integrationTorii.test.js` သည် Torii နှင့် ချိတ်ဆက်မှုအခြေအနေ/ဆက်ရှင်အကူအညီပေးသူများကို တရားဝင်ဖြစ်စေသည်။
+- **Android ဖောက်သည် ခံနိုင်ရည်ရှိမှု မှတ်စုများ-** `java/iroha_android/README.md:150` သည် တန်းစီခြင်း/နောက်ပြန်ပိတ် ပုံသေများကို လှုံ့ဆော်ပေးသည့် လက်ရှိချိတ်ဆက်မှု စမ်းသပ်မှုများကို မှတ်တမ်းတင်ထားသည်။
 
-- **Rust bridge fixtures:** `crates/connect_norito_bridge/src/lib.rs` and associated tests cover the canonical encode/decode paths used by every SDK.
-- **Swift demo harness:** `examples/ios/NoritoDemoXcode/NoritoDemoXcodeTests/ConnectViewModelTests.swift` exercises Connect session flows with mocked transports.
-- **Swift CI gating:** run `make swift-ci` when updating Connect artifacts to validate fixture parity, dashboard feeds, and Buildkite `ci/xcframework-smoke:<lane>:device_tag` metadata before sharing with other SDKs.
-- **JavaScript SDK integration tests:** `javascript/iroha_js/test/integrationTorii.test.js` validate Connect status/session helpers against Torii.
-- **Android client resilience notes:** `java/iroha_android/README.md:150` documents the current connectivity experiments that inspired the queue/back-off defaults.
+## အလုပ်ရုံပြင်ဆင်ရေးပစ္စည်းများ
 
-## Workshop Prep Items
+- [x] Android- အထက်ရှိ ဇယားအတန်းတစ်ခုစီအတွက် အမှတ်ပေးသူအား သတ်မှတ်ပေးသည်။
+- [x] JS- အပေါ်က ဇယားအတန်းတစ်ခုစီအတွက် အမှတ်ပေးသူကို သတ်မှတ်ပေးပါ။
+- [x] ရှိပြီးသား အကောင်အထည်ဖော်မှုများ သို့မဟုတ် စမ်းသပ်မှုများဆီသို့ လင့်ခ်များကို စုဆောင်းပါ။
+- [x] Feb 2026 ကောင်စီမတိုင်မီ အလုပ်အကြိုသုံးသပ်မှုကို အချိန်ဇယား (2026-01-29 15:00 UTC အတွက် Android TL၊ JS Lead၊ Swift Lead ဖြင့် ကြိုတင်စာရင်းသွင်းထားသည်)။
+- [x] လက်ခံထားသောအဖြေများဖြင့် `docs/source/connect_architecture_strawman.md` ကို အပ်ဒိတ်လုပ်ပါ။
 
-- [x] Android: assign point person for each table row above.
-- [x] JS: assign point person for each table row above.
-- [x] Collect links to existing implementation spikes or experiments.
-- [x] Schedule pre-work review before Feb 2026 council (Booked for 2026-01-29 15:00 UTC with Android TL, JS Lead, Swift Lead).
-- [x] Update `docs/source/connect_architecture_strawman.md` with accepted answers.
+## ကြိုတင်ဖတ်ရန် Package
 
-## Pre-read Package
-
-- ✅ Bundle recorded under `artifacts/connect/pre-read/20260129/` (generated via `make docs-html` after refreshing the strawman, SDK guides, and this checklist).
-- 📄 Summary + distribution steps live in `docs/source/project_tracker/connect_architecture_pre_read.md`; include the link in the Feb 2026 workshop invite and in the `#sdk-council` reminder.
-- 🔁 When refreshing the bundle, update the path and hash inside the pre-read note and archive the announcement in `status.md` under the IOS7/AND7 readiness logs.
+- ✅ `artifacts/connect/pre-read/20260129/` အောက်တွင် မှတ်တမ်းတင်ထားသော Bundle ( strawman ၊ SDK လမ်းညွှန်များနှင့် ဤ checklist ကို ပြန်လည်ဆန်းသစ်ပြီးနောက် `make docs-html` မှတဆင့်ထုတ်ပေးသည် ။
+- 📄 အကျဉ်းချုပ် + ဖြန့်ဖြူးရေး အဆင့်များကို `docs/source/project_tracker/connect_architecture_pre_read.md` တွင် တိုက်ရိုက်ထုတ်လွှင့်သည်။ Feb 2026 အလုပ်ရုံဆွေးနွေးပွဲ ဖိတ်ကြားချက်နှင့် `#sdk-council` သတိပေးချက်တွင် လင့်ခ်ကို ထည့်သွင်းပါ။
+- 🔁 အစုအဝေးကို ပြန်လည်ဆန်းသစ်သည့်အခါ၊ ကြိုတင်ဖတ်ရှုခြင်းမှတ်စုအတွင်း လမ်းကြောင်းနှင့် hash ကို အပ်ဒိတ်လုပ်ပြီး IOS7/AND7 အဆင်သင့်မှတ်တမ်းများအောက်တွင် `status.md` တွင် ကြေညာချက်ကို သိမ်းဆည်းပါ။

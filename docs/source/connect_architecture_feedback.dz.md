@@ -7,82 +7,79 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 097ea58d49f48d059cda762cd719bc62f0b2d6f6ddecedef3f9bac030ae46aec
 source_last_modified: "2025-12-29T18:16:35.934098+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-#! Connect Architecture Feedback Checklist
+#! བཟོ་རིག་འཆར་སྣང་མཐུད་སྦྲེལ་མཐུད།
 
-This checklist captures the open questions from the Connect Session Architecture
-strawman that require input from the Android and JavaScript leads before the
-Feb 2026 cross-SDK workshop. Use it to collect comments asynchronously, track
-ownership, and unblock the workshop agenda.
+ཞིབ་དཔྱད་ཐོ་ཡིག་འདི་གིས་ མཐུད་ལམ་ཡུན་ཚོགས་ལས་ ཁ་ཕྱེ་བའི་དྲི་བ་ཚུ་ བཟུང་ཡོདཔ་ཨིན།
+Android དང་ JavaScript ལས་ཨིན་པུཊི་དགོ་མི་ སིཊ་རོ་མཱན་གྱིས་ གོང་ལུ་འཁྲིད་དེ་འགྱོཝ་ཨིན།
+སྤྱི་ཟླ་༢ པའི་ཚེས་ ༢༠༢༦ ལུ་ ཀོརསི་ཨེསི་ཌི་ཀེ་ ལས་རིམ། དུས་མཉམ་དུ་བསམ་བཀོད་བསྡུ་ལེན་འབད་ནི་ལུ་ལག་ལེན་འཐབ།
+བདག་དབང་དང་ ལས་རིམ་གྱི་གྲོས་གཞི་འདི་ བཀག་ཆ་མེདཔ་བཟོ་ནི།
 
-> Status / Notes column captured final responses from Android and JS leads as of
-> the Feb 2026 pre-workshop sync; link new follow-up issues inline if decisions
-> evolve.
+> གནས་སྟངས་ / དྲན་ཐོ་ ཀེར་ཐིག་གིས་ Android དང་ JS ལས་ མཐའ་མཇུག་ལན་གསལ་ཚུ་ བཟུང་ཡོདཔ་ཨིན།
+> སྤྱི་ཟླ་༢ པའི་ཚེས་ ༢༠༢༦ གི་སྔོན་འགྲོའི་ལས་རིམ་མཉམ་འབྱུང་། ཐག་གཅོད་ཚུ་ཨིན་པ་ཅིན་ རྗེས་འཇུག་གནད་དོན་ཚུ་ ནང་ན་འབྲེལ་མཐུད་འབད།
+> འཕེལ་རྒྱས་འགྲོ་བཞིན་ཡོད།
 
-## Session Lifecycle & Transport
+## ལས་རི ང ་གི ་ ཚེ་སྲོག་འཁོར་དང་འགྲིམ་ཐབས།
 
-| Topic | Android owner | JS owner | Status / Notes |
-|-------|---------------|----------|----------------|
-| WebSocket reconnect back-off strategy (exponential vs. capped linear) | Android Networking TL | JS Lead | ✅ Agreed on exponential back-off with jitter, capped at 60 s; JS mirrors same constants for browser/node parity. |
-| Offline buffer capacity defaults (current strawman: 32 frames) | Android Networking TL | JS Lead | ✅ Confirmed 32-frame default with config override; Android persists via `ConnectQueueConfig`, JS respects `window.connectQueueMax`. |
-| Push-style reconnect notifications (FCM/APNS vs. polling) | Android Networking TL | JS Lead | ✅ Android will expose optional FCM hook for wallet apps; JS remains polling-based with exponential back-off, noting browser push constraints. |
-| Ping/pong cadence guardrails for mobile clients | Android Networking TL | JS Lead | ✅ Standardised 30 s ping with 3× miss tolerance; Android balances Doze impact, JS clamps to ≥15 s to avoid browser throttling. |
+| དོན་ཚན་ | Android གི་བདག་པོ། | JS ཇོ་བདག་ | གནས་ཚད་ / དྲན་ཐོ། |
+|----------------------------------------------------------- |
+| ཝེབ་སོ་ཀེཊི་གིས་ རྒྱབ་ཐག་ཐབས་ཤེས་ (མགྱོགས་ཚད་དང་ རིམ་འགྲོས་ཅན་) | Android Networking TL | JS ལིཌ་ | ✅ 60s ལུ་མཐའ་སྐོར་ཏེ་ ཇི་ཊར་དང་གཅིག་ཁར་ མགྱོགས་འཕེལ་གྱི་རྒྱབ་ལོག་འདི་ ཆ་འཇོག་འབད་ཡོདཔ། ཇེ་ཨེསི་གིས་ བརྡ་འཚོལ་/མཛུབ་གནོན་ཆ་སྙོམས་ཀྱི་དོན་ལུ་ རྟག་བརྟན་ཚུ་ རྟགས་བཀལཝ་ཨིན། |
+| ཨོཕ་ལིན་བཱ་ཕར་ནུས་ཤུགས་སྔོན་སྒྲིག་ཚུ་ (ད་ལྟོའི་ཚོད་འཛིན་: ༣༢ གཞི་ཁྲམ་ཚུ་) | Android Networking TL | JS ལིཌ་ | ✅ རིམ་སྒྲིག་བཀག་ཆ་དང་གཅིག་ཁར་ 32-frame སྔོན་སྒྲིག་འབད་ཡོདཔ། Android འདི་ `ConnectQueueConfig` བརྒྱུད་དེ་ གནས་ཏེ་ཡོདཔ་ཨིན། |
+| བརྡ་བསྐུལ་ཚུ་ ལོག་མཐུད་དེ་ (FCM/APNS དང་ འོས་བསྡུ) | Android Networking TL | JS ལིཌ་ | ✅ Android གིས་ དངུལ་ཁུག་མཉེན་ཆས་ཚུ་གི་དོན་ལུ་ གདམ་ཁ་ཅན་གྱི་ FCM ཧུཀ་འདི་ ཕྱིར་བཏོན་འབད་འོང་། JSའདི་ མགྱོགས་འཕེལ་གྱི་རྒྱབ་ཕྱོགས་དང་གཅིག་ཁར་ འོས་འདེམས་ལུ་གཞི་བཞག་སྟེ་ བརྡ་འཚོལ་འབད་མི་གིས་ ཐོ་ཕོག་དོ་ཡོདཔ་སྦེ་ཨིན་མས། |
+| འགྲུལ་འཕྲིན་གྱི་ མཁོ་མངགས་འབད་མི་ཚུ་གི་དོན་ལུ་ པིང་/པོང་གི་ ཚད་གཞིའི་སྲུང་སྐྱོབ། | Android Networking TL | JS ལིཌ་ | ✅ ཚད་ལྡན་ ༣༠ པའི་པིང་ ༣× བརླག་སྟོར་ཤོར་བ་དང་། Android གིས་ Doze གི་ཕན་གནོད་ཚུ་ ཚད་སྙོམས་བཟོཝ་ཨིན།, JS གིས་ བརའུ་ཟར་གྱི་ ཐོགས་མེད་ལུ་ བཀག་ཐབས་ལུ་ ≥15s ལུ་ བསྡམ་བཞགཔ་ཨིན། |
 
-## Encryption & Key Management
+## གསང་བཟོ དང་ གཙོ་བོའི་འཛིན་སྐྱོང་།
 
-| Topic | Android owner | JS owner | Status / Notes |
-|-------|---------------|----------|----------------|
-| X25519 key storage expectations (StrongBox, WebCrypto secure contexts) | Android Crypto TL | JS Lead | ✅ Android stores X25519 in StrongBox when available (falls back to TEE); JS mandates secure-context WebCrypto for dApps, falling back to the native `iroha_js_host` bridge in Node. |
-| ChaCha20-Poly1305 nonce management sharing across SDKs | Android Crypto TL | JS Lead | ✅ Adopt shared `sequence` counter API with 64-bit wrap guard and shared tests; JS uses BigInt counters to match Rust behaviour. |
-| Hardware-backed attestation payload schema | Android Crypto TL | JS Lead | ✅ Schema finalised: `attestation { platform, evidence_b64, statement_hash }`; JS optional (browser), Node uses HSM plug-in hook. |
-| Recovery flow for lost wallets (key rotation handshake) | Android Crypto TL | JS Lead | ✅ Wallet rotation handshake accepted: dApp issues `rotate` control, wallet replies with new pubkey + signed acknowledgment; JS re-keys WebCrypto material immediately. |
+| དོན་ཚན་ | Android གི་བདག་པོ། | JS ཇོ་བདག་ | གནས་ཚད་ / དྲན་ཐོ། |
+|----------------------------------------------------------- |
+| X25519 ལྡེ་མིག་གསོག་འཇོག་རེ་བ་ (StrongBox, WebCrypto ཉེན་སྲུང་སྐབས་དོན་) | Android Crypto TL | JS ལིཌ་ | ✅ ཨེན་ཌོརཌི་གིས་ འཐོབ་ཚུགས་པའི་སྐབས་ ཨིསི་ཊོང་བོགསི་ནང་ X25519 གསོག་འཇོག་འབདཝ་ཨིན། (TEE ལུ་ལོག་འོང་) JS གིས་ dApps གི་དོན་ལུ་ ཉེན་སྲུང་ཅན་གྱི་ སྐབས་དོན་ WebCrypto ལུ་ ནོ་ཌི་ལུ་ཡོད་པའི་ སྐྱེས་ལྡན་ `iroha_js_host` ཟམ་ལུ་ ལོག་འགྱོཝ་ཨིན། |
+| ChaCha20-Poly1305 SDKs ནང་ འཛིན་སྐྱོང་བརྗེ་སོར་འབད་ནི། | Android Crypto TL | JS ལིཌ་ | ✅ 64-bit wraw ཉེན་སྐྱོབ་དང་ བརྗེ་སོར་གྱི་བརྟག་དཔྱད་ཚུ་དང་གཅིག་ཁར་ `sequence` གྱངས་ཁ་བརྐྱབ་མི་ ཨེ་པི་ཨའི་ བགོ་བཤའ་རྐྱབ་ཡོདཔ། JS གིས་ Rust གི་སྤྱོད་ལམ་དང་མཐུན་སྒྲིག་འབད་ནིའི་དོན་ལུ་ BigInt གྱངས་ཁ་ལག་ལེན་འཐབ་ཨིན། |
+| མཐུན་རྐྱེན་རྒྱབ་སྐྱོར་ཡོད་པའི་བདེན་དཔང་པེ་ལོཌ་ལས་འཆར་ | Android Crypto TL | JS ལིཌ་ | ✅ ལས་རིམ་མཐའ་དཔྱད་: `attestation { platform, evidence_b64, statement_hash }`; ཇེ་ཨེསི་གདམ་ཁ་ཅན་ (བརྡ་འཚོལ་), ནོ་ཌི་གིས་ ཨེཆ་ཨེསི་ཨེམ་པ་ལག་ཨིན་ཧུཀ་ལག་ལེན་འཐབ་ཨིན། |
+| བརླག་སྟོར་ཤོར་བའི་དངུལ་ཁུག་ཚུ་གི་དོན་ལུ་ ལོག་ཐོབ་རྒྱུན་ (ལྡེ་མིག་བསྒྱིར་མི་ལགཔ་འཐབ།) | Android Crypto TL | JS ལིཌ་ | ✅ དངུལ་ཁུག་བསྒྱིར་བའི་ལག་བཟོས་ངོས་ལེན་འབད་ཡོདཔ།: dApp གི་གནད་དོན་ཚུ་ `rotate` ཚད་འཛིན་འབདཝ་ཨིན། JS re-keys WebCrypto རྒྱུ་ཆ། |
 
-## Permissions & Proof Bundles
+## གནང་བ་དང་བདེན་དཔང་བཱན་ཌེལསི།| དོན་ཚན་ | Android གི་བདག་པོ། | JS ཇོ་བདག་ | གནས་ཚད་ / དྲན་ཐོ། |
+|----------------------------------------------------------- |
+| ཇི་ཨེ་གི་དོན་ལུ་ གནང་བ་ཉུང་མཐའ་ (ཐབས་ལམ་/བྱུང་ལས་/ཐོན་ཁུངས་) | Android གནས་སྡུད་དཔེ་ཚད་ TL | JS ལིཌ་ | ✅ ཇི་ཨེ་གཞི་རྟེན་: `methods`, `events`, `resources`, `constraints`; ཇེ་ཨེསི་གིས་ རསཊི་གསལ་སྟོན་དང་གཅིག་ཁར་ དབྱེ་བ་ཡིག་གཟུགས་དབྱེ་བ་ཚུ་ ཕྲང་སྒྲིག་འབདཝ་ཨིན། |
+| ཝ་ལེཊ་བཀག་ཆ་སྤྲོད་ལེན་ (`reason_code`, ས་གནས་ཀྱི་འཕྲིན་དོན།) | Android Networking TL | JS ལིཌ་ | ✅ མཇུག་བསྡུའི་ཨང་རྟགས་ (`user_declined`, `permissions_mismatch`, `compliance_failed`, `internal_error`, གདམ་ཁའི་ `internal_error`, |
+| བདེན་ཁུངས་ཅན་གྱི་བཱན་ཌལ་གདམ་ཁ་ཅན་གྱི་ས་སྒོ་ཚུ་ (བསྟར་སྤྱོད་/ཀེ་ཝའི་སི་མཉམ་སྦྲགས་) | Android གནས་སྡུད་དཔེ་ཚད་ TL | JS ལིཌ་ | ✅ ཨེསི་ཌི་ཀེ་ཚུ་ཆ་མཉམ་གྱིས་ གདམ་ཁ་ཅན་གྱི་ `attachments[]` (Norito `AttachmentRef`) དང་ `compliance_manifest_id` དང་ལེན་འབདཝ་ཨིན། སྤྱོད་ལམ་བསྒྱུར་བཅོས་དགོཔ་མེད། |
+| Norito JSON vs. ཟམ་པ་བཟོ་ཡོད་པའི་སྒྲིག་བཀོད་ཚུ། | Android གནས་སྡུད་དཔེ་ཚད་ TL | JS ལིཌ་ | ✅ གྲོས་ཆོད་: ཟམ་པ་བཟོ་མི་གི་སྒྲིག་བཀོད་ཚུ་ལུ་དགའ་བ། JSON འགྲུལ་ལམ་འདི་ རྐྱེན་སེལ་འབད་ནིའི་དོན་ལུ་རྐྱངམ་ཅིག་ ལུས་ཡོདཔ་ད་ JS གིས་ `Value` མཐུན་སྒྲིག་སྦེ་བཞགཔ་ཨིན། |
 
-| Topic | Android owner | JS owner | Status / Notes |
-|-------|---------------|----------|----------------|
-| Minimum permission schema (methods/events/resources) for GA | Android Data Model TL | JS Lead | ✅ GA baseline: `methods`, `events`, `resources`, `constraints`; JS aligns TypeScript types with Rust manifest. |
-| Wallet rejection payload (`reason_code`, localized messages) | Android Networking TL | JS Lead | ✅ Codes finalised (`user_declined`, `permissions_mismatch`, `compliance_failed`, `internal_error`) plus optional `localized_message`. |
-| Proof bundle optional fields (compliance/KYC attachments) | Android Data Model TL | JS Lead | ✅ All SDKs accept optional `attachments[]` (Norito `AttachmentRef`) and `compliance_manifest_id`; no behaviour change required. |
-| Alignment on Norito JSON schema vs. bridge-generated structs | Android Data Model TL | JS Lead | ✅ Decision: prefer bridge-generated structs; JSON path remains for debugging only, JS keeps `Value` adapter. |
+## ཨེསི་ཌི་ཀེ་ཕེག་ཀེཌ་དང་ཨེ་པི་ཨའི་ དབྱིབས།
 
-## SDK Facades & API Shape
+| དོན་ཚན་ | Android གི་བདག་པོ། | JS ཇོ་བདག་ | གནས་ཚད་ / དྲན་ཐོ། |
+|----------------------------------------------------------- |
+| མཐོ་རིམ་ཨ་སིན་ཀ་ངོས་འདྲ་བ་ (`Flow`, async བསྐྱར་བརྗོད་འབད་མི་) sparity | Android Networking TL | JS ལིཌ་ | ✅ Android གིས་ `Flow<ConnectEvent>`; JS གིས་ `AsyncIterable<ConnectEvent>` ལག་ལེན་འཐབ་ཨིན། གཉིས་ཀའི་སབ་ཁྲ་ `ConnectEventKind` བརྗེ་སོར་འབད་ནི། |
+| འཛོལ་བ་ དབྱེ་ཁག་སབ་ཁྲ་བཟོ་ནི། (`ConnectError` ཡིག་དཔར་རྐྱབ་ཡོད་པའི་སྡེ་ཚན་) | Android Networking TL | JS ལིཌ་ | ✅ {`Transport`, `Codec`, `Authorization`, `Timeout`, `QueueOverflow`, `QueueOverflow`, Norito} |
+| འཕུར་འགྲུལ་གྱི་བརྡ་མཚོན་གྱི་དོན་ལུ་ ཆ་མེད་གཏང་བའི་ཡིག་བརྡ། | Android Networking TL | JS ལིཌ་ | ✅ ངོ་སྤྲོད་འབད་ཡོད་མི་ Norito ཚད་འཛིན་; གཉིས་ཆ་རང་ SDKs ཁ་ཐོག་ལུ་ ཆ་མེད་བཏང་ཚུགས་པའི་ ཀོར་ཊུའིན་/ཁྱོན་སྙོམ་གྱི་ ཁས་བླངས་ཚུ་ དངུལ་ཁུག་ངོས་ལེན་ལུ་ གུས་ཞབས་འབདཝ་ཨིན། |
+| བརྗེ་སོར་འབད་ཡོད་པའི་ ཊེ་ལི་མི་ཊི་ཧུཀ་ (བྱུང་ལས་, མེ་ཊིགསི་མིང་བཏགས་) | Android Networking TL | JS ལིཌ་ | ✅ མེ་ཊིག་མིང་ཚུ་ ཕྲང་སྒྲིག་འབད་ཡོདཔ་ཨིན་: `connect.queue_depth`, `connect.latency_ms`, `connect.reconnects_total`; དཔེ་ཚད་ཕྱིར་འདྲེན་འབད་མི་ཚུ་ ཡིག་ཐོག་ལུ་བཀོད་ཡོདཔ། |
 
-| Topic | Android owner | JS owner | Status / Notes |
-|-------|---------------|----------|----------------|
-| High-level async interfaces (`Flow`, async iterators) parity | Android Networking TL | JS Lead | ✅ Android exposes `Flow<ConnectEvent>`; JS uses `AsyncIterable<ConnectEvent>`; both map to shared `ConnectEventKind`. |
-| Error taxonomy mapping (`ConnectError`, typed subclasses) | Android Networking TL | JS Lead | ✅ Adopt shared enum {`Transport`, `Codec`, `Authorization`, `Timeout`, `QueueOverflow`, `Internal`} with platform-specific payload details. |
-| Cancellation semantics for in-flight sign requests | Android Networking TL | JS Lead | ✅ Introduced `cancelRequest(hash)` control; both SDKs surface cancellable coroutines/promises respecting wallet acknowledgment. |
-| Shared telemetry hooks (events, metrics naming) | Android Networking TL | JS Lead | ✅ Metric names aligned: `connect.queue_depth`, `connect.latency_ms`, `connect.reconnects_total`; sample exporters documented. |
+## བཙན་ཤེད་དང་ དུས་དེབ་བཟོ་ནི།
 
-## Offline Persistence & Journaling
+| དོན་ཚན་ | Android གི་བདག་པོ། | JS ཇོ་བདག་ | གནས་ཚད་ / དྲན་ཐོ། |
+|----------------------------------------------------------- |
+| གྱལ་རིམ་གཞི་ཁྲམ་ཚུ་གི་དོན་ལུ་ གསོག་འཇོག་རྩ་སྒྲིག་ (གཉིས་ལྡན་ Norito vs. JSON) | Android གནས་སྡུད་དཔེ་ཚད་ TL | JS ལིཌ་ | ✅ ག་སྟེ་ཡང་ གསོག་འཇོག་ Norito (`.to`); ཇེ་ཨེསི་གིས་ ཨིན་ཌེགསི་ཌི་ཌི་བི་ `ArrayBuffer` ལག་ལེན་འཐབ་ཨིན། |
+| དུས་དེབ་བདག་འཛིན་གྱི་སྲིད་བྱུས་དང་ཚད་གཞི། | Android Networking TL | JS ལིཌ་ | ✅ སྔོན་སྒྲིག་བདག་འཛིན་ ༢༤h དང་ ༡ MiB ལཱ་ཡུན་རེ་ལུ་; རིམ་སྒྲིག་འབད་ཚུགསཔ་ཨིན་ `ConnectQueueConfig`. |
+| ཕྱོགས་གཉིས་ཆ་ར་གིས་ གཞི་ཁྲམ་ཚུ་ བསྐྱར་རྩེད་འབད་བའི་སྐབས་ འཁྲུག་རྩོད་གསལ་ཚད་བཟོ། | Android Networking TL | JS ལིཌ་ | ✅ ལག་ལེན `sequence` + `payload_hash`; འདྲ་བཤུས་སྣང་མེད་བཞག་མི་ འཁྲུག་རྩོད་ཚུ་གིས་ `ConnectError.Internal` གིས་ ཊེ་ལི་མི་ཊི་བྱུང་རིམ་དང་གཅིག་ཁར་ འབྱུང་བཅུགཔ་ཨིན། |
+| བང་རིམ་གཏིང་ཚད་དང་ བསྐྱར་རྩེད་མཐར་འཁྱོལ་གྱི་དོན་ལུ་ བརྒྱུད་འཕྲིན་ | Android Networking TL | JS ལིཌ་ | ✅ Imit I1mit དང་ `connect.replay_success_total` གྱངས་ཁ་བཀོད།; གཉིས་ཀའི་ SDKs གིས་ I1NT00000004X བརྒྱུད་འཕྲིན་ལས་རིམ་ནང་ལུ་ ཧུམ་སྦེ་ ཧུམ་སྦེ་ཡོདཔ་ཨིན། |
 
-| Topic | Android owner | JS owner | Status / Notes |
-|-------|---------------|----------|----------------|
-| Storage format for queued frames (binary Norito vs. JSON) | Android Data Model TL | JS Lead | ✅ Store binary Norito (`.to`) everywhere; JS uses IndexedDB `ArrayBuffer`. |
-| Journal retention policy & size caps | Android Networking TL | JS Lead | ✅ Default retention 24 h and 1 MiB per session; configurable via `ConnectQueueConfig`. |
-| Conflict resolution when both sides replay frames | Android Networking TL | JS Lead | ✅ Use `sequence` + `payload_hash`; duplicates ignored, conflicts trigger `ConnectError.Internal` with telemetry event. |
-| Telemetry for queue depth and replay success | Android Networking TL | JS Lead | ✅ Emit `connect.queue_depth` gauge and `connect.replay_success_total` counter; both SDKs hook into shared Norito telemetry schema. |
+## ལག་ལེན་འཐབ་ནི་ སྤྱང་ཀི་དང་ རྒྱབ་རྟེན།- **རཱསི་ཟམ་གྱི་སྒྲིག་བཀོད་ཚུ་:* `crates/connect_norito_bridge/src/lib.rs` དང་ འབྲེལ་ཡོད་བརྟག་དཔྱད་ཚུ་གིས་ SDK རེ་རེ་གིས་ལག་ལེན་འཐབ་མི་ canonical encode/decode འགྲུལ་ལམ་ཚུ་ ཁྱབ་ཚུགས།
+- **Swift demo harness:** `examples/ios/NoritoDemoXcode/NoritoDemoXcodeTests/ConnectViewModelTests.swift` ལུས་སྦྱོང་ཚུ་ མཐུད་ལམ་ལཱ་ཡུན་ཚུ་ སྐྱེལ་འདྲེན་འབད་མི་ཚུ་དང་གཅིག་ཁར་ རྒྱུན་འགྲུལ་འབདཝ་ཨིན།
+- **Swift CI gating:** གཡོག་བཀོལ་བའི་སྐབས་ བརྟན་བརྟན་གྱི་ཆ་སྙོམས་དང་ ཌེཤ་བོརཌི་ཕིཌི་ཚུ་ དེ་ལས་ བཱའིཊི་ཀའིཊི་ `ci/xcframework-smoke:<lane>:device_tag` མེ་ཊ་ཌེ་ཊ་ཚུ་ ཨེསི་ཌི་ཀེ་གཞན་ཚུ་དང་གཅིག་ཁར་ བརྗེ་སོར་འབད་བའི་ཧེ་མ་ མཐུད་སྦྲེལ་ཅ་དམ་ཚུ་ དུས་མཐུན་བཟོ་བའི་སྐབས་ མཐུད་ལམ་གྱི་ཅ་མཛོད་ཚུ་ དུས་མཐུན་བཟོ་བའི་སྐབས་ གཡོག་བཀོལ།
+- **JavaScript SDK མཉམ་བསྡོམས་བརྟག་དཔྱད་ཚུ་:** `javascript/iroha_js/test/integrationTorii.test.js` གིས་ ངེས་དཔྱད་འབད་ མཐུད་ལམ་གནས་རིམ་/ལཱ་ཡུན་གྱི་གྲོགས་རམ་པ་ཚུ་ Torii ལས་ བདེན་དཔྱད་འབདཝ་ཨིན།
+- **ཨེན་ཌོའིཌ་ མཁོ་སྤྲོད་འབད་མི་ བཀག་ཐབས་དྲན་འཛིན་ཚུ་:** `java/iroha_android/README.md:150` གིས་ ད་ལྟོའི་མཐུད་འབྲེལ་བརྟག་དཔྱད་ཚུ་ གྲལ་ཐིག་/རྒྱབ་བསྐྱོར་སྔོན་སྒྲིག་ལུ་ སེམས་ཤུགས་བྱིན་མི་ ཡིག་ཆ་བཟོཝ་ཨིན།
 
-## Implementation Spikes & References
+## ལས་འཆར་སྔོན་འགོད་རྣམ་གྲངས།
 
-- **Rust bridge fixtures:** `crates/connect_norito_bridge/src/lib.rs` and associated tests cover the canonical encode/decode paths used by every SDK.
-- **Swift demo harness:** `examples/ios/NoritoDemoXcode/NoritoDemoXcodeTests/ConnectViewModelTests.swift` exercises Connect session flows with mocked transports.
-- **Swift CI gating:** run `make swift-ci` when updating Connect artifacts to validate fixture parity, dashboard feeds, and Buildkite `ci/xcframework-smoke:<lane>:device_tag` metadata before sharing with other SDKs.
-- **JavaScript SDK integration tests:** `javascript/iroha_js/test/integrationTorii.test.js` validate Connect status/session helpers against Torii.
-- **Android client resilience notes:** `java/iroha_android/README.md:150` documents the current connectivity experiments that inspired the queue/back-off defaults.
+- [x] Android: གོང་འཁོད་ཐིག་ཁྲམ་གྲལ་ཐིག་རེ་རེ་གི་དོན་ལུ་ པོའིནཊི་འདི་འགན་སྤྲོད་འབད།
+- [x] JS: གོང་ལུ་ཐིག་ཁྲམ་གྲལ་ཐིག་རེ་རེ་གི་དོན་ལུ་ ས་ཚིགས་མི་ངོམ་འགན་སྤྲོད་འབད།
+- [x] ད་ལྟོ་ཡོད་པའི་ལག་ལེན་གྱི་ འབྲེལ་མཐུན་ཚུ་ མཉམ་སྡེབ་འབད་དགོ།
+- [x] སྤྱི་ཟླ་༢ པའི་ཚེས་༢༠༢༦ གི་ཚོགས་སྡེ་གི་ཧེ་མ་ ལས་རིམ་གྱི་ཧེ་མའི་བསྐྱར་ཞིབ་འབད་ (༢༠༢༦-༠༡-༢༩ ༡༥:༠༠ ཡུ་ཊི་སི་དང་གཅིག་ཁར་ ཨེན་ཌོརཌ་ཊི་ཨེལ་ ཇེ་ཨེསི་ལིཌ་ སུའིཕཊ་ལིཌ)།
+- [x] ངོས་ལེན་འབད་ཡོད་པའི་ལན་ཚུ་དང་གཅིག་ཁར་ Torii དུས་མཐུན་བཟོ།
 
-## Workshop Prep Items
+## སྔོན་བཀླག་ཐུམ་སྒྲིལ་།
 
-- [x] Android: assign point person for each table row above.
-- [x] JS: assign point person for each table row above.
-- [x] Collect links to existing implementation spikes or experiments.
-- [x] Schedule pre-work review before Feb 2026 council (Booked for 2026-01-29 15:00 UTC with Android TL, JS Lead, Swift Lead).
-- [x] Update `docs/source/connect_architecture_strawman.md` with accepted answers.
-
-## Pre-read Package
-
-- ✅ Bundle recorded under `artifacts/connect/pre-read/20260129/` (generated via `make docs-html` after refreshing the strawman, SDK guides, and this checklist).
-- 📄 Summary + distribution steps live in `docs/source/project_tracker/connect_architecture_pre_read.md`; include the link in the Feb 2026 workshop invite and in the `#sdk-council` reminder.
-- 🔁 When refreshing the bundle, update the path and hash inside the pre-read note and archive the announcement in `status.md` under the IOS7/AND7 readiness logs.
+- ✅ `artifacts/connect/pre-read/20260129/` གི་འོག་ལུ་ཐོ་བཀོད་འབད་ཡོད་པའི་ Bundle (`make docs-html` བརྒྱུད་དེ་ འདབ་མ་དང་ SDK ལམ་སྟོན་ དེ་ལས་ ཞིབ་དཔྱད་ཐོ་ཡིག་འདི་ གསར་བསྐྲུན་འབད་བའི་ཤུལ་ལས་ བཏོན་ཡོདཔ་ཨིན།)
+- 📄 བཅུད་བསྡུས། + བཀྲམ་སྤེལ་གྱི་རིམ་པ་ `docs/source/project_tracker/connect_architecture_pre_read.md` ནང་སྡོད་ཡོད། སྤྱི་ཟླ་༢ པའི་ལས་རིམ་ནང་ འབྲེལ་མཐུད་དང་ `#sdk-council` X དྲན་སྐུལ་ནང་ འབྲེལ་མཐུད་ཚུ་ ཚུདཔ་ཨིན།
+- 🔁 བཱན་ཌལ་འདི་ གསརཔ་བཟོ་བའི་སྐབས་ སྔོན་སྒྲིག་ལྷག་ནིའི་དྲན་ཐོ་ནང་ལུ་ ལམ་དང་ ཧེཤ་འདི་ དུས་མཐུན་བཟོ་ཞིནམ་ལས་ IOS7/AND7 གྲ་སྒྲིག་དྲན་ཐོ་ཚུ་གི་འོག་ལུ་ `status.md` ནང་ལུ་ གསལ་བསྒྲགས་འདི་ གཏན་མཛོད་འབད་དགོ།

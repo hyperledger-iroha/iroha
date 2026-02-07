@@ -7,137 +7,132 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 9cda4648f0af7f89022e9d9f4ea243bc22685d9356927bbf1417c77b2057d872
 source_last_modified: "2025-12-29T18:16:35.940439+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 External Audit Brief
-% Iroha Crypto Working Group
+% SM2/SM3/SM4 የውጭ ኦዲት አጭር መግለጫ
+% Iroha Crypto የስራ ቡድን
 % 2026-01-30
 
-# Overview
+# አጠቃላይ እይታ
 
-This brief packages the engineering and compliance context required for an
-independent review of Iroha’s SM2/SM3/SM4 enablement. It targets audit teams
-with Rust cryptography experience and familiarity with Chinese National
-Cryptography standards. The expected outcome is a written report covering
-implementation risks, conformance gaps, and prioritised remediation guidance
-ahead of the SM rollout moving from preview to production.
+ይህ አጭር የምህንድስና እና ተገዢነት አውድ ለ
+የIroha's SM2/SM3/SM4 ማንቃት ገለልተኛ ግምገማ። የኦዲት ቡድኖችን ያነጣጠረ ነው።
+ከሩስት ክሪፕቶግራፊ ልምድ እና ከቻይንኛ ብሄራዊ ጋር መተዋወቅ
+የክሪፕቶግራፊ ደረጃዎች. የሚጠበቀው ውጤት የሚሸፍነው የጽሁፍ ዘገባ ነው።
+የመተግበር አደጋዎች፣ የተስማሚነት ክፍተቶች እና ቅድሚያ የሚሰጠው የማሻሻያ መመሪያ
+ከቅድመ እይታ ወደ ምርት ከሚሸጋገር የኤስኤም ልቀት በፊት።
 
-# Program Snapshot
+# የፕሮግራም ቅጽበታዊ ገጽ እይታ
 
-- **Release scope:** Iroha 2/3 shared codebase, deterministic verification
-  paths across nodes and SDKs, signing available behind configuration guard.
-- **Current phase:** SM-P3.2 (OpenSSL/Tongsuo backend integration) with Rust
-  implementations already shipping for verification and symmetric use-cases.
-- **Target decision date:** 2026-04-30 (audit findings inform go/no-go for
-  enabling SM signing in validator builds).
-- **Key risks tracked:** third-party dependency pedigree, deterministic
-  behaviour under mixed hardware, operator compliance readiness.
+- ** የመልቀቂያ ወሰን:** Iroha 2/3 የተጋራ ኮድ ቤዝ፣ የሚወስን ማረጋገጫ
+  በአንጓዎች እና ኤስዲኬዎች ላይ መሄጃ መንገዶች፣ ከውቅረት ጠባቂ በስተጀርባ ይገኛል።
+- ** የአሁኑ ደረጃ: ** SM-P3.2 (OpenSSL/Tongsuo የጀርባ ውህደት) ከዝገት ጋር
+  ትግበራዎች ለማረጋገጫ እና ለተመጣጣኝ አጠቃቀም ጉዳዮች አስቀድመው ይላካሉ።
+- **የዒላማው ውሳኔ ቀን፡** 2026-04-30 (የኦዲት ግኝቶች መሄድ/አለመሄድን ያሳውቃሉ
+  የኤስኤምኤስ መፈረም አረጋጋጭ ግንባታዎችን ማንቃት)።
+- ** ቁልፍ አደጋዎች ተከታትለዋል: *** የሶስተኛ ወገን ጥገኝነት የዘር ሐረግ ፣ ቆራጥነት
+  በድብልቅ ሃርድዌር ስር ያለ ባህሪ፣ ከዋኝ ተገዢነት ዝግጁነት።
 
-# Code & Fixture References
+# ኮድ እና ቋሚ ማጣቀሻዎች
 
-- `crates/iroha_crypto/src/sm.rs` — Rust implementations and optional OpenSSL
-  bindings (`sm-ffi-openssl` feature).
-- `crates/ivm/tests/sm_syscalls.rs` — IVM syscall coverage for hashing,
-  verification, and symmetric modes.
-- `crates/iroha_data_model/tests/sm_norito_roundtrip.rs` — Norito payload
-  round-trips for SM artefacts.
-- `docs/source/crypto/sm_program.md` — programme history, dependency audit, and
-  rollout guardrails.
-- `docs/source/crypto/sm_operator_rollout.md` — operator-facing enablement and
-  rollback procedures.
-- `docs/source/crypto/sm_compliance_brief.md` — regulatory summary and export
-  considerations.
+- `crates/iroha_crypto/src/sm.rs` - ዝገት ትግበራዎች እና አማራጭ OpenSSL
+  ማሰሪያዎች (`sm-ffi-openssl` ባህሪ).
+- `crates/ivm/tests/sm_syscalls.rs` — IVM syscall ሽፋን ለ hashing፣
+  ማረጋገጫ, እና ሲሜትሪክ ሁነታዎች.
+- `crates/iroha_data_model/tests/sm_norito_roundtrip.rs` — Norito ክፍያ
+  የዙር ጉዞዎች ለ SM artefacts.
+- `docs/source/crypto/sm_program.md` — የፕሮግራም ታሪክ፣ የጥገኝነት ኦዲት፣ እና
+  ተንከባላይ ጠባቂዎች.
+- `docs/source/crypto/sm_operator_rollout.md` - ኦፕሬተር ፊት ለፊት ማስቻል እና
+  የመመለሻ ሂደቶች.
+- `docs/source/crypto/sm_compliance_brief.md` - የቁጥጥር ማጠቃለያ እና ወደ ውጭ መላክ
+  ግምቶች.
 - `scripts/sm_openssl_smoke.sh` / `crates/iroha_crypto/tests/sm_openssl_smoke.rs`
-  — deterministic smoke harness for OpenSSL-backed flows.
-- `fuzz/sm_*` corpora — RustCrypto-based fuzz seeds covering SM3/SM4 primitives.
+  - በOpenSSL ለሚደገፉ ፍሰቶች የሚወስን የጭስ ማውጫ።
+- `fuzz/sm_*` corpora - SM3/SM4 ፕሪሚየርቶችን የሚሸፍኑ RustCrypto-based fuzz ዘሮች።
 
-# Requested Audit Scope
+# የተጠየቀ የኦዲት ወሰን1. **የዝርዝር ስምምነት**
+   - የSM2 ፊርማ ማረጋገጫን፣ ZA ስሌትን እና ቀኖናዊውን ያረጋግጡ
+     ኢንኮዲንግ ባህሪ.
+   - SM3/SM4 ፕሪሚቲቭ GM/T 0002-2012 እና GM/T 0007-2012 መከተላቸውን ያረጋግጡ፣
+     የቆጣሪ ሁነታ ኢንቫሪዎችን እና የ IV አያያዝን ጨምሮ.
+2. ** ቁርጠኝነት እና ቋሚ ጊዜ ዋስትናዎች ***
+   - የቅርንጫፎችን ፣ የጠረጴዛ ፍለጋዎችን እና የሃርድዌር መላኪያ የመስቀለኛ መንገድ አፈፃፀምን ይገምግሙ
+     በሲፒዩ ቤተሰቦች ውስጥ የሚወሰን ሆኖ ይቆያል።
+   - ለግል ቁልፍ ስራዎች የቋሚ ጊዜ የይገባኛል ጥያቄዎችን ይገምግሙ እና ያረጋግጡ
+     OpenSSL/Tongsuo ዱካዎች የቋሚ ጊዜ ትርጉሞችን ይይዛሉ።
+3. ** የጎን-ቻናል እና የስህተት ትንተና **
+   - በሁለቱም ዝገት ውስጥ የጊዜ፣ መሸጎጫ እና የኃይል የጎን ቻናል አደጋዎችን ይፈትሹ
+     በFFI የሚደገፉ የኮድ ዱካዎች።
+   - ለፊርማ ማረጋገጫ የስህተት አያያዝ እና የስህተት ስርጭትን መገምገም እና
+     የተረጋገጠ የምስጠራ አለመሳካቶች.
+4. **ግንባታ፣ ጥገኝነት እና የአቅርቦት ሰንሰለት ግምገማ ***
+   - ሊባዙ የሚችሉ ግንባታዎችን እና የOpenSSL/Tongsuo ቅርሶችን ያረጋግጡ።
+   - የጥገኝነት ዛፍ ፈቃድ እና የኦዲት ሽፋንን ይገምግሙ።
+5. **የፈተና እና የማረጋገጫ ትጥቅ ትችት**
+   - የሚወስኑ የጭስ ሙከራዎችን፣ የፉዝ ማሰሪያዎችን እና የNorito መጋጠሚያዎችን ይገምግሙ።
+   - ተጨማሪ ሽፋንን ይመክራል (ለምሳሌ፣ ልዩነት ሙከራ፣ በንብረት ላይ የተመሰረተ
+     ማስረጃዎች) ክፍተቶች ከቀሩ.
+6. ** ተገዢነት እና ኦፕሬተር መመሪያ ማረጋገጫ **
+   - የተላኩ ሰነዶችን ከህጋዊ መስፈርቶች እና ከሚጠበቀው አንጻር ቼክ ያድርጉ
+     ኦፕሬተር መቆጣጠሪያዎች.
 
-1. **Specification conformance**
-   - Validate SM2 signature verification, ZA calculation, and canonical
-     encoding behaviour.
-   - Confirm SM3/SM4 primitives follow GM/T 0002-2012 and GM/T 0007-2012,
-     including counter mode invariants and IV handling.
-2. **Determinism & constant-time guarantees**
-   - Review branching, table lookups, and hardware dispatch so node execution
-     remains deterministic across CPU families.
-   - Evaluate constant-time claims for private-key operations and confirm the
-     OpenSSL/Tongsuo paths retain constant-time semantics.
-3. **Side-channel and fault analysis**
-   - Inspect for timing, cache, and power side-channel risks in both Rust and
-     FFI-backed code paths.
-   - Assess fault-handling and error propagation for signature verification and
-     authenticated encryption failures.
-4. **Build, dependency, and supply-chain review**
-   - Confirm reproducible builds and provenance of OpenSSL/Tongsuo artefacts.
-   - Review dependency tree licensing and audit coverage.
-5. **Testing & verification harness critique**
-   - Evaluate deterministic smoke tests, fuzz harnesses, and Norito fixtures.
-   - Recommend additional coverage (e.g., differential testing, property-based
-     proofs) if gaps remain.
-6. **Compliance & operator guidance validation**
-   - Cross-check shipped documentation against legal requirements and expected
-     operator controls.
+# የሚላኩ እና ሎጂስቲክስ
 
-# Deliverables & Logistics
+- ** መጀመር: *** 2026-02-24 (ምናባዊ፣ 90 ደቂቃዎች)።
+- ** ቃለ-መጠይቆች: ** Crypto WG, IVM ጠባቂዎች, የመሳሪያ ስርዓት ኦፕስ (እንደ አስፈላጊነቱ).
+- ** የቅርስ መዳረሻ: ** ተነባቢ-ብቻ ማከማቻ መስታወት ፣ የ CI ቧንቧ ምዝግብ ማስታወሻዎች ፣ የቤት ዕቃዎች
+  ውጤቶች፣ እና ጥገኝነት SBOMs (CycloneDX)።
+- ** ጊዜያዊ ዝመናዎች: *** ሳምንታዊ የጽሑፍ ሁኔታ + የአደጋ ጥሪዎች።
+- ** የመጨረሻ መላኪያዎች (በ2026-04-15 መጨረሻ)
+  - ከአደጋ ደረጃ ጋር አስፈፃሚ ማጠቃለያ።
+  - ዝርዝር ግኝቶች (በእያንዳንዱ እትም: ተፅዕኖ, ዕድል, ኮድ ማጣቀሻዎች,
+    የማሻሻያ መመሪያ).
+  - የድጋሚ ሙከራ/የማረጋገጫ እቅድ።
+  - በቆራጥነት ፣ በቋሚ-ጊዜ አቀማመጥ እና በማክበር አሰላለፍ ላይ መግለጫ።
 
-- **Kick-off:** 2026-02-24 (virtual, 90 minutes).
-- **Interviews:** Crypto WG, IVM maintainers, platform ops (as needed).
-- **Artefact access:** read-only repository mirror, CI pipeline logs, fixture
-  outputs, and dependency SBOMs (CycloneDX).
-- **Interim updates:** weekly written status + risk callouts.
-- **Final deliverables (due 2026-04-15):**
-  - Executive summary with risk rating.
-  - Detailed findings (per issue: impact, likelihood, code references,
-    remediation guidance).
-  - Re-test/verification plan.
-  - Statement on determinism, constant-time posture, and compliance alignment.
+## የተሳትፎ ሁኔታ
 
-## Engagement Status
+| ሻጭ | ሁኔታ | ጅምር | የመስክ መስኮት | ማስታወሻ |
+|--------|--------|----------|-------------|------|
+| የቢትስ ዱካ (ሲኤን ልምምድ) | የተፈፀመው የስራ መግለጫ 2026-02-21 | 2026-02-24 | 2026-02-24–2026-03-22 | የማድረስ ጊዜ 2026-04-15; Hui Zhang ከአሌሴይ ኤም ጋር የምህንድስና ተጓዳኝ በመሆን ግንባር ቀደም ተሳትፎ። ሳምንታዊ ሁኔታ ጥሪ እሮብ 09:00UTC። |
+| NCC ቡድን (APAC) | ድንገተኛ ማስገቢያ የተጠበቀ | N/A (ይቆያሉ) | ጊዜያዊ 2026-05-06–2026-05-31 | ማግበር ከፍተኛ ተጋላጭነት ያላቸው ግኝቶች ሁለተኛ ማለፊያ የሚያስፈልጋቸው ከሆነ ብቻ; ዝግጁነት በPriya N. (ደህንነት) እና በNCC የቡድን ተሳትፎ ዴስክ 2026-02-22 ተረጋግጧል። |
 
-| Vendor | Status | Kick-off | Field Window | Notes |
-|--------|--------|----------|--------------|-------|
-| Trail of Bits (CN practice) | Statement of work executed 2026-02-21 | 2026-02-24 | 2026-02-24 – 2026-03-22 | Delivery due 2026-04-15; Hui Zhang leading engagement with Alexey M. as engineering counterpart. Weekly status call Wednesdays 09:00 UTC. |
-| NCC Group (APAC) | Contingency slot reserved | N/A (on hold) | Provisional 2026-05-06 – 2026-05-31 | Activation only if high-risk findings require second pass; readiness confirmed by Priya N. (Security) and NCC Group engagement desk 2026-02-22. |
-
-# Attachments Included in Outreach Package
-
-- `docs/source/crypto/sm_program.md`
+# ማያያዣዎች በአድራሻ ጥቅል ውስጥ ተካትተዋል።- `docs/source/crypto/sm_program.md`
 - `docs/source/crypto/sm_operator_rollout.md`
 - `docs/source/crypto/sm_compliance_brief.md`
 - `docs/source/crypto/sm_lock_refresh_plan.md`
 - `docs/source/crypto/sm_rust_vector_check.md`
-- `docs/source/crypto/attachments/sm_iroha_crypto_tree.txt` — `cargo tree -p iroha_crypto --no-default-features --features "sm sm-ffi-openssl"` snapshot.
-- `docs/source/crypto/attachments/sm_iroha_crypto_metadata.json` — `cargo metadata` export for the `iroha_crypto` crate (locked dependency graph).
-- `docs/source/crypto/attachments/sm_openssl_smoke.log` — latest `scripts/sm_openssl_smoke.sh` run (skips SM2/SM4 paths when provider support is missing).
-- `docs/source/crypto/attachments/sm_openssl_provenance.md` — local toolkit provenance (pkg-config/OpenSSL version notes).
-- Fuzz corpus manifest (`fuzz/sm_corpus_manifest.json`).
+- `docs/source/crypto/attachments/sm_iroha_crypto_tree.txt` - `cargo tree -p iroha_crypto --no-default-features --features "sm sm-ffi-openssl"` ቅጽበታዊ ገጽ እይታ።
+- `docs/source/crypto/attachments/sm_iroha_crypto_metadata.json` — `cargo metadata` ወደ `iroha_crypto` crate (የተቆለፈ ጥገኛ ግራፍ) ወደ ውጭ መላክ።
+- `docs/source/crypto/attachments/sm_openssl_smoke.log` - የቅርብ ጊዜ `scripts/sm_openssl_smoke.sh` ሩጫ (የአቅራቢ ድጋፍ በሚጠፋበት ጊዜ SM2/SM4 ዱካዎችን ይዘላል)።
+- `docs/source/crypto/attachments/sm_openssl_provenance.md` - የአካባቢያዊ የመሳሪያ ስብስብ ፕሮቬንሽን (pkg-config/OpenSSL ስሪት ማስታወሻዎች)።
+- Fuzz ኮርፐስ አንጸባራቂ (`fuzz/sm_corpus_manifest.json`)።
 
-> **Environment caveat:** The current development snapshot uses the vendored OpenSSL 3.x toolchain (`openssl` crate `vendored` feature) but macOS lacks SM3/SM4 CPU intrinsics and the default provider does not expose SM4-GCM, so the OpenSSL smoke harness still skips SM4 coverage and Annex Example SM2 parsing. A workspace dependency cycle (`sorafs_manifest ↔ sorafs_car`) also forces the helper script to skip the run after emitting the `cargo check` failure. Re-run the bundle inside the Linux release build environment (OpenSSL/Tongsuo with SM4 enabled and without the cycle) to capture full parity before the external audit.
+> ** የአካባቢ ማስጠንቀቂያ:** የአሁኑ የእድገት ቅጽበታዊ ገጽ እይታ የተሸጠውን OpenSSL 3.x toolchainን ይጠቀማል (`openssl` crate `vendored` ባህሪ) ግን ማክሮስ SM3/SM4 CPU intrinsics ይጎድላል እና ነባሪ አቅራቢው አሁንም የSM4-Open ኤስ.ኤም.ኤስ.ኤም.ኤስ.ኤም.ኤስ.ኤም.ኤስ.ኤም.ኤስ.ኤም.ኤስ.ኤም.ኤስ.ኤም.ኤስ.ኤም.ኤስ.ኤም.ኤስ.ኤም.ኤስ.ኤም.ኤስ.ኤም.ኤስ.ኤም.ኤስ.ኤም.ኤስ.ኤም.ፒ.ኤስ.ኤም.ኤስ.ኤም.ኤስ.ኤም.ፒ.ኤስ.ኤም.ኤስ.ኤም.ኤስ.ኤም.ኤስ.ኤም.ፒ.ኤስ.ኤም.ኤስ.ኤም.ፒ.ኤስ.ኤም.ኤስ.ኤም.ኤስ.ኤም.ፒ.ኤስ.ኤም.ኤስ.ኤም.ኤስ.ኤም.ፒ.ኤስ.ኤም.ኤስ.ኤም.ኤስ.ኤም.ኤ.ኤስ.ኤም.ኤስ.ኤም.ኤስ.ኤም.ኤስ.ኤም.ኤ.ኤስ.ኤም እና ኤስኤምኤስን እና ጭስ አያጨስም ምሳሌ SM2 መተንተን። የስራ ቦታ ጥገኝነት ዑደት (`sorafs_manifest ↔ sorafs_car`) እንዲሁም የረዳት ስክሪፕት የ`cargo check` ውድቀትን ከለቀቀ በኋላ ሩጫውን እንዲያልፍ ያስገድደዋል። ከውጪ ኦዲት በፊት ሙሉ እኩልነትን ለመያዝ በሊኑክስ መልቀቂያ ግንባታ አካባቢ (OpenSSL/Tongsuo በSM4 የነቃ እና ያለ ዑደቱ) ውስጥ ያለውን ቅርቅብ እንደገና ያሂዱ።
 
-# Candidate audit partners & scope
+# እጩ የኦዲት አጋሮች እና ወሰን
 
-| Firm | Relevant experience | Typical scope & deliverables | Notes |
-|------|---------------------|------------------------------|-------|
-| Trail of Bits (CN cryptography practice) | Rust code reviews (`ring`, zkVMs), prior GM/T assessments for mobile payment stacks. | Spec conformance diff (GM/T 0002/3/4), constant-time review of Rust + OpenSSL paths, differential fuzzing, supply-chain review, remediation roadmap. | Already engaged; table retained for completeness when planning future refresh cycles. |
-| NCC Group APAC | Hardware/SOC + Rust cryptography red teams, published reviews of RustCrypto primitives and payment HSM bridges. | Holistic assessment of Rust + JNI/FFI bindings, deterministic policy validation, perf/telemetry gate review, operator playbook walkthrough. | Reserved as contingency; can also provide bilingual reporting for Chinese regulators. |
-| Kudelski Security (Blockchain & crypto team) | Audits of Halo2, Mina, zkSync, custom signature schemes implemented in Rust. | Focus on elliptic-curve correctness, transcript integrity, threat modelling for hardware acceleration, and CI/rollout evidence. | Useful for second opinions on hardware acceleration (SM-5a) and FASTPQ-to-SM interactions. |
-| Least Authority | Cryptographic protocol audits for Rust-based blockchains (Filecoin, Polkadot), reproducible builds consulting. | Deterministic build verification, Norito codec verification, compliance evidence cross-check, operator communication review. | Well-suited for transparency/audit-report deliverables when regulators request independent verification beyond code review. |
+| ጽኑ | ተዛማጅ ልምድ | የተለመደ ወሰን እና ሊደርሱ የሚችሉ | ማስታወሻ |
+|-------------|--------------|-------|
+| የቢትስ ዱካ (ሲኤን ክሪፕቶግራፊ ልምምድ) | የዝገት ኮድ ግምገማዎች (`ring`፣ zkVMs)፣ የቅድሚያ GM/T ግምገማዎች ለሞባይል ክፍያ ቁልል። | ልዩ የተስማሚነት ልዩነት (ጂኤም/ቲ 0002/3/4)፣ የዝገት + ክፍት ኤስኤስኤል ዱካዎች ቋሚ ጊዜ ግምገማ፣ ልዩነት ግርግር፣ የአቅርቦት ሰንሰለት ግምገማ፣ የማሻሻያ ፍኖተ ካርታ። | ቀድሞውኑ ተሳትፏል; የወደፊት እድሳት ዑደቶችን ሲያቅዱ ለምልነት ተጠብቆ ይቆያል። |
+| NCC ቡድን APAC | ሃርድዌር/ኤስኦሲ + ዝገት ክሪፕቶግራፊ ቀይ ቡድኖች፣ የታተሙ የRustCrypto primitives እና የክፍያ HSM ድልድዮች። | የዝገት + JNI/FFI ማሰሪያዎች ሁሉን አቀፍ ግምገማ፣ ወሳኙ የፖሊሲ ማረጋገጫ፣ የፐርፍ/የቴሌሜትሪ በር ግምገማ፣ የኦፕሬተር የመጫወቻ መጽሐፍ የእግር ጉዞ። | እንደ ድንገተኛ ሁኔታ የተያዘ; እንዲሁም ለቻይና ተቆጣጣሪዎች የሁለት ቋንቋ ሪፖርት ማድረግ ይችላል። |
+| Kudelski ደህንነት (Blockchain & crypto ቡድን) | የHalo2፣ ሚና፣ zkSync፣ ብጁ ፊርማ ዕቅዶች በሩስት ውስጥ የተተገበሩ ኦዲቶች። | በኢሊፕቲክ-ከርቭ ትክክለኛነት፣ የጽሁፍ ግልባጭ ትክክለኛነት፣ ለሃርድዌር ማጣደፍ ማስፈራሪያ ሞዴሊንግ እና CI/የመልቀቅ ማስረጃ ላይ ያተኩሩ። | በሃርድዌር ማጣደፍ (SM-5a) እና FASTPQ-to-SM መስተጋብር ላይ ለሁለተኛ አስተያየቶች ጠቃሚ። |
+| ትንሹ ባለስልጣን | ክሪፕቶግራፊክ ፕሮቶኮል ኦዲት ለ Rust-based blockchains (ፋይሌኮይን፣ ፖልካዶት)፣ እንደገና ሊባዛ የሚችል ማማከርን ይገነባል። | ቆራጥ የግንባታ ማረጋገጫ፣ Norito የኮዴክ ማረጋገጫ፣ የታዛዥነት ማረጋገጫ መስቀል-ቼክ፣ የኦፕሬተር ግንኙነት ግምገማ። | ተቆጣጣሪዎች ከኮድ ግምገማ ባለፈ ገለልተኛ ማረጋገጫ ሲጠይቁ ለግልጽነት/ኦዲት-ሪፖርት ማቅረቢያዎች በጣም ተስማሚ። |
 
-All engagements request the same artefact bundle enumerated above plus the following optional add-ons depending on the firm:
+ሁሉም ተሳትፎዎች ከላይ የተዘረዘረው ተመሳሳይ የቅርስ ቅርቅብ እና በኩባንያው ላይ በመመስረት የሚከተሉትን አማራጭ ማከያዎች ይጠይቃሉ፡- ** ልዩ የተግባር እና የመወሰን ባህሪ፡** የ SM2 ZA አመጣጥ፣ SM3 ንጣፍ፣ SM4 ዙር ተግባራት፣ እና የ`sm_accel` የአሂድ መግቢያ በር በመስመር-በመስመር ማረጋገጥ ማጣደፍ የትርጉም ስራን ፈጽሞ እንደማይለውጥ ለማረጋገጥ።
+- **የጎን ቻናል እና የFFI ግምገማ፡** የቋሚ ጊዜ የይገባኛል ጥያቄዎች፣ ደህንነቱ ያልተጠበቀ የኮድ ብሎኮች እና የSSL/Tongsuo ድልድይ ንብርብሮችን መመርመር፣ በዝገት መንገድ ላይ የተለያየ ሙከራን ጨምሮ።
+- ** CI/የአቅርቦት ሰንሰለት ማረጋገጫ፡** የ`sm_interop_matrix`፣ `sm_openssl_smoke`፣ እና `sm_perf` መታጠቂያዎች ከ SBOM/SLSA ማረጋገጫዎች ጋር መባዛት የኦዲት ግኝቶች ማስረጃዎችን ለመልቀቅ በቀጥታ ሊታሰሩ ይችላሉ።
+- ** ከዋኝ ጋር የሚጋጭ መያዣ፡** የ`sm_operator_rollout.md` መሻገር፣ ተገዢ የመመዝገቢያ አብነቶች እና የቴሌሜትሪ ዳሽቦርዶች በሰነድ ውስጥ ቃል የተገቡ ማቃለያዎች በቴክኒካል ተፈጻሚነት እንዳላቸው ለማረጋገጥ።
 
-- **Spec conformance & deterministic behaviour:** Line-by-line verification of SM2 ZA derivation, SM3 padding, SM4 round functions, and the `sm_accel` runtime dispatch gate to ensure acceleration never alters semantics.
-- **Side-channel and FFI review:** Inspection of constant-time claims, unsafe code blocks, and OpenSSL/Tongsuo bridging layers, including diff testing against the Rust path.
-- **CI / supply-chain validation:** Reproduction of the `sm_interop_matrix`, `sm_openssl_smoke`, and `sm_perf` harnesses together with SBOM/SLSA attestations so audit findings can be tied directly to release evidence.
-- **Operator-facing collateral:** Cross-check of `sm_operator_rollout.md`, compliance filing templates, and telemetry dashboards to confirm that mitigations promised in documentation are technically enforceable.
+የወደፊት ኦዲቶችን በሚወስኑበት ጊዜ፣ የአቅራቢዎችን ጥንካሬዎች ከተወሰኑ የመንገድ ካርታዎች ምዕራፍ ጋር ለማጣጣም ይህንን ሰንጠረዥ እንደገና ይጠቀሙ (ለምሳሌ፡- Kudelskiን ለሃርድዌር/ፐርፍ ከባድ ልቀቶች፣ ለቋንቋ/የአሂድ ጊዜ ትክክለኛነት እና ቢያንስ ለግንባታ ግንባታ ማረጋገጫዎች ትንሹ ባለስልጣን)።
 
-When scoping future audits, reuse this table to align vendor strengths with the specific roadmap milestone (e.g., favour Kudelski for hardware/perf heavy releases, Trail of Bits for language/runtime correctness, and Least Authority for reproducible build assurances).
+# የመገናኛ ነጥቦች
 
-# Points of Contact
-
-- **Technical owner:** Crypto WG lead (Alexey M., `alexey@iroha.tech`)
-- **Program manager:** Platform Operations coordinator (Sarah K.,
+- ** ቴክኒካል ባለቤት፡** Crypto WG አመራር (Alexey M., `alexey@iroha.tech`)
+** የፕሮግራም አስተዳዳሪ:** የመድረክ ኦፕሬሽን አስተባባሪ (ሳራ ኬ.
   `sarah@iroha.tech`)
-- **Security liaison:** Security Engineering (Priya N., `security@iroha.tech`)
-- **Documentation liaison:** Docs/DevRel lead (Jamila R.,
+- **የደህንነት ግንኙነት፡** የደህንነት ምህንድስና (Priya N., `security@iroha.tech`)
+- ** የሰነድ ግንኙነት፡** ሰነዶች/ዴቭሬል መሪ (Jamila R.፣
   `docs@iroha.tech`)

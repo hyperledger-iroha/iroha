@@ -7,142 +7,139 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 624ca40bb09d616d2820a7229022507b73dc3c0692f7eb83f5169aee32a64c4f
 source_last_modified: "2025-12-29T18:16:35.929771+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Compute Lane (SSC-1)
+# Hesablama zolağı (SSC-1)
 
-The compute lane accepts deterministic HTTP-style calls, maps them onto Kotodama
-entrypoints, and records metering/receipts for billing and governance review.
-This RFC freezes the manifest schema, call/receipt envelopes, sandbox guardrails,
-and configuration defaults for the first release.
+Hesablama zolağı deterministik HTTP üslublu zəngləri qəbul edir, onları Kotodama-ə uyğunlaşdırır
+giriş nöqtələri və hesablama və idarəetmənin nəzərdən keçirilməsi üçün ölçmə/qəbzləri qeyd edir.
+Bu RFC manifest sxemini, zəng/qəbul zərflərini, sandbox qoruyucularını,
+və ilk buraxılış üçün konfiqurasiya defoltları.
 
 ## Manifest
 
-- Schema: `crates/iroha_data_model/src/compute/mod.rs` (`ComputeManifest` /
+- Sxem: `crates/iroha_data_model/src/compute/mod.rs` (`ComputeManifest` /
   `ComputeRoute`).
-- `abi_version` is pinned to `1`; manifests with a different version are rejected
-  during validation.
-- Each route declares:
+- `abi_version` `1`-ə bərkidilib; fərqli versiyaya malik manifestlər rədd edilir
+  doğrulama zamanı.
+- Hər bir marşrut bəyan edir:
   - `id` (`service`, `method`)
-  - `entrypoint` (Kotodama entrypoint name)
-  - codec allowlist (`codecs`)
-  - TTL/gas/request/response caps (`ttl_slots`, `gas_budget`, `max_*_bytes`)
-  - determinism/execution class (`determinism`, `execution_class`)
-  - SoraFS ingress/model descriptors (`input_limits`, optional `model`)
-  - pricing family (`price_family`) + resource profile (`resource_profile`)
-  - authentication policy (`auth`)
-- Sandbox guardrails live in the manifest `sandbox` block and are shared by all
-  routes (mode/randomness/storage and non-deterministic syscall rejection).
+  - `entrypoint` (Kotodama giriş nöqtəsinin adı)
+  - kodeklərin icazə siyahısı (`codecs`)
+  - TTL/qaz/sorğu/cavab qapaqları (`ttl_slots`, `gas_budget`, `max_*_bytes`)
+  - determinizm/icra sinfi (`determinism`, `execution_class`)
+  - SoraFS giriş/model deskriptorları (`input_limits`, isteğe bağlı `model`)
+  - qiymət ailəsi (`price_family`) + resurs profili (`resource_profile`)
+  - autentifikasiya siyasəti (`auth`)
+- Sandbox qoruyucuları manifest `sandbox` blokunda yaşayır və hamı tərəfindən paylaşılır
+  marşrutlar (rejim/təsadüfilik/saxlama və deterministik olmayan sistem çağırışının rədd edilməsi).
 
-Example: `fixtures/compute/manifest_compute_payments.json`.
+Misal: `fixtures/compute/manifest_compute_payments.json`.
 
-## Calls, requests, and receipts
+## Zənglər, sorğular və qəbzlər
 
-- Schema: `ComputeRequest`, `ComputeCall`, `ComputeCallSummary`, `ComputeReceipt`,
-  `ComputeMetering`, `ComputeOutcome` in
+- Sxem: `ComputeRequest`, `ComputeCall`, `ComputeCallSummary`, `ComputeReceipt`,
+  `ComputeMetering`, `ComputeOutcome`
   `crates/iroha_data_model/src/compute/mod.rs`.
-- `ComputeRequest::hash()` produces the canonical request hash (headers are kept
-  in a deterministic `BTreeMap` and the payload is carried as `payload_hash`).
-- `ComputeCall` captures the namespace/route, codec, TTL/gas/response cap,
-  resource profile + price family, auth (`Public` or UAID-bound
-  `ComputeAuthn`), determinism (`Strict` vs `BestEffort`), execution class
-  hints (CPU/GPU/TEE), declared SoraFS input bytes/chunks, optional sponsor
-  budget, and the canonical request envelope. The request hash is used for
-  replay protection and routing.
-- Routes may embed optional SoraFS model references and input limits
-  (inline/chunk caps); manifest sandbox rules gate GPU/TEE hints.
-- `ComputePriceWeights::charge_units` converts metering data into billed compute
-  units via ceil-division on cycles and egress bytes.
-- `ComputeOutcome` reports `Success`, `Timeout`, `OutOfMemory`,
-  `BudgetExhausted`, or `InternalError` and optionally includes response hashes/
-  sizes/codec for audit.
+- `ComputeRequest::hash()` kanonik sorğu hashını yaradır (başlıqlar saxlanılır
+  deterministik `BTreeMap`-də və faydalı yük `payload_hash` kimi daşınır).
+- `ComputeCall` ad sahəsi/marşrut, kodek, TTL/qaz/cavab qapağı,
+  resurs profili + qiymət ailəsi, auth (`Public` və ya UAID ilə bağlıdır
+  `ComputeAuthn`), determinizm (`Strict` vs `BestEffort`), icra sinfi
+  göstərişlər (CPU/GPU/TEE), elan edilmiş SoraFS giriş baytları/parçaları, isteğe bağlı sponsor
+  büdcə və kanonik sorğu zərfi. sorğu hash üçün istifadə olunur
+  təkrar qorunma və marşrutlaşdırma.
+- Marşrutlar isteğe bağlı SoraFS model arayışlarını və giriş limitlərini daxil edə bilər
+  (daxili/parça başlıqları); manifest sandbox qaydaları qapısı GPU/TEE göstərişləri.
+- `ComputePriceWeights::charge_units` ölçmə məlumatlarını hesablanmış hesablamaya çevirir
+  dövrlər və çıxış baytları üzrə tavan bölməsi vasitəsilə vahidlər.
+- `ComputeOutcome` hesabatları `Success`, `Timeout`, `OutOfMemory`,
+  `BudgetExhausted`, və ya `InternalError` və isteğe bağlı olaraq cavab heşləri daxildir/
+  audit üçün ölçülər/kodek.
 
-Examples:
-- Call: `fixtures/compute/call_compute_payments.json`
-- Receipt: `fixtures/compute/receipt_compute_payments.json`
+Nümunələr:
+- Zəng edin: `fixtures/compute/call_compute_payments.json`
+- Qəbz: `fixtures/compute/receipt_compute_payments.json`
 
-## Sandbox and resource profiles
+## Sandbox və resurs profilləri- `ComputeSandboxRules` standart olaraq icra rejimini `IvmOnly`-a kilidləyir,
+  sorğu hash-dən toxumların deterministik təsadüfiliyi, yalnız oxunmağa imkan verir SoraFS
+  daxil olur və deterministik olmayan sistem çağırışlarını rədd edir. GPU/TEE göstərişləri tərəfindən təmin edilir
+  İcranı deterministik saxlamaq üçün `allow_gpu_hints`/`allow_tee_hints`.
+- `ComputeResourceBudget` dövrlərdə, xətti yaddaşda, yığında hər profil üçün qapaqlar təyin edir
+  ölçüsü, IO büdcəsi və çıxış, üstəgəl GPU göstərişləri və WASI-lite köməkçiləri üçün keçidlər.
+- Defolt olaraq iki profil göndərilir (`cpu-small`, `cpu-balanced`)
+  `defaults::compute::resource_profiles` deterministik geri dönüşlərlə.
 
-- `ComputeSandboxRules` locks the execution mode to `IvmOnly` by default,
-  seeds deterministic randomness from the request hash, allows read-only SoraFS
-  access, and rejects non-deterministic syscalls. GPU/TEE hints are gated by
-  `allow_gpu_hints`/`allow_tee_hints` to keep execution deterministic.
-- `ComputeResourceBudget` sets per-profile caps on cycles, linear memory, stack
-  size, IO budget, and egress, plus toggles for GPU hints and WASI-lite helpers.
-- Defaults ship two profiles (`cpu-small`, `cpu-balanced`) under
-  `defaults::compute::resource_profiles` with deterministic fallbacks.
+## Qiymətləndirmə və hesablama vahidləri
 
-## Pricing and billing units
+- Qiymət ailələri (`ComputePriceWeights`) dövrlərin xəritəsini və hesablamaya çıxış baytlarını
+  vahidlər; default ödəniş `ceil(cycles/1_000_000) + ceil(egress_bytes/1024)` ilə
+  `unit_label = "cu"`. Ailələr manifestlərdə `price_family` ilə açar və
+  qəbul zamanı tətbiq edilir.
+- Ölçmə qeydləri `charged_units` üstəgəl xam dövr/giriş/çıxış/müddəti daşıyır
+  uzlaşma üçün cəmi. Ödənişlər icra sinfi ilə gücləndirilir və
+  determinizm çarpanları (`ComputePriceAmplifiers`) və qapalı
+  `compute.economics.max_cu_per_call`; çıxış tərəfindən sıxılır
+  `compute.economics.max_amplification_ratio` bağlı cavab gücləndirilməsi.
+- Sponsor büdcələri (`ComputeCall::sponsor_budget_cu`) qarşı tətbiq edilir
+  zəng başına/gündəlik limitlər; hesablanmış vahidlər elan edilmiş sponsor büdcəsindən artıq olmamalıdır.
+- İdarəetmə qiymət yeniləmələri risk sinfi sərhədlərindən istifadə edir
+  `compute.economics.price_bounds` və əsas ailələr qeyd edildi
+  `compute.economics.price_family_baseline`; istifadə edin
+  Yeniləmədən əvvəl deltaları yoxlamaq üçün `ComputeEconomics::apply_price_update`
+  aktiv ailə xəritəsi. Torii konfiqurasiya yeniləmələri istifadə edir
+  `ConfigUpdate::ComputePricing` və kiso bunu eyni sərhədlərlə tətbiq edir
+  idarəetmə redaktələrini deterministik saxlayın.
 
-- Price families (`ComputePriceWeights`) map cycles and egress bytes into compute
-  units; defaults charge `ceil(cycles/1_000_000) + ceil(egress_bytes/1024)` with
-  `unit_label = "cu"`. Families are keyed by `price_family` in manifests and
-  enforced at admission.
-- Metering records carry `charged_units` plus raw cycle/ingress/egress/duration
-  totals for reconciliation. Charges are amplified by execution-class and
-  determinism multipliers (`ComputePriceAmplifiers`) and capped by
-  `compute.economics.max_cu_per_call`; egress is clamped by
-  `compute.economics.max_amplification_ratio` to bound response amplification.
-- Sponsor budgets (`ComputeCall::sponsor_budget_cu`) are enforced against
-  per-call/daily caps; billed units must not exceed the declared sponsor budget.
-- Governance price updates use the risk-class bounds in
-  `compute.economics.price_bounds` and the baseline families recorded in
-  `compute.economics.price_family_baseline`; use
-  `ComputeEconomics::apply_price_update` to validate deltas before updating
-  the active family map. Torii config updates use
-  `ConfigUpdate::ComputePricing`, and kiso applies it with the same bounds to
-  keep governance edits deterministic.
+## Konfiqurasiya
 
-## Configuration
+Yeni hesablama konfiqurasiyası `crates/iroha_config/src/parameters`-də yaşayır:
 
-New compute configuration lives in `crates/iroha_config/src/parameters`:
-
-- User view: `Compute` (`user.rs`) with env overrides:
-  - `COMPUTE_ENABLED` (default `false`)
+- İstifadəçi görünüşü: `Compute` (`user.rs`) env ləğvetmələri ilə:
+  - `COMPUTE_ENABLED` (defolt `false`)
   - `COMPUTE_DEFAULT_TTL_SLOTS` / `COMPUTE_MAX_TTL_SLOTS`
   - `COMPUTE_MAX_REQUEST_BYTES` / `COMPUTE_MAX_RESPONSE_BYTES`
   - `COMPUTE_MAX_GAS_PER_CALL`
   - `COMPUTE_DEFAULT_RESOURCE_PROFILE` / `COMPUTE_DEFAULT_PRICE_FAMILY`
   - `COMPUTE_AUTH_POLICY`
-- Pricing/economics: `compute.economics` captures
-  `max_cu_per_call`/`max_amplification_ratio`, fee split, sponsor caps
-  (per-call and daily CU), price family baselines + risk classes/bounds for
-  governance updates, and execution-class multipliers (GPU/TEE/best-effort).
-- Actual/defaults: `actual.rs` / `defaults.rs::compute` expose parsed
-  `Compute` settings (namespaces, profiles, price families, sandbox).
-- Invalid configs (empty namespaces, default profile/family missing, TTL cap
-  inversions) are surfaced as `InvalidComputeConfig` during parsing.
+- Qiymətləndirmə/iqtisadiyyat: `compute.economics` çəkir
+  `max_cu_per_call`/`max_amplification_ratio`, ödəniş bölgüsü, sponsor qalıqları
+  (zəng başına və gündəlik Kİ), qiymət ailəsinin əsas göstəriciləri + risk sinifləri/hüdudları
+  idarəetmə yeniləmələri və icra sinfi çarpanları (GPU/TEE/best-fort).
+- Faktiki/defolt: `actual.rs` / `defaults.rs::compute` təhlil edilmiş ifşa
+  `Compute` parametrləri (ad boşluqları, profillər, qiymət ailələri, sandbox).
+- Yanlış konfiqurasiyalar (boş ad məkanları, defolt profil/ailə yoxdur, TTL qapağı
+  inversiyalar) təhlil zamanı `InvalidComputeConfig` kimi görünür.
 
-## Tests and fixtures
+## Testlər və qurğular
 
-- Deterministic helpers (`request_hash`, pricing) and fixture roundtrips live in
-  `crates/iroha_data_model/src/compute/mod.rs` (see `fixtures_round_trip`,
+- Deterministik köməkçilər (`request_hash`, qiymətlər) və armatur səfərləri burada yaşayır
+  `crates/iroha_data_model/src/compute/mod.rs` (bax `fixtures_round_trip`,
   `request_hash_is_stable`, `pricing_rounds_up_units`).
-- JSON fixtures live in `fixtures/compute/` and are exercised by the data-model
-  tests for regression coverage.
+- JSON qurğuları `fixtures/compute/`-də yaşayır və məlumat modeli tərəfindən həyata keçirilir
+  reqressiya əhatəsi üçün testlər.
 
-## SLO harness and budgets
-
-- `compute.slo.*` configuration exposes the gateway SLO knobs (in-flight queue
-  depth, RPS cap, and latency targets) in
-  `crates/iroha_config/src/parameters/{user,actual,defaults}.rs`. Defaults: 32
-  in-flight, 512 queued per route, 200 RPS, p50 25 ms, p95 75 ms, p99 120 ms.
-- Run the lightweight bench harness to capture SLO summaries and a request/egress
+## SLO qoşqu və büdcələri- `compute.slo.*` konfiqurasiyası şlüz SLO düymələrini (uçuş növbəsi) ifşa edir
+  dərinlik, RPS qapağı və gecikmə hədəfləri).
+  `crates/iroha_config/src/parameters/{user,actual,defaults}.rs`. Defolt: 32
+  uçuş zamanı, marşrut başına 512 növbə, 200 RPS, p50 25ms, p95 75ms, p99 120ms.
+- SLO xülasələrini və sorğu/çıxışı əldə etmək üçün yüngül dəzgah kəmərini işə salın
   snapshot: `cargo run -p xtask --bin compute_gateway -- bench [manifest_path]
-  [iterations] [concurrency] [out_dir]` (defaults: `fixtures/compute/manifest_compute_payments.json`,
-  128 iterations, concurrency 16, outputs under
-  `artifacts/compute_gateway/bench_summary.{json,md}`). The bench uses
-  deterministic payloads (`fixtures/compute/payload_compute_payments.json`) and
-  per-request headers to avoid replay collisions while exercising
-  `echo`/`uppercase`/`sha3` entrypoints.
+  [iterasiyalar] [koncurrency] [out_dir]` (defaults: `fixtures/compute/manifest_compute_payments.json`,
+  128 iterasiya, paralellik 16, çıxışlar altında
+  `artifacts/compute_gateway/bench_summary.{json,md}`). Skamya istifadə edir
+  deterministik faydalı yüklər (`fixtures/compute/payload_compute_payments.json`) və
+  məşq zamanı təkrar toqquşmaların qarşısını almaq üçün hər sorğu başlıqları
+  `echo`/`uppercase`/`sha3` giriş nöqtələri.
 
-## SDK/CLI parity fixtures
+## SDK/CLI paritet qurğuları
 
-- Canonical fixtures live under `fixtures/compute/`: manifest, call, payload, and
-  the gateway-style response/receipt layout. Payload hashes must match the call
-  `request.payload_hash`; the helper payload lives in
+- Kanonik qurğular `fixtures/compute/` altında yaşayır: manifest, zəng, faydalı yük və
+  şlüz tipli cavab/qəbz tərtibatı. Yük həşləri zəngə uyğun olmalıdır
+  `request.payload_hash`; köməkçi yükü yaşayır
   `fixtures/compute/payload_compute_payments.json`.
-- The CLI ships `iroha compute simulate` and `iroha compute invoke`:
+- CLI gəmiləri `iroha compute simulate` və `iroha compute invoke`:
 
 ```bash
 iroha compute simulate \
@@ -157,12 +154,12 @@ iroha compute invoke \
   --payload fixtures/compute/payload_compute_payments.json
 ```
 
-- JS: `loadComputeFixtures`/`simulateCompute`/`buildGatewayRequest` live in
-  `javascript/iroha_js/src/compute.js` with regression tests under
+- JS: `loadComputeFixtures`/`simulateCompute`/`buildGatewayRequest` yaşayır
+  altında reqressiya testləri ilə `javascript/iroha_js/src/compute.js`
   `javascript/iroha_js/test/computeExamples.test.js`.
-- Swift: `ComputeSimulator` loads the same fixtures, validates payload hashes,
-  and simulates the entrypoints with tests in
+- Swift: `ComputeSimulator` eyni qurğuları yükləyir, faydalı yük həşlərini təsdiqləyir,
+  və testlərlə giriş nöqtələrini simulyasiya edir
   `IrohaSwift/Tests/IrohaSwiftTests/ComputeSimulatorTests.swift`.
-- The CLI/JS/Swift helpers all share the same Norito fixtures so SDKs can
-  validate request construction and hash handling offline without hitting a
-  running gateway.
+- CLI/JS/Swift köməkçilərinin hamısı eyni Norito qurğularını paylaşır ki, SDK-lar
+  a vurmadan sorğu tikinti və hash idarə offline doğrulayın
+  çalışan qapı.

@@ -7,137 +7,132 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 9cda4648f0af7f89022e9d9f4ea243bc22685d9356927bbf1417c77b2057d872
 source_last_modified: "2025-12-29T18:16:35.940439+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 External Audit Brief
-% Iroha Crypto Working Group
+% SM2/SM3/SM4 Tashqi audit bo'yicha qisqacha ma'lumot
+% Iroha Kripto ishchi guruhi
 % 2026-01-30
 
-# Overview
+# Umumiy ko'rinish
 
-This brief packages the engineering and compliance context required for an
-independent review of Iroha’s SM2/SM3/SM4 enablement. It targets audit teams
-with Rust cryptography experience and familiarity with Chinese National
-Cryptography standards. The expected outcome is a written report covering
-implementation risks, conformance gaps, and prioritised remediation guidance
-ahead of the SM rollout moving from preview to production.
+Ushbu qisqacha ma'lumot uchun zarur bo'lgan muhandislik va muvofiqlik konteksti to'plangan
+Iroha ning SM2/SM3/SM4 faolligini mustaqil ko'rib chiqish. U auditorlik guruhlariga mo'ljallangan
+Rust kriptografiyasi tajribasi va Xitoy milliy kompaniyasi bilan tanish
+Kriptografiya standartlari. Kutilgan natija yozma hisobotdir
+amalga oshirish xatarlari, muvofiqlik kamchiliklari va ustuvor tuzatish bo'yicha ko'rsatmalar
+oldindan ko'rishdan ishlab chiqarishga o'tadigan SM chiqarilishidan oldin.
 
-# Program Snapshot
+# Dastur surati
 
-- **Release scope:** Iroha 2/3 shared codebase, deterministic verification
-  paths across nodes and SDKs, signing available behind configuration guard.
-- **Current phase:** SM-P3.2 (OpenSSL/Tongsuo backend integration) with Rust
-  implementations already shipping for verification and symmetric use-cases.
-- **Target decision date:** 2026-04-30 (audit findings inform go/no-go for
-  enabling SM signing in validator builds).
-- **Key risks tracked:** third-party dependency pedigree, deterministic
-  behaviour under mixed hardware, operator compliance readiness.
+- **Chiqarish doirasi:** Iroha 2/3 umumiy kod bazasi, deterministik tekshirish
+  tugunlar va SDK'lar bo'ylab yo'llar, konfiguratsiya himoyasi orqasida imzo qo'yish mumkin.
+- **Hozirgi bosqich:** Rust bilan SM-P3.2 (OpenSSL/Tongsuo backend integratsiyasi)
+  tekshirish uchun yuborilgan ilovalar va nosimmetrik foydalanish holatlari.
+- **Maqsadli qaror qabul qilish sanasi:** 2026-04-30 (audit natijalari go/no-go uchun ma'lumot beradi
+  validator tuzilmalarida SM-ga kirishni yoqish).
+- **Kuzatiladigan asosiy xavflar:** uchinchi tomonga qaramlik nasl-nasabi, deterministik
+  aralash apparat ostida xatti-harakatlar, operator muvofiqligi tayyorligi.
 
-# Code & Fixture References
+# Kod va moslamalar uchun havolalar
 
-- `crates/iroha_crypto/src/sm.rs` — Rust implementations and optional OpenSSL
-  bindings (`sm-ffi-openssl` feature).
-- `crates/ivm/tests/sm_syscalls.rs` — IVM syscall coverage for hashing,
-  verification, and symmetric modes.
-- `crates/iroha_data_model/tests/sm_norito_roundtrip.rs` — Norito payload
-  round-trips for SM artefacts.
-- `docs/source/crypto/sm_program.md` — programme history, dependency audit, and
-  rollout guardrails.
-- `docs/source/crypto/sm_operator_rollout.md` — operator-facing enablement and
-  rollback procedures.
-- `docs/source/crypto/sm_compliance_brief.md` — regulatory summary and export
-  considerations.
+- `crates/iroha_crypto/src/sm.rs` - Rust ilovalari va ixtiyoriy OpenSSL
+  bog'lashlar (`sm-ffi-openssl` xususiyati).
+- `crates/ivm/tests/sm_syscalls.rs` - IVM xeshlash uchun tizim qamrovi,
+  tekshirish va simmetrik rejimlar.
+- `crates/iroha_data_model/tests/sm_norito_roundtrip.rs` - Norito foydali yuk
+  SM artefaktlari uchun aylanma sayohatlar.
+- `docs/source/crypto/sm_program.md` - dastur tarixi, qaramlik auditi va
+  aylanma to'siqlar.
+- `docs/source/crypto/sm_operator_rollout.md` — operatorga qarashli yoqish va
+  orqaga qaytarish protseduralari.
+- `docs/source/crypto/sm_compliance_brief.md` - normativ xulosa va eksport
+  mulohazalar.
 - `scripts/sm_openssl_smoke.sh` / `crates/iroha_crypto/tests/sm_openssl_smoke.rs`
-  — deterministic smoke harness for OpenSSL-backed flows.
-- `fuzz/sm_*` corpora — RustCrypto-based fuzz seeds covering SM3/SM4 primitives.
+  — OpenSSL tomonidan qo'llab-quvvatlanadigan oqimlar uchun deterministik tutun jabduqlari.
+- `fuzz/sm_*` korpusi — SM3/SM4 ibtidoiylarini qamrab olgan RustCrypto asosidagi noaniq urug'lar.
 
-# Requested Audit Scope
+# Talab qilingan audit doirasi1. **Spesifikasiyaga muvofiqligi**
+   - SM2 imzo tekshiruvini, ZA hisobini va kanonikni tasdiqlang
+     kodlash harakati.
+   - GM/T 0002-2012 va GM/T 0007-2012 ga muvofiq SM3/SM4 primitivlarini tasdiqlang,
+     qarshi rejimi o'zgarmaslari va IV ishlov berish, shu jumladan.
+2. **Determinizm va doimiy vaqt kafolatlari**
+   - Tugun bajarilishi uchun filiallarni, jadvallarni qidirishni va apparat jo'natishini ko'rib chiqing
+     CPU oilalarida deterministik bo'lib qoladi.
+   - Maxfiy kalit operatsiyalari uchun doimiy vaqt talablarini baholang va tasdiqlang
+     OpenSSL/Tongsuo yo'llari doimiy vaqt semantikasini saqlaydi.
+3. **Yon kanal va nosozlik tahlili**
+   - Rust va ikkalasida ham vaqt, kesh va quvvat yon kanali xavflarini tekshiring
+     FFI tomonidan qo'llab-quvvatlanadigan kod yo'llari.
+   - Imzoni tekshirish uchun xatoliklarni bartaraf etish va xatolar tarqalishini baholash va
+     autentifikatsiya qilingan shifrlash xatolari.
+4. **Yaratish, bog'liqlik va ta'minot zanjirini ko'rib chiqish**
+   - OpenSSL/Tongsuo artefaktlarining qayta tiklanadigan tuzilishi va kelib chiqishini tasdiqlang.
+   - Tobelik daraxtini litsenziyalash va auditni qamrab olishni ko'rib chiqing.
+5. **Sinov va tekshirish uskunalari tanqidi**
+   - Deterministik tutun sinovlari, noaniq jabduqlar va Norito moslamalarini baholang.
+   - Qo'shimcha qamrovni tavsiya eting (masalan, differentsial test, mulkka asoslangan
+     dalillar) agar bo'shliqlar qolsa.
+6. **Muvofiqlik va operator ko'rsatmalarini tekshirish**
+   - Yuborilgan hujjatlarni qonuniy talablarga va kutilganiga muvofiq tekshirish
+     operator boshqaruvlari.
 
-1. **Specification conformance**
-   - Validate SM2 signature verification, ZA calculation, and canonical
-     encoding behaviour.
-   - Confirm SM3/SM4 primitives follow GM/T 0002-2012 and GM/T 0007-2012,
-     including counter mode invariants and IV handling.
-2. **Determinism & constant-time guarantees**
-   - Review branching, table lookups, and hardware dispatch so node execution
-     remains deterministic across CPU families.
-   - Evaluate constant-time claims for private-key operations and confirm the
-     OpenSSL/Tongsuo paths retain constant-time semantics.
-3. **Side-channel and fault analysis**
-   - Inspect for timing, cache, and power side-channel risks in both Rust and
-     FFI-backed code paths.
-   - Assess fault-handling and error propagation for signature verification and
-     authenticated encryption failures.
-4. **Build, dependency, and supply-chain review**
-   - Confirm reproducible builds and provenance of OpenSSL/Tongsuo artefacts.
-   - Review dependency tree licensing and audit coverage.
-5. **Testing & verification harness critique**
-   - Evaluate deterministic smoke tests, fuzz harnesses, and Norito fixtures.
-   - Recommend additional coverage (e.g., differential testing, property-based
-     proofs) if gaps remain.
-6. **Compliance & operator guidance validation**
-   - Cross-check shipped documentation against legal requirements and expected
-     operator controls.
+# Yetkazib berish va logistika
 
-# Deliverables & Logistics
+- **Boshlanish vaqti:** 2026-02-24 (virtual, 90 daqiqa).
+- **Intervyular:** Crypto WG, IVM texnik xizmat ko'rsatuvchilar, platforma operatsiyalari (kerak bo'lganda).
+- **Artefaktga kirish:** faqat o‘qish uchun mo‘ljallangan ombor oynasi, CI quvuri jurnallari, armatura
+  chiqishlar va qaramlik SBOMlari (CycloneDX).
+- **Oraliq yangilanishlar:** haftalik yozma holat + xavf haqida eslatmalar.
+- **Yakuniy natijalar (muddati 2026-04-15):**
+  - Tavakkalchilik darajasi bilan ijro etuvchi xulosa.
+  - Batafsil topilmalar (har bir masala: ta'sir, ehtimollik, kod havolalari,
+    tuzatish bo'yicha ko'rsatmalar).
+  - Qayta sinov/tasdiqlash rejasi.
+  - Determinizm, doimiy vaqt holati va muvofiqlikni moslashtirish bo'yicha bayonot.
 
-- **Kick-off:** 2026-02-24 (virtual, 90 minutes).
-- **Interviews:** Crypto WG, IVM maintainers, platform ops (as needed).
-- **Artefact access:** read-only repository mirror, CI pipeline logs, fixture
-  outputs, and dependency SBOMs (CycloneDX).
-- **Interim updates:** weekly written status + risk callouts.
-- **Final deliverables (due 2026-04-15):**
-  - Executive summary with risk rating.
-  - Detailed findings (per issue: impact, likelihood, code references,
-    remediation guidance).
-  - Re-test/verification plan.
-  - Statement on determinism, constant-time posture, and compliance alignment.
+## Ishtirok etish holati
 
-## Engagement Status
-
-| Vendor | Status | Kick-off | Field Window | Notes |
+| Sotuvchi | Holati | Boshlanish | Maydon oynasi | Eslatmalar |
 |--------|--------|----------|--------------|-------|
-| Trail of Bits (CN practice) | Statement of work executed 2026-02-21 | 2026-02-24 | 2026-02-24 – 2026-03-22 | Delivery due 2026-04-15; Hui Zhang leading engagement with Alexey M. as engineering counterpart. Weekly status call Wednesdays 09:00 UTC. |
-| NCC Group (APAC) | Contingency slot reserved | N/A (on hold) | Provisional 2026-05-06 – 2026-05-31 | Activation only if high-risk findings require second pass; readiness confirmed by Priya N. (Security) and NCC Group engagement desk 2026-02-22. |
+| Bitlar izi (CN amaliyoti) | Bajarilgan ishlar hisoboti 2026-02-21 | 2026-02-24 | 2026-02-24-2026-03-22 | Yetkazib berish muddati 2026-04-15; Hui Chjan muhandislik hamkasbi sifatida Aleksey M. bilan hamkorlikda etakchi. Haftalik holat chaqiruvi chorshanba kunlari 09:00UTC. |
+| NCC Group (APAC) | Favqulodda vaziyatlar uchun joy ajratilgan | Yo'q (kutishda) | Vaqtinchalik 2026-05-06-2026-05-31 | Faqat yuqori xavfli topilmalar ikkinchi o'tishni talab qilsa, faollashtirish; tayyorlik Priya N. (Xavfsizlik) va NCC Group ish stoli tomonidan tasdiqlangan 2026-02-22. |
 
-# Attachments Included in Outreach Package
-
-- `docs/source/crypto/sm_program.md`
+# Qo'shimchalar Autreach to'plamiga kiritilgan- `docs/source/crypto/sm_program.md`
 - `docs/source/crypto/sm_operator_rollout.md`
 - `docs/source/crypto/sm_compliance_brief.md`
 - `docs/source/crypto/sm_lock_refresh_plan.md`
 - `docs/source/crypto/sm_rust_vector_check.md`
-- `docs/source/crypto/attachments/sm_iroha_crypto_tree.txt` — `cargo tree -p iroha_crypto --no-default-features --features "sm sm-ffi-openssl"` snapshot.
-- `docs/source/crypto/attachments/sm_iroha_crypto_metadata.json` — `cargo metadata` export for the `iroha_crypto` crate (locked dependency graph).
-- `docs/source/crypto/attachments/sm_openssl_smoke.log` — latest `scripts/sm_openssl_smoke.sh` run (skips SM2/SM4 paths when provider support is missing).
-- `docs/source/crypto/attachments/sm_openssl_provenance.md` — local toolkit provenance (pkg-config/OpenSSL version notes).
-- Fuzz corpus manifest (`fuzz/sm_corpus_manifest.json`).
+- `docs/source/crypto/attachments/sm_iroha_crypto_tree.txt` — `cargo tree -p iroha_crypto --no-default-features --features "sm sm-ffi-openssl"` surati.
+- `docs/source/crypto/attachments/sm_iroha_crypto_metadata.json` — `iroha_crypto` qutisi uchun `cargo metadata` eksporti (qulflangan qaramlik grafigi).
+- `docs/source/crypto/attachments/sm_openssl_smoke.log` — soʻnggi `scripts/sm_openssl_smoke.sh` ishga tushirildi (provayder yordami yoʻq boʻlganda SM2/SM4 yoʻllarini oʻtkazib yuboradi).
+- `docs/source/crypto/attachments/sm_openssl_provenance.md` - mahalliy asboblar to'plamining kelib chiqishi (pkg-config/OpenSSL versiya eslatmalari).
+- Fuzz korpus manifest (`fuzz/sm_corpus_manifest.json`).
 
-> **Environment caveat:** The current development snapshot uses the vendored OpenSSL 3.x toolchain (`openssl` crate `vendored` feature) but macOS lacks SM3/SM4 CPU intrinsics and the default provider does not expose SM4-GCM, so the OpenSSL smoke harness still skips SM4 coverage and Annex Example SM2 parsing. A workspace dependency cycle (`sorafs_manifest ↔ sorafs_car`) also forces the helper script to skip the run after emitting the `cargo check` failure. Re-run the bundle inside the Linux release build environment (OpenSSL/Tongsuo with SM4 enabled and without the cycle) to capture full parity before the external audit.
+> **Atrof-muhitga oid ogohlantirish:** Joriy ishlanma surati ishlab chiqarilgan OpenSSL 3.x asboblar zanjiridan foydalanadi (`openssl` sandiq `vendored` xususiyati), lekin macOS’da SM3/SM4 protsessorining o‘ziga xos xususiyatlari yo‘q va standart provayder SMPS4-ning o‘zini tuta olmayotganligini ko‘rsatmaydi. qamrovi va ilova misoli SM2 tahlili. Ish maydoniga bog'liqlik davri (`sorafs_manifest ↔ sorafs_car`) ham `cargo check` xatosini chiqargandan so'ng yordamchi skriptni ishga tushirishni o'tkazib yuborishga majbur qiladi. Tashqi auditdan oldin toʻliq paritetni olish uchun toʻplamni Linux relizlar yaratish muhitida (SM4 yoqilgan OpenSSL/Tongsuo va siklsiz) qayta ishga tushiring.
 
-# Candidate audit partners & scope
+# Nomzod audit hamkorlari va qamrovi
 
-| Firm | Relevant experience | Typical scope & deliverables | Notes |
+| Firma | Tegishli tajriba | Odatda ko'lami va yetkazib berish | Eslatmalar |
 |------|---------------------|------------------------------|-------|
-| Trail of Bits (CN cryptography practice) | Rust code reviews (`ring`, zkVMs), prior GM/T assessments for mobile payment stacks. | Spec conformance diff (GM/T 0002/3/4), constant-time review of Rust + OpenSSL paths, differential fuzzing, supply-chain review, remediation roadmap. | Already engaged; table retained for completeness when planning future refresh cycles. |
-| NCC Group APAC | Hardware/SOC + Rust cryptography red teams, published reviews of RustCrypto primitives and payment HSM bridges. | Holistic assessment of Rust + JNI/FFI bindings, deterministic policy validation, perf/telemetry gate review, operator playbook walkthrough. | Reserved as contingency; can also provide bilingual reporting for Chinese regulators. |
-| Kudelski Security (Blockchain & crypto team) | Audits of Halo2, Mina, zkSync, custom signature schemes implemented in Rust. | Focus on elliptic-curve correctness, transcript integrity, threat modelling for hardware acceleration, and CI/rollout evidence. | Useful for second opinions on hardware acceleration (SM-5a) and FASTPQ-to-SM interactions. |
-| Least Authority | Cryptographic protocol audits for Rust-based blockchains (Filecoin, Polkadot), reproducible builds consulting. | Deterministic build verification, Norito codec verification, compliance evidence cross-check, operator communication review. | Well-suited for transparency/audit-report deliverables when regulators request independent verification beyond code review. |
+| Trail of Bits (CN kriptografiya amaliyoti) | Rust kodini ko'rib chiqish (`ring`, zkVMs), mobil to'lovlar to'plami uchun oldingi GM/T baholashlari. | Xususiyatlarga muvofiqlik farqi (GM/T 0002/3/4), Rust + OpenSSL yo'llarining doimiy ko'rib chiqilishi, differentsial noaniqlik, ta'minot zanjiri ko'rib chiqish, tuzatish yo'l xaritasi. | Allaqachon shug'ullangan; Kelajakdagi yangilanish davrlarini rejalashtirishda jadval to'liqligi uchun saqlanadi. |
+| NCC Group APAC | Uskuna/SOC + Rust kriptografiyasi qizil jamoalari, RustCrypto ibtidoiylari va to'lov HSM ko'priklari haqida nashr etilgan sharhlar. | Rust + JNI/FFI ulanishlarining yaxlit bahosi, deterministik siyosatni tekshirish, perf/telemetriya eshigini ko'rib chiqish, operator o'yin kitobini o'rganish. | Favqulodda vaziyat sifatida saqlangan; Xitoy regulyatorlari uchun ikki tilli hisobotlarni ham taqdim etishi mumkin. |
+| Kudelski Xavfsizlik (Blockchain va kripto jamoasi) | Rust-da amalga oshirilgan Halo2, Mina, zkSync, maxsus imzo sxemalarini tekshirish. | Elliptik egri chiziqning to'g'riligiga, transkript yaxlitligiga, apparat tezlashuvi uchun tahdid modellashtirishga va CI/rollout dalillariga e'tibor qarating. | Uskuna tezlashuvi (SM-5a) va FASTPQ-dan SM-ga o'zaro ta'sirlar bo'yicha ikkinchi fikrlar uchun foydalidir. |
+| Eng kam vakolat | Rust-ga asoslangan blokcheynlar (Filecoin, Polkadot) uchun kriptografik protokol tekshiruvlari, takrorlanadigan qurilish konsaltinglari. | Deterministik qurilish tekshiruvi, Norito kodek tekshiruvi, muvofiqlik dalillarini o'zaro tekshirish, operator aloqasini tekshirish. | Regulyatorlar kodni tekshirishdan tashqari mustaqil tekshirishni talab qilganda shaffoflik/audit hisoboti natijalari uchun juda mos keladi. |
 
-All engagements request the same artefact bundle enumerated above plus the following optional add-ons depending on the firm:
+Barcha majburiyatlar yuqorida sanab o'tilgan bir xil artefakt to'plamini va firmaga qarab quyidagi ixtiyoriy qo'shimchalarni talab qiladi:- **Maxsus muvofiqlik va deterministik xatti-harakat: ** SM2 ZA hosilasi, SM3 to'ldirish, SM4 davra funksiyalari va `sm_accel` ish vaqti jo'natish shlyuzining satr bo'yicha tekshiruvi tezlashuv hech qachon semantikani o'zgartirmasligini ta'minlash uchun.
+- **Yon kanal va FFI tekshiruvi:** Doimiy vaqtli da'volar, xavfli kod bloklari va OpenSSL/Tongsuo ko'prigi qatlamlarini tekshirish, shu jumladan Rust yo'liga qarshi farq sinovlari.
+- **CI / ta'minot zanjiri tekshiruvi:** `sm_interop_matrix`, `sm_openssl_smoke` va `sm_perf` jabduqlarini SBOM/SLSA attestatsiyalari bilan ko'paytirish, shuning uchun audit natijalari bevosita dalillarni e'lon qilish uchun bog'lanishi mumkin.
+- **Operator garovi:** `sm_operator_rollout.md`, muvofiqlik topshirish shablonlari va telemetriya asboblar panelini o'zaro tekshirish, hujjatlarda va'da qilingan yumshatishlar texnik jihatdan bajarilishi mumkinligini tasdiqlash.
 
-- **Spec conformance & deterministic behaviour:** Line-by-line verification of SM2 ZA derivation, SM3 padding, SM4 round functions, and the `sm_accel` runtime dispatch gate to ensure acceleration never alters semantics.
-- **Side-channel and FFI review:** Inspection of constant-time claims, unsafe code blocks, and OpenSSL/Tongsuo bridging layers, including diff testing against the Rust path.
-- **CI / supply-chain validation:** Reproduction of the `sm_interop_matrix`, `sm_openssl_smoke`, and `sm_perf` harnesses together with SBOM/SLSA attestations so audit findings can be tied directly to release evidence.
-- **Operator-facing collateral:** Cross-check of `sm_operator_rollout.md`, compliance filing templates, and telemetry dashboards to confirm that mitigations promised in documentation are technically enforceable.
+Kelajakdagi auditlarni aniqlashda ushbu jadvaldan sotuvchining kuchli tomonlarini yoʻl xaritasining aniq bosqichiga moslashtirish uchun qaytadan foydalaning (masalan, apparat/mukammal relizlar uchun Kudelski, til/ish vaqtining toʻgʻriligi uchun Trail of Bits va takrorlanishi mumkin boʻlgan tuzilish kafolatlari uchun eng kichik vakolat).
 
-When scoping future audits, reuse this table to align vendor strengths with the specific roadmap milestone (e.g., favour Kudelski for hardware/perf heavy releases, Trail of Bits for language/runtime correctness, and Least Authority for reproducible build assurances).
+# Aloqa nuqtalari
 
-# Points of Contact
-
-- **Technical owner:** Crypto WG lead (Alexey M., `alexey@iroha.tech`)
-- **Program manager:** Platform Operations coordinator (Sarah K.,
+- **Texnik egasi:** Crypto WG yetakchisi (Aleksey M., `alexey@iroha.tech`)
+- **Dastur menejeri:** Platforma operatsiyalari koordinatori (Sara K.,
   `sarah@iroha.tech`)
-- **Security liaison:** Security Engineering (Priya N., `security@iroha.tech`)
-- **Documentation liaison:** Docs/DevRel lead (Jamila R.,
+- **Xavfsizlik aloqasi:** Xavfsizlik muhandisligi (Priya N., `security@iroha.tech`)
+- **Hujjatlar bilan bog‘lanish:** Docs/DevRel yetakchisi (Jamila R.,
   `docs@iroha.tech`)

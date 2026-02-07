@@ -4,25 +4,27 @@ direction: rtl
 source: docs/portal/docs/sorafs/developer-sdk-rust.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-sdk-rust
-title: مقتطفات Rust SDK
-sidebar_label: مقتطفات Rust
-description: أمثلة Rust دنيا لاستهلاك تدفقات الأدلة والمانيفستات.
+ID: ڈویلپر-SDK-RUST
+عنوان: زنگ SDK اسنیپٹس
+سائڈبار_لیبل: زنگ کے ٹکڑوں
+تفصیل: ڈائرکٹری اسٹریمز اور ظاہر ہونے کے لئے کم سے کم مورچا کی مثالیں۔
 ---
 
-:::note المصدر المعتمد
-تعكس هذه الصفحة `docs/source/sorafs/developer/sdk/rust.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم إيقاف مجموعة Sphinx القديمة.
+::: منظور شدہ ماخذ کو نوٹ کریں
+یہ صفحہ `docs/source/sorafs/developer/sdk/rust.md` کی عکاسی کرتا ہے۔ اس بات کو یقینی بنائیں کہ اس وقت تک دونوں کاپیاں ہم آہنگی میں رکھیں جب تک کہ پرانا اسفنکس کلسٹر ریٹائر نہ ہوجائے۔
 :::
 
-تغذّي حزم Rust في هذا المستودع واجهة CLI ويمكن تضمينها داخل مُنسِّقات أو خدمات مخصّصة.
-تسلط المقتطفات التالية الضوء على المساعدات التي يطلبها معظم المطورين.
+اس ذخیرے میں زنگ آلود پیکیجز سی ایل آئی میں کھانا کھاتے ہیں اور کسٹم فارمیٹرز یا خدمات کے اندر سرایت کرسکتے ہیں۔
+مندرجہ ذیل اقتباسات زیادہ تر ڈویلپرز کی ضرورت کی مدد کو اجاگر کرتے ہیں۔
 
-## مساعد تدفق الأدلة
+## ثبوت بہاؤ اسسٹنٹ
 
-أعد استخدام محلل تدفق الأدلة الحالي لتجميع المقاييس من استجابة HTTP:
+HTTP جواب سے میٹرکس جمع کرنے کے لئے اپنے موجودہ شواہد کے بہاؤ پارسر کا دوبارہ استعمال کریں:
 
 ```rust
 use std::error::Error;
@@ -60,45 +62,45 @@ pub fn collect_proof_metrics(response: Response) -> Result<ProofStreamSummary, B
 }
 ```
 
-تتوفر النسخة الكاملة (مع الاختبارات) في `docs/examples/sorafs_rust_proof_stream.rs`.
-تنتج `ProofStreamSummary::to_json()` نفس JSON للمقاييس الذي يصدره CLI، ما يسهل تغذية
-منصات الرصد أو فرضيات CI.
+مکمل ورژن (ٹیسٹوں کے ساتھ) `docs/examples/sorafs_rust_proof_stream.rs` پر دستیاب ہے۔
+`ProofStreamSummary::to_json()` CLI کی طرح ایک ہی میٹرکس JSON تیار کرتا ہے ، جس سے کھانا کھلانا آسان ہوجاتا ہے
+مانیٹرنگ پلیٹ فارم یا سی آئی فرضی تصورات۔
 
-## تقييم الجلب متعدد المصادر
+## کثیر سورس بازیافت کا اندازہ کریں
 
-يعرض الموديول `sorafs_car::multi_fetch` مُجدول الجلب غير المتزامن المستخدم في CLI.
-نفّذ `sorafs_car::multi_fetch::ScorePolicy` ومرّره عبر `FetchOptions::score_policy`
-لضبط ترتيب المزوّدين. يوضح اختبار الوحدة
-`multi_fetch::tests::score_policy_can_filter_providers` كيفية فرض تفضيلات مخصصة.
+ماڈیول `sorafs_car::multi_fetch` CLI میں استعمال ہونے والے غیر متزلزل بازیافت شیڈیولر کو دکھاتا ہے۔
+`sorafs_car::multi_fetch::ScorePolicy` پر عمل کریں اور اسے `FetchOptions::score_policy` کے ذریعے منتقل کریں
+فراہم کرنے والوں کے آرڈر کو ایڈجسٹ کرنے کے لئے۔ یونٹ کی جانچ کا مظاہرہ کرتا ہے
+`multi_fetch::tests::score_policy_can_filter_providers` اپنی مرضی کے مطابق ترجیحات کو کس طرح مجبور کریں۔
 
-عناصر أخرى تعكس أعلام CLI:
+دوسرے عناصر جو CLI جھنڈوں کی عکاسی کرتے ہیں:
 
-- `FetchOptions::per_chunk_retry_limit` يطابق علم `--retry-budget` لتشغيلات CI التي
-  تحد عدد المحاولات عمدًا.
-- اجمع بين `FetchOptions::global_parallel_limit` و`--max-peers` لتقييد عدد المزوّدين
-  المتزامنين.
-- يقوم `OrchestratorConfig::with_telemetry_region("region")` بوسم مقاييس
-  `sorafs_orchestrator_*`، بينما يعكس `OrchestratorConfig::with_transport_policy`
-  علم CLI `--transport-policy`. تُشحن `TransportPolicy::SoranetPreferred` كافتراضي عبر
-  أسطح CLI/SDK؛ استخدم `TransportPolicy::DirectOnly` فقط عند اختبار downgrade أو اتباع
-  توجيه امتثال، واحجز `SoranetStrict` لطيارين PQ-only بموافقة صريحة.
-- اضبط `SorafsGatewayFetchOptions::write_mode_hint =
-  Some(WriteModeHint::UploadPqOnly)` لفرض رفع PQ-only؛ سيعزز المساعد سياسات
-  النقل/إخفاء الهوية تلقائيًا ما لم يتم تجاوزها صراحةً.
-- استخدم `SorafsGatewayFetchOptions::policy_override` لتثبيت طبقة نقل أو إخفاء هوية
-  مؤقتة لطلب واحد؛ تمرير أي حقل يتجاوز تخفيض brownout ويفشل عندما يتعذر تلبية الطبقة
-  المطلوبة.
-- تستخدم روابط Python (`sorafs_multi_fetch_local` / `sorafs_gateway_fetch`) وJavaScript
-  (`sorafsMultiFetchLocal`) نفس المُجدول، لذا اضبط `return_scoreboard=true` في تلك المساعدات
-  لاسترجاع الأوزان المحسوبة مع إيصالات الـ chunk.
-- يسجل `SorafsGatewayScoreboardOptions::telemetry_source_label` تدفق OTLP الذي أنتج
-  حزمة تبنٍ. عند الإغفال، يستنتج العميل `region:<telemetry_region>` (أو `chain:<chain_id>`) تلقائيًا
-  حتى تحمل الميتاداتا دائمًا وسمًا وصفيًا.
+- `FetchOptions::per_chunk_retry_limit` CI رنز کے لئے `--retry-budget` پرچم سے میل کھاتا ہے
+  جان بوجھ کر کوششوں کی تعداد کو محدود کریں۔
+- فراہم کنندگان کی تعداد کو محدود کرنے کے لئے `FetchOptions::global_parallel_limit` اور `--max-peers` کو یکجا کریں
+  ہم وقت ساز
+- `OrchestratorConfig::with_telemetry_region("region")` ٹیگز میٹرکس
+  `sorafs_orchestrator_*` ، جبکہ `OrchestratorConfig::with_transport_policy` کی عکاسی ہوتی ہے
+  CLI پرچم `--transport-policy`۔ `TransportPolicy::SoranetPreferred` جہاز بطور ڈیفالٹ کے ذریعے
+  CLI/SDK کھالیں ؛ جب صرف ڈاون گریڈ یا فالو کی جانچ کرتے ہو تو `TransportPolicy::DirectOnly` استعمال کریں
+  تعمیل ہدایت ، اور واضح منظوری کے ساتھ صرف PQ- صرف پائلٹوں کے لئے `SoranetStrict`۔
+- سیٹ `sorafsgatewayfetchptions :: write_mode_hint =
+  کچھ (Writemodehint :: اپلوڈپقونلی) `صرف PQ-Olly اپ لوڈ پر مجبور کرنا ؛ اسسٹنٹ پالیسیوں کو فروغ دے گا
+  جب تک واضح طور پر اوورڈ نہ ہو تب تک خود بخود منتقلی/گمنام کریں۔
+- ٹرانسپورٹ یا گمنام پرت انسٹال کرنے کے لئے `SorafsGatewayFetchOptions::policy_override` استعمال کریں
+  ایک ہی آرڈر کے لئے عارضی ؛ کسی بھی فیلڈ سے گزرنا جو براؤن آؤٹ میں کمی سے تجاوز کرتا ہے ناکام ہوجاتا ہے جب پرت مطمئن نہیں ہوسکتی ہے
+  ضروری ہے۔
+- ازگر (`sorafs_multi_fetch_local` / `sorafs_gateway_fetch`) اور جاوا اسکرپٹ بائنڈنگ استعمال کرتا ہے
+  (`sorafsMultiFetchLocal`) same scheduler, so set `return_scoreboard=true` in that helper
+  حص can ہ کی رسیدوں کے ساتھ حساب شدہ وزن کو بازیافت کرنے کے لئے۔
+-`SorafsGatewayScoreboardOptions::telemetry_source_label` نے تیار کردہ OTLP اسٹریم کو ریکارڈ کیا
+  گھاس کا ایک بنڈل۔ غلطی پر ، کلائنٹ خود بخود `region:<telemetry_region>` (یا `chain:<chain_id>`) کا پتہ لگاتا ہے۔
+  تو میٹا ڈیٹا ہمیشہ وضاحتی ٹیگ اٹھاتا ہے۔
 
-## الجلب عبر `iroha::Client`
+## `iroha::Client` کے ذریعے بازیافت کریں
 
-تضم حزمة Rust SDK مساعد الجلب عبر البوابة؛ مرر مانيفست مع أوصاف المزوّدين
-(بما في ذلك رموز البث) ودع العميل يدير الجلب متعدد المصادر:
+مورچا SDK میں گیٹ وے بازیافت کرنے والا مددگار شامل ہے۔ فراہم کنندگان کی تفصیل کے ساتھ ظاہر کے ذریعے سکرول کریں
+(بشمول براڈکاسٹ کوڈز) اور کلائنٹ کو ملٹی سورس بازیافت کا انتظام کرنے دیں:
 
 ```rust
 use eyre::Result;
@@ -147,22 +149,20 @@ pub async fn fetch_payload(
 }
 ```
 
-اضبط `transport_policy` إلى `Some(TransportPolicy::SoranetStrict)` عندما يجب أن ترفض
-الرفوعات المرحلات الكلاسيكية، أو `Some(TransportPolicy::DirectOnly)` عندما يجب تجاوز
-SoraNet بالكامل. وجّه `scoreboard.persist_path` إلى دليل آرتيفاكتات الإصدار، واضبط
-اختياريًا `scoreboard.now_unix_secs`، واملأ `scoreboard.metadata` بسياق الالتقاط
-(وسوم fixtures، هدف Torii، إلخ) حتى يستهلك `cargo xtask sorafs-adoption-check` JSON
-حتميًا عبر SDKs مع ملف المصدر الذي يتوقعه SF-6c.
-تقوم `Client::sorafs_fetch_via_gateway` الآن بإثراء تلك الميتاداتا بمعرف المانيفست،
-وتوقع CID المانيفست الاختياري، وعلم `gateway_manifest_provided` عبر فحص
-`GatewayFetchConfig` المقدم، بحيث تلبي الالتقاطات التي تتضمن ظرف مانيفست موقع متطلبات
-دليل SF-6c دون تكرار تلك الحقول يدويًا.
+`transport_policy` کو `Some(TransportPolicy::SoranetStrict)` پر سیٹ کریں جب اسے مسترد کرنا چاہئے
+کلاسیکی ریلے ، یا `Some(TransportPolicy::DirectOnly)` جب ان کو نظرانداز کیا جانا چاہئے
+سورانیٹ مکمل طور پر۔ `scoreboard.persist_path` کو ریلیز نمونے کی ڈائرکٹری ، اور سیٹ پر پوائنٹ کریں
+اختیاری طور پر `scoreboard.now_unix_secs` ، اور `scoreboard.metadata` کو کیپچر سیاق و سباق سے بھریں
+.
+SF-6C کے ذریعہ متوقع ماخذ فائل کے ساتھ SDKs کے ذریعے ناگزیر۔
+`Client::sorafs_fetch_via_gateway` اب مینی فیسٹ ID کے ساتھ میٹا ڈیٹا کو افزودہ کرتا ہے ،
+سی آئی ڈی کی توقع اختیاری مینی فیسٹ میں کی جاتی ہے ، اور `gateway_manifest_provided` کو امتحان کے ذریعے جھنڈا لگایا جاتا ہے
+`GatewayFetchConfig` فراہم کی گئی ہے ، تاکہ اس پک اپس جس میں دستخط شدہ مینی فیسٹ لفافہ شامل ہوتا ہے اس کی ضروریات کو پورا کرتے ہیں
+SF-6C دستی دستی طور پر ان کھیتوں کو نقل کیے بغیر۔
 
-## مساعدات المانيفست
+## ظاہر امداد
 
-يظل `ManifestBuilder` الطريقة المعتمدة لتجميع حمولات Norito برمجيًا:
-
-```rust
+`ManifestBuilder` Norito پے لوڈ کو پروگرام کے مطابق مرتب کرنے کے لئے منظور شدہ طریقہ ہے:```rust
 use sorafs_manifest::{ManifestBuilder, ManifestV1, PinPolicy, StorageClass};
 
 fn build_manifest(bytes: &[u8]) -> Result<ManifestV1, Box<dyn std::error::Error>> {
@@ -177,5 +177,5 @@ fn build_manifest(bytes: &[u8]) -> Result<ManifestV1, Box<dyn std::error::Error>
 }
 ```
 
-ضمّن المنشئ حيثما احتاجت الخدمات إلى توليد المانيفستات ديناميكيًا؛ تظل CLI هي المسار
-الموصى به للخطوط الحتمية.
+تعمیر کنندہ کو شامل کریں جہاں بھی خدمات کو متحرک طور پر ظاہر کرنے کی ضرورت ہے۔ سی ایل آئی راہ باقی ہے
+لازمی لائنوں کے لئے تجویز کردہ۔

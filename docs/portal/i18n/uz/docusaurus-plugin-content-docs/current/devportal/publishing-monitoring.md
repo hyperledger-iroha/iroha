@@ -8,33 +8,35 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Publishing & Monitoring
 sidebar_label: Publishing & Monitoring
 description: Capture the end-to-end monitoring flow for SoraFS portal releases so DOCS-3c has deterministic probes, telemetry, and evidence bundles.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-Roadmap item **DOCS-3c** requires more than a packaging checklist: after every
-SoraFS publish we must continuously prove that the developer portal, Try it
-proxy, and gateway bindings remain healthy. This page documents the monitoring
-surface that accompanies the [deployment guide](./deploy-guide.md) so CI and on
-call engineers can exercise the same checks that Ops uses to enforce the SLO.
+“Yo‘l xaritasi” bandi **DOCS-3c** qadoqlash bo‘yicha nazorat ro‘yxatidan ko‘proq narsani talab qiladi: har biridan keyin
+SoraFS nashrida biz doimiy ravishda ishlab chiquvchi portal ekanligini isbotlashimiz kerak, sinab ko'ring
+proksi-server va shlyuz ulanishlari sog'lom bo'lib qoladi. Ushbu sahifa monitoringni hujjatlashtiradi
+[joylashtirish boʻyicha qoʻllanma](./deploy-guide.md) bilan birga boʻlgan sirt
+qo'ng'iroq muhandislari Ops SLOni qo'llash uchun foydalanadigan bir xil tekshiruvlarni amalga oshirishi mumkin.
 
-## Pipeline recap
+## Quvur quvurlari sarhisobi
 
-1. **Build and sign** – follow the [deployment guide](./deploy-guide.md) to run
-   `npm run build`, `scripts/preview_wave_preflight.sh`, and the Sigstore +
-   manifest submission steps. The preflight script emits `preflight-summary.json`
-   so every preview carries build/link/probe metadata.
-2. **Pin and verify** – `sorafs_cli manifest submit`, `cargo xtask soradns-verify-binding`,
-   and the DNS cutover plan provide deterministic artefacts for governance.
-3. **Archive evidence** – store the CAR summary, Sigstore bundle, alias proof,
-   probe output, and `docs_portal.json` dashboard snapshots under
+1. **Yaratish va imzolash** – ishga tushirish uchun [tartibga solish qo‘llanmasi](./deploy-guide.md)ga amal qiling
+   `npm run build`, `scripts/preview_wave_preflight.sh` va Sigstore +
+   manifest topshirish bosqichlari. Preflight skripti `preflight-summary.json` ni chiqaradi
+   shuning uchun har bir oldindan ko'rish qurilish/bog'lanish/tekshiruv metama'lumotlarini o'z ichiga oladi.
+2. **Pin va tasdiqlash** – `sorafs_cli manifest submit`, `cargo xtask soradns-verify-binding`,
+   va DNS kesish rejasi boshqaruv uchun deterministik artefaktlarni taqdim etadi.
+3. **Arxiv dalillari** – CAR xulosasini, Sigstore to‘plamini, taxallus isbotini,
+   zond chiqishi va `docs_portal.json` asboblar panelidagi suratlar
    `artifacts/sorafs/<tag>/`.
 
-## Monitoring channels
+## Monitoring kanallari
 
-### 1. Publishing monitors (`scripts/monitor-publishing.mjs`)
+### 1. Nashriyot monitorlari (`scripts/monitor-publishing.mjs`)
 
-The new `npm run monitor:publishing` command wraps the portal probe, Try it
-proxy probe, and binding verifier into a single CI-friendly check. Provide a
-JSON config (checked into CI secrets or `configs/docs_monitor.json`) and run:
+Yangi `npm run monitor:publishing` buyrug'i portal tekshiruvini o'rab oladi, Sinab ko'ring
+proksi tekshiruvi va tekshirgichni bitta CI-do'st tekshiruvga ulash. a taqdim eting
+JSON konfiguratsiyasi (CI sirlari yoki `configs/docs_monitor.json`da tekshiriladi) va ishga tushiring:
 
 ```bash
 cd docs/portal
@@ -44,13 +46,13 @@ npm run monitor:publishing -- \
   --evidence-dir ../../artifacts/sorafs/preview-2026-02-14/monitoring
 ```
 
-Add `--prom-out ../../artifacts/docs_monitor/monitor.prom` (and optionally
-`--prom-job docs-preview`) to emit Prometheus text-format metrics suitable for
-Pushgateway uploads or direct Prometheus scrapes in staging/production. The
-metrics mirror the JSON summary so SLO dashboards and alert rules can track
-portal, Try it, binding, and DNS health without parsing the evidence bundle.
+`--prom-out ../../artifacts/docs_monitor/monitor.prom` qo'shing (va ixtiyoriy
+`--prom-job docs-preview`) uchun mos bo'lgan Prometheus matn formatidagi ko'rsatkichlarni chiqaradi.
+Pushgateway yuklamalari yoki sahnalashtirish/ishlab chiqarishda to'g'ridan-to'g'ri Prometheus qirqishlar. The
+ko'rsatkichlar JSON xulosasini aks ettiradi, shuning uchun SLO asboblar paneli va ogohlantirish qoidalari kuzatilishi mumkin
+portal, Sinab ko'ring, bog'lash va DNS salomatligi dalillar to'plamini tahlil qilmasdan.
 
-Example config with required knobs and multiple bindings:
+Kerakli tugmalar va bir nechta ulanishlar bilan namuna konfiguratsiyasi:
 
 ```json
 {
@@ -117,101 +119,101 @@ Example config with required knobs and multiple bindings:
 }
 ```
 
-The monitor writes a JSON summary (S3/SoraFS friendly) and exits non‑zero when
-any probe fails, making it suitable for Cron jobs, Buildkite steps, or
-Alertmanager webhooks. Passing `--evidence-dir` persists `summary.json`,
-`portal.json`, `tryit.json`, and `binding.json` alongside a `checksums.sha256`
-manifest so governance reviewers can diff the monitor results without having to
-re-run the probes.
+Monitor JSON xulosasini yozadi (S3/SoraFS qulay) va qachon noldan farq qiladi
+har qanday prob muvaffaqiyatsiz tugadi, bu uni Cron ishlari, Buildkite qadamlari yoki
+Alertmanager veb-huklari. `--evidence-dir` o'tish davom etadi `summary.json`,
+`portal.json`, `tryit.json` va `binding.json` `checksums.sha256` bilan birga
+manifest, shuning uchun boshqaruvni ko'rib chiquvchilar monitor natijalarini shartsiz farqlashlari mumkin
+problarni qayta ishga tushiring.
 
-> **TLS guardrail:** `monitorPortal` rejects `http://` base URLs unless you set
-> `allowInsecureHttp: true` in the config. Keep production/staging probes on
-> HTTPS; the opt-in exists solely for local previews.
+> **TLS himoyasi:** `monitorPortal` `http://` asosiy URL manzillarini siz o‘rnatmasangiz rad etadi
+> konfiguratsiyada `allowInsecureHttp: true`. Ishlab chiqarish/sozlash zondlarini yoqing
+> HTTPS; kirish faqat mahalliy oldindan ko'rish uchun mavjud.
 
-Each binding entry runs `cargo xtask soradns-verify-binding` against the captured
-`portal.gateway.binding.json` bundle (and optional `manifestJson`) so alias,
-proof status, and content CID stay aligned with the published evidence. The
-optional `hostname` guard confirms the alias-derived canonical host matches the
-gateway host you intend to promote, preventing DNS cutovers that drift from the
-recorded binding.
+Har bir majburiy yozuv `cargo xtask soradns-verify-binding` ni qo'lga olinganlarga qarshi ishlaydi
+`portal.gateway.binding.json` to'plami (va ixtiyoriy `manifestJson`), shuning uchun taxallus,
+isbot holati va kontent CID nashr etilgan dalillarga mos keladi. The
+ixtiyoriy `hostname` qo'riqchisi taxallusdan olingan kanonik xost bilan mos kelishini tasdiqlaydi
+Siz targ'ib qilmoqchi bo'lgan shlyuz xostingi, bu DNS-dan o'chib ketadigan kesishmalarning oldini oladi
+qayd qilingan bog'lanish.
 
-The optional `dns` block wires DOCS-7’s SoraDNS rollout into the same monitor.
-Each entry resolves a hostname/record-type pair (for example the
-`docs-preview.sora.link` → `docs-preview.sora.link.gw.sora.name` CNAME) and
-confirms the answers match `expectedRecords` or `expectedIncludes`. The second
-entry in the snippet above hard-codes the canonical hashed hostname produced by
-`cargo xtask soradns-hosts --name docs-preview.sora.link`; the monitor now proves
-both the human-friendly alias and the canonical hash (`igjssx53…gw.sora.id`)
-resolve to the pinned pretty host. This makes DNS promotion evidence automatic:
-the monitor will fail if either host drifts, even when the HTTP bindings still
-staple the right manifest.
+Majburiy emas `dns` blok simlari DOCS-7 ning SoraDNS-ni bir xil monitorga ulaydi.
+Har bir yozuv xost nomi/yozuv turi juftligini hal qiladi (masalan
+`docs-preview.sora.link` → `docs-preview.sora.link.gw.sora.name` CNAME) va
+javoblar `expectedRecords` yoki `expectedIncludes` mosligini tasdiqlaydi. Ikkinchisi
+tomonidan ishlab chiqarilgan kanonik xeshlangan xost nomining qattiq kodlari yuqoridagi qismdagi yozuv
+`cargo xtask soradns-hosts --name docs-preview.sora.link`; monitor endi isbotlaydi
+inson uchun qulay taxallus va kanonik xesh (`igjssx53…gw.sora.id`)
+mahkamlangan go'zal xostga qaror qiling. Bu DNS targ'ibot dalillarini avtomatik qiladi:
+Agar HTTP ulanishlari hali ham davom etsa ham, agar host drifts bo'lsa, monitor muvaffaqiyatsiz bo'ladi
+to'g'ri manifestni belgilang.
 
-### 2. OpenAPI version manifest guard
+### 2. OpenAPI versiyasi manifest himoyasi
 
-DOCS-2b’s “signed OpenAPI manifest” requirement now ships an automated guard:
-`ci/check_openapi_spec.sh` calls `npm run check:openapi-versions`, which invokes
-`scripts/verify-openapi-versions.mjs` to cross-check
-`docs/portal/static/openapi/versions.json` with the actual Torii specs and
-manifests. The guard verifies that:
+DOCS-2b "imzolangan OpenAPI manifest" talabi endi avtomatlashtirilgan qo'riqchini yuboradi:
+`ci/check_openapi_spec.sh` `npm run check:openapi-versions` ni chaqiradi, bu esa chaqiradi
+O'zaro tekshirish uchun `scripts/verify-openapi-versions.mjs`
+`docs/portal/static/openapi/versions.json` haqiqiy Torii xususiyatlariga ega va
+namoyon bo'ladi. Qo'riqchi buni tasdiqlaydi:
 
-- Every version listed in `versions.json` has a matching directory under
+- `versions.json` ro'yxatida keltirilgan har bir versiyada mos keladigan katalog mavjud
   `static/openapi/versions/`.
-- Each entry’s `bytes` and `sha256` fields match the on-disk spec file.
-- The `latest` alias mirrors the `current` entry (digest/size/signature metadata)
-  so the default download cannot drift.
-- Signed entries reference a manifest whose `artifact.path` points back to the
-  same spec and whose signature/public key hex values match the manifest.
+- Har bir yozuvning `bytes` va `sha256` maydonlari diskdagi spetsifikatsiya fayliga mos keladi.
+- `latest` taxallusi `current` yozuvini aks ettiradi (dijest/hajm/imzo meta-maʼlumotlari)
+  shuning uchun standart yuklab olish drift bo'lishi mumkin emas.
+- Imzolangan yozuvlar `artifact.path` manifestga ishora qiladi.
+  bir xil spetsifikatsiya va imzo/ommaviy kalit hex qiymatlari manifestga mos keladi.
 
-Run the guard locally whenever you mirror a new spec:
+Har safar yangi xususiyatni aks ettirganingizda qo'riqchini mahalliy sifatida ishga tushiring:
 
 ```bash
 cd docs/portal
 npm run check:openapi-versions
 ```
 
-Failure messages include the stale-file hint (`npm run sync-openapi -- --latest`)
-so portal contributors know how to refresh the snapshots. Keeping the guard in
-CI prevents portal releases where the signed manifest and the published digest
-fall out of sync.
+Muvaffaqiyatsizlik xabarlari eskirgan fayl haqida maslahatni o'z ichiga oladi (`npm run sync-openapi -- --latest`)
+shuning uchun portal ishtirokchilari suratlarni qanday yangilashni bilishadi. Qo'riqchini ichkarida ushlab turish
+CI imzolangan manifest va chop etilgan dayjestda portal nashrlarini oldini oladi
+sinxronlashdan chiqib ketish.
 
-### 2. Dashboards & alerts
+### 2. Boshqaruv paneli va ogohlantirishlar
 
-- **`dashboards/grafana/docs_portal.json`** – primary board for DOCS-3c. Panels
-  track `torii_sorafs_gateway_refusals_total`, replication SLA misses, Try it
-  proxy errors, and probe latency (`docs.preview.integrity` overlay). Export the
-  board after every release and attach it to the operations ticket.
-- **Try it proxy alerts** – Alertmanager rule `TryItProxyErrors` fires on
-  sustained `probe_success{job="tryit-proxy"}` drops or
-  `tryit_proxy_requests_total{status="error"}` spikes.
-- **Gateway SLO** – `DocsPortal/GatewayRefusals` ensures alias bindings continue
-  to advertise the pinned manifest digest; escalations link to the
-  `cargo xtask soradns-verify-binding` CLI transcript captured during publish.
+- **`dashboards/grafana/docs_portal.json`** – DOCS-3c uchun asosiy plata. Panellar
+  trek `torii_sorafs_gateway_refusals_total`, replikatsiya SLA o'tkazib yuborilgan, Sinab ko'ring
+  proksi-server xatolari va tekshirish kechikishi (`docs.preview.integrity` qoplamasi). ni eksport qiling
+  har bir chiqarilgandan keyin taxtani joylashtiring va uni operatsiya chiptasiga biriktiring.
+- **Proksi ogohlantirishlarini sinab ko'ring** – Alertmanager qoidasi `TryItProxyErrors` yonadi
+  barqaror `probe_success{job="tryit-proxy"}` tomchi yoki
+  `tryit_proxy_requests_total{status="error"}` tikanlar.
+- **Gateway SLO** – `DocsPortal/GatewayRefusals` taxallus bilan bog‘lanishning davom etishini ta’minlaydi
+  mahkamlangan manifest dayjestini reklama qilish; eskalatsiyalar bilan bog'lanadi
+  `cargo xtask soradns-verify-binding` CLI transkripti nashr paytida olingan.
 
-### 3. Evidence trail
+### 3. Dalil izi
 
-Each monitoring run should append:
+Har bir monitoring jarayoniga quyidagilar qo'shilishi kerak:
 
-- `monitor-publishing` evidence bundle (`summary.json`, per-section files, and
+- `monitor-publishing` dalillar to'plami (`summary.json`, har bir bo'lim fayllari va
   `checksums.sha256`).
-- Grafana screenshots for the `docs_portal` board over the release window.
-- Try it proxy change/rollback transcripts (`npm run manage:tryit-proxy` logs).
-- Alias verification output from `cargo xtask soradns-verify-binding`.
+- Chiqarish oynasi ustidagi `docs_portal` taxtasi uchun Grafana skrinshotlari.
+- Proksi-serverni o'zgartirish/qayta tiklash transkriptlarini sinab ko'ring (`npm run manage:tryit-proxy` jurnallari).
+- `cargo xtask soradns-verify-binding` dan taxallusni tekshirish chiqishi.
 
-Store these under `artifacts/sorafs/<tag>/monitoring/` and link them in the
-release issue so the audit trail survives after CI logs expire.
+Bularni `artifacts/sorafs/<tag>/monitoring/` ostida saqlang va ularni ulang
+CI jurnallari muddati tugagandan keyin audit izi saqlanib qolishi uchun chiqarish muammosi.
 
-## Operational checklist
+## Operatsion nazorat ro'yxati
 
-1. Run the deployment guide through Step 7.
-2. Execute `npm run monitor:publishing` with production configuration; archive
-   the JSON output.
-3. Capture Grafana panels (`docs_portal`, `TryItProxyErrors`,
-   `DocsPortal/GatewayRefusals`) and attach them to the release ticket.
-4. Schedule recurring monitors (recommended: every 15 minutes) pointing at the
-   production URLs with the same config to satisfy the DOCS-3c SLO gate.
-5. During incidents, re-run the monitor command with `--json-out` to record
-   before/after evidence and attach it to the postmortem.
+1. Joylashtirish bo'yicha qo'llanmani 7-qadam orqali ishga tushiring.
+2. `npm run monitor:publishing` ni ishlab chiqarish konfiguratsiyasi bilan bajaring; arxiv
+   JSON chiqishi.
+3. Grafana panellarini suratga oling (`docs_portal`, `TryItProxyErrors`,
+   `DocsPortal/GatewayRefusals`) va ularni chiqarish chiptasiga biriktiring.
+4. Takroriy monitorlarni (tavsiya etiladi: har 15 daqiqada) belgilab
+   DOCS-3c SLO darvozasini qondirish uchun bir xil konfiguratsiyaga ega ishlab chiqarish URL manzillari.
+5. Voqea sodir bo'lganda, yozib olish uchun monitor buyrug'ini `--json-out` bilan qayta ishga tushiring.
+   dalildan oldin/keyin va uni o'limdan keyin biriktiring.
 
-Following this loop closes DOCS-3c: the portal build flow, publishing pipeline,
-and monitoring stack now live in a single playbook with reproducible commands,
-sample configs, and telemetry hooks.
+Ushbu tsikldan so'ng DOCS-3c yopiladi: portalni qurish oqimi, nashr qilish quvuri,
+va monitoring to'plami endi takrorlanadigan buyruqlar bilan bitta o'yin kitobida yashaydi,
+namuna konfiguratsiyalari va telemetriya ilgaklari.

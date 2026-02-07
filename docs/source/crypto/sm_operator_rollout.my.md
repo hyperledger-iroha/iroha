@@ -7,49 +7,50 @@ generator: scripts/sync_docs_i18n.py
 source_hash: dffc2cf6c6e59f54d1fc22136ba93f75466509c699a4361a381bf7e0ce0d1dda
 source_last_modified: "2025-12-29T18:16:35.943754+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# SM Feature Rollout & Telemetry Checklist
+# SM လုပ်ဆောင်ချက် ထုတ်လွှင့်မှုနှင့် တယ်လီမီတာ စစ်ဆေးခြင်းစာရင်း
 
-This checklist helps SRE and operator teams enable the SM (SM2/SM3/SM4) feature
-set safely once the audit and compliance gates are cleared. Follow this document
-alongside the configuration brief in `docs/source/crypto/sm_program.md` and the
-legal/export guidance in `docs/source/crypto/sm_compliance_brief.md`.
+ဤစစ်ဆေးမှုစာရင်းသည် SRE နှင့် အော်ပရေတာအဖွဲ့များအား SM (SM2/SM3/SM4) အင်္ဂါရပ်ကို ဖွင့်ရန် ကူညီပေးသည်။
+စာရင်းစစ်နှင့်လိုက်နာမှုဂိတ်များကိုရှင်းလင်းပြီးသည်နှင့်လုံခြုံစွာသတ်မှတ်ပါ။ ဤစာတမ်းကို လိုက်နာပါ။
+`docs/source/crypto/sm_program.md` တွင် configuration အကျဉ်းနှင့် တွဲပြီး
+`docs/source/crypto/sm_compliance_brief.md` တွင် တရားဝင်/ပို့ကုန် လမ်းညွှန်ချက်။
 
-## 1. Pre-flight Readiness
-- [ ] Confirm the workspace release notes show `sm` as verify-only or signing,
-      depending on the rollout stage.
-- [ ] Verify the fleet is running binaries built from a commit that includes the
-      SM telemetry counters and configuration knobs. (Target release TBD; track
-      in the rollout ticket.)
-- [ ] Run `scripts/sm_perf.sh --tolerance 0.25` on a staging node (per target
-      architecture) and archive the summary output. The script now auto-selects
-      the scalar baseline as a comparison target for acceleration modes
-      (`--compare-tolerance` defaults to 5.25 while the SM3 NEON work lands);
-      investigate or block the rollout if either the primary or comparison
-      guard fails. When capturing on Linux/aarch64 Neoverse hardware, pass
+## 1. လေယာဉ်အကြိုပြင်ဆင်မှု
+- [ ] အလုပ်ခွင်ထုတ်လွှတ်မှုမှတ်စုများသည် `sm` ကို အတည်ပြုရန် သို့မဟုတ် လက်မှတ်ထိုးခြင်းအဖြစ် အတည်ပြုရန်၊
+      ဖြန့်ချိသည့်အဆင့်ပေါ် မူတည်.
+- [ ] ရေယာဉ်စုသည် ၎င်းပါဝင်သည့် commit တစ်ခုမှ တည်ဆောက်ထားသော binaries များကို လုပ်ဆောင်နေကြောင်း အတည်ပြုပါ။
+      SM တယ်လီမီတာ ကောင်တာများနှင့် ဖွဲ့စည်းမှု ခလုတ်များ။ (ပစ်မှတ်ထုတ် TBD; တစ်ပုဒ်
+      ဖြန့်ချိရေးလက်မှတ်တွင်။)
+- [ ] `scripts/sm_perf.sh --tolerance 0.25` ကို အဆင့်သတ်မှတ်ထားသော node တစ်ခုပေါ်တွင် (ပစ်မှတ်တစ်ခုစီတွင် ဖွင့်ပါ။
+      architecture) နှင့် အကျဉ်းချုပ် output ကို သိမ်းဆည်းပါ။ ဇာတ်ညွှန်းသည် ယခု အလိုအလျောက် ရွေးပေးသည်။
+      အရှိန်မြှင့်မုဒ်များအတွက် နှိုင်းယှဉ်ပစ်မှတ်အဖြစ် စကလာအခြေခံလိုင်း
+      (`--compare-tolerance` သည် SM3 NEON အလုပ်လုပ်နေစဉ်တွင် ပုံသေ 5.25 သို့ ပြောင်းလဲသည်);
+      ပင်မ သို့မဟုတ် နှိုင်းယှဥ်မှုဖြစ်လျှင် စုံစမ်းစစ်ဆေးခြင်း သို့မဟုတ် ပိတ်ပင်ခြင်း
+      အစောင့်အကြပ် ပျက်သွားတယ်။ Linux/aarch64 Neoverse ဟာ့ဒ်ဝဲကို ရိုက်ကူးသည့်အခါ ကျော်သွားပါ။
       `--baseline crates/iroha_crypto/benches/sm_perf_baseline_aarch64_unknown_linux_gnu_<mode>.json --write-baseline`
-      to overwrite the exported `m3-pro-native` medians with the host’s capture
-      before shipping.
-- [ ] Ensure `status.md` and the rollout ticket record the compliance filings for
-      any nodes operating in jurisdictions that require them (see compliance brief).
-- [ ] Prepare KMS/HSM updates if validators will store SM signing keys in
-      hardware modules.
+      လက်ခံသူ၏ဖမ်းယူမှုဖြင့် တင်ပို့ထားသော `m3-pro-native` မီဒီယာများကို ထပ်ရေးရန်
+      ပို့ဆောင်ခြင်းမပြုမီ။
+- [ ] `status.md` နှင့် ထုတ်ဝေခွင့်လက်မှတ်သည် လိုက်နာမှုဆိုင်ရာ စာရွက်စာတမ်းများကို မှတ်တမ်းတင်ထားကြောင်း သေချာပါစေ။
+      ၎င်းတို့ကို လိုအပ်သည့် တရားစီရင်ပိုင်ခွင့်များတွင် လုပ်ဆောင်နေသည့် မည်သည့် ကုဒ်များမဆို (လိုက်နာမှုအကျဉ်းကို ကြည့်ပါ)။
+- [ ] အတည်ပြုသူများသည် SM လက်မှတ်ထိုးခြင်းကီးများကို သိမ်းဆည်းမည်ဆိုပါက KMS/HSM အပ်ဒိတ်များကို ပြင်ဆင်ပါ။
+      ဟာ့ဒ်ဝဲ မော်ဂျူးများ။
 
-## 2. Configuration Changes
-1. Run the xtask helper to generate the SM2 key inventory and ready-to-paste snippet:
+## 2. Configuration အပြောင်းအလဲများ
+1. SM2 သော့စာရင်းနှင့် ကူးထည့်ရန် အဆင်သင့်ရှိသည့် အတိုအထွာကို ထုတ်လုပ်ရန် xtask helper ကို ဖွင့်ပါ-
    ```bash
    cargo xtask sm-operator-snippet \
      --distid CN12345678901234 \
      --json-out sm2-key.json \
      --snippet-out client-sm2.toml
    ```
-   Use `--snippet-out -` (and optionally `--json-out -`) to stream the outputs to stdout when you just need to inspect them.
-   If you prefer to drive the lower-level CLI commands manually, the equivalent flow is:
+   ၎င်းတို့ကို စစ်ဆေးရန် လိုအပ်သောအခါတွင် ၎င်းတို့အား တင်းမာစေရန် ထုတ်လွှင့်ချက်များကို တိုက်ရိုက်ထုတ်လွှင့်ရန် `--snippet-out -` (နှင့် ရွေးချယ်နိုင်သည် `--json-out -`) ကို အသုံးပြုပါ။
+   အောက်ခြေအဆင့် CLI ညွှန်ကြားချက်များကို ကိုယ်တိုင်မောင်းနှင်လိုပါက၊ ညီမျှသောစီးဆင်းမှုသည်-
    ```bash
    cargo run -p iroha_cli --features sm -- \
      crypto sm2 keygen \
@@ -63,9 +64,9 @@ legal/export guidance in `docs/source/crypto/sm_compliance_brief.md`.
      --snippet-output client-sm2.toml \
      --emit-json --quiet
    ```
-   If `jq` is unavailable, open `sm2-key.json`, copy the `private_key_hex` value, and pass it directly to the export command.
-2. Add the resulting snippet to each node’s configuration (values shown for the
-   verify-only stage; adjust per environment and keep the keys sorted as shown):
+   `jq` ကို မရရှိနိုင်ပါက `sm2-key.json` ကိုဖွင့်ပါ၊ `private_key_hex` တန်ဖိုးကို ကူးယူပြီး ၎င်းကို ပို့ကုန်အမိန့်သို့ တိုက်ရိုက်ပေးပို့ပါ။
+2. ရလဒ်အတိုအထွာကို node တစ်ခုစီ၏ဖွဲ့စည်းပုံသို့ ပေါင်းထည့်ပါ (ဒီအတွက် ပြထားသည့်တန်ဖိုးများ
+   တစ်ခုတည်းသောအဆင့်၊ ပတ်ဝန်းကျင်အလိုက် ချိန်ညှိပြီး ပြထားသည့်အတိုင်း သော့များကို စီထားပါ-
 ```toml
 [crypto]
 default_hash = "sm3-256"
@@ -73,74 +74,70 @@ allowed_signing = ["ed25519", "sm2"]   # remove "sm2" to stay in verify-only mod
 sm2_distid_default = "1234567812345678"
 # enable_sm_openssl_preview = true  # optional: only when deploying the OpenSSL/Tongsuo path
 ```
-3. Restart the node and confirm `crypto.sm_helpers_available` and (if you enabled the preview backend) `crypto.sm_openssl_preview_enabled` surface as expected in:
-   - `/status` JSON (`"crypto":{"sm_helpers_available":true,"sm_openssl_preview_enabled":true,...}`).
-   - The rendered `config.toml` for each node.
-4. Update manifests/genesis entries to add SM algorithms to the allow-list if
-   signing is enabled later in the rollout. When using `--genesis-manifest-json`
-   without a pre-signed genesis block, `irohad` now seeds the runtime crypto
-   snapshot directly from the manifest’s `crypto` block—ensure the manifest is
-   checked into your change plan before rolling forward.
-
-## 3. Telemetry & Monitoring
-- Scrape Prometheus endpoints and ensure the following counters/gauges appear:
+3. node ကို ပြန်လည်စတင်ပြီး `crypto.sm_helpers_available` ကို အတည်ပြုပြီး (အစမ်းကြည့်ရှုသည့် နောက်ခံဖိုင်ကို ဖွင့်ထားလျှင်) `crypto.sm_openssl_preview_enabled` တွင် မျှော်လင့်ထားသည့်အတိုင်း မျက်နှာပြင်-
+   - `/status` JSON (`"crypto":{"sm_helpers_available":true,"sm_openssl_preview_enabled":true,...}`)။
+   - node တစ်ခုစီအတွက် `config.toml` ကို ပြန်ဆိုထားသည်။
+4. ခွင့်ပြုထားသောစာရင်းသို့ SM algorithms ပေါင်းထည့်ရန် manifests/genesis entries များကို အပ်ဒိတ်လုပ်ပါ
+   ထုတ်ဝေမှုတွင် နောက်ပိုင်းတွင် လက်မှတ်ထိုးခြင်းကို ဖွင့်ထားသည်။ `--genesis-manifest-json` ကိုသုံးတဲ့အခါ
+   ကြိုတင်လက်မှတ်ထိုးထားသော ဥပါဒ်ပိတ်ဆို့ခြင်းမရှိဘဲ၊ `irohad` သည် ယခု runtime crypto ကို မျိုးစေ့ချပေးသည်
+   မန်နီးဖက်စ်၏ `crypto` ဘလောက်မှ တိုက်ရိုက် လျှပ်တစ်ပြက်ရိုက်ချက်- မန်နီးဖက်စ်ဖြစ်ကြောင်း သေချာပါစေ။
+   ရှေ့မဆက်မီ သင်၏ပြောင်းလဲမှုအစီအစဉ်ကို စစ်ဆေးပါ။## 3. Telemetry & Monitoring
+- Prometheus အဆုံးမှတ်များကို ခြစ်ပြီး အောက်ပါကောင်တာ/တိုင်းထွာများ ပေါ်လာကြောင်း သေချာပါစေ။
   - `iroha_sm_syscall_total{kind="verify"}`
   - `iroha_sm_syscall_total{kind="hash"}`
   - `iroha_sm_syscall_total{kind="seal|open",mode="gcm|ccm"}`
-  - `iroha_sm_openssl_preview` (0/1 gauge reporting the preview toggle state)
+  - `iroha_sm_openssl_preview` (0/1 gauge အကြိုကြည့်ရှုမှု အဖွင့်အပိတ်အခြေအနေကို အစီရင်ခံသည်)
   - `iroha_sm_syscall_failures_total{kind="verify|hash|seal|open",reason="..."}`
-- Hook signing path once SM2 signing is enabled; add counters for
-  `iroha_sm_sign_total` and `iroha_sm_sign_failures_total`.
-- Create Grafana dashboards/alerts for:
-  - Spikes in failure counters (window 5m).
-  - Sudden drops in SM syscall throughput.
-  - Differences between nodes (e.g., mismatched enablement).
+- SM2 လက်မှတ်ထိုးခြင်းကိုဖွင့်ပြီးသည်နှင့် Hook signing path; ကောင်တာများထည့်ပါ။
+  `iroha_sm_sign_total` နှင့် `iroha_sm_sign_failures_total`။
+- အတွက် Grafana ဒက်ရှ်ဘုတ်များ/သတိပေးချက်များကို ဖန်တီးပါ။
+  - ချို့ယွင်းချက်ကောင်တာများ (ပြတင်းပေါက် 5 မီတာ)။
+  - SM syscall ဖြတ်သန်းမှုတွင် ရုတ်တရက် ကျဆင်းသွားသည်။
+  - node များအကြား ကွာခြားချက်များ (ဥပမာ၊ မကိုက်ညီသော ဖွင့်ထားမှု)။
 
-## 4. Rollout Steps
-| Phase | Actions | Notes |
-|-------|---------|-------|
-| Verify-only | Update `crypto.default_hash` to `sm3-256`, leave `allowed_signing` without `sm2`, monitor verification counters. | Goal: exercise SM verification paths without risking consensus divergence. |
-| Mixed Signing Pilot | Allow limited SM signing (subset of validators); monitor signing counters and latency. | Ensure fallback to Ed25519 remains available; halt if telemetry shows mismatches. |
-| GA Signing | Extend `allowed_signing` to include `sm2`, update manifests/SDKs, and publish final runbook. | Requires closed audit findings, updated compliance filings, and stable telemetry. |
+## 4. စတင်ထွက်ခြင်း အဆင့်များ
+| အဆင့် | လုပ်ဆောင်ချက်များ | မှတ်စုများ |
+|---------|---------|-------|
+| အတည်ပြု-သပ်သပ် | `crypto.default_hash` ကို `sm3-256` သို့ အပ်ဒိတ်လုပ်ပါ၊ `allowed_signing` ကို `sm2` မပါဘဲ ထားလိုက်ပါ၊ စောင့်ကြည့်စစ်ဆေးခြင်း ကောင်တာများ။ | ပန်းတိုင်- အများဆန္ဒ ကွဲလွဲမှုကို အန္တရာယ်မပြုဘဲ SM စိစစ်ရေးလမ်းကြောင်းများကို ကျင့်သုံးပါ။ |
+| ရောနှောလက်မှတ်ထိုးလေယာဉ်မှူး | အကန့်အသတ်ရှိသော SM လက်မှတ်ရေးထိုးခြင်းကို ခွင့်ပြုပါ (တရားဝင်စစ်ဆေးသူများ၏ အစုခွဲ)၊ လက်မှတ်ထိုးကောင်တာများနှင့် latency ကိုစောင့်ကြည့်ပါ။ | Ed25519 သို့ ပြန်ပြောင်းရရှိနိုင်ကြောင်း သေချာပါစေ။ Telemetry သည် မကိုက်ညီကြောင်းပြသပါက ရပ်ပါ။ |
+| GA လက်မှတ်ရေးထိုးခြင်း | `sm2` ပါဝင်ရန် `allowed_signing` ကို တိုးချဲ့ပါ၊ manifests/SDKs များကို အပ်ဒိတ်လုပ်ပြီး နောက်ဆုံး runbook ကို ထုတ်ဝေပါ။ | ပိတ်ထားသော စာရင်းစစ်တွေ့ရှိချက်များ၊ မွမ်းမံထားသော လိုက်နာမှု စာရွက်စာတမ်းများနှင့် တည်ငြိမ်သော တယ်လီမီတာကို လိုအပ်ပါသည်။ |
 
-### Readiness Reviews
-- **Verify-only readiness (SM-RR1).** Convene Release Eng, Crypto WG, Ops, and Legal. Require:
-  - `status.md` notes compliance filing status + OpenSSL provenance.
-  - `docs/source/crypto/sm_program.md` / `sm_compliance_brief.md` / this checklist updated within the last release window.
-  - `defaults/genesis` or the environment-specific manifest shows `crypto.allowed_signing = ["ed25519","sm2"]` and `crypto.default_hash = "sm3-256"` (or the verify-only variant without `sm2` if still in stage one).
-  - `scripts/sm_openssl_smoke.sh` + `scripts/sm_interop_matrix.sh` logs attached to the rollout ticket.
-  - Telemetry dashboard (`iroha_sm_*`) reviewed for steady-state behaviour.
-- **Signing pilot readiness (SM-RR2).** Additional gates:
-  - Audit report for RustCrypto SM stack closed or RFC for compensating controls signed by Security.
-  - Operator runbooks (facility-specific) updated with signing fallback/rollback steps.
-  - Genesis manifests for the pilot cohort include `allowed_signing = ["ed25519","sm2"]` and the allow-list is mirrored in each node configuration.
-  - Exit/rollback plan documented (switch `allowed_signing` back to Ed25519, restore manifests, reset dashboards).
-- **GA readiness (SM-RR3).** Requires positive pilot report, updated compliance filings for all validator jurisdictions, signed telemetry baselines, and release ticket approval from Release Eng + Crypto WG + Ops/Legal triad.
+### အဆင်သင့်သုံးသပ်ချက်များ
+- ** တစ်ခုတည်းသော အဆင်သင့်ဖြစ်မှုကို အတည်ပြုပါ (SM-RR1)။** Release Eng၊ Crypto WG၊ Ops နှင့် တရားဝင် ခေါ်ယူခြင်း။ လိုအပ်သည်-
+  - `status.md` မှတ်စုများ လိုက်နာမှု စာရွက်စာတမ်း အခြေအနေ + OpenSSL သက်သေ။
+  - `docs/source/crypto/sm_program.md` / `sm_compliance_brief.md` / ဤစစ်ဆေးစာရင်းကို နောက်ဆုံးထုတ်သည့်ဝင်းဒိုးအတွင်း မွမ်းမံပြင်ဆင်ထားသည်။
+  - `defaults/genesis` သို့မဟုတ် ပတ်ဝန်းကျင်ဆိုင်ရာ သီးခြားမန်နီးဖက်စ် `crypto.allowed_signing = ["ed25519","sm2"]` နှင့် `crypto.default_hash = "sm3-256"` (သို့မဟုတ် အဆင့်တစ်တွင်ရှိနေပါက `sm2` မပါသော အတည်ပြု-သပ်သပ်မူကွဲ)။
+  - `scripts/sm_openssl_smoke.sh` + `scripts/sm_interop_matrix.sh` ထုတ်ပေးခြင်းလက်မှတ်တွင် ပူးတွဲပါရှိသော မှတ်တမ်းများ။
+  - တည်ငြိမ်သောအမူအကျင့်အတွက် Telemetry ဒက်ရှ်ဘုတ် (`iroha_sm_*`) ပြန်လည်သုံးသပ်ထားသည်။
+- **လေယာဉ်မှူး အဆင်သင့် (SM-RR2) ကို လက်မှတ်ရေးထိုးခြင်း။** အပိုဂိတ်များ-
+  - Security မှ လက်မှတ်ထိုးထားသော ထိန်းချုပ်မှုများကို လျော်ကြေးပေးရန်အတွက် RustCrypto SM stack အတွက် စာရင်းစစ်အစီရင်ခံစာ။
+  - အော်ပရေတာ runbooks (facility-specific) ကို နောက်ပြန်ဆုတ်ခြင်း/ပြန်လှည့်ခြင်းအဆင့်များကို လက်မှတ်ထိုးခြင်းဖြင့် အပ်ဒိတ်လုပ်ထားသည်။
+  - Genesis သည် `allowed_signing = ["ed25519","sm2"]` ပါ၀င်သော ရှေ့ပြေးအဖွဲ့အတွက် ထင်ရှားပြီး ခွင့်ပြုစာရင်းကို node ဖွဲ့စည်းမှုတစ်ခုစီတွင် ထင်ဟပ်စေသည်။
+  - မှတ်တမ်းတင်ထားသော ထွက်/ပြန်လှည့်ခြင်း အစီအစဉ် (`allowed_signing` ကို Ed25519 သို့ ပြန်ပြောင်း၊ မန်နီးဖက်စ်များကို ပြန်လည်ရယူပါ၊ ဒက်ရှ်ဘုတ်များကို ပြန်လည်သတ်မှတ်ပါ)။
+- **GA အဆင်သင့် (SM-RR3)။** အပြုသဘောဆောင်သော ရှေ့ပြေးအစီရင်ခံစာ၊ တရားဝင်တရားစီရင်ပိုင်ခွင့်အာဏာအားလုံးအတွက် လိုက်နာမှုမွမ်းမံထားသော စာရွက်စာတမ်းများ၊ လက်မှတ်ရေးထိုးထားသော တယ်လီမီတာအခြေခံလိုင်းများနှင့် Release Eng + Crypto WG + Ops/Legal triad တို့မှ လက်မှတ်အတည်ပြုချက်ထုတ်ပေးရန် လိုအပ်ပါသည်။## 5. ထုပ်ပိုးခြင်းနှင့် လိုက်နာမှု စစ်ဆေးခြင်းစာရင်း
+- ** OpenSSL/Tongsuo ရှေးဟောင်းပစ္စည်းများ အစုအဝေး။** သင်္ဘောဖြင့် OpenSSL/Tongsuo 3.0+ မျှဝေထားသောစာကြည့်တိုက်များ (`libcrypto`/`libssl`) သို့မဟုတ် တိကျသောစနစ်မှီခိုမှုအား မှတ်တမ်းတင်ပါ။ စာရင်းစစ်များသည် ပေးသွင်းသူတည်ဆောက်မှုကို ခြေရာခံနိုင်စေရန် ထုတ်ဝေမှုမန်နီးဖက်စ်တွင် ဗားရှင်း၊ တည်ဆောက်မှုအလံများနှင့် SHA256 စစ်ဆေးမှုများကို မှတ်တမ်းတင်ပါ။
+- **CI ကာလအတွင်း အတည်ပြုပါ။** ပစ်မှတ်ပလက်ဖောင်းတစ်ခုစီရှိ ထုပ်ပိုးထားသော ပစ္စည်းများနှင့် ဆန့်ကျင်ဘက် `scripts/sm_openssl_smoke.sh` ကို လုပ်ဆောင်သည့် CI အဆင့်ကို ထည့်ပါ။ အကြိုကြည့်ရှုခြင်းအလံကို ဖွင့်ထားသော်လည်း ဝန်ဆောင်မှုပေးသူကို ကနဦးလုပ်ဆောင်၍မရပါ (ပျောက်ဆုံးနေသော ခေါင်းစီးများ၊ ပံ့ပိုးမထားသော အယ်လဂိုရီသမ်၊ စသည်)။
+- **လိုက်နာမှုမှတ်စုများကို ထုတ်ဝေပါ။** ထုပ်ပိုးပေးသူဗားရှင်းဖြင့် ထုတ်ဝေမှုမှတ်စုများ / `status.md` ကို အပ်ဒိတ်လုပ်ပါ၊ ပို့ကုန်ထိန်းချုပ်မှု ကိုးကားချက်များ (GM/T၊ GB/T) နှင့် SM အယ်လဂိုရီသမ်များအတွက် လိုအပ်သော တရားစီရင်ပိုင်ခွင့်ဆိုင်ရာ သီးခြားဖိုင်များ။
+- **အော်ပရေတာ runbook အပ်ဒိတ်များ။** အဆင့်မြှင့်ခြင်းအစီအစဥ်ကို မှတ်တမ်းတင်ပါ- မျှဝေထားသောအရာဝတ္ထုအသစ်များကို အဆင့်မြှင့်တင်ပါ၊ `crypto.enable_sm_openssl_preview = true` ဖြင့် ရွယ်တူများကို ပြန်လည်စတင်ပါ၊ `/status` အကွက်ကိုအတည်ပြုပြီး `iroha_sm_openssl_preview` gauge ကို `scripts/sm_perf.sh --tolerance 0.25` အလံပြန်ပြောင်းပါ (သို့) ပက်ကေ့ဂျ်ကို ပြန်ပြောင်းထားပါ (သို့) အလံကို ပြန်ပြောင်းထားပါ တယ်လီမီတာကို အစမ်းကြည့်ရှုခြင်းသည် ရေယာဉ်စုတစ်လျှောက် သွေဖည်သွားပါသည်။
+- **အထောက်အထားထိန်းသိမ်းခြင်း။** OpenSSL/Tongsuo ပက်ကေ့ဂျ်များအတွက် တည်ဆောက်မှုမှတ်တမ်းများနှင့် လက်မှတ်ရေးထိုးခြင်းဆိုင်ရာ သက်သေအထောက်အထားများကို တရားဝင်ထုတ်ပေးခြင်းဆိုင်ရာ အထောက်အထားများနှင့်အတူ အနာဂတ်စာရင်းစစ်များသည် သက်သေကွင်းဆက်ကို ပြန်လည်ထုတ်လုပ်နိုင်စေရန်။
 
-## 5. Packaging & Compliance Checklist
-- **Bundle OpenSSL/Tongsuo artifacts.** Ship OpenSSL/Tongsuo 3.0+ shared libraries (`libcrypto`/`libssl`) with every validator package or document the exact system dependency. Record the version, build flags, and SHA256 checksums in the release manifest so auditors can trace the supplier build.
-- **Verify during CI.** Add a CI step that executes `scripts/sm_openssl_smoke.sh` against the packaged artifacts on each target platform. The job must fail if the preview flag is enabled but the provider cannot be initialised (missing headers, unsupported algorithm, etc.).
-- **Publish compliance notes.** Update release notes / `status.md` with the bundled provider version, export-control references (GM/T, GB/T), and any jurisdiction-specific filings required for SM algorithms.
-- **Operator runbook updates.** Document the upgrade flow: stage the new shared objects, restart peers with `crypto.enable_sm_openssl_preview = true`, confirm the `/status` field and `iroha_sm_openssl_preview` gauge flip to `true`, and keep a rollback plan (flip the config flag or revert the package) if preview telemetry deviates across the fleet.
-- **Evidence retention.** Archive the build logs and signing attestations for the OpenSSL/Tongsuo packages alongside the validator release artefacts so future audits can reproduce the provenance chain.
-
-## 6. Incident Response
-- **Verification failure spikes:** Roll back to a build without SM support or remove `sm2`
-  from `allowed_signing` (reverting `default_hash` as needed) and fail over to the previous
-  release while investigating. Capture failed payloads, comparative hashes, and node logs.
-- **Performance regressions:** Compare SM metrics with Ed25519/SHA2 baselines.
-  If ARM intrinsic path causes divergence, set `crypto.sm_intrinsics = "force-disable"`
-  (feature toggle pending implementation) and report findings.
-- **Telemetry gaps:** If counters are missing or not updating, file an issue
-  against Release Engineering; do not proceed with wider rollout until the gap
-  is resolved.
+## 6. Incident တုံ့ပြန်မှု
+- **စစ်ဆေးခြင်း ချို့ယွင်းမှု မြင့်တက်ခြင်း-** SM ပံ့ပိုးမှုမပါဘဲ တည်ဆောက်မှုသို့ ပြန်လှည့်ပါ သို့မဟုတ် `sm2` ကို ဖယ်ရှားပါ။
+  `allowed_signing` မှ (`default_hash` ကို လိုအပ်သလို ပြန်ပြောင်း) ပြီး ယခင်သို့ မအောင်မြင်ပါ
+  စုံစမ်းရင်းနဲ့ ပြန်လွှတ်ပေးတယ်။ မအောင်မြင်သော payload များ၊ နှိုင်းယှဉ် hashe များနှင့် node မှတ်တမ်းများကို ဖမ်းယူပါ။
+- **စွမ်းဆောင်ရည်ဆုတ်ယုတ်မှုများ-** SM မက်ထရစ်များကို Ed25519/SHA2 အခြေခံလိုင်းများနှင့် နှိုင်းယှဉ်ပါ။
+  ARM ၏ ပင်ကိုယ်လမ်းကြောင်းသည် ကွဲပြားမှုကို ဖြစ်စေပါက `crypto.sm_intrinsics = "force-disable"` ကို သတ်မှတ်ပါ။
+  (လုပ်ဆောင်ချက်ကို ဆိုင်းငံ့ထားသော အကောင်အထည်ဖော်မှုကို ခလုတ်နှိပ်ပါ) နှင့် တွေ့ရှိချက်များကို အစီရင်ခံပါ။
+- **တယ်လီမီတာ ကွာဟချက်-** ကောင်တာများ ပျောက်ဆုံးနေပါက သို့မဟုတ် အပ်ဒိတ်မလုပ်ပါက ပြဿနာတစ်ခု တင်ပြပါ။
+  ဖြန့်ချိရေးအင်ဂျင်နီယာနှင့်ဆန့်ကျင်။ ကွာဟချက်မပြည့်မချင်း ကျယ်ကျယ်ပြန့်ပြန့် ဆက်လက်မလုပ်ဆောင်ပါနှင့်
+  ဖြေရှင်းသည်။
 
 ## 7. Checklist Template
-- [ ] Configuration staged and peer restarted.
-- [ ] Telemetry counters visible and dashboards configured.
-- [ ] Compliance/legal steps recorded.
-- [ ] Rollout phase approved by Crypto WG / Release TL.
-- [ ] Post-rollout review completed and findings documented.
+- [ ] စီစဉ်ဖွဲ့စည်းမှုကို အဆင့်သတ်မှတ်ပြီး ရွယ်တူချင်း ပြန်လည်စတင်သည်။
+- [ ] တယ်လီမီတာ ကောင်တာများကို မြင်နိုင်ပြီး ဒက်ရှ်ဘုတ်များကို ပြင်ဆင်သတ်မှတ်ထားသည်။
+- [ ] လိုက်နာမှု/တရားဝင်အဆင့်များကို မှတ်တမ်းတင်ထားသည်။
+- [ ] ဖြန့်ချိသည့်အဆင့်ကို Crypto WG / ဖြန့်ချိသည့် TL မှ အတည်ပြုသည်။
+- [ ] စတင်ရောင်းချပြီးနောက် ပြန်လည်သုံးသပ်ခြင်း ပြီးမြောက်ပြီး တွေ့ရှိချက်များကို မှတ်တမ်းတင်ထားသည်။
 
-Maintain this checklist in the rollout ticket and update `status.md` when the
-fleet transitions between phases.
+ဤစစ်ဆေးရန်စာရင်းကို ထုတ်ဝေခွင့်လက်မှတ်တွင် ထိန်းသိမ်းထားပြီး `status.md` ကို အပ်ဒိတ်လုပ်သည့်အခါ၊
+အဆင့်များအကြား ရေယာဉ်အကူးအပြောင်းများ။

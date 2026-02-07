@@ -8,147 +8,144 @@ source_hash: 0f2b1d7d027d715eac5a3ca8be29dea8f0e76013e948947a4de66108ac561f34
 source_last_modified: "2026-01-22T14:58:53.689594+00:00"
 translation_last_reviewed: 2026-02-07
 title: Contract Deployment (.to) — API & Workflow
+translator: machine-google-reviewed
 ---
 
-Status: implemented and exercised by Torii, CLI, and core admission tests (Nov 2025).
+Статус: Torii, CLI һәм төп ҡабул итеү һынауҙары тарафынан тормошҡа ашырылған һәм ғәмәлгә ашырыла (2025 йылдың ноябре).
 
-## Overview
+## Обзор
 
-- Deploy compiled IVM bytecode (`.to`) by submitting it to Torii or by issuing
-  `RegisterSmartContractCode`/`RegisterSmartContractBytes` instructions
-  directly.
-- Nodes recompute `code_hash` and the canonical ABI hash locally; mismatches
-  reject deterministically.
-- Stored artifacts live under the on-chain `contract_manifests` and
-  `contract_code` registries. Manifests reference hashes only and remain small;
-  code bytes are keyed by `code_hash`.
-- Protected namespaces can require an enacted governance proposal before a
-  deployment is admitted. The admission path looks up the proposal payload and
-  enforces `(namespace, contract_id, code_hash, abi_hash)` equality when the
-  namespace is protected.
+- IVM байтекодты (`.to`) йыйылмаһы Torii-ға тапшырып йәки сығарыу юлы менән төҙөгән.
+  `RegisterSmartContractCode`/`RegisterSmartContractBytes` инструкциялары
+  туранан-тура.
+- Төйөндәр `code_hash` һәм канонлы АБИ хешын урындағы кимәлдә ҡабаттан иҫәпләү; тап килмәүе
+  детерминистик яҡтан кире ҡағыу.
+- Һаҡланған артефакттар `contract_manifests` һәм 1990 й.
+  `contract_code` реестрҙары. Манифесттар хештар ғына һылтанмалар һәм бәләкәй булып ҡала;
+  код байттары `code_hash` тарафынан клавиша.
+- Һаҡланған исемдәр киңлектәрендә идара итеү тәҡдимен талап итә ала, ә һуңынан
+  таратыу ҡабул ителә. Ҡабул итеү юлы тәҡдим файҙалы йөк һәм өҫкә ҡарай һәм
+  үтәй `(namespace, contract_id, code_hash, abi_hash)` тигеҙлек ҡасан
+  исемдәр киңлеге һаҡлана.
 
-## Stored Artifacts & Retention
+## Һаҡланған артефакттар & Һаҡлау
 
-- `RegisterSmartContractCode` inserts/overwrites the manifest for a given
-  `code_hash`. When the same hash already exists, it is replaced with the new
-  manifest.
-- `RegisterSmartContractBytes` stores the compiled program under
-  `contract_code[code_hash]`. If bytes for a hash already exist they must match
-  exactly; differing bytes raise an invariant violation.
-- Code size is capped by the custom parameter `max_contract_code_bytes`
-  (default 16 MiB). Override it with a `SetParameter(Custom)` transaction before
-  registering larger artifacts.
-- Retention is unbounded: manifests and code remain available until explicitly
-  removed in a future governance workflow. There is no TTL or automatic GC.
+- `RegisterSmartContractCode` вставкалар/өҫтөндә бирелгән манифест өсөн бирелгән
+  `code_hash`. Ҡасан шул уҡ хеш инде бар, ул яңы менән алмаштырыла
+  беленергә.
+- `RegisterSmartContractBytes` 1990 йылдарҙа төҙөлгән программаны һаҡлай.
+  `contract_code[code_hash]`. Әгәр байт өсөн хеш инде бар, улар тура килергә тейеш
+  теүәл; төрлө байттар инвариант хоҡуҡ боҙоуҙы күтәрә.
+- Код күләме `max_contract_code_bytes` ҡулланыусы параметры менән ҡапланған
+  (ғәҙәти 16 МиБ). Уны `SetParameter(Custom)` транзакцияһы менән өҫтөнлөк бирегеҙ.
+  ҙурыраҡ артефакттарҙы теркәү.
+- Һаҡлау сикһеҙ: манифест һәм код асыҡтан-асыҡ тиклем ҡала
+  киләсәктә идара итеү эш ағымында алынды. ТТЛ йәки автоматик ГК юҡ.
 
-## Admission pipeline
+## Ҡабул итеү торбаһы
 
-- The validator parses the IVM header, enforces `version_major == 1`, and checks
-  `abi_version == 1`. Unknown versions reject immediately; there is no runtime
-  toggle.
-- When a manifest is already present for `code_hash`, validation ensures the
-  stored `code_hash`/`abi_hash` equal the computed values from the submitted
-  program. A mismatch produces `Manifest{Code,Abi}HashMismatch` errors.
-- Transactions targeting protected namespaces must include metadata keys
-  `gov_namespace` and `gov_contract_id`. The admission path compares them
-  against enacted `DeployContract` proposals; if no matching proposal exists the
-  transaction is rejected with `NotPermitted`.
+- Валитатор IVM башын анализлай, `version_major == 1` X, чектарҙы үтәй.
+  `abi_version == 1`. Билдәһеҙ версиялар шунда уҡ кире ҡаға; эшләү ваҡыты юҡ
+  переключатель.
+- Ҡасан манифест инде `code_hash` өсөн бар, раҫлау тәьмин итә
+  һаҡлаған `code_hash`/`abi_hash` тигеҙ иҫәпләнгән ҡиммәттәргә тиң тапшырылған
+  программаһы. Тураш түгел, `Manifest{Code,Abi}HashMismatch` хаталары етештерә.
+- Һаҡланған исемдәр киңлектәренә йүнәлтелгән операциялар метамағлүмәт асҡыстарын үҙ эсенә алырға тейеш
+  `gov_namespace` һәм `gov_contract_id`. Ҡабул итеү юлы уларҙы сағыштыра .
+  ҡаршы ҡабул ителгән `DeployContract` тәҡдимдәре; әгәр ҙә бер ниндәй ҙә тап килгән тәҡдим бар, был
+  операцияһы `NotPermitted` менән кире ҡағыла.
 
-## Torii endpoints (feature `app_api`)
-
-- `POST /v1/contracts/deploy`
-  - Request body: `DeployContractDto` (see `docs/source/torii_contracts_api.md` for field details).
-  - Torii decodes the base64 payload, computes both hashes, builds a manifest,
-    and submits `RegisterSmartContractCode` plus
-    `RegisterSmartContractBytes` in a signed transaction on behalf of the
-    caller.
-  - Response: `{ ok, code_hash_hex, abi_hash_hex }`.
-  - Errors: invalid base64, unsupported ABI version, missing permission
-    (`CanRegisterSmartContractCode`), size cap exceeded, governance gating.
-- `POST /v1/contracts/code`
-  - Accepts `RegisterContractCodeDto` (authority, private key, manifest) and submits only
-    `RegisterSmartContractCode`. Use when manifests are staged separately from
-    bytecode.
+## Torii ос нөктәләре (функцияһы `app_api`)- `POST /v1/contracts/deploy`
+  - Һорау органы: `DeployContractDto` X (ҡара: Баҫыу реквизиттары өсөн `docs/source/torii_contracts_api.md`).
+  - Torii base64 файҙалы йөктө декодлай, ике хеш-шашын иҫәпләй, манифест төҙөй,
+    һәм `RegisterSmartContractCode` плюс тапшыра
+    `RegisterSmartContractBytes` ҡултамғалы операцияла
+    шылтыратыусы.
+  - Яуап: `{ ok, code_hash_hex, abi_hash_hex }`.
+  - Хаталар: дөрөҫ булмаған base64, ярҙамһыҙ ABI версияһы, рөхсәт юҡ
+    (`CanRegisterSmartContractCode`), ҙурлыҡтағы ҡапҡас артып китә, ​​идара итеү ҡапҡаһы.
+- Torii.
+  - `RegisterContractCodeDto` ҡабул итеү (власть, шәхси асҡыс, асыҡ) һәм тик тапшыра
+    `RegisterSmartContractCode`. Ҡулланыу ҡасан манифестар айырым ҡуйыла 2013 йылдан .
+    байткод.
 - `POST /v1/contracts/instance`
-  - Accepts `DeployAndActivateInstanceDto` (authority, private key, namespace/contract_id, `code_b64`, optional manifest overrides) and deploys + activates atomically.
+  - ҡабул итеү `DeployAndActivateInstanceDto` (власть, шәхси асҡыс, исемдәр киңлеге/контракт_id, `code_b64`, опциональ манифест өҫтөнлөктәре) һәм таратыу + атомлы әүҙемләштереү.
 - `POST /v1/contracts/instance/activate`
-  - Accepts `ActivateInstanceDto` (authority, private key, namespace, contract_id, `code_hash`) and submits only the activation instruction.
+  - Ҡабул итеү `ActivateInstanceDto` (власть, шәхси асҡыс, исемдәр киңлеге, cout_id, `code_hash`) һәм тик активация инструкцияһын тапшыра.
 - `GET /v1/contracts/code/{code_hash}`
-  - Returns `{ manifest: { code_hash, abi_hash } }`.
-    Additional manifest fields are preserved internally but omitted here for a
-    stable API.
+  - Ҡайтарыу `{ manifest: { code_hash, abi_hash } }`.
+    Өҫтәмә асыҡ ҡырҙар эске һаҡланған, әммә бында төшөрөп ҡалдырылған өсөн
+    тотороҡло API.
 - `GET /v1/contracts/code-bytes/{code_hash}`
-  - Returns `{ code_b64 }` with the stored `.to` image encoded as base64.
+  - `{ code_b64 }` ҡайтарыу менән һаҡланған `.to` һүрәте base64 тип кодланған.
 
-All contract lifecycle endpoints share a dedicated deploy limiter configured via
-`torii.deploy_rate_per_origin_per_sec` (tokens per second) and
-`torii.deploy_burst_per_origin` (burst tokens). Defaults are 4 req/s with a burst of
-8 for each token/key derived from `X-API-Token`, the remote IP, or the endpoint hint.
-Set either field to `null` to disable the limiter for trusted operators. When the
-limiter fires, Torii increments the
-`torii_contract_throttled_total{endpoint="code|deploy|instance|activate"}` telemetry counter and
-returns HTTP 429; any handler error increments
-`torii_contract_errors_total{endpoint=…}` for alerting.
+Бөтә контракт тормош циклы остары бағышланған бағышланған таратыусы сикләүсе аша конфигурацияланған
+`torii.deploy_rate_per_origin_per_sec` (секундына жетондар) һәм
+`torii.deploy_burst_per_origin` X (бурст токендары). Ғәҙәттәгесә 4 req/s менән ярсыҡ менән 2012.
+8 өсөн һәр токен/асҡыс алынған `X-API-Token`, алыҫ IP, йәки ос нөктәһе кәңәштәре.
+Ышаныслы операторҙар өсөн сикләүсене өҙөү өсөн `null`-ға тиклем йәки яланға ҡуйығыҙ. Ҡасан .
+сикләүсе янғындар, Torii өҫтәүҙәр
+`torii_contract_throttled_total{endpoint="code|deploy|instance|activate"}` телеметрия счетчигы һәм
+ҡайтара HTTP 429; теләһә ниндәй обработчик хатаһы өҫтәүҙәр
+`torii_contract_errors_total{endpoint=…}` иҫкәрткән өсөн.
 
-## Governance integration & protected namespaces
-
-- Set the custom parameter `gov_protected_namespaces` (JSON array of namespace
-  strings) to enable admission gating. Torii exposes helpers under
-  `/v1/gov/protected-namespaces` and the CLI mirrors them via
+## Идара итеү интеграцияһы & һаҡланған исемдәр киңлеге- `gov_protected_namespaces` (JSON массив исемдәр киңлеге
+  ҡылдар) ҡабул итеү ҡапҡаһы мөмкинлек бирә. Torii ярҙамсыларҙы фашлай.
+  `/v1/gov/protected-namespaces` һәм CLI уларҙы көҙгө аша
   `iroha_cli app gov protected set` / `iroha_cli app gov protected get`.
-- Proposals created with `ProposeDeployContract` (or the Torii
-  `/v1/gov/proposals/deploy-contract` endpoint) capture
+- `ProposeDeployContract` менән булдырылған тәҡдимдәр (йәки Torii X
+  `/v1/gov/proposals/deploy-contract` ос нөктәһе) тотоу
   `(namespace, contract_id, code_hash, abi_hash, abi_version)`.
-- Once the referendum passes, `EnactReferendum` marks the proposal Enacted and
-  admission will accept deployments that carry matching metadata and code.
-- Transactions must include the metadata pair `gov_namespace=a namespace` and
-  `gov_contract_id=an identifier` (and should set `contract_namespace` /
-  `contract_id` for call-time binding). CLI helpers populate these
-  automatically when you pass `--namespace`/`--contract-id`.
-- When protected namespaces are enabled, queue admission rejects attempts to
-  rebind an existing `contract_id` to a different namespace; use the enacted
-  proposal or retire the previous binding before deploying elsewhere.
-- If the lane manifest sets a validator quorum above one, include
-  `gov_manifest_approvers` (JSON array of validator account IDs) so the queue can count
-  the additional approvals alongside the transaction authority. Lanes also reject
-  metadata that references namespaces not present in the manifest's
-  `protected_namespaces` set.
+- Бер тапҡыр референдум үтә, `EnactReferendum` тәҡдимде билдәләй һәм
+  ҡабул итеү ҡабул итәсәк таратыу, улар тап килгән метамағлүмәттәр һәм код йөрөтә.
+- Транзакциялар Torii һәм
+  `gov_contract_id=an identifier` (һәм `contract_namespace` / ҡуйырға тейеш /
+  `contract_id` өсөн шылтыратыу-ваҡыт бәйләү). CLI ярҙамсылары был халыҡты тултыра
+  автоматик рәүештә үткәндә `--namespace`/`--contract-id`.
+- Ҡасан һаҡланған исемдәр киңлеге өҫтөндә эшләй, сиратҡа ҡабул итеү тырышлыҡтарын кире ҡаға.
+  ғәмәлдәге `contract_id` X-ты икенсе исемдәр киңлегенә ҡабаттан бәйләү; ҡабул ителгән ҡулланыу
+  тәҡдим йәки пенсияға элекке мотлаҡ башҡа урындарҙы йәйелдерер алдынан.
+- Әгәр ҙә һыҙат манифестында бер өҫтәге валитатор кворумы ҡуйһа, үҙ эсенә ала
+  `gov_manifest_approvers` (JSON массив валитатор иҫәбенә идентификаторҙар) шулай сират иҫәпләй ала
+  өҫтәмә раҫлауҙар менән бер рәттән транзакция органы. Лейнс та кире ҡаға.
+  метамағлүмәттәр, һылтанмалар исемдәр киңлектәрендә булмаған манифест&#8217;s
+  `protected_namespaces` комплекты.
 
-## CLI helpers
+## CLI ярҙамсылары
 
 - `iroha_cli app contracts deploy --authority <id> --private-key <hex> --code-file <path>`
-  submits the Torii deploy request (computing hashes on the fly).
+  Torii тапшырыу запросын тапшыра (осоуҙа хештарҙы иҫәпләү).
 - `iroha_cli app contracts deploy-activate --authority <id> --private-key <hex> --namespace <ns> --contract-id <id> --code-file <path>`
-  builds the manifest (signed with the supplied key), registers bytes + manifest,
-  and activates the `(namespace, contract_id)` binding in one transaction. Use
-  `--dry-run` to print the computed hashes and instruction count without
-  submitting, and `--manifest-out` to save the signed manifest JSON.
-- `iroha_cli app contracts manifest build --code-file <path> [--sign-with <hex>]` computes
-  `code_hash`/`abi_hash` for compiled `.to` and optionally signs the manifest,
-  printing JSON or writing to `--out`.
+  манифест төҙөй (ялған асҡыс менән ҡултамға), байт + манифест,
+  һәм бер транзакцияла `(namespace, contract_id)` бәйләүен әүҙемләштереү. Файҙаланыу
+  `--dry-run` компьютер хештарын һәм инструкция һанын баҫтырыу өсөн
+  тапшырыу, һәм `--manifest-out` ҡул ҡуйылған манифест JSON ҡотҡарыу өсөн.
+- `iroha_cli app contracts manifest build --code-file <path> [--sign-with <hex>]` иҫәпләүҙәр
+  Torii өсөн `.to` X һәм теләк буйынса манифестҡа ҡул ҡуя,
+  JSON йәки яҙыу `--out` тип баҫтырыу.
 - `iroha_cli app contracts simulate --authority <id> --private-key <hex> --code-file <path> --gas-limit <u64>`
-  runs an offline VM pass and reports ABI/hash metadata plus the queued ISIs
-  (counts and instruction ids) without touching the network. Attach
-  `--namespace/--contract-id` to mirror call-time metadata.
-- `iroha_cli app contracts manifest get --code-hash <hex>` fetches the manifest via Torii
-  and optionally writes it to disk.
-- `iroha_cli app contracts code get --code-hash <hex> --out <path>` downloads
-  the stored `.to` image.
-- `iroha_cli app contracts instances --namespace <ns> [--table]` lists activated
-  contract instances (manifest + metadata driven).
-- Governance helpers (`iroha_cli app gov deploy propose`, `iroha_cli app gov enact`,
-  `iroha_cli app gov protected set/get`) orchestrate the protected-namespace workflow and
-  expose JSON artefacts for auditing.
+  офлайн виртуаль пропуск эшләй һәм хәбәр итә ABI/хэш метамағлүмәттәр плюс сиратлы ИСИ
+  (һанаҡ һәм инструкция ids) селтәргә теймәйенсә. Беркетергә
+  `--namespace/--contract-id` көҙгө шылтыратыу-ваҡыт метамағлүмәттәр.
+- Torii Torii аша манифест алып килә.
+  һәм теләк буйынса уны дискҡа яҙа.
+- `iroha_cli app contracts code get --code-hash <hex> --out <path>` скачивание
+  һаҡланған Torii һүрәте.
+- `iroha_cli app contracts instances --namespace <ns> [--table]`X исемлеге әүҙемләштерелгән
+  контракт инстанциялары (төп + метамағлүмәттәр менән идара ителә).
+- Идара итеү ярҙамсылары (`iroha_cli app gov deploy propose`, `iroha_cli app gov enact`,
+  `iroha_cli app gov protected set/get` X) һаҡланған исем-шәрифе эш ағымын оркестрлаштыра һәм
+  аудит өсөн JSON артефакттарын фашлай.
 
-## Testing & coverage
+## Һынау & ҡаплау
 
-- Unit tests under `crates/iroha_core/tests/contract_code_bytes.rs` cover code
-  storage, idempotency, and the size cap.
-- `crates/iroha_core/tests/gov_enact_deploy.rs` validates manifest insertion via
-  enactment, and `crates/iroha_core/tests/gov_protected_gate.rs` exercises
-  protected-namespace admission end-to-end.
-- Torii routes include request/response unit tests, and the CLI commands have
-  integration tests ensuring JSON round-trips remain stable.
+- `crates/iroha_core/tests/contract_code_bytes.rs` ҡаплау коды буйынса берәмек һынауҙары
+  һаҡлау, идемпотенция, һәм ҙурлыҡтағы ҡапҡас.
+- `crates/iroha_core/tests/gov_enact_deploy.rs` раҫлай аша манифест индереү .
+  ҡабул итеү, һәм `crates/iroha_core/tests/gov_protected_gate.rs` күнекмәләр
+  һаҡланған-исемдәре ҡабул итеү аҙағынан аҙағына тиклем.
+- Torii маршруттары үтенес/яуап блогы һынауҙары инә, ә CLI командалары бар.
+  интеграция һынауҙары тәьмин итеү JSON түңәрәк-сәйәхәттәр тотороҡло ҡала.
 
-Refer to `docs/source/governance_api.md` for detailed referendum payloads and
-ballot workflows.
+Һылтанма `docs/source/governance_api.md` өсөн ентекле референдум файҙалы йөкләмәләр һәм
+бюллетень эш ағымы.

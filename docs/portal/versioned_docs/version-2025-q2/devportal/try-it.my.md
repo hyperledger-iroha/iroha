@@ -7,49 +7,50 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c389a2121f577bcf8893a0d5c0b898ec2ff5330f2f1727de3387da98f8369915
 source_last_modified: "2025-12-29T18:16:35.904297+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Try It sandbox
+# Sandbox ကိုစမ်းကြည့်ပါ။
 
-The developer portal ships an optional “Try it” console so you can call Torii
-endpoints without leaving the documentation. The console relays requests
-through the bundled proxy so browsers can bypass CORS limits while still
-enforcing rate limits and authentication.
+developer portal သည် ရွေးချယ်နိုင်သော "စမ်းသုံးကြည့်ပါ" ကွန်ဆိုးလ်တစ်ခု ပို့ပေးသောကြောင့် သင်သည် Torii ကိုခေါ်ဆိုနိုင်ပါသည်။
+စာရွက်စာတမ်းကို မချန်ဘဲ အဆုံးမှတ်များ။ ကွန်ဆိုးလ်သည် တောင်းဆိုချက်များကို ထပ်ဆင့်ပို့သည်။
+ဘရောက်ဆာများသည် CORS ကန့်သတ်ချက်များကို ဖြတ်ကျော်နိုင်စေရန် အစုအဝေးရှိ ပရောက်စီမှတစ်ဆင့် ငြိမ်နေပါ။
+နှုန်းကန့်သတ်ချက်နှင့် စစ်မှန်ကြောင်း အတည်ပြုခြင်းတို့ကို ပြဋ္ဌာန်းထားသည်။
 
-## Prerequisites
+## လိုအပ်ချက်များ
 
-- Node.js 18.18 or newer (matches the portal build requirements)
-- Network access to a Torii staging environment
-- A bearer token that can call the Torii routes you plan to exercise
+- Node.js 18.18 သို့မဟုတ် အသစ်များ (ပေါ်တယ်တည်ဆောက်မှုလိုအပ်ချက်များနှင့် ကိုက်ညီသည်)
+- Torii အဆင့်သတ်မှတ်ပတ်ဝန်းကျင်သို့ ကွန်ရက်ဝင်ရောက်ခွင့်
+- သင်လေ့ကျင့်ရန်စီစဉ်ထားသော Torii လမ်းကြောင်းများကိုခေါ်ဆိုနိုင်သော ကိုင်ဆောင်သူတိုကင်
 
-All proxy configuration is done through environment variables. The table below
-lists the most important knobs:
+ပရောက်စီဖွဲ့စည်းမှုအားလုံးကို ပတ်၀န်းကျင် ကိန်းရှင်များမှတစ်ဆင့် လုပ်ဆောင်သည်။ အောက်ပါဇယား
+အရေးအကြီးဆုံး ခလုတ်များကို စာရင်းပြုစုသည်။
 
-| Variable | Purpose | Default |
-| --- | --- | --- |
-| `TRYIT_PROXY_TARGET` | Base Torii URL that the proxy forwards requests to | **Required** |
-| `TRYIT_PROXY_LISTEN` | Listen address for local development (format `host:port` or `[ipv6]:port`) | `127.0.0.1:8787` |
-| `TRYIT_PROXY_ALLOWED_ORIGINS` | Comma-separated list of origins that may call the proxy | `http://localhost:3000` |
-| `TRYIT_PROXY_BEARER` | Default bearer token forwarded to Torii | _empty_ |
-| `TRYIT_PROXY_ALLOW_CLIENT_AUTH` | Allow end users to supply their own token via `X-TryIt-Auth` | `0` |
-| `TRYIT_PROXY_MAX_BODY` | Maximum request body size (bytes) | `1048576` |
-| `TRYIT_PROXY_TIMEOUT_MS` | Upstream timeout in milliseconds | `10000` |
-| `TRYIT_PROXY_RATE_LIMIT` | Requests allowed per rate window per client IP | `60` |
-| `TRYIT_PROXY_RATE_WINDOW_MS` | Sliding window for rate limiting (ms) | `60000` |
+| ပြောင်းလဲနိုင်သော | ရည်ရွယ်ချက် | ပုံသေ |
+| ---| ---| ---|
+| `TRYIT_PROXY_TARGET` | Proxy မှ ထပ်ဆင့်တောင်းဆိုသော | **လိုအပ်သည်** |
+| `TRYIT_PROXY_LISTEN` | ဒေသဖွံ့ဖြိုးရေးအတွက် လိပ်စာ နားထောင်ရန် (ဖော်မက် `host:port` သို့မဟုတ် `[ipv6]:port`) | `127.0.0.1:8787` |
+| `TRYIT_PROXY_ALLOWED_ORIGINS` | ပရောက်စီ | ဟုခေါ်ဆိုနိုင်သော ကော်မာ-ခြားထားသော မူရင်းစာရင်း `http://localhost:3000` |
+| `TRYIT_PROXY_BEARER` | ပုံသေကိုင်ဆောင်သူ တိုကင် Torii | _empty_ |
+| `TRYIT_PROXY_ALLOW_CLIENT_AUTH` | သုံးစွဲသူများအား `X-TryIt-Auth` | မှတစ်ဆင့် ၎င်းတို့၏ကိုယ်ပိုင်တိုကင်ကို ထောက်ပံ့ပေးရန် ခွင့်ပြုပါ။ `0` |
+| `TRYIT_PROXY_MAX_BODY` | အများဆုံး တောင်းဆိုချက် ကိုယ်ထည်အရွယ်အစား (ဘိုက်များ) | `1048576` |
+| `TRYIT_PROXY_TIMEOUT_MS` | မီလီစက္ကန့်အတွင်း | `10000` |
+| `TRYIT_PROXY_RATE_LIMIT` | သုံးစွဲသူ IP | တစ်ခုနှုန်း ဝင်းဒိုးတစ်ခုနှုန်း တောင်းဆိုမှုများကို ခွင့်ပြုသည်။ `60` |
+| `TRYIT_PROXY_RATE_WINDOW_MS` | နှုန်းကန့်သတ်ချက် (ms) | `60000` |
 
-The proxy also exposes `GET /healthz`, returns structured JSON errors, and
-redacts bearer tokens from log output.
+ပရောက်စီသည် `GET /healthz` ကိုလည်း ဖော်ထုတ်ပေးသည်၊ ဖွဲ့စည်းတည်ဆောက်ထားသော JSON အမှားများကို ပြန်ပို့ပေးသည်၊
+မှတ်တမ်းထွက်ရှိမှုမှ ကိုင်ဆောင်သူတိုကင်များကို ပြန်လည်ပြင်ဆင်သည်။
 
-## Start the proxy locally
+## ပရောက်စီကို စက်တွင်းတွင် စတင်ပါ။
 
-Install dependencies the first time you set up the portal:
+ပေါ်တယ်ကို သင်ပထမဆုံးစဖွင့်သောအခါတွင် မှီခိုအားထားမှုများကို ထည့်သွင်းပါ-
 
 ```bash
 cd docs/portal
 npm install
 ```
 
-Run the proxy and point it at your Torii instance:
+ပရောက်စီကိုဖွင့်ပြီး သင်၏ Torii စံနမူနာတွင် ညွှန်ပြပါ-
 
 ```bash
 export TRYIT_PROXY_TARGET="https://torii.devnet.sora.example"
@@ -59,13 +60,13 @@ export TRYIT_PROXY_BEARER="Bearer eyJhbGciOi..."
 npm run tryit-proxy
 ```
 
-The script logs the bound address and forwards requests from `/proxy/*` to the
-configured Torii origin.
+script သည် ဘောင်ခတ်ထားသောလိပ်စာကို မှတ်တမ်းတင်ပြီး `/proxy/*` မှ တောင်းဆိုချက်များကို ပေးပို့သည်။
+Torii ဇာစ်မြစ်ကို ပြင်ဆင်ထားသည်။
 
-## Wire the portal widgets
+## ပေါ်တယ်ဝစ်ဂျက်များကို ကြိုးတပ်ပါ။
 
-When you build or serve the developer portal, set the URL that the widgets
-should use for the proxy:
+ဆော့ဖ်ဝဲရေးသားသူပေါ်တယ်ကို တည်ဆောက်သည့်အခါ သို့မဟုတ် ဝန်ဆောင်မှုပေးသည့်အခါ၊ ဝစ်ဂျက်များဖြစ်သည့် URL ကို သတ်မှတ်ပါ။
+proxy အတွက် သုံးသင့်သည်-
 
 ```bash
 export TRYIT_PROXY_PUBLIC_URL="http://localhost:8787"
@@ -73,29 +74,27 @@ export TRYIT_PROXY_DEFAULT_BEARER="Bearer eyJhbGciOi..." # Optional
 npm run start
 ```
 
-The following components read these values from `docusaurus.config.js`:
+အောက်ပါ အစိတ်အပိုင်းများသည် `docusaurus.config.js` မှ ဤတန်ဖိုးများကို ဖတ်ပြသည်-
 
-- **Swagger UI** — rendered at `/reference/torii-swagger`; uses a request
-  interceptor to attach bearer tokens automatically.
-- **RapiDoc** — rendered at `/reference/torii-rapidoc`; mirrors the token field
-  and supports try-it requests against the proxy.
-- **Try it console** — embedded on the API overview page; lets you send custom
-  requests, view headers, and inspect response bodies.
+- **Swagger UI** — `/reference/torii-swagger` တွင် ပြန်ဆိုထားသည်။ တောင်းဆိုချက်ကိုအသုံးပြုသည်။
+  ကိုင်ဆောင်သူတိုကင်များကို အလိုအလျောက် ပူးတွဲရန် ကြားဖြတ်ကိရိယာ။
+- **RapiDoc** — `/reference/torii-rapidoc`၊ တိုကင်အကွက်ကို မှန်ပြောင်းကြည့်သည်။
+  proxy နှင့် ဆန့်ကျင်ဘက် try-it တောင်းဆိုမှုများကို ပံ့ပိုးပေးသည်။
+- **စမ်းသုံးကြည့်ပါ console** — API ခြုံငုံသုံးသပ်ချက် စာမျက်နှာတွင် ထည့်သွင်းထားသည်။ စိတ်ကြိုက်ပို့ပေးတယ်။
+  တောင်းဆိုချက်များ၊ ခေါင်းစီးများကိုကြည့်ရှုပြီး တုံ့ပြန်မှုအဖွဲ့များကို စစ်ဆေးပါ။
 
-Changing the token in any widget only affects the current browser session; the
-proxy never persists or logs the supplied token.
+မည်သည့်ဝစ်ဂျက်တွင်မဆို တိုကင်ကိုပြောင်းလဲခြင်းသည် လက်ရှိဘရောက်ဆာစက်ရှင်ကိုသာ အကျိုးသက်ရောက်သည်။ အဆိုပါ
+ပရောက်စီသည် ပံ့ပိုးပေးထားသော တိုကင်ကို ဘယ်သောအခါမှ ဆက်မလုပ်ပါ သို့မဟုတ် မှတ်တမ်းမတင်ပါ။
 
-## Observability & operations
+## ကြည့်ရှုနိုင်မှုနှင့် လည်ပတ်မှုများ
 
-Every request is logged once with method, path, origin, upstream status, and the
-authentication source (`override`, `default`, or `client`). Tokens are never
-stored—both bearer headers and `X-TryIt-Auth` values are redacted before
-logging—so you can forward stdout to a central collector without worrying about
-secrets leaking.
+တောင်းဆိုမှုတိုင်းကို နည်းလမ်း၊ လမ်းကြောင်း၊ မူရင်း၊ အထက်ပိုင်းအခြေအနေ၊ နှင့် တစ်ကြိမ်ဖြင့် မှတ်တမ်းတင်ထားသည်။
+စစ်မှန်ကြောင်းအထောက်အထား (`override`၊ `default`၊ သို့မဟုတ် `client`)။ တိုကင်များသည် ဘယ်တော့မှ မဟုတ်ပါ။
+သိမ်းဆည်းထားသည် — ထမ်းသူခေါင်းစီးများနှင့် `X-TryIt-Auth` တန်ဖိုးများကို မပြင်ရသေးမီ
+သစ်ခုတ်ခြင်း—ဒါကြောင့် သင်သည် stdout ကို စိတ်ပူစရာမလိုဘဲ ဗဟိုစုဆောင်းသူထံ ပေးပို့နိုင်ပါသည်။
+လျှို့ဝှက်ချက်များပေါက်ကြား။
 
-### Health probes & alerting
-
-Run the bundled probe during deployments or on a schedule:
+### ကျန်းမာရေးစစ်ဆေးခြင်းနှင့် သတိပေးချက်အစုအပြုံလိုက်စုံစမ်းစစ်ဆေးမှုကို ဖြန့်ကျက်ချထားစဉ် သို့မဟုတ် အချိန်ဇယားအတိုင်း လုပ်ဆောင်ပါ-
 
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
@@ -104,18 +103,18 @@ TRYIT_PROXY_SAMPLE_PATH="/v1/status" \
 npm run probe:tryit-proxy
 ```
 
-Environment knobs:
+ပတ်ဝန်းကျင် ခလုတ်များ-
 
-- `TRYIT_PROXY_SAMPLE_PATH` — optional Torii route (without `/proxy`) to exercise.
-- `TRYIT_PROXY_SAMPLE_METHOD` — defaults to `GET`; set to `POST` for write routes.
-- `TRYIT_PROXY_PROBE_TOKEN` — injects a temporary bearer token for the sample call.
-- `TRYIT_PROXY_PROBE_TIMEOUT_MS` — overrides the default 5 s timeout.
-- `TRYIT_PROXY_PROBE_METRICS_FILE` — optional Prometheus textfile destination for `probe_success`/`probe_duration_seconds`.
-- `TRYIT_PROXY_PROBE_LABELS` — comma-separated `key=value` pairs appended to the metrics (defaults to `job=tryit-proxy` and `instance=<proxy URL>`).
+- `TRYIT_PROXY_SAMPLE_PATH` — ရွေးချယ်နိုင်သော Torii လမ်းကြောင်း (`/proxy` မပါဘဲ)။
+- `TRYIT_PROXY_SAMPLE_METHOD` — `GET` သို့ ပုံသေများ။ လမ်းကြောင်းများရေးသားရန်အတွက် `POST` ဟုသတ်မှတ်ထားသည်။
+- `TRYIT_PROXY_PROBE_TOKEN` — နမူနာခေါ်ဆိုမှုအတွက် ယာယီကိုင်ဆောင်သူ တိုကင်ကို ထိုးသွင်းသည်။
+- `TRYIT_PROXY_PROBE_TIMEOUT_MS` — ပုံသေ 5s အချိန်ကုန်ဆုံးမှုကို အစားထိုးသည်။
+- `TRYIT_PROXY_PROBE_METRICS_FILE` — ရွေးချယ်နိုင်သော Prometheus `probe_success`/`probe_duration_seconds` အတွက် စာသားဖိုင် ဦးတည်ရာ။
+- `TRYIT_PROXY_PROBE_LABELS` — ကော်မာ-ခြားထားသော `key=value` အတွဲများကို မက်ထရစ်များတွင် ထည့်ထားသည် (ပုံသေများမှာ `job=tryit-proxy` နှင့် `instance=<proxy URL>`)။
 
-Feed the results into a textfile collector by pointing the probe at a writable
-path (for example, `/var/lib/node_exporter/textfile_collector/tryit.prom`) and
-adding any custom labels:
+ရလဒ်များကို စာသားဖိုင်စုဆောင်းသူထံ ညွှန်ပြခြင်းဖြင့် ရလဒ်များကို ရေးသွင်းနိုင်သည်။
+လမ်းကြောင်း (ဥပမာ၊ `/var/lib/node_exporter/textfile_collector/tryit.prom`) နှင့်
+စိတ်ကြိုက်တံဆိပ်များထည့်ခြင်း-
 
 ```bash
 TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" \
@@ -124,11 +123,11 @@ TRYIT_PROXY_PROBE_LABELS="job=tryit-proxy,cluster=prod" \
 npm run probe:tryit-proxy
 ```
 
-The script rewrites the metrics file atomically so your collector always reads a
-complete payload.
+ဇာတ်ညွှန်းသည် မက်ထရစ်ဖိုင်ကို အက်တမ်ပုံစံဖြင့် ပြန်လည်ရေးသားပေးသောကြောင့် သင်၏စုဆောင်းသူသည် အမြဲဖတ်သည်။
+ပြီးပြည့်စုံသော payload။
 
-For lightweight alerting, wire the probe into your monitoring stack. A Prometheus
-example that pages after two consecutive failures:
+ပေါ့ပါးသောသတိပေးချက်အတွက်၊ သင်၏စောင့်ကြည့်ရေးစဥ်တွင် စုံစမ်းစစ်ဆေးမှုအား ကြိုးတပ်ပါ။ Prometheus
+နှစ်ကြိမ်ဆက်တိုက် ကျရှုံးပြီးနောက် စာမျက်နှာများ ဥပမာ-
 
 ```yaml
 groups:
@@ -145,11 +144,11 @@ groups:
             The try-it proxy at {{ $labels.instance }} is not responding to probe requests.
 ```
 
-### Rollback automation
+### အလိုအလျောက်ပြန်လှည့်ခြင်း။
 
-Use the management helper to update or restore the target Torii URL. The script
-stores the previous configuration in `.env.tryit-proxy.bak` so rollbacks are a
-single command.
+ပစ်မှတ် Torii URL ကို အပ်ဒိတ် သို့မဟုတ် ပြန်လည်ရယူရန် စီမံခန့်ခွဲမှုအကူကို အသုံးပြုပါ။ ဇာတ်ညွှန်း
+`.env.tryit-proxy.bak` တွင် ယခင် configuration ကို သိမ်းဆည်းထားသောကြောင့် rollbacks များသည်
+command တစ်ခုတည်း။
 
 ```bash
 # Update TRYIT_PROXY_TARGET and back up the previous config.
@@ -159,5 +158,5 @@ npm run manage:tryit-proxy -- update --target https://torii.devnet.sora.example
 npm run manage:tryit-proxy -- rollback
 ```
 
-Override the env file path with `--env` or `TRYIT_PROXY_ENV` if your deployment
-stores configuration elsewhere.
+သင်၏အသုံးပြုမှုရှိပါက `--env` သို့မဟုတ် `TRYIT_PROXY_ENV` ဖြင့် env ဖိုင်လမ်းကြောင်းကို အစားထိုးပါ။
+configuration ကို အခြားနေရာတွင် သိမ်းဆည်းပါ။

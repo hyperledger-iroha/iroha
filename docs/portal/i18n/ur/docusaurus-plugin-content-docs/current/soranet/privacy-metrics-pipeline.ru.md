@@ -4,37 +4,39 @@ direction: rtl
 source: docs/portal/docs/soranet/privacy-metrics-pipeline.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: privacy-metrics-pipeline
-title: Конвейер метрик приватности SoraNet (SNNet-8)
-sidebar_label: Конвейер метрик приватности
-description: Сбор телеметрии с сохранением приватности для relay и orchestrator SoraNet.
+ID: پرائیویسی میٹرکس پائپ لائن
+عنوان: سورانیٹ پرائیویسی میٹرکس پائپ لائن (SNNET-8)
+سائڈبار_لیبل: پرائیویسی میٹرکس پائپ لائن
+تفصیل: ریلے اور آرکسٹریٹر سورانیٹ کے لئے رازداری کو برقرار رکھتے ہوئے ٹیلی میٹری کا مجموعہ۔
 ---
 
-:::note Канонический источник
-Отражает `docs/source/soranet/privacy_metrics_pipeline.md`. Держите обе копии синхронизированными, пока не будет выведена из эксплуатации старая документация.
+::: نوٹ کینونیکل ماخذ
+`docs/source/soranet/privacy_metrics_pipeline.md` کی عکاسی کرتا ہے۔ پرانی دستاویزات ریٹائر ہونے تک دونوں کاپیاں ہم آہنگ رکھیں۔
 :::
 
-# Конвейер метрик приватности SoraNet
+# سورانیٹ پرائیویسی میٹرکس پائپ لائن
 
-SNNet-8 вводит ориентированную на приватность поверхность телеметрии для runtime relay. Теперь relay агрегирует события handshake и circuit в минутные buckets и экспортирует только грубые счетчики Prometheus, оставляя отдельные circuits несвязываемыми и давая операторам практическую видимость.
+SNNET-8 رن ٹائم ریلے کے لئے پرائیویسی پر مبنی ٹیلی میٹری کی سطح متعارف کراتا ہے۔ ریلے اب ہینڈ شیک اور سرکٹ کے واقعات کو منٹ کی بالٹیوں میں جمع کرتا ہے اور صرف موٹے Prometheus کاؤنٹرز کو برآمد کرتا ہے ، جس سے انفرادی سرکٹس غیر منسلک رہ جاتے ہیں اور آپریٹرز کو عملی مرئیت دیتے ہیں۔
 
-## Обзор агрегатора
+## اجتماعی جائزہ
 
-- Runtime-реализация находится в `tools/soranet-relay/src/privacy.rs` как `PrivacyAggregator`.
-- Buckets индексируются по минутам настенного времени (`bucket_secs`, по умолчанию 60 секунд) и хранятся в ограниченном кольце (`max_completed_buckets`, по умолчанию 120). Collector shares имеют собственный ограниченный backlog (`max_share_lag_buckets`, по умолчанию 12), чтобы устаревшие окна Prio сбрасывались как suppressed buckets, а не утекали в память или маскировали зависшие collectors.
-- `RelayConfig::privacy` напрямую сопоставляется с `PrivacyConfig`, открывая настройки (`bucket_secs`, `min_handshakes`, `flush_delay_buckets`, `force_flush_buckets`, `max_completed_buckets`, `max_share_lag_buckets`, `expected_shares`). В production runtime сохраняются значения по умолчанию, а SNNet-8a вводит пороги безопасной агрегации.
-- Модули runtime записывают события через типизированные helpers: `record_circuit_accepted`, `record_circuit_rejected`, `record_throttle`, `record_throttle_cooldown`, `record_capacity_reject`, `record_active_sample`, `record_verified_bytes` и `record_gar_category`.
+- رن ٹائم نفاذ `tools/soranet-relay/src/privacy.rs` میں `PrivacyAggregator` کے طور پر واقع ہے۔
+- بالٹیاں دیوار کے وقت کے منٹ (`bucket_secs` ، پہلے سے طے شدہ 60 سیکنڈ) کے ذریعہ ترتیب دی جاتی ہیں اور ایک محدود رنگ میں محفوظ ہوتی ہیں (`max_completed_buckets` ، پہلے سے طے شدہ 120)۔ کلکٹر کے حصص کا اپنا ایک محدود بیکلاگ (`max_share_lag_buckets` ، پہلے سے طے شدہ 12) ہے تاکہ لیگیسی پریو ونڈوز میموری میں لیک ہونے یا ہنگیں جمع کرنے والوں کو نقاب پوش کرنے کے بجائے دبے ہوئے بالٹیوں کے طور پر دوبارہ ترتیب دے۔
+- `RelayConfig::privacy` براہ راست `PrivacyConfig` پر نقشہ بناتا ہے ، افتتاحی ترتیبات (`bucket_secs` ، `min_handshakes` ، `flush_delay_buckets` ، `force_flush_buckets` ، `max_completed_buckets` ، `max_completed_buckets` ، I18000036X ، I18000036X ، I1800000036X ، I1800000036X ، I1800000036X ، `max_completed_buckets` ، `max_completed_buckets` ، `max_completed_buckets` ، `force_flush_buckets`. پروڈکشن رن ٹائم پہلے سے طے شدہ اقدار کو برقرار رکھتا ہے ، اور SNNET-8A محفوظ جمع کی دہلیز کو متعارف کراتا ہے۔
+- رن ٹائم ماڈیولز ٹائپڈ مددگاروں کے ذریعہ ریکارڈ ایونٹس: `record_circuit_accepted` ، `record_circuit_rejected` ، `record_throttle` ، `record_throttle_cooldown` ، `record_capacity_reject` ، `record_active_sample` ، `record_active_sample` اور `record_active_sample` اور `record_active_sample` اور `record_active_sample` اور `record_active_sample` اور `record_active_sample` اور `record_active_sample`۔
 
-## Админ-эндпоинт relay
+## ایڈمن اینڈپوائنٹ ریلے
 
-Операторы могут опрашивать admin listener relay для сырых наблюдений через `GET /privacy/events`. Эндпоинт возвращает JSON с разделителями строк (`application/x-ndjson`), содержащий payloads `SoranetPrivacyEventV1`, отраженные из внутреннего `PrivacyEventBuffer`. Буфер хранит самые новые события до `privacy.event_buffer_capacity` записей (по умолчанию 4096) и очищается при чтении, поэтому скрейперам нужно опрашивать достаточно часто, чтобы избежать пропусков. События покрывают те же сигналы handshake, throttle, verified bandwidth, active circuit и GAR, которые питают счетчики Prometheus, позволяя downstream collectors архивировать приватно-безопасные breadcrumbs или подпитывать workflows безопасной агрегации.
+آپریٹرز `GET /privacy/events` کے ذریعے کچے مشاہدات کے لئے ایڈمن سننے والوں کو ریلے میں پول کرسکتے ہیں۔ اختتامی نقطہ واپس لائن سے طے شدہ JSON (`application/x-ndjson`) جس میں پے لوڈ `SoranetPrivacyEventV1` پر مشتمل ہے اندرونی `PrivacyEventBuffer` سے ظاہر ہوتا ہے۔ بفر `privacy.event_buffer_capacity` اندراجات (پہلے سے طے شدہ 4096) تک کے تازہ ترین واقعات کو اسٹور کرتا ہے اور پڑھنے پر صاف ہوجاتا ہے ، لہذا گمشدہ واقعات سے بچنے کے لئے کھرچنے والے کثرت سے پولنگ کرنے کی ضرورت ہوتی ہے۔ واقعات ایک ہی مصافحہ ، تھروٹل ، تصدیق شدہ بینڈوتھ ، فعال سرکٹ اور گار سگنلز کا احاطہ کرتے ہیں جو Prometheus کاؤنٹرز کو کھانا کھاتے ہیں ، جس سے بہاو جمع کرنے والوں کو نجی طور پر بریڈ کرمبس کو محفوظ محفوظ کرنے یا محفوظ جمع کرنے والے کام کے بہاؤ کو کھانا کھلانا پڑتا ہے۔
 
-## Конфигурация relay
+## ریلے کنفیگریشن
 
-Операторы настраивают cadence приватной телеметрии в конфигурационном файле relay через секцию `privacy`:
+آپریٹرز سیکشن `privacy` کے ذریعے ریلے کنفیگریشن فائل میں نجی ٹیلی میٹری کیڈینس کو تشکیل دیتے ہیں:
 
 ```json
 {
@@ -52,73 +54,67 @@ SNNet-8 вводит ориентированную на приватность 
 }
 ```
 
-Значения по умолчанию соответствуют спецификации SNNet-8 и проверяются при загрузке:
+پہلے سے طے شدہ اقدار SNNET-8 تفصیلات کے ساتھ تعمیل کرتی ہیں اور بوٹ پر جانچ پڑتال کی جاتی ہیں:| فیلڈ | تفصیل | ڈیفالٹ |
+| ------ | ---------- | ---------------- |
+| `bucket_secs` | ہر جمع ونڈو کی چوڑائی (سیکنڈ)۔ | `60` |
+| `min_handshakes` | بالٹی سے کاؤنٹرز کے جاری ہونے سے پہلے شرکاء کی کم سے کم تعداد۔ | `12` |
+| `flush_delay_buckets` | فلش کرنے کی کوشش سے پہلے مکمل بالٹیاں کی تعداد۔ | `1` |
+| `force_flush_buckets` | دبے ہوئے بالٹی کو جاری کرنے سے پہلے زیادہ سے زیادہ عمر۔ | `6` |
+| `max_completed_buckets` | ذخیرہ شدہ بیکلاگ بالٹیاں (میموری کو حدود سے پرے بڑھنے سے روکتی ہیں)۔ | `120` |
+| `max_share_lag_buckets` | دبانے تک کلکٹر کے حصص کے انعقاد کے لئے ونڈو۔ | `12` |
+| `expected_shares` | ضم ہونے سے پہلے پریو کلکٹر کے حصص کی تعداد۔ | `2` |
+| `event_buffer_capacity` | ایڈمن تھریڈ کے لئے بیک بلاگ این ڈی جےسن واقعات۔ | `4096` |
 
-| Поле | Описание | По умолчанию |
-|------|----------|--------------|
-| `bucket_secs` | Ширина каждого окна агрегации (секунды). | `60` |
-| `min_handshakes` | Минимальное число участников перед выпуском счетчиков из bucket. | `12` |
-| `flush_delay_buckets` | Количество завершенных buckets перед попыткой flush. | `1` |
-| `force_flush_buckets` | Максимальный возраст перед выпуском suppressed bucket. | `6` |
-| `max_completed_buckets` | Хранимый backlog buckets (не дает памяти расти без границ). | `120` |
-| `max_share_lag_buckets` | Окно удержания collector shares до подавления. | `12` |
-| `expected_shares` | Число Prio collector shares перед объединением. | `2` |
-| `event_buffer_capacity` | Backlog NDJSON событий для admin-потока. | `4096` |
+`force_flush_buckets` کو `flush_delay_buckets` کے نیچے ترتیب دینا ، زیرونگ دہلیز ، یا گارڈ ہولڈ کو غیر فعال کرنا اب تعیناتیوں سے بچنے کے لئے توثیق میں ناکام ہوجاتا ہے جو ریلے کی سطح پر ٹیلی میٹری لیک کریں گے۔
 
-Установка `force_flush_buckets` ниже `flush_delay_buckets`, обнуление порогов или отключение guard удержания теперь проваливает валидацию, чтобы избежать развертываний, которые бы утекали телеметрией на уровне relay.
+`event_buffer_capacity` حد `/admin/privacy/events` کو بھی محدود کرتی ہے ، اس بات کو یقینی بناتا ہے کہ کھرچنی غیر معینہ مدت تک پیچھے نہیں رہ سکتی ہے۔
 
-Лимит `event_buffer_capacity` также ограничивает `/admin/privacy/events`, гарантируя, что скрейперы не смогут бесконечно отставать.
+## پریو کلیکٹر کے حصص
 
-## Prio collector shares
+SNNET-8A دوہری جمع کرنے والوں کو تعینات کرتا ہے جو خفیہ طور پر مشترکہ پریو بالٹیاں جاری کرتے ہیں۔ آرکیسٹریٹر اب NDJSON اسٹریم `/privacy/events` کو ریکارڈز `SoranetPrivacyEventV1` کے لئے تجزیہ کرتا ہے اور `SoranetPrivacyPrioShareV1` کو `SoranetSecureAggregator::ingest_prio_share` کی ہدایت کرتے ہیں۔ جب `PrivacyBucketConfig::expected_shares` کے ذخائر آتے ہیں تو بالٹیاں جاری کی جاتی ہیں ، جو ریلے سلوک کی عکاسی کرتی ہیں۔ `SoranetPrivacyBucketMetricsV1` میں ضم ہونے سے پہلے بالٹی سیدھ اور ہسٹگرام شکل کے خلاف حصص کی توثیق کی جاتی ہے۔ اگر ہینڈ شیکس کی نتیجے میں تعداد `min_contributors` سے نیچے آجاتی ہے تو ، بالٹی کو `suppressed` کے طور پر برآمد کیا جاتا ہے ، جس سے ریلے کے اندر جمع کرنے والے کے طرز عمل کی نقل ہوتی ہے۔ دبے ہوئے ونڈوز اب `insufficient_contributors` ، `collector_suppressed` ، `collector_window_elapsed` ، اور `forced_flush_window_elapsed` کے درمیان فرق کرنے میں مدد کے لئے `suppression_reason` ٹیگ جاری کریں۔ وجہ `collector_window_elapsed` بھی متحرک ہے جب پریو شیئرز `max_share_lag_buckets` سے زیادہ لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے لمبے حصے۔
 
-SNNet-8a разворачивает двойные collectors, которые выпускают секретно-разделенные buckets Prio. Orchestrator теперь парсит NDJSON поток `/privacy/events` для записей `SoranetPrivacyEventV1` и share `SoranetPrivacyPrioShareV1`, направляя их в `SoranetSecureAggregator::ingest_prio_share`. Buckets выпускаются, когда приходит `PrivacyBucketConfig::expected_shares` вкладов, отражая поведение relay. Shares валидируются по выравниванию buckets и форме гистограммы перед объединением в `SoranetPrivacyBucketMetricsV1`. Если итоговое число handshakes падает ниже `min_contributors`, bucket экспортируется как `suppressed`, повторяя поведение агрегатора внутри relay. Подавленные окна теперь выпускают метку `suppression_reason`, чтобы операторы могли отличать `insufficient_contributors`, `collector_suppressed`, `collector_window_elapsed` и `forced_flush_window_elapsed` при диагностике провалов телеметрии. Причина `collector_window_elapsed` также срабатывает, когда Prio shares задерживаются дольше `max_share_lag_buckets`, делая зависшие collectors видимыми без хранения устаревших аккумуляторов в памяти.
+## استقبالیہ اختتامی نقطہ Torii
 
-## Эндпоинты приема Torii
+Torii اب دو HTTP ٹیلی میٹری کے اختتامی مقامات شائع کرتا ہے تاکہ ریلے اور جمع کرنے والے اپنی نقل و حمل کو سرایت کیے بغیر مشاہدات کو آگے بڑھا سکیں:- `POST /v1/soranet/privacy/event` پے لوڈ `RecordSoranetPrivacyEventDto` کو قبول کرتا ہے۔ جسم `SoranetPrivacyEventV1` کے علاوہ ایک اختیاری ٹیگ `source` لپیٹ دیتا ہے۔ Torii فعال ٹیلی میٹری پروفائل کے خلاف درخواست کی جانچ پڑتال کرتا ہے ، ایونٹ کو ریکارڈ کرتا ہے اور HTTP `202 Accepted` کے ساتھ جواب دیتا ہے جس کے ساتھ ساتھ Norito JSON لفافے میں شامل ونڈو (`bucket_start_unix` ، `bucket_duration_secs`) اور ریلے موڈ پر مشتمل ہے۔
+- `POST /v1/soranet/privacy/share` پے لوڈ `RecordSoranetPrivacyShareDto` کو قبول کرتا ہے۔ جسم میں `SoranetPrivacyPrioShareV1` اور ایک اختیاری اشارہ `forwarded_by` لے کر چلتا ہے تاکہ آپریٹرز کو جمع کرنے والوں کے دھاگوں کا آڈٹ کرنے کی اجازت دی جاسکے۔ کامیاب گذارشات Norito JSON لفافے کے ساتھ HTTP Grafana واپس کریں ، جمع کرنے والے ، بالٹی ونڈو ، اور دبانے کا اشارہ۔ توثیق کی غلطیوں کو ٹیلی میٹری کے ردعمل `Conversion` پر نقشہ تیار کیا گیا ہے تاکہ جمع کرنے والوں کے مابین عین مطابق غلطی کو سنبھالنے کے ل .۔ آرکسٹریٹر ایونٹ لوپ اب پولنگ ریلے کے وقت ان حصص کو جاری کرتا ہے ، پریو بیٹری Torii کو ریلے پر بالٹیوں کے ساتھ ہم آہنگی میں رکھتا ہے۔
 
-Torii теперь публикует два телеметрических HTTP-эндпоинта, чтобы relays и collectors могли пересылать наблюдения без встраивания собственного транспорта:
+دونوں اختتامی نکات ٹیلی میٹری پروفائل کا احترام کرتے ہیں: جب میٹرکس غیر فعال ہوجاتے ہیں تو وہ `503 Service Unavailable` واپس کرتے ہیں۔ کلائنٹ Norito بائنری (`application/x.norito`) یا Norito JSON (`application/x.norito+json`) لاش بھیج سکتے ہیں۔ سرور خود بخود معیاری Torii ایکسٹریکٹرز کے ذریعے فارمیٹ پر بات چیت کرتا ہے۔
 
-- `POST /v1/soranet/privacy/event` принимает payload `RecordSoranetPrivacyEventDto`. Тело оборачивает `SoranetPrivacyEventV1` плюс необязательную метку `source`. Torii проверяет запрос по активному профилю телеметрии, записывает событие и отвечает HTTP `202 Accepted` вместе с Norito JSON-конвертом, содержащим вычисленное окно (`bucket_start_unix`, `bucket_duration_secs`) и режим relay.
-- `POST /v1/soranet/privacy/share` принимает payload `RecordSoranetPrivacyShareDto`. Тело несет `SoranetPrivacyPrioShareV1` и необязательную подсказку `forwarded_by`, чтобы операторы могли аудитировать потоки collectors. Успешные отправки возвращают HTTP `202 Accepted` с Norito JSON-конвертом, суммирующим collector, окно bucket и подсказку подавления; ошибки валидации сопоставляются с телеметрическим ответом `Conversion`, чтобы сохранить детерминированную обработку ошибок между collectors. Цикл событий orchestrator теперь выпускает эти shares при опросе relays, сохраняя синхронизацию Prio-аккумулятора Torii с buckets на relay.
+## میٹرکس Prometheus
 
-Оба эндпоинта учитывают профиль телеметрии: они возвращают `503 Service Unavailable`, когда метрики отключены. Клиенты могут отправлять Norito binary (`application/x.norito`) или Norito JSON (`application/x.norito+json`) тела; сервер автоматически договаривается о формате через стандартные Torii extractors.
+ہر برآمد شدہ بالٹی میں لیبل `mode` (`entry` ، `middle` ، `exit`) اور `bucket_start` ہوتے ہیں۔ میٹرکس کے مندرجہ ذیل خاندان دستیاب ہیں:
 
-## Метрики Prometheus
+| میٹرک | تفصیل |
+| -------- | -------------- |
+| `soranet_privacy_circuit_events_total{kind}` | `kind={accepted,pow_rejected,downgrade,timeout,other_failure,capacity_reject}` کے ساتھ مصافحہ کی درجہ بندی۔ |
+| `soranet_privacy_throttles_total{scope}` | `scope={congestion,cooldown,emergency,remote_quota,descriptor_quota,descriptor_replay}` کے ساتھ تھروٹل کاؤنٹرز۔ |
+| `soranet_privacy_throttle_cooldown_millis_{sum,count}` | جمع شدہ کوولڈاؤن کے دوروں کو تھروٹلڈ ہینڈ ہیکس کے ذریعہ تعاون کیا گیا۔ |
+| `soranet_privacy_verified_bytes_total` | اندھے پیمائش کے ثبوت سے ثابت تھروپپٹ۔ |
+| `soranet_privacy_active_circuits_{avg,max}` | اوسط اور فی بالٹی فعال سرکٹس کی چوٹی۔ |
+| `soranet_privacy_rtt_millis{percentile}` | آر ٹی ٹی پرسنٹائل کا تخمینہ (`p50` ، `p90` ، `p99`)۔ |
+| `soranet_privacy_gar_reports_total{category_hash}` | ہیشڈ گورننس ایکشن رپورٹ کاؤنٹرز ، کلید زمرہ ڈائجسٹ ہے۔ |
+| `soranet_privacy_bucket_suppressed` | بالٹیوں کو روکا جاتا ہے کیونکہ شریک کی حد تک نہیں پہنچی ہے۔ |
+| `soranet_privacy_pending_collectors{mode}` | بیٹری جمع کرنے والے کے حصص کو ضم کرنے کے منتظر ، ریلے وضع کے ذریعہ گروپ کیا گیا۔ |
+| `soranet_privacy_suppression_total{reason}` | `reason={insufficient_contributors,collector_suppressed,collector_window_elapsed,forced_flush_window_elapsed}` کے ساتھ دبے ہوئے بالٹیاں کاؤنٹرز تاکہ ڈیش بورڈز رازداری کی ناکامیوں کو منسوب کرسکیں۔ |
+| `soranet_privacy_snapshot_suppression_ratio` | آخری نالی (0-1) پر دبے ہوئے/ضم شدہ کا حصہ ، الرٹ بجٹ کے لئے مفید ہے۔ |
+| `soranet_privacy_last_poll_unixtime` | حالیہ کامیاب سروے کا UNIX وقت (کلکٹر-آئیڈل الرٹ کو طاقت دیتا ہے)۔ |
+| `soranet_privacy_collector_enabled` | گیج ، جو `0` پر گرتا ہے جب رازداری جمع کرنے والا غیر فعال ہوتا ہے یا شروع نہیں ہوتا ہے (کلکٹر سے معذور الرٹ کو طاقت دیتا ہے)۔ |
+| `soranet_privacy_poll_errors_total{provider}` | ریلے عرف پولنگ کی غلطیاں (ضابطہ کشائی کی غلطیوں ، HTTP کی ناکامیوں ، یا غیر متوقع اسٹیٹس کوڈز کے ساتھ اضافہ)۔ |
 
-Каждый экспортируемый bucket несет метки `mode` (`entry`, `middle`, `exit`) и `bucket_start`. Выпускаются следующие семейства метрик:
+مشاہداتی بالٹیاں خاموش رہتی ہیں ، بغیر کھڑکیوں کو بنائے ڈیش بورڈز کو صاف رکھیں۔
 
-| Metric | Description |
-|--------|-------------|
-| `soranet_privacy_circuit_events_total{kind}` | Таксономия handshakes с `kind={accepted,pow_rejected,downgrade,timeout,other_failure,capacity_reject}`. |
-| `soranet_privacy_throttles_total{scope}` | Счетчики throttle с `scope={congestion,cooldown,emergency,remote_quota,descriptor_quota,descriptor_replay}`. |
-| `soranet_privacy_throttle_cooldown_millis_{sum,count}` | Агрегированные длительности cooldown, внесенные throttled handshakes. |
-| `soranet_privacy_verified_bytes_total` | Проверенная пропускная способность от слепых доказательств измерений. |
-| `soranet_privacy_active_circuits_{avg,max}` | Среднее и пик активных circuits на bucket. |
-| `soranet_privacy_rtt_millis{percentile}` | Оценки RTT percentiles (`p50`, `p90`, `p99`). |
-| `soranet_privacy_gar_reports_total{category_hash}` | Хешированные счетчики Governance Action Report, ключом является digest категории. |
-| `soranet_privacy_bucket_suppressed` | Buckets удержаны, потому что порог участников не был достигнут. |
-| `soranet_privacy_pending_collectors{mode}` | Аккумуляторы collector shares в ожидании объединения, сгруппированные по режиму relay. |
-| `soranet_privacy_suppression_total{reason}` | Счетчики suppressed buckets с `reason={insufficient_contributors,collector_suppressed,collector_window_elapsed,forced_flush_window_elapsed}`, чтобы дашборды могли атрибутировать провалы приватности. |
-| `soranet_privacy_snapshot_suppression_ratio` | Доля suppressed/слитых на последнем drain (0-1), полезно для бюджетов алертов. |
-| `soranet_privacy_last_poll_unixtime` | UNIX-время самого свежего успешного опроса (питает алерт collector-idle). |
-| `soranet_privacy_collector_enabled` | Gauge, который падает до `0`, когда privacy collector отключен или не запустился (питает алерт collector-disabled). |
-| `soranet_privacy_poll_errors_total{provider}` | Ошибки опроса по алиасу relay (увеличивается при ошибках декодирования, HTTP-сбоях или неожиданных статус-кодах). |
+## آپریشنل سفارشات1. ** ڈیش بورڈز ** - اوپر میٹرکس بنائیں ، `mode` اور `window_start` کے ذریعہ گروپ بندی کریں۔ جمع کرنے والوں یا ریلے کی پریشانیوں کی نشاندہی کرنے کے لئے گمشدہ ونڈوز کو اجاگر کریں۔ ممبروں کی کمی اور جمع کرنے والوں کی وجہ سے ہونے والی جگہوں کو جمع کرنے والے افراد کی وجہ سے ہونے والے دباؤ کے درمیان فرق کرنے کے لئے `soranet_privacy_suppression_total{reason}` کا استعمال کریں۔ Grafana میں اب ایک ** "دبانے کی وجوہات (5 میٹر)" ** ان کاؤنٹرز پر مبنی پینل اور ایک ** "دبے ہوئے بالٹی ٪" ** اسٹیٹ جو منتخب کردہ رینج پر `sum(soranet_privacy_bucket_suppressed) / count(...)` کا حساب لگاتا ہے لہذا آپریٹرز بجٹ کی خلاف ورزیوں کو ایک نظر میں دیکھ سکتے ہیں۔ ** "کلکٹر شیئر بیکلاگ" ** سیریز (`soranet_privacy_pending_collectors`) اور ** "اسنیپ شاٹ دبانے کا تناسب" ** اسٹیٹ اسٹیٹ نے خودکار رنز کے دوران پھنسے ہوئے جمع کرنے والوں اور بجٹ بڑھنے کو نمایاں کیا۔
+2. ** انتباہ ** - نجی طور پر محفوظ میٹروں سے الارم کو ٹرگر کریں: POW مسترد پھٹ ، کولڈاؤن فریکوئنسی ، RTT بڑھنے اور صلاحیت کو مسترد کرنا۔ چونکہ کاؤنٹر ہر بالٹی کے اندر اجارہ دار ہوتے ہیں ، لہذا شرح کے آسان قواعد اچھی طرح سے کام کرتے ہیں۔
+3. ** واقعہ -ردعمل ** - پہلے جمع شدہ ڈیٹا پر انحصار کریں۔ جب آپ کو گہری ڈیبگنگ کی ضرورت ہو تو ، ریلے سے اسنیپ شاٹس بالٹیوں کو دوبارہ چلانے کے لئے کہیں یا خام ٹریفک لاگز جمع کرنے کے بجائے بلائنڈ پیمائش کے ثبوت چیک کریں۔
+4. ** ہولڈ ** - کھرچنے والے اکثر `max_completed_buckets` سے زیادہ نہ ہونے کے ل .۔ برآمد کنندگان کو آؤٹ پٹ Prometheus کو کیننیکل ماخذ کے طور پر سمجھنا چاہئے اور جمع کرانے کے بعد مقامی بالٹیوں کو حذف کرنا چاہئے۔
 
-Buckets без наблюдений остаются молчаливыми, сохраняя дашборды чистыми без создания нулевых окон.
+## تجزیات دبانے اور خودکار رنز
 
-## Операционные рекомендации
+SNNET-8 کی قبولیت کا انحصار یہ ظاہر کرنے پر ہے کہ خودکار جمع کرنے والے صحت مند رہتے ہیں اور دبانے کو پالیسی کی حدود میں رکھا جاتا ہے (کسی بھی 30 منٹ کی ونڈو میں relay10 ٪ بالٹی فی ریلے)۔ ضروری ٹولز اب ذخیرے کے ساتھ شامل ہیں۔ آپریٹرز کو انہیں ہفتہ وار رسومات میں تعمیر کرنا چاہئے۔ Grafana میں نئے دبانے والے پینل ذیل میں پروم کیو ایل کے تاثرات کی نقل تیار کرتے ہیں ، جس میں کال ٹیموں کو دستی سوالات کا سہارا لینے سے پہلے براہ راست مرئیت ملتی ہے۔
 
-1. **Дашборды** - строьте метрики выше, группируя по `mode` и `window_start`. Подсвечивайте пропущенные окна, чтобы выявлять проблемы collectors или relays. Используйте `soranet_privacy_suppression_total{reason}` для различения недостатка участников и suppression, вызванной collectors, при триаже пробелов. В Grafana теперь есть панель **"Suppression Reasons (5m)"** на базе этих счетчиков и stat **"Suppressed Bucket %"**, вычисляющий `sum(soranet_privacy_bucket_suppressed) / count(...)` по выбранному диапазону, чтобы операторы видели нарушения бюджета с первого взгляда. Серия **"Collector Share Backlog"** (`soranet_privacy_pending_collectors`) и stat **"Snapshot Suppression Ratio"** выделяют зависшие collectors и дрейф бюджета во время автоматизированных прогонов.
-2. **Алертинг** - запускайте тревоги от приватно-безопасных счетчиков: всплески PoW reject, частоту cooldown, дрейф RTT и capacity rejects. Поскольку счетчики монотонны в пределах каждого bucket, простые правила по скорости работают хорошо.
-3. **Инцидент-ответ** - сначала полагайтесь на агрегированные данные. Когда нужен более глубокий дебаг, просите relays воспроизвести snapshots buckets или проверить слепые доказательства измерений вместо сбора сырых логов трафика.
-4. **Удержание** - скрейпьте достаточно часто, чтобы не превысить `max_completed_buckets`. Экспортеры должны считать вывод Prometheus каноническим источником и удалять локальные buckets после отправки.
+### دبانے کے جائزے کے لئے پروم کیو ایل کی ترکیبیں
 
-## Аналитика suppression и автоматизированные прогоны
-
-Принятие SNNet-8 зависит от демонстрации того, что автоматизированные collectors остаются здоровыми, а suppression держится в пределах политики (≤10% buckets на relay за любое 30-минутное окно). Нужные инструменты теперь поставляются вместе с репозиторием; операторы должны встроить их в еженедельные ритуалы. Новые панели suppression в Grafana повторяют PromQL-выражения ниже, давая дежурным командам живую видимость до того, как они прибегнут к ручным запросам.
-
-### PromQL-рецепты для обзора suppression
-
-Операторы должны держать под рукой следующие PromQL-хелперы; оба упомянуты в общем дашборде Grafana (`dashboards/grafana/soranet_privacy_metrics.json`) и правилах Alertmanager:
+آپریٹرز کو مندرجہ ذیل پروم کیو ایل مددگاروں کو ہاتھ میں رکھنا چاہئے۔ دونوں کا ذکر جنرل ڈیش بورڈ Grafana (`dashboards/grafana/soranet_privacy_metrics.json`) اور الرٹ مینجر قواعد میں کیا گیا ہے:
 
 ```promql
 /* Suppression ratio per relay mode (30 minute window) */
@@ -142,11 +138,11 @@ clamp_min(
 )
 ```
 
-Используйте выходное соотношение, чтобы подтвердить, что stat **"Suppressed Bucket %"** остается ниже бюджетного порога; подключите детектор всплесков к Alertmanager для быстрого отклика, когда число участников неожиданно падает.
+اس بات کی تصدیق کرنے کے لئے آؤٹ پٹ تناسب کا استعمال کریں ** "دبے ہوئے بالٹی ٪" ** بجٹ کی دہلیز سے نیچے ہے۔ جب شرکاء کی تعداد غیر متوقع طور پر گرتی ہے تو فوری ردعمل کے لئے انتباہی مینیجر سے اسپائک ڈٹیکٹر سے رابطہ کریں۔
 
-### CLI для офлайн-отчета buckets
+### بالٹیاں آف لائن رپورٹ کے لئے سی ایل آئی
 
-В workspace доступен `cargo xtask soranet-privacy-report` для разовых NDJSON-выгрузок. Укажите один или несколько admin-экспортов relay:
+`cargo xtask soranet-privacy-report` ورک اسپیس میں ایک وقت کے NDJSON اپ لوڈز کے لئے دستیاب ہے۔ ایک یا زیادہ ایڈمن ریلے برآمدات کی وضاحت کریں:
 
 ```bash
 cargo xtask soranet-privacy-report \
@@ -155,14 +151,12 @@ cargo xtask soranet-privacy-report \
   --json-out artifacts/sorafs_privacy/relay_summary.json
 ```
 
-Хелпер прогоняет захват через `SoranetSecureAggregator`, печатает сводку suppression в stdout и по желанию пишет структурированный JSON-отчет через `--json-out <path|->`. Он учитывает те же настройки, что и live collector (`--bucket-secs`, `--min-contributors`, `--expected-shares` и т. д.), позволяя операторам воспроизводить исторические захваты с другими порогами при разборе инцидента. Приложите JSON вместе со скриншотами Grafana, чтобы проход SNNet-8 по аналитике suppression оставался аудируемым.
+مددگار `SoranetSecureAggregator` کے توسط سے گرفتاری چلاتا ہے ، دبانے کا خلاصہ STDOUT پر پرنٹ کرتا ہے ، اور اختیاری طور پر `--json-out <path|->` کے ذریعہ ایک ساختہ JSON رپورٹ لکھتا ہے۔ یہ براہ راست کلکٹر (`--bucket-secs` ، `--min-contributors` ، `--expected-shares` ، وغیرہ) کی طرح ترتیبات کو مدنظر رکھتا ہے ، جس سے آپریٹرز کو کسی واقعے کا تجزیہ کرتے وقت مختلف دہلیز کے ساتھ تاریخی گرفتاریوں کو دوبارہ چلانے کی اجازت ملتی ہے۔ Grafana کے اسکرین شاٹس کے ساتھ JSON کو منسلک کریں تاکہ SNNET-8 دبانے والے تجزیات پاس قابل آڈٹ رہیں۔### پہلے خودکار سیشن کے لئے چیک لسٹ
 
-### Чеклист первой автоматизированной сессии
+گورننس کو ابھی بھی اس بات کا ثبوت درکار ہے کہ پہلے خودکار سیشن نے دبانے والے بجٹ کو پورا کیا۔ مددگار اب `--max-suppression-ratio <0-1>` کو قبول کرتا ہے تاکہ جب دبے ہوئے بالٹیاں درست ونڈو (10 ٪ پہلے سے طے شدہ) سے تجاوز کریں یا جب ابھی تک کوئی بالٹیاں نہ ہوں تو CI یا آپریٹرز تیزی سے ناکام ہوسکیں۔ تجویز کردہ اسٹریم:
 
-Говернанс по-прежнему требует доказать, что первая автоматизированная сессия уложилась в бюджет suppression. Хелпер теперь принимает `--max-suppression-ratio <0-1>`, чтобы CI или операторы могли быстро завершаться ошибкой, когда suppressed buckets превышают допустимое окно (по умолчанию 10%) или когда buckets еще отсутствуют. Рекомендуемый поток:
-
-1. Экспортировать NDJSON из admin-endpoints relay и потока orchestrator `/v1/soranet/privacy/event|share` в `artifacts/sorafs_privacy/<relay>.ndjson`.
-2. Запустить хелпер с бюджетом политики:
+1. ایڈمن اینڈ پوائنٹس ریلے اور آرکسٹریٹر اسٹریم `/v1/soranet/privacy/event|share` سے `artifacts/sorafs_privacy/<relay>.ndjson` سے NDJSON برآمد کریں۔
+2. پالیسی بجٹ مددگار چلائیں:
 
    ```bash
    cargo xtask soranet-privacy-report \
@@ -172,13 +166,13 @@ cargo xtask soranet-privacy-report \
      --max-suppression-ratio 0.10
    ```
 
-   Команда печатает наблюдаемое соотношение и завершает работу с ненулевым кодом, когда бюджет превышен **или** когда buckets еще не готовы, сигнализируя, что телеметрия еще не была произведена для прогона. Live-метрики должны показывать, что `soranet_privacy_pending_collectors` сливается к нулю, а `soranet_privacy_snapshot_suppression_ratio` остается ниже того же бюджета во время прогона.
-3. Архивируйте JSON-вывод и лог CLI вместе с пакетом доказательств SNNet-8 до переключения транспорта по умолчанию, чтобы ревьюеры могли воспроизвести точные артефакты.
+   کمانڈ مشاہدہ شدہ تناسب کو پرنٹ کرتا ہے اور غیر صفر کوڈ کے ساتھ باہر نکلتا ہے جب بجٹ سے تجاوز کیا جاتا ہے ** یا ** جب بالٹی ابھی تیار نہیں ہوتی ہے ، اس بات کا اشارہ کرتے ہیں کہ ابھی تک ٹیلی میٹری کو رن کے لئے تیار نہیں کیا گیا ہے۔ براہ راست میٹرکس کو یہ ظاہر کرنا چاہئے کہ `soranet_privacy_pending_collectors` صفر میں ضم ہوجاتا ہے اور `soranet_privacy_snapshot_suppression_ratio` رن کے دوران اسی بجٹ سے نیچے رہتا ہے۔
+3. ڈیفالٹ ٹرانسپورٹ کو تبدیل کرنے سے پہلے JSON آؤٹ پٹ اور CLI لاگ ان SNNET-8 شواہد پیکیج کے ساتھ محفوظ شدہ دستاویزات بنائیں تاکہ جائزہ لینے والے عین مطابق نمونے کو دوبارہ پیش کرسکیں۔
 
-## Следующие шаги (SNNet-8a)
+## اگلے اقدامات (Snnet-8a)
 
-- Интегрировать двойные Prio collectors, подключив прием shares к runtime, чтобы relays и collectors выпускали согласованные payloads `SoranetPrivacyBucketMetricsV1`. *(Готово — см. `ingest_privacy_payload` в `crates/sorafs_orchestrator/src/lib.rs` и сопутствующие тесты.)*
-- Опубликовать общий Prometheus dashboard JSON и правила алертов, покрывающие suppression gaps, здоровье collectors и анонимность. *(Готово — см. `dashboards/grafana/soranet_privacy_metrics.json`, `dashboards/alerts/soranet_privacy_rules.yml`, `dashboards/alerts/soranet_policy_rules.yml` и проверки.)*
-- Подготовить артефакты калибровки дифференциальной приватности, описанные в `privacy_metrics_dp.md`, включая воспроизводимые блокноты и governance digest. *(Готово — notebook и артефакты генерируются `scripts/telemetry/run_privacy_dp.py`; CI wrapper `scripts/telemetry/run_privacy_dp_notebook.sh` исполняет notebook через workflow `.github/workflows/release-pipeline.yml`; digest сохранен в `docs/source/status/soranet_privacy_dp_digest.md`.)*
+- حصص کے استقبال کو رن ٹائم سے مربوط کرکے ڈبل پریو جمع کرنے والوں کو مربوط کریں تاکہ ریلے اور جمع کرنے والے مستقل پے لوڈز `SoranetPrivacyBucketMetricsV1` جاری کریں۔ *(ہو گیا - `crates/sorafs_orchestrator/src/lib.rs` اور متعلقہ ٹیسٹ میں `ingest_privacy_payload` دیکھیں۔)*
+- مشترکہ Prometheus ڈیش بورڈ JSON اور انتباہی قواعد شائع کریں جس میں دبانے والے فرقوں ، صحت جمع کرنے والوں اور گمنامی کا احاطہ کیا گیا ہے۔ *(ہو گیا - `dashboards/grafana/soranet_privacy_metrics.json` ، `dashboards/alerts/soranet_privacy_rules.yml` ، `dashboards/alerts/soranet_policy_rules.yml` اور چیک دیکھیں۔)*
+- `privacy_metrics_dp.md` میں بیان کردہ تفریق پرائیویسی انشانکن نمونے تیار کریں ، جس میں تولیدی نوٹ بک اور گورننس ڈائجسٹ بھی شامل ہے۔ *(DONE - نوٹ بک اور نمونے `scripts/telemetry/run_privacy_dp.py` کے ذریعہ تیار کیے گئے ہیں C CI ریپر `scripts/telemetry/run_privacy_dp_notebook.sh` ورک فلو `.github/workflows/release-pipeline.yml` کے ذریعے نوٹ بک پر عمل درآمد I `docs/source/status/soranet_privacy_dp_digest.md` میں محفوظ شدہ ڈائجسٹ۔)
 
-Текущий релиз доставляет основу SNNet-8: детерминированную, приватно-безопасную телеметрию, которая напрямую подключается к существующим скрейперам и дашбордам Prometheus. Артефакты калибровки дифференциальной приватности на месте, workflow релизного пайплайна поддерживает актуальность вывода notebook, а оставшаяся работа сосредоточена на мониторинге первого автоматизированного прогона и расширении аналитики suppression-алертов.
+موجودہ ریلیز SNNET-8 کا بنیادی حصہ فراہم کرتی ہے: تعصب پسند ، نجی طور پر محفوظ ٹیلی میٹری جو براہ راست موجودہ Prometheus سکریپرس اور ڈیش بورڈز سے مربوط ہوتی ہے۔ تفریق پرائیویسی انشانکن نمونے کی جگہ موجود ہے ، ریلیز پائپ لائن ورک فلو نوٹ بک کی آؤٹ پٹ کو تازہ ترین رکھتا ہے ، اور باقی کام پہلے خودکار رن کی نگرانی اور دبانے والے انتباہ تجزیات کو بڑھانے پر مرکوز ہے۔

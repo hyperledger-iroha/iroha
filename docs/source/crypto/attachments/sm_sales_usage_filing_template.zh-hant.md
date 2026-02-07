@@ -7,90 +7,88 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 14f32b40ff71fa4eef698eac80d8d7dd27104b46b84523d735d054dedea1c47a
 source_last_modified: "2025-12-29T18:16:35.938696+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Sales & Usage Filing (销售/使用备案) Template
-% Hyperledger Iroha Compliance Working Group
+% SM2/SM3/SM4 銷售及使用備案 (銷售/使用備案) 模板
+% Hyperledger Iroha 合規工作組
 % 2026-05-06
 
-# Instructions
+# 說明
 
-Use this template when filing deployment usage with an SCA office for onshore
-operators. Provide one submission per deployment cluster or data space. Update
-the placeholders with operator-specific details and attach the evidence listed
-in the checklist.
+向 SCA 陸上辦公室提交部署使用情況時，請使用此模板
+運營商。每個部署集群或數據空間提供一份提交。更新
+具有特定於運營商詳細信息的佔位符並附上列出的證據
+在清單中。
 
-# 1. Operator & Deployment Summary
+# 1. 運營商和部署總結
 
-| Field | Value |
-|-------|-------|
-| Operator name | {{ OPERATOR_NAME }} |
-| Business registration ID | {{ REG_ID }} |
-| Registered address | {{ ADDRESS }} |
-| Primary contact (name / title / email / phone) | {{ CONTACT }} |
-| Deployment identifier | {{ DEPLOYMENT_ID }} |
-| Deployment location(s) | {{ LOCATIONS }} |
-| Filing type | Sales / Usage (销售/使用备案) |
-| Filing date | {{ YYYY-MM-DD }} |
+|領域|價值|
+|--------|--------|
+|運營商名稱 | {{ OPERATOR_NAME }} |
+|商業登記證 | {{ REG_ID }} |
+|註冊地址 | {{ 地址}} |
+|主要聯繫人（姓名/職務/電子郵件/電話）| {{ 聯繫 }} |
+|部署標識符 | {{ DEPLOYMENT_ID }} |
+|部署位置 | {{ 地點 }} |
+|歸檔類型 |銷售/使用(銷售/使用備案) |
+|申請日期 | {{ 年-月-日 }} |
 
-# 2. Deployment Details
+# 2. 部署細節
 
-- Software build ID / hash: `{{ BUILD_HASH }}`
-- Build source: {{ BUILD_SOURCE }} (e.g., operator-built from source, vendor-provided binary).
-- Activation date: {{ ACTIVATION_DATE }}
-- Planned maintenance windows: {{ MAINTENANCE_CADENCE }}
-- Node roles participating in SM signing:
-  | Node | Role | SM features enabled | Key vault location |
+- 軟件版本 ID/哈希：`{{ BUILD_HASH }}`
+- 構建源：{{ BUILD_SOURCE }}（例如，操作員從源構建、供應商提供的二進製文件）。
+- 激活日期：{{ ACTIVATION_DATE }}
+- 計劃維護時段：{{ MAINTENANCE_CADENCE }}
+- 參與SM簽名的節點角色：
+  |節點|角色 | SM 功能已啟用 |密鑰保管庫位置 |
   |------|------|---------------------|--------------------|
-  | {{ NODE_ID }} | {{ ROLE }} | {{ FEATURES }} | {{ VAULT }} |
+  | {{ NODE_ID }} | {{ 角色 }} | {{ 特點 }} | {{ 保險庫 }} |
 
-# 3. Cryptographic Controls
+# 3. 加密控制
 
-- Allowed algorithms: {{ ALGORITHMS }} (ensure SM set matches configuration).
-- Key lifecycle summary:
-  | Stage | Description |
-  |-------|-------------|
-  | Generation | {{ KEY_GENERATION }} |
-  | Storage | {{ KEY_STORAGE }} |
-  | Rotation | {{ KEY_ROTATION }} |
-  | Revocation | {{ KEY_REVOCATION }} |
-- Distinct identity (`distid`) policy: {{ DISTID_POLICY }}
-- Configuration excerpt (`crypto` section): provide Norito/JSON snapshot with hashes.
+- 允許的算法：{{ ALGORITHMS }}（確保 SM 集與配置匹配）。
+- 關鍵生命週期摘要：
+  |舞台|描述 |
+  |--------|-------------|
+  |一代| {{ KEY_GENERATION }} |
+  |存儲| {{ KEY_STORAGE }} |
+  |旋轉| {{ KEY_ROTATION }} |
+  |撤銷| {{ KEY_REVOCATION }} |
+- 獨特身份 (`distid`) 政策：{{ DISTID_POLICY }}
+- 配置摘錄（`crypto` 部分）：提供帶有哈希值的 Norito/JSON 快照。
 
-# 4. Telemetry & Audit Trails
+# 4. 遙測和審計跟踪
 
-- Monitoring endpoints: {{ METRICS_ENDPOINTS }} (`/metrics`, dashboards).
-- Logged metrics: `crypto.sm.verification_total`, `crypto.sm.sign_total`,
-  latency histograms, error counters.
-- Log retention policy: {{ LOG_RETENTION }} (≥ three years recommended).
-- Audit log storage location: {{ AUDIT_STORAGE }}
+- 監控端點：{{ METRICS_ENDPOINTS }}（`/metrics`，儀表板）。
+- 記錄的指標：`crypto.sm.verification_total`、`crypto.sm.sign_total`、
+  延遲直方圖、錯誤計數器。
+- 日誌保留政策：{{ LOG_RETENTION }}（建議≥三年）。
+- 審核日誌存儲位置：{{ AUDIT_STORAGE }}
 
-# 5. Incident Response & Contacts
+# 5. 事件響應和聯繫方式
 
-| Role | Name | Phone | Email | SLA |
-|------|------|-------|-------|-----|
-| Security operations lead | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
-| Crypto on-call | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
-| Legal / compliance | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
-| Vendor support (if applicable) | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
+|角色 |名稱 |電話 |電子郵件 |服務水平協議 |
+|------|------|--------|--------|-----|
+|安全運營主管 | {{ 姓名 }} | {{ 電話 }} | {{ 電子郵件 }} | {{ SLA }} |
+|加密待命 | {{ 姓名 }} | {{ 電話 }} | {{ 電子郵件 }} | {{ SLA }} |
+|法律/合規| {{ 姓名 }} | {{ 電話 }} | {{ 電子郵件 }} | {{ SLA }} |
+|供應商支持（如果適用）| {{ 姓名 }} | {{ 電話 }} | {{ 電子郵件 }} | {{ SLA }} |
 
-# 6. Attachments Checklist
+# 6. 附件清單- [ ] 帶有哈希值的配置快照 (Norito + JSON)。
+- [ ] 確定性構建的證明（哈希、SBOM、再現性註釋）。
+- [ ] 遙測儀表板導出和警報定義。
+- [ ] 事件響應計劃和待命輪換文件。
+- [ ] 操作員培訓確認書或運行手冊收據。
+- [ ] 鏡像交付工件的出口控制聲明。
+- [ ] 相關合同協議或政策豁免的副本。
 
-- [ ] Configuration snapshot (Norito + JSON) with hashes.
-- [ ] Proof of deterministic build (hashes, SBOM, reproducibility notes).
-- [ ] Telemetry dashboard exports and alert definitions.
-- [ ] Incident response plan and on-call rotation document.
-- [ ] Operator training acknowledgement or runbook receipt.
-- [ ] Export-control statement mirroring delivered artefacts.
-- [ ] Copies of relevant contractual agreements or policy waivers.
+# 7. 操作符聲明
 
-# 7. Operator Declaration
+> 我們確認上面列出的部署符合中國商業
+> 加密法規，支持 SM 的服務遵循記錄的
+> 事件響應和遙測政策，並且審計工件將
+> 保留至少三年。
 
-> We confirm that the deployment listed above complies with PRC commercial
-> cryptography regulations, that SM-enabled services follow the documented
-> incident response and telemetry policies, and that audit artefacts will be
-> retained for at least three years.
-
-- Authorised signer: ________________________
-- Date: ________________________
-
+- 授權簽字人：________________________
+- 日期：___________________

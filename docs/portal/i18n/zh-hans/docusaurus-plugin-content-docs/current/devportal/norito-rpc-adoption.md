@@ -8,48 +8,50 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Norito-RPC Adoption Schedule
 sidebar_label: Norito-RPC adoption
 description: Cross-SDK rollout plan, evidence checklist, and automation hooks for roadmap item NRPC-4.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-> Canonical planning notes live in `docs/source/torii/norito_rpc_adoption_schedule.md`.  
-> This portal copy distils the rollout expectations for SDK authors, operators, and reviewers.
+> 规范的规划说明位于 `docs/source/torii/norito_rpc_adoption_schedule.md` 中。  
+> 此门户副本提炼了 SDK 作者、运营商和审阅者的推出期望。
 
-## Objectives
+## 目标
 
-- Align every SDK (Rust CLI, Python, JavaScript, Swift, Android) on the binary Norito-RPC transport ahead of the AND4 production toggle.
-- Keep phase gates, evidence bundles, and telemetry hooks deterministic so governance can audit the rollout.
-- Make it trivial to capture fixture and canary evidence with the shared helpers that roadmap NRPC-4 calls out.
+- 在 AND4 生产切换之前对齐二进制 Norito-RPC 传输上的每个 SDK（Rust CLI、Python、JavaScript、Swift、Android）。
+- 保持阶段门、证据包和遥测挂钩的确定性，以便治理可以审核部署。
+- 使用路线图 NRPC-4 调用的共享助手来轻松捕获固定装置和金丝雀证据。
 
-## Phase timeline
+## 阶段时间线
 
-| Phase | Window | Scope | Exit Criteria |
-|-------|--------|-------|---------------|
-| **P0 – Lab parity** | Q2 2025 | Rust CLI + Python smoke suites run `/v1/norito-rpc` in CI, JS helper passes unit tests, Android mock harness exercises dual transports. | `python/iroha_python/scripts/run_norito_rpc_smoke.sh` and `javascript/iroha_js/test/noritoRpcClient.test.js` green in CI; Android harness wired into `./gradlew test`. |
-| **P1 – SDK preview** | Q3 2025 | Shared fixture bundle checked in, `scripts/run_norito_rpc_fixtures.sh --sdk <label>` records logs + JSON in `artifacts/norito_rpc/`, optional Norito transport flags exposed in SDK samples. | Fixture manifest signed, README updates show opt-in usage, Swift preview API available behind the IOS2 flag. |
-| **P2 – Staging / AND4 preview** | Q1 2026 | Staging Torii pools prefer Norito, Android AND4 preview clients and Swift IOS2 parity suites default to the binary transport, telemetry dashboard `dashboards/grafana/torii_norito_rpc_observability.json` populated. | `docs/source/torii/norito_rpc_stage_reports.md` captures the canary, `scripts/telemetry/test_torii_norito_rpc_alerts.sh` passes, Android mock harness replay captures success/error cases. |
-| **P3 – Production GA** | Q4 2026 | Norito becomes the default transport for all SDKs; JSON remains a brownout fallback. Release jobs archive parity artefacts with every tag. | Release checklist bundles Norito smoke output for Rust/JS/Python/Swift/Android; Alert thresholds for Norito vs JSON error-rate SLOs enforced; `status.md` and release notes cite GA evidence. |
+|相|窗口|范围 |退出标准 |
+|--------|--------|--------|---------------|
+| **P0 – 实验室平价** | 2025 年第二季度 | Rust CLI + Python Smoke 套件在 CI 中运行 `/v1/norito-rpc`，JS 帮助程序通过单元测试，Android 模拟线束练习双重传输。 | `python/iroha_python/scripts/run_norito_rpc_smoke.sh` 和 `javascript/iroha_js/test/noritoRpcClient.test.js` 在 CI 中呈绿色； Android 线束连接至 `./gradlew test`。 |
+| **P1 – SDK 预览** | Q32025 |签入共享夹具包，`scripts/run_norito_rpc_fixtures.sh --sdk <label>` 在 `artifacts/norito_rpc/` 中记录日志 + JSON，SDK 示例中公开可选的 Norito 传输标志。 |已签名的夹具清单、自述文件更新显示选择加入的使用情况、IOS2 标志后面可用的 Swift 预览 API。 |
+| **P2 – 分期/AND4 预览** | Q12026 |暂存 Torii 池更喜欢 Norito，Android AND4 预览客户端和 Swift IOS2 奇偶校验套件默认为二进制传输，填充遥测仪表板 `dashboards/grafana/torii_norito_rpc_observability.json`。 | `docs/source/torii/norito_rpc_stage_reports.md` 捕获金丝雀，`scripts/telemetry/test_torii_norito_rpc_alerts.sh` 通过，Android 模拟线束重放捕获成功/错误情况。 |
+| **P3 – 正式发布** | Q42026 | Norito 成为所有 SDK 的默认传输； JSON 仍然是一种停电后备方案。发布作业归档每个标签的奇偶工件。 |发布 Rust/JS/Python/Swift/Android 的清单包 Norito 烟雾输出；强制执行 Norito 与 JSON 错误率 SLO 的警报阈值； `status.md` 和发行说明引用了 GA 证据。 |
 
-## SDK deliverables & CI hooks
+## SDK 可交付成果和 CI 挂钩
 
-- **Rust CLI & integration harness** – extend `iroha_cli pipeline` smoke tests to force the Norito transport once `cargo xtask norito-rpc-verify` lands. Guard with `cargo test -p integration_tests -- norito_streaming` (lab) and `cargo xtask norito-rpc-verify` (staging/GA), storing artefacts under `artifacts/norito_rpc/`.
-- **Python SDK** – default the release smoke (`python/iroha_python/scripts/release_smoke.sh`) to Norito RPC, keep `run_norito_rpc_smoke.sh` as the CI entrypoint, and document parity handling in `python/iroha_python/README.md`. CI target: `PYTHON_BIN=python3 python/iroha_python/scripts/run_norito_rpc_smoke.sh`.
-- **JavaScript SDK** – stabilise `NoritoRpcClient`, let governance/query helpers default to Norito when `toriiClientConfig.transport.preferred === "norito_rpc"`, and capture end-to-end samples in `javascript/iroha_js/recipes/`. CI must run `npm test` plus the dockerised `npm run test:norito-rpc` job before publish; provenance uploads Norito smoke logs under `javascript/iroha_js/artifacts/`.
-- **Swift SDK** – wire the Norito bridge transport behind the IOS2 flag, mirror the fixture cadence, and ensure the Connect/Norito parity suite runs inside the Buildkite lanes referenced in `docs/source/sdk/swift/index.md`.
-- **Android SDK** – AND4 preview clients and the mock Torii harness adopt Norito, with retry/backoff telemetry documented in `docs/source/sdk/android/networking.md`. The harness shares fixtures with other SDKs via `scripts/run_norito_rpc_fixtures.sh --sdk android`.
+- **Rust CLI 和集成工具** – 扩展 `iroha_cli pipeline` 烟雾测试，以在 `cargo xtask norito-rpc-verify` 落地后强制 Norito 传输。使用 `cargo test -p integration_tests -- norito_streaming`（实验室）和 `cargo xtask norito-rpc-verify`（登台/GA）进行防护，将工件存储在 `artifacts/norito_rpc/` 下。
+- **Python SDK** – 默认释放烟雾 (`python/iroha_python/scripts/release_smoke.sh`) 为 Norito RPC，保留 `run_norito_rpc_smoke.sh` 作为 CI 入口点，并在 `python/iroha_python/README.md` 中进行文档奇偶校验处理。 CI 目标：`PYTHON_BIN=python3 python/iroha_python/scripts/run_norito_rpc_smoke.sh`。
+- **JavaScript SDK** – 稳定 `NoritoRpcClient`，让治理/查询助手在 `toriiClientConfig.transport.preferred === "norito_rpc"` 时默认为 Norito，并捕获 `javascript/iroha_js/recipes/` 中的端到端样本。 CI 必须在发布之前运行 `npm test` 以及 dockerized `npm run test:norito-rpc` 作业；来源在 `javascript/iroha_js/artifacts/` 下上传 Norito 烟雾日志。
+- **Swift SDK** – 在 IOS2 标志后面连接 Norito 桥接传输，镜像夹具节奏，并确保 Connect/Norito 奇偶校验套件在 `docs/source/sdk/swift/index.md` 中引用的 Buildkite 通道内运行。
+- **Android SDK** – AND4 预览客户端和模拟 Torii 工具采用 Norito，重试/退避遥测记录在 `docs/source/sdk/android/networking.md` 中。该线束通过 `scripts/run_norito_rpc_fixtures.sh --sdk android` 与其他 SDK 共享固定装置。
 
-## Evidence & automation
+## 证据和自动化
 
-- `scripts/run_norito_rpc_fixtures.sh` wraps `cargo xtask norito-rpc-verify`, captures stdout/stderr, and emits `fixtures.<sdk>.summary.json` so SDK owners have a deterministic artefact to attach to `status.md`. Use `--sdk <label>` and `--out artifacts/norito_rpc/<stamp>/` to keep CI bundles tidy.
-- `cargo xtask norito-rpc-verify` enforces schema hash parity (`fixtures/norito_rpc/schema_hashes.json`) and fails if Torii returns `X-Iroha-Error-Code: schema_mismatch`. Pair every failure with a JSON fallback capture for debugging.
-- `scripts/telemetry/test_torii_norito_rpc_alerts.sh` and `dashboards/grafana/torii_norito_rpc_observability.json` define the alert contracts for NRPC-2. Run the script after every dashboard edit and store the `promtool` output in the canary bundle.
-- `docs/source/runbooks/torii_norito_rpc_canary.md` describes the staging and production drills; update it whenever fixture hashes or alert gates change.
+- `scripts/run_norito_rpc_fixtures.sh` 包装 `cargo xtask norito-rpc-verify`，捕获 stdout/stderr，并发出 `fixtures.<sdk>.summary.json`，因此 SDK 所有者可以将确定性工件附加到 `status.md`。使用 `--sdk <label>` 和 `--out artifacts/norito_rpc/<stamp>/` 保持 CI 包整洁。
+- `cargo xtask norito-rpc-verify` 强制架构哈希奇偶校验 (`fixtures/norito_rpc/schema_hashes.json`)，如果 Torii 返回 `X-Iroha-Error-Code: schema_mismatch`，则失败。将每个失败与 JSON 后备捕获配对以进行调试。
+- `scripts/telemetry/test_torii_norito_rpc_alerts.sh` 和 `dashboards/grafana/torii_norito_rpc_observability.json` 定义 NRPC-2 的警报合约。每次仪表板编辑后运行脚本并将 `promtool` 输出存储在金丝雀包中。
+- `docs/source/runbooks/torii_norito_rpc_canary.md` 描述了分阶段和生产演习；每当夹具哈希或警报门发生变化时更新它。
 
-## Reviewer checklist
+## 审稿人清单
 
-Before ticking an NRPC-4 milestone, confirm:
+在勾选 NRPC-4 里程碑之前，请确认：
 
-1. Latest fixture bundle hashes match `fixtures/norito_rpc/schema_hashes.json` and the corresponding CI artefact recorded under `artifacts/norito_rpc/<stamp>/`.
-2. SDK README / portal docs describe how to force JSON fallback and cite the Norito transport default.
-3. Telemetry dashboards show dual-stack error-rate panels with alert links, and the Alertmanager dry run (`scripts/telemetry/test_torii_norito_rpc_alerts.sh`) is attached to the tracker.
-4. The adoption schedule here matches the tracker entry (`docs/source/torii/norito_rpc_tracker.md`) and the roadmap (NRPC-4) references the same evidence bundle.
+1. 最新的装置包哈希值与 `fixtures/norito_rpc/schema_hashes.json` 和 `artifacts/norito_rpc/<stamp>/` 下记录的相应 CI 工件相匹配。
+2. SDK 自述文件/门户文档描述了如何强制 JSON 回退并引用 Norito 传输默认值。
+3. 遥测仪表板显示带有警报链接的双堆栈错误率面板，并且 Alertmanager 试运行 (`scripts/telemetry/test_torii_norito_rpc_alerts.sh`) 连接到跟踪器。
+4. 这里的采用时间表与跟踪器条目 (`docs/source/torii/norito_rpc_tracker.md`) 匹配，路线图 (NRPC-4) 引用相同的证据包。
 
-Staying disciplined on the schedule keeps cross-SDK behaviour predictable and lets governance audit Norito-RPC adoption without bespoke requests.
+遵守时间表可以保持跨 SDK 行为的可预测性，并允许治理审核 Norito-RPC 的采用，而无需定制请求。

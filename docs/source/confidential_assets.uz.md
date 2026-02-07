@@ -7,90 +7,85 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 969ffd4cee6ee4880d5f754fb36adaf30dde532a29e4c6397cf0f358438bb57e
 source_last_modified: "2026-01-22T16:26:46.566038+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
 SPDX-License-Identifier: Apache-2.0
 -->
-# Confidential Assets & ZK Transfer Design
+# Maxfiy aktivlar va ZK transfer dizayni
 
-## Motivation
-- Deliver opt-in shielded asset flows so domains can preserve transactional privacy without altering transparent circulation.
-- Provide auditors and operators with lifecycle controls (activation, rotation, revocation) for circuits and cryptographic parameters.
+## Motivatsiya
+- Domenlar shaffof muomalani o'zgartirmasdan tranzaksiya maxfiyligini saqlab qolishi uchun himoyalangan aktiv oqimlarini taqdim eting.
+- Auditorlar va operatorlarni sxemalar va kriptografik parametrlar uchun hayot aylanishini boshqarish vositalari (faollashtirish, aylantirish, bekor qilish) bilan ta'minlash.
 
-## Threat Model
-- Validators are honest-but-curious: they execute consensus faithfully but attempt to inspect ledger/state.
-- Network observers see block data and gossiped transactions; no assumption of private gossip channels.
-- Out of scope: off-ledger traffic analysis, quantum adversaries (tracked separately under PQ roadmap), ledger availability attacks.
+## Tahdid modeli
+- Tasdiqlovchilar halol, ammo qiziquvchan: ular konsensusni sodiqlik bilan bajaradilar, lekin daftarni/davlatni tekshirishga harakat qilishadi.
+- Tarmoq kuzatuvchilari blok ma'lumotlarini va g'iybat qilingan operatsiyalarni ko'rishadi; shaxsiy g'iybat kanallari haqida hech qanday taxmin yo'q.
+- Qo'llash doirasi tashqarida: daftardan tashqari trafik tahlili, kvant raqiblari (PQ yo'l xaritasi bo'yicha alohida kuzatiladi), daftar mavjudligiga hujumlar.
 
-## Design Overview
-- Assets may declare a *shielded pool* in addition to existing transparent balances; shielded circulation is represented via cryptographic commitments.
-- Notes encapsulate `(asset_id, amount, recipient_view_key, blinding, rho)` with:
-  - Commitment: `Comm = Pedersen(params_id || asset_id || amount || recipient_view_key || blinding)`.
-  - Nullifier: `Null = Poseidon(domain_sep || nk || rho || asset_id || chain_id)`, independent of note ordering.
-  - Encrypted payload: `enc_payload = AEAD_XChaCha20Poly1305(ephemeral_shared_key, note_plaintext)`.
-- Transactions transport Norito-encoded `ConfidentialTransfer` payloads containing:
-  - Public inputs: Merkle anchor, nullifiers, new commitments, asset id, circuit version.
-  - Encrypted payloads for recipients and optional auditors.
-  - Zero-knowledge proof attesting value conservation, ownership, and authorization.
-- Verifying keys and parameter sets are controlled through on-ledger registries with activation windows; nodes refuse to validate proofs that reference unknown or revoked entries.
-- Consensus headers commit to the active confidential feature digest so blocks are only accepted when registry and parameter state matches.
-- Proof construction uses a Halo2 (Plonkish) stack without trusted setup; Groth16 or other SNARK variants are intentionally unsupported in v1.
+## Dizayn umumiy ko'rinishi
+- aktivlar mavjud shaffof balanslarga qo'shimcha ravishda *himoyalangan hovuz* e'lon qilishi mumkin; himoyalangan aylanish kriptografik majburiyatlar orqali ifodalanadi.
+- Eslatmalar `(asset_id, amount, recipient_view_key, blinding, rho)` bilan qoplangan:
+  - Majburiyat: `Comm = Pedersen(params_id || asset_id || amount || recipient_view_key || blinding)`.
+  - Nullifier: `Null = Poseidon(domain_sep || nk || rho || asset_id || chain_id)`, nota tartibidan mustaqil.
+  - Shifrlangan foydali yuk: `enc_payload = AEAD_XChaCha20Poly1305(ephemeral_shared_key, note_plaintext)`.
+- Norito kodli `ConfidentialTransfer` foydali yuklarni o'z ichiga olgan tranzaktsiyalar:
+  - Umumiy ma'lumotlar: Merkle langari, bekor qiluvchilar, yangi majburiyatlar, aktiv identifikatori, sxema versiyasi.
+  - Qabul qiluvchilar va ixtiyoriy auditorlar uchun shifrlangan yuklamalar.
+  - Qiymatni saqlash, egalik qilish va avtorizatsiyani tasdiqlovchi nol bilim isboti.
+- tekshirish kalitlari va parametrlar to'plami faollashtirish oynalari bo'lgan buxgalteriya registrlari orqali boshqariladi; tugunlar noma'lum yoki bekor qilingan yozuvlarga ishora qiluvchi dalillarni tasdiqlashdan bosh tortadi.
+- Konsensus sarlavhalari faol konfidensial xususiyat dayjestiga amal qiladi, shuning uchun bloklar faqat registr va parametr holati mos kelganda qabul qilinadi.
+- Proof konstruktsiyasi ishonchli sozlashsiz Halo2 (Plonkish) stekidan foydalanadi; Groth16 yoki boshqa SNARK variantlari v1 da ataylab qo‘llab-quvvatlanmaydi.
 
-### Deterministic Fixtures
+### Deterministik moslamalar
 
-Confidential memo envelopes now ship with a canonical fixture at `fixtures/confidential/encrypted_payload_v1.json`. The dataset captures a positive v1 envelope plus negative malformed samples so SDKs can assert parsing parity. The Rust data-model tests (`crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs`) and Swift suite (`IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift`) both load the fixture directly, guaranteeing that Norito encoding, error surfaces, and regression coverage stay aligned as the codec evolves.
+Maxfiy eslatma konvertlari endi `fixtures/confidential/encrypted_payload_v1.json` da kanonik moslama bilan jo'natiladi. Ma'lumotlar to'plami musbat v1 konvertini va salbiy noto'g'ri shakllangan namunalarni oladi, shuning uchun SDKlar tahlil paritetini tasdiqlay oladi. Rust ma'lumotlar modeli testlari (`crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs`) va Swift to'plami (`IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift`) ikkalasi ham moslamani to'g'ridan-to'g'ri yuklaydi va Norito kodlash, xato yuzalar va regressiya qamrovi kodek rivojlanishi bilan bir xil bo'lishini kafolatlaydi.
 
-Swift SDKs can now emit shield instructions without bespoke JSON glue: construct a
-`ShieldRequest` with the 32-byte note commitment, encrypted payload, and debit metadata,
-then call `IrohaSDK.submit(shield:keypair:)` (or `submitAndWait`) to sign and relay the
-transaction over `/v1/pipeline/transactions`. The helper validates commitment lengths,
-threads `ConfidentialEncryptedPayload` into the Norito encoder, and mirrors the `zk::Shield`
-layout described below so wallets stay in lock-step with Rust.
+Swift SDK-lar endi maxsus JSON elimsiz qalqon ko'rsatmalarini chiqarishi mumkin:
+`ShieldRequest` 32 baytli nota majburiyati, shifrlangan foydali yuk va debet metamaʼlumotlari bilan,
+keyin imzo qo'yish va uzatish uchun `IrohaSDK.submit(shield:keypair:)` (yoki `submitAndWait`) ga qo'ng'iroq qiling.
+`/v1/pipeline/transactions` dan ortiq tranzaksiya. Yordamchi majburiyat muddatini tasdiqlaydi,
+`ConfidentialEncryptedPayload` ni Norito kodlovchisiga ulaydi va `zk::Shield` ni aks ettiradi
+tartibi quyida tasvirlangan, shuning uchun hamyonlar Rust bilan qulflangan qadamda qoladi.## Konsensus majburiyatlari va imkoniyatlarni aniqlash
+- Blok sarlavhalari `conf_features = { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }` ni ko'rsatadi; dayjest konsensus xeshida ishtirok etadi va blokni qabul qilish uchun mahalliy registr ko'rinishiga teng bo'lishi kerak.
+- Boshqaruv kelajakdagi `activation_height` bilan `next_conf_features` dasturlash orqali yangilanishlarni bosqichma-bosqich amalga oshirishi mumkin; bu balandlikka qadar blok ishlab chiqaruvchilari oldingi dayjestni chiqarishni davom ettirishlari kerak.
+- Validator tugunlari `confidential.enabled = true` va `assume_valid = false` bilan ishlashi kerak. Agar ikkala shart bajarilmasa yoki mahalliy `conf_features` farq qilsa, ishga tushirish tekshiruvlari validator to'plamiga qo'shilishni rad etadi.
+- P2P qoʻl siqish metamaʼlumotlariga endi `{ enabled, assume_valid, conf_features }` kiradi. Qo'llab-quvvatlanmaydigan xususiyatlarni reklama qiluvchi tengdoshlar `HandshakeConfidentialMismatch` bilan rad etiladi va hech qachon konsensus aylanishiga kirmaydi.
+- Validator bo'lmagan kuzatuvchilar `assume_valid = true` ni belgilashlari mumkin; ular ko'r-ko'rona maxfiy deltalarni qo'llaydilar, lekin konsensus xavfsizligiga ta'sir qilmaydi.## Obyekt siyosati
+- Har bir aktiv taʼrifi yaratuvchi tomonidan yoki boshqaruv orqali oʻrnatilgan `AssetConfidentialPolicy` ga ega:
+  - `TransparentOnly`: standart rejim; faqat shaffof ko'rsatmalarga (`MintAsset`, `TransferAsset` va boshqalar) ruxsat beriladi va himoyalangan operatsiyalar rad etiladi.
+  - `ShieldedOnly`: barcha emissiya va o'tkazmalar maxfiy ko'rsatmalardan foydalanishi kerak; `RevealConfidential` taqiqlangan, shuning uchun balanslar hech qachon ommaga ko'rinmaydi.
+  - `Convertible`: egalari quyidagi yoqish/o'chirish yo'riqnomalaridan foydalangan holda shaffof va ekranlangan tasvirlar o'rtasida qiymatni o'tkazishi mumkin.
+- Siyosat pul mablag'larining qolib ketishining oldini olish uchun cheklangan FSMga amal qiladi:
+  - `TransparentOnly → Convertible` (qalqonlangan hovuzni darhol yoqish).
+  - `TransparentOnly → ShieldedOnly` (kutish kutilayotgan o'tish va konvertatsiya oynasini talab qiladi).
+  - `Convertible → ShieldedOnly` (majburiy minimal kechikish).
+  - `ShieldedOnly → Convertible` (migratsiya rejasi kerak, shuning uchun himoyalangan qaydlar sarflanishi mumkin).
+  - `ShieldedOnly → TransparentOnly`, agar himoyalangan hovuz bo'sh bo'lmasa yoki boshqaruv muhim eslatmalarni himoya qiluvchi migratsiyani kodlamasa, ruxsat etilmaydi.
+- Boshqaruv ko'rsatmalari `pending_transition { new_mode, effective_height, previous_mode, transition_id, conversion_window }` `ScheduleConfidentialPolicyTransition` ISI orqali o'rnatiladi va `CancelConfidentialPolicyTransition` bilan rejalashtirilgan o'zgarishlarni bekor qilishi mumkin. Mempool tekshiruvi hech qanday tranzaksiya o'tish balandligini bosib o'tmasligini ta'minlaydi va agar siyosat tekshiruvi o'rta blokni o'zgartirsa, qo'shilish aniq bajarilmaydi.
+- Kutilayotgan o'tishlar yangi blok ochilganda avtomatik ravishda qo'llaniladi: blok balandligi konversiya oynasiga kirganda (`ShieldedOnly` yangilanishlari uchun) yoki dasturlashtirilgan `effective_height` ga yetganda, ish vaqti `AssetConfidentialPolicy` yangilanadi, `AssetConfidentialPolicy` yangilanadi, Prometheus yangilanadi va metatalar tozalanadi. Agar `ShieldedOnly` o'tish muddati tugashi bilan shaffof ta'minot saqlanib qolsa, ish vaqti o'zgartirishni bekor qiladi va oldingi rejimni o'zgarmagan holda ogohlantirishni qayd qiladi.
+- `policy_transition_delay_blocks` va `policy_transition_window_blocks` konfiguratsiya tugmalari hamyonlarga kalit atrofida eslatmalarni aylantirish imkonini berish uchun minimal ogohlantirish va imtiyozli muddatlarni qo'llaydi.
+- `pending_transition.transition_id` audit dastagi sifatida ishlaydi; Boshqaruv o'tishlarni yakunlash yoki bekor qilishda operatorlar hisobotlarni o'zaro bog'lashlari uchun iqtibos keltirishi kerak.
+- `policy_transition_window_blocks` standarti 720 ga (≈12 soat, 60 s blokirovka vaqtida). Tugunlar qisqaroq xabar berishga harakat qiladigan boshqaruv so'rovlarini siqib chiqaradi.
+- Ibtido namoyon bo'ladi va CLI joriy va kutilayotgan siyosatlarni yuzaga chiqaradi. Qabul qilish mantig'i har bir maxfiy ko'rsatmaga ruxsat berilganligini tasdiqlash uchun bajarilish vaqtida siyosatni o'qiydi.
+- Migratsiya nazorat roʻyxati — Milestone M0 kuzatib boradigan bosqichma-bosqich yangilash rejasi uchun quyidagi “Migratsiya ketma-ketligi”ga qarang.
 
-## Consensus Commitments & Capability Gating
-- Block headers expose `conf_features = { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }`; the digest participates in the consensus hash and must equal the local registry view for block acceptance.
-- Governance can stage upgrades by programming `next_conf_features` with a future `activation_height`; until that height, block producers must continue to emit the previous digest.
-- Validator nodes MUST operate with `confidential.enabled = true` and `assume_valid = false`. Startup checks refuse to join the validator set if either condition fails or if local `conf_features` diverge.
-- P2P handshake metadata now includes `{ enabled, assume_valid, conf_features }`. Peers advertising unsupported features are rejected with `HandshakeConfidentialMismatch` and never enter consensus rotation.
-- Non-validator observers may set `assume_valid = true`; they blindly apply confidential deltas but do not influence consensus safety.
+#### Torii orqali o'tishlarni kuzatishHamyonlar va auditorlar tekshirish uchun `GET /v1/confidential/assets/{definition_id}/transitions` so'rovi
+faol `AssetConfidentialPolicy`. JSON foydali yuki har doim kanonikni o'z ichiga oladi
+aktiv identifikatori, oxirgi kuzatilgan blok balandligi, siyosatning `current_mode`, rejim
+bu balandlikda amal qiladi (konversiya oynalari vaqtincha `Convertible` haqida xabar beradi) va
+kutilgan `vk_set_hash`/Poseidon/Pedersen parametr identifikatorlari. Swift SDK iste'molchilari qo'ng'iroq qilishlari mumkin
+`ToriiClient.getConfidentialAssetPolicy` yozilmagan DTOlar bilan bir xil ma'lumotlarni olish uchun
+qo'lda yozilgan dekodlash. Boshqaruv tizimiga o'tish kutilayotganda, javob quyidagilarni o'z ichiga oladi:
 
-## Asset Policies
-- Each asset definition carries an `AssetConfidentialPolicy` set by the creator or via governance:
-  - `TransparentOnly`: default mode; only transparent instructions (`MintAsset`, `TransferAsset`, etc.) are permitted and shielded operations are rejected.
-  - `ShieldedOnly`: all issuance and transfers must use confidential instructions; `RevealConfidential` is forbidden so balances never surface publicly.
-  - `Convertible`: holders may move value between transparent and shielded representations using the on/off-ramp instructions below.
-- Policies follow a constrained FSM to prevent stranding funds:
-  - `TransparentOnly → Convertible` (immediate enablement of shielded pool).
-  - `TransparentOnly → ShieldedOnly` (requires pending transition and conversion window).
-  - `Convertible → ShieldedOnly` (enforced minimum delay).
-  - `ShieldedOnly → Convertible` (migration plan required so shielded notes remain spendable).
-  - `ShieldedOnly → TransparentOnly` is disallowed unless the shielded pool is empty or governance encodes a migration that unshields outstanding notes.
-- Governance instructions set `pending_transition { new_mode, effective_height, previous_mode, transition_id, conversion_window }` via the `ScheduleConfidentialPolicyTransition` ISI and may abort scheduled changes with `CancelConfidentialPolicyTransition`. Mempool validation ensures no transaction straddles the transition height and inclusion fails deterministically if a policy check would change mid-block.
-- Pending transitions are applied automatically when a new block opens: once the block height enters the conversion window (for `ShieldedOnly` upgrades) or reaches the programmed `effective_height`, the runtime updates `AssetConfidentialPolicy`, refreshes `zk.policy` metadata, and clears the pending entry. If transparent supply remains when a `ShieldedOnly` transition matures, the runtime aborts the change and logs a warning, leaving the previous mode intact.
-- Config knobs `policy_transition_delay_blocks` and `policy_transition_window_blocks` enforce minimum notice and grace periods to let wallets convert notes around the switch.
-- `pending_transition.transition_id` doubles as an audit handle; governance must quote it when finalising or cancelling transitions so operators can correlate on/off-ramp reports.
-- `policy_transition_window_blocks` defaults to 720 (≈12 hours at 60 s block time). Nodes clamp governance requests that attempt shorter notice.
-- Genesis manifests and CLI flows surface current and pending policies. Admission logic reads the policy at execution time to confirm each confidential instruction is authorised.
-- Migration checklist — see “Migration sequencing” below for the staged upgrade plan that Milestone M0 tracks.
-
-#### Monitoring transitions via Torii
-
-Wallets and auditors poll `GET /v1/confidential/assets/{definition_id}/transitions` to inspect
-the active `AssetConfidentialPolicy`. The JSON payload always includes the canonical
-asset id, the latest observed block height, the policy’s `current_mode`, the mode that is
-effective at that height (conversion windows temporarily report `Convertible`), and the
-expected `vk_set_hash`/Poseidon/Pedersen parameter identifiers. Swift SDK consumers can call
-`ToriiClient.getConfidentialAssetPolicy` to receive the same data as typed DTOs without
-hand-written decoding. When a governance transition is pending the response also embeds:
-
-- `transition_id` — audit handle returned by `ScheduleConfidentialPolicyTransition`.
+- `transition_id` - `ScheduleConfidentialPolicyTransition` tomonidan qaytarilgan audit dastagi.
 - `previous_mode`/`new_mode`.
 - `effective_height`.
-- `conversion_window` and the derived `window_open_height` (the block where wallets must
-  begin conversion for ShieldedOnly cut-overs).
+- `conversion_window` va olingan `window_open_height` (hamyonlar kerak bo'lgan blok
+  ShieldedOnly cut-overs uchun konvertatsiya qilishni boshlang).
 
-Example response:
+Javobga misol:
 
 ```json
 {
@@ -112,202 +107,184 @@ Example response:
 }
 ```
 
-A `404` response indicates no matching asset definition exists. When no transition is
-scheduled the `pending_transition` field is `null`.
+`404` javobi mos keladigan aktiv taʼrifi yoʻqligini bildiradi. Hech qanday o'tish bo'lmaganda
+rejalashtirilgan `pending_transition` maydoni `null`.
 
-### Policy state machine
+### Siyosat holati mashinasi| Joriy rejim | Keyingi rejim | Old shartlar | Samarali balandlikda ishlov berish | Eslatmalar |
+|--------------------|------------------|----------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------|
+| TransparentOnly | Konvertatsiya qilinadigan | Boshqaruv tasdiqlovchi/parametrlar registridagi yozuvlarni faollashtirdi. `ScheduleConfidentialPolicyTransition`ni `effective_height ≥ current_height + policy_transition_delay_blocks` bilan yuboring. | O'tish `effective_height` da aniq amalga oshiriladi; himoyalangan hovuz darhol mavjud bo'ladi.                   | Shaffof oqimlarni saqlashda maxfiylikni yoqish uchun standart yo'l.               |
+| TransparentOnly | ShieldedOnly | Yuqoridagi kabi, shuningdek, `policy_transition_window_blocks ≥ 1`.                                                         | Ish vaqti avtomatik ravishda `Convertible`ga `effective_height - policy_transition_window_blocks` da kiradi; `effective_height` da `ShieldedOnly` ga aylanadi. | Shaffof ko'rsatmalar o'chirilishidan oldin deterministik konvertatsiya oynasini taqdim etadi.   |
+| Konvertatsiya qilinadigan | ShieldedOnly | `effective_height ≥ current_height + policy_transition_delay_blocks` bilan rejalashtirilgan o'tish. Boshqaruv (`transparent_supply == 0`) audit metama'lumotlari orqali sertifikatlashi KERAK; ish vaqti buni kesishda amalga oshiradi. | Yuqoridagi kabi bir xil oyna semantikasi. `effective_height` da shaffof ta'minot nolga teng bo'lmasa, `PolicyTransitionPrerequisiteFailed` bilan o'tish to'xtatiladi. | Aktivni to'liq maxfiy muomalaga kiritadi.                                     |
+| ShieldedOnly | Konvertatsiya qilinadigan | Rejalashtirilgan o'tish; faol favqulodda chiqish yo'q (`withdraw_height` o'rnatilmagan).                                    | Davlat burilishlari `effective_height`; himoyalangan eslatmalar o'z kuchini saqlab qolganda, rampalar qayta ochiladi.                           | Xizmat oynalari yoki auditorlik tekshiruvlari uchun ishlatiladi.                                          |
+| ShieldedOnly | TransparentOnly | Boshqaruv `shielded_supply == 0` ni isbotlashi yoki imzolangan `EmergencyUnshield` rejasini tuzishi kerak (auditor imzolari talab qilinadi). | Ish vaqti `effective_height` dan oldin `Convertible` oynasini ochadi; balandlikda maxfiy ko'rsatmalar bajarilmaydi va aktiv faqat shaffof rejimga qaytadi. | Yakuniy chiqish. Oyna davomida biron bir maxfiy eslatma sarflansa, o'tish avtomatik ravishda bekor qilinadi. |
+| Har qanday | Hozirgi | bilan bir xil `CancelConfidentialPolicyTransition` kutilayotgan oʻzgarishlarni tozalaydi.                                                        | `pending_transition` darhol olib tashlandi.                                                                          | Status-kvoni saqlaydi; to'liqligi uchun ko'rsatilgan.                                             |Yuqorida sanab o'tilmagan o'tishlar boshqaruvni taqdim etish paytida rad etiladi. Ish vaqti rejalashtirilgan o'tishni qo'llashdan oldin dastlabki shartlarni tekshiradi; Old shartlar bajarilmasa, aktivni avvalgi holatiga qaytaradi va telemetriya va blokirovka hodisalari orqali `PolicyTransitionPrerequisiteFailed` chiqaradi.
 
-| Current mode       | Next mode        | Prerequisites                                                                 | Effective-height handling                                                                                         | Notes                                                                                     |
-|--------------------|------------------|-------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------|
-| TransparentOnly    | Convertible      | Governance has activated verifier/parameter registry entries. Submit `ScheduleConfidentialPolicyTransition` with `effective_height ≥ current_height + policy_transition_delay_blocks`. | Transition executes exactly at `effective_height`; shielded pool becomes available immediately.                   | Default path for enabling confidentiality while keeping transparent flows.               |
-| TransparentOnly    | ShieldedOnly     | Same as above, plus `policy_transition_window_blocks ≥ 1`.                                                         | Runtime auto-enters `Convertible` at `effective_height - policy_transition_window_blocks`; flips to `ShieldedOnly` at `effective_height`. | Provides deterministic conversion window before transparent instructions are disabled.   |
-| Convertible        | ShieldedOnly     | Scheduled transition with `effective_height ≥ current_height + policy_transition_delay_blocks`. Governance SHOULD certify (`transparent_supply == 0`) via audit metadata; runtime enforces this at cut-over. | Identical window semantics as above. If the transparent supply is non-zero at `effective_height`, the transition aborts with `PolicyTransitionPrerequisiteFailed`. | Locks the asset into fully confidential circulation.                                     |
-| ShieldedOnly       | Convertible      | Scheduled transition; no active emergency withdrawal (`withdraw_height` unset).                                    | State flips at `effective_height`; reveal ramps reopen while shielded notes remain valid.                           | Used for maintenance windows or auditor reviews.                                          |
-| ShieldedOnly       | TransparentOnly  | Governance must prove `shielded_supply == 0` or stage a signed `EmergencyUnshield` plan (auditor signatures required). | Runtime opens a `Convertible` window ahead of `effective_height`; at the height, confidential instructions hard-fail and the asset returns to transparent-only mode. | Last-resort exit. Transition auto-cancels if any confidential note spends during the window. |
-| Any                | Same as current  | `CancelConfidentialPolicyTransition` clears pending change.                                                        | `pending_transition` removed immediately.                                                                          | Maintains status quo; shown for completeness.                                             |
+### Migratsiya ketma-ketligi
 
-Transitions not listed above are rejected during governance submission. Runtime checks the prerequisites right before applying a scheduled transition; failing preconditions pushes the asset back to its previous mode and emits `PolicyTransitionPrerequisiteFailed` via telemetry and block events.
+2. **O‘tish bosqichi:** `ScheduleConfidentialPolicyTransition` ni `effective_height` bilan `policy_transition_delay_blocks` ga mos ravishda yuboring. `ShieldedOnly` tomon harakatlanayotganda konvertatsiya oynasini belgilang (`window ≥ policy_transition_window_blocks`).
+3. **Operator yo‘riqnomasini nashr qilish:** Qaytarilgan `transition_id` ni yozib oling va rampani yoqish/o‘chirish kitobini tarqating. Hamyonlar va auditorlar oynaning ochiq balandligini o'rganish uchun `/v1/confidential/assets/{id}/transitions` ga obuna bo'lishadi.
+4. **Oynani qo'llash:** Oyna ochilganda, ish vaqti siyosatni `Convertible` ga o'zgartiradi, `PolicyTransitionWindowOpened { transition_id }` chiqaradi va ziddiyatli boshqaruv so'rovlarini rad etishni boshlaydi.
+5. **Yakunlash yoki to‘xtatish:** `effective_height` da ish vaqti o‘tish uchun zarur shartlarni tekshiradi (nol shaffof ta’minot, favqulodda vaziyatlarda olib qo‘yish yo‘q va hokazo). Muvaffaqiyat siyosatni talab qilingan rejimga o'zgartiradi; muvaffaqiyatsizlik `PolicyTransitionPrerequisiteFailed` chiqaradi, kutilayotgan o'tishni o'chiradi va siyosatni o'zgarishsiz qoldiradi.
+6. **Sxema yangilanishlari:** Muvaffaqiyatli oʻtishdan soʻng boshqaruv aktivlar sxemasi versiyasini (masalan, `asset_definition.v2`) oʻzgartiradi va manifestlarni ketma-ketlashtirishda CLI vositalari `confidential_policy` ni talab qiladi. Genesis yangilash hujjatlari operatorlarga validatorlarni qayta ishga tushirishdan oldin siyosat sozlamalari va registr barmoq izlarini qo‘shishni buyuradi.
 
-### Migration sequencing
+Maxfiylik bilan boshlangan yangi tarmoqlar to'g'ridan-to'g'ri genezisda kerakli siyosatni kodlaydi. Ular konversiya oynalari deterministik bo'lib qolishi va hamyonlarni sozlash uchun vaqtlari bo'lishi uchun ishga tushirilgandan keyin rejimlarni o'zgartirganda hamon yuqoridagi nazorat ro'yxatiga amal qilishadi.
 
-2. **Stage the transition:** Submit `ScheduleConfidentialPolicyTransition` with an `effective_height` that respects `policy_transition_delay_blocks`. When moving toward `ShieldedOnly`, specify a conversion window (`window ≥ policy_transition_window_blocks`).
-3. **Publish operator guidance:** Record the returned `transition_id` and circulate an on/off-ramp runbook. Wallets and auditors subscribe to `/v1/confidential/assets/{id}/transitions` to learn the window open height.
-4. **Window enforcement:** When the window opens, the runtime switches the policy to `Convertible`, emits `PolicyTransitionWindowOpened { transition_id }`, and begins rejecting conflicting governance requests.
-5. **Finalize or abort:** At `effective_height`, the runtime verifies the transition prerequisites (zero transparent supply, no emergency withdrawals, etc.). Success flips the policy to the requested mode; failure emits `PolicyTransitionPrerequisiteFailed`, clears the pending transition, and leaves the policy unchanged.
-6. **Schema upgrades:** After a successful transition, governance bumps the asset schema version (e.g., `asset_definition.v2`) and CLI tooling requires `confidential_policy` when serialising manifests. Genesis upgrade docs instruct operators to add policy settings and registry fingerprints before restarting validators.
+### Norito manifest versiyasini yaratish va faollashtirish- Ibtido manifestlari `confidential_registry_root` maxsus kaliti uchun `SetParameter` ni o'z ichiga olishi KERAK. Foydali yuk - `ConfidentialRegistryMeta { vk_set_hash: Option<String> }` ga mos keladigan Norito JSON: hech qanday tasdiqlovchi yozuvlari faol bo'lmaganda maydonni (`null`) o'tkazib yuboring, aks holda 32 baytlik olti burchakli satrni (`0x…`) taqdim eting (`0x…`) I180000 ga teng. manifestda yuborilgan tekshirgich ko'rsatmalari. Agar parametr etishmayotgan bo'lsa yoki xesh kodlangan ro'yxatga olish kitobiga rozi bo'lmasa, tugunlar boshlashni rad etadi.
+- Simli `ConfidentialFeatureDigest::conf_rules_version` manifest layout versiyasini o'z ichiga oladi. V1 tarmoqlari uchun u `Some(1)` bo'lib qolishi KERAK va `iroha_config::parameters::defaults::confidential::RULES_VERSION` ga teng. Qoidalar to'plami o'zgarganda, konstantani yo'q qiling, manifestlarni qayta yarating va bloklash bosqichida ikkilik fayllarni chiqaring; versiyalarni aralashtirish validatorlarning `ConfidentialFeatureDigestMismatch` bilan bloklarni rad etishiga olib keladi.
+- Faollashtirish manifestida ro'yxatga olish kitobi yangilanishlari, parametrlarning hayotiy siklidagi o'zgarishlar va siyosatga o'tishlar to'plami KERAK bo'lib, dayjest barqaror bo'lib qoladi:
+  1. Rejalashtirilgan registr mutatsiyalarini (`Publish*`, `Set*Lifecycle`) oflayn holat ko'rinishida qo'llang va `compute_confidential_feature_digest` bilan faollashtirilgandan keyingi dayjestni hisoblang.
+  2. Hisoblangan xesh yordamida `SetParameter::custom(confidential_registry_root, {"vk_set_hash": "0x…"})` chiqaring, shunda ortda qolgan tengdoshlar oraliq registr ko'rsatmalarini o'tkazib yuborgan taqdirda ham to'g'ri dayjestni tiklashi mumkin.
+  3. `ScheduleConfidentialPolicyTransition` ko'rsatmalarini qo'shing. Har bir ko'rsatma boshqaruv tomonidan chiqarilgan `transition_id` dan iqtibos keltirishi kerak; unutgan manifestlar ish vaqti tomonidan rad etiladi.
+  4. Manifest baytlarini, SHA-256 barmoq izini va faollashtirish rejasida ishlatiladigan dayjestni saqlang. Operatorlar qismlarga bo'linmaslik uchun manifestga ovoz berishdan oldin barcha uchta artefaktni tekshiradilar.
+- Chiqarishlar kechiktirilgan kesishni talab qilganda, maqsadli balandlikni moslashtirilgan parametrga yozib oling (masalan, `custom.confidential_upgrade_activation_height`). Bu auditorlarga Norito kodli dalil beradi, validatorlar dayjest o'zgarishi kuchga kirgunga qadar ogohlantirish oynasini hurmat qilgan.## Tekshiruvchi va Parametrning hayot aylanishi
+### ZK reestri
+- Ledger `ZkVerifierEntry { vk_id, circuit_id, version, proving_system, curve, public_inputs_schema_hash, vk_hash, vk_len, max_proof_bytes, gas_schedule_id, activation_height, deprecation_height, withdraw_height, status, metadata_uri_cid, vk_bytes_cid }` ni saqlaydi, bu erda `proving_system` hozirda `Halo2` ga o'rnatiladi.
+- `(circuit_id, version)` juftlari global miqyosda noyobdir; reestr elektron metama'lumotlar bo'yicha qidirish uchun ikkinchi darajali indeksni saqlaydi. Qabul paytida ikki nusxadagi juftlikni ro'yxatdan o'tkazishga urinishlar rad etiladi.
+- `circuit_id` bo'sh bo'lmasligi va `public_inputs_schema_hash` ko'rsatilishi kerak (odatda tekshirgichning kanonik ommaviy kirish kodlashining Blake2b-32 xeshi). Qabul qilish ushbu maydonlarni o'tkazib yuborgan yozuvlarni rad etadi.
+- Boshqaruv ko'rsatmalariga quyidagilar kiradi:
+  - `PUBLISH` faqat metadata bilan `Proposed` yozuvini qo'shish uchun.
+  - `ACTIVATE { vk_id, activation_height }` davr chegarasida kirishni faollashtirishni rejalashtirish uchun.
+  - Yakuniy balandlikni belgilash uchun `DEPRECATE { vk_id, deprecation_height }`, bunda dalillar yozuvga murojaat qilishi mumkin.
+  - favqulodda o'chirish uchun `WITHDRAW { vk_id, withdraw_height }`; ta'sirlangan aktivlar yangi yozuvlar faollashgunga qadar olib qo'yish balandligidan keyin maxfiy xarajatlarni muzlatib qo'yadi.
+- Ibtido `vk_set_hash` faol yozuvlarga mos keladigan `confidential_registry_root` maxsus parametrini avtomatik ravishda chiqaradi; validation tugun konsensusga kirishidan oldin ushbu dayjestni mahalliy ro'yxatga olish holati bilan o'zaro tekshiradi.
+- Verifierni ro'yxatdan o'tkazish yoki yangilash uchun `gas_schedule_id` talab qilinadi; tekshirish roʻyxatga olish kitobi `Active` ekanligini, `(circuit_id, version)` indeksida mavjudligini va Halo2 dalillari `OpenVerifyEnvelope` ni taqdim etishini, `circuit_id`, `circuit_id`, Prometheus000, Prometheus000101010101010101018NI0000010101 bilan mos kelishini taʼminlaydi. ro'yxatga olish kitobi.
 
-New networks that start with confidentiality enabled encode the desired policy directly in genesis. They still follow the checklist above when changing modes post-launch so that conversion windows remain deterministic and wallets have time to adjust.
+### Tasdiqlash kalitlari
+- Tasdiqlash kalitlari kitobdan tashqari qoladi, lekin tekshirgich metamaʼlumotlari bilan birga chop etilgan kontent manzilli identifikatorlar (`pk_cid`, `pk_hash`, `pk_len`) tomonidan havola qilinadi.
+- Wallet SDK'lari PK ma'lumotlarini oladi, xeshlarni tekshiradi va mahalliy ravishda keshlaydi.
 
-### Norito manifest versioning & activation
+### Pedersen va Poseidon parametrlari
+- Alohida registrlar (`PedersenParams`, `PoseidonParams`), har biri `params_id`, generatorlar/doimiylar xeshlari, faollashtirish, eskirish va olib tashlash balandliklariga ega bo'lgan ko'zgu tekshiruvi hayot aylanishini boshqarish.
 
-- Genesis manifests MUST include a `SetParameter` for the custom `confidential_registry_root` key. The payload is Norito JSON matching `ConfidentialRegistryMeta { vk_set_hash: Option<String> }`: omit the field (`null`) when no verifier entries are active, otherwise supply a 32-byte hex string (`0x…`) equal to the hash produced by `compute_vk_set_hash` over the verifier instructions shipped in the manifest. Nodes refuse to start if the parameter is missing or the hash disagrees with the encoded registry writes.
-- The on-wire `ConfidentialFeatureDigest::conf_rules_version` embeds the manifest layout version. For v1 networks it MUST remain `Some(1)` and equals `iroha_config::parameters::defaults::confidential::RULES_VERSION`. When the ruleset evolves, bump the constant, regenerate manifests, and roll out binaries in lock-step; mixing versions causes validators to reject blocks with `ConfidentialFeatureDigestMismatch`.
-- Activation manifests SHOULD bundle registry updates, parameter lifecycle changes, and policy transitions so the digest stays consistent:
-  1. Apply the planned registry mutations (`Publish*`, `Set*Lifecycle`) in an offline state view and compute the post-activation digest with `compute_confidential_feature_digest`.
-  2. Emit `SetParameter::custom(confidential_registry_root, {"vk_set_hash": "0x…"})` using the computed hash so lagging peers can recover the correct digest even if they miss intermediate registry instructions.
-  3. Append the `ScheduleConfidentialPolicyTransition` instructions. Each instruction must quote the governance-issued `transition_id`; manifests that forget it will be rejected by the runtime.
-  4. Persist the manifest bytes, a SHA-256 fingerprint, and the digest used in the activation plan. Operators verify all three artefacts before voting the manifest into effect to avoid partitions.
-- When rollouts require a deferred cut-over, record the target height in a companion custom parameter (for example `custom.confidential_upgrade_activation_height`). This gives auditors a Norito-encoded proof that validators honoured the notice window before the digest change took effect.
+## Deterministik tartiblash va bekor qiluvchilar
+- Har bir aktiv `next_leaf_index` bilan `CommitmentTree` ni saqlaydi; bloklar majburiyatlarni deterministik tartibda qo'shadi: tranzaktsiyalarni blok tartibida takrorlash; Har bir tranzaksiya doirasida `output_idx` seriyali ko'tarilish orqali himoyalangan chiqishlarni takrorlang.
+- `note_position` daraxt ofsetlaridan olingan, lekin nullifierning bir qismi emas**; u faqat dalil guvohi ichida a'zolik yo'llarini oziqlantiradi.
+- reorgs ostida nullifier barqarorligi PRF dizayni bilan kafolatlanadi; PRF kiritish `{ nk, note_preimage_hash, asset_id, chain_id, params_id }`-ni bog'laydi va `max_anchor_age_blocks` bilan cheklangan tarixiy Merkle ildizlariga langar qo'yadi.## Hisob kitobi oqimi
+1. **MintConfidential { asset_id, summa, recipient_shint }**
+   - `Convertible` yoki `ShieldedOnly` aktiv siyosatini talab qiladi; qabul qilish aktivlar vakolatini tekshiradi, joriy `params_id` ni oladi, `rho` namunalarini oladi, majburiyatlarni chiqaradi, Merkle daraxtini yangilaydi.
+   - Yangi majburiyat, Merkle ildiz deltasi va audit izlari uchun tranzaksiya chaqiruvi xesh bilan `ConfidentialEvent::Shielded` chiqaradi.
+2. **TransferConfidential { asset_id, proof, circuit_id, version, noulifiers, new_commitments, enc_payloads, anchor_root, memo }**
+   - VM syscall ro'yxatga olish kitobi orqali dalilni tekshiradi; xost bekor qiluvchilarning foydalanilmaganligini ta'minlaydi, majburiyatlar deterministik tarzda qo'shiladi, langar yaqinda.
+   - Ledger `NullifierSet` yozuvlarini qayd qiladi, qabul qiluvchilar/auditorlar uchun shifrlangan foydali yuklarni saqlaydi va `ConfidentialEvent::Transferred` ni bekor qiluvchilarni, tartiblangan natijalarni, isbot xeshini va Merkle ildizlarini chiqaradi.
+3. **RevealConfidential { asset_id, proof, circuit_id, versiya, nullifier, summa, recipient_count, anchor_root }**
+   - Faqat `Convertible` aktivlari uchun mavjud; proof banknot qiymatini aniqlangan summaga tengligini tasdiqlaydi, buxgalteriya hisobi shaffof balansni kreditlaydi va sarflangan bekor qiluvchini belgilash orqali ekranlangan banknotni yoqib yuboradi.
+   - `ConfidentialEvent::Unshielded` ni umumiy miqdor, sarflangan bekor qiluvchilar, isbot identifikatorlari va tranzaksiya chaqiruvi xesh bilan chiqaradi.
 
-## Verifier & Parameter Lifecycle
-### ZK Registry
-- Ledger stores `ZkVerifierEntry { vk_id, circuit_id, version, proving_system, curve, public_inputs_schema_hash, vk_hash, vk_len, max_proof_bytes, gas_schedule_id, activation_height, deprecation_height, withdraw_height, status, metadata_uri_cid, vk_bytes_cid }` where `proving_system` is currently fixed to `Halo2`.
-- `(circuit_id, version)` pairs are globally unique; the registry maintains a secondary index for lookups by circuit metadata. Attempts to register a duplicate pair are rejected during admission.
-- `circuit_id` must be non-empty and `public_inputs_schema_hash` must be provided (typically a Blake2b-32 hash of the verifier’s canonical public-input encoding). Admission rejects records that omit these fields.
-- Governance instructions include:
-  - `PUBLISH` to add a `Proposed` entry with metadata only.
-  - `ACTIVATE { vk_id, activation_height }` to schedule entry activation at an epoch boundary.
-  - `DEPRECATE { vk_id, deprecation_height }` to mark the final height where proofs may reference the entry.
-  - `WITHDRAW { vk_id, withdraw_height }` for emergency shutdown; affected assets freeze confidential spending after the withdraw height until new entries activate.
-- Genesis manifests auto-emit a `confidential_registry_root` custom parameter whose `vk_set_hash` matches the active entries; validation cross-checks this digest against local registry state before a node can join consensus.
-- Registering or updating a verifier requires a `gas_schedule_id`; verification enforces that the registry entry is `Active`, present in the `(circuit_id, version)` index, and that Halo2 proofs provide an `OpenVerifyEnvelope` whose `circuit_id`, `vk_hash`, and `public_inputs_schema_hash` match the registry record.
+## Ma'lumotlar modeli qo'shimchalari
+- Yoqish bayrog'i bilan `ConfidentialConfig` (yangi konfiguratsiya bo'limi), `assume_valid`, gaz/cheklash tugmalari, langar oynasi, tekshirgich orqa tomoni.
+- Ochiq versiya baytli (`CONFIDENTIAL_ASSET_V1 = 0x01`) `ConfidentialNote`, `ConfidentialTransfer` va `ConfidentialMint` Norito sxemalari.
+- `ConfidentialEncryptedPayload` AEAD memo baytlarini `{ version, ephemeral_pubkey, nonce, ciphertext }` bilan o'rab oladi, XChaCha20-Poly1305 tartibi uchun sukut bo'yicha `version = CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1`.
+- kanonik kalit hosila vektorlari `docs/source/confidential_key_vectors.json` da yashaydi; CLI va Torii oxirgi nuqtalari ushbu qurilmalarga nisbatan regressga uchraydi. Xarajat/nokor/koʻrish zinapoyasi uchun hamyonga moʻljallangan lotinlar `fixtures/confidential/keyset_derivation_v1.json` da chop etilgan va tillararo paritetni kafolatlash uchun Rust + Swift SDK testlari orqali amalga oshiriladi.
+- `asset::AssetDefinition` `confidential_policy: AssetConfidentialPolicy { mode, vk_set_hash, poseidon_params_id, pedersen_params_id, pending_transition }` ga erishadi.
+- `ZkAssetState` uzatish/ekrandan chiqarish tekshiruvchilari uchun `(backend, name, commitment)` majburiyligini saqlab qoladi; bajarilish havola qilingan yoki inline tekshirish kaliti roʻyxatdan oʻtgan majburiyatga mos kelmagan dalillarni rad etadi va mutatsiyaga uchragan holatdan oldin hal qilingan backend kalitiga qarshi dalillarni uzatish/ekrandan chiqarishni tekshiradi.
+- `CommitmentTree` (chegara oʻtkazish punktlari boʻlgan obyekt uchun), `NullifierSet` kalitlari `(chain_id, asset_id, nullifier)`, `ZkVerifierEntry`, `PedersenParams`, `PoseidonParams` dunyoda saqlanadi.
+- Mempool dublikatlarni erta aniqlash va langar yoshini tekshirish uchun vaqtinchalik `NullifierIndex` va `AnchorIndex` tuzilmalarini saqlaydi.
+- Norito sxema yangilanishlari ommaviy kirishlar uchun kanonik tartiblashni o'z ichiga oladi; aylanish testlari kodlash determinizmini ta'minlaydi.
+- Shifrlangan foydali yuk aylanma safarlari birlik testlari (`crates/iroha_data_model/src/confidential.rs`) orqali bloklanadi va yuqoridagi hamyon kalitini chiqarish vektorlari auditorlar uchun AEAD konvertlari hosilalarini bog'laydi. `norito.md` konvert uchun sim sarlavhasini hujjatlashtiradi.## IVM Integratsiya va Syscall
+- Qabul qiluvchi `VERIFY_CONFIDENTIAL_PROOF` tizimi qo'ng'iroqlarini joriy qiling:
+  - `circuit_id`, `version`, `scheme`, `public_inputs`, `proof` va natijada `ConfidentialStateDelta { asset_id, nullifiers, commitments, enc_payloads }`.
+  - Syscall registrdan tekshirgich meta-ma'lumotlarini yuklaydi, o'lcham/vaqt chegaralarini qo'llaydi, deterministik gazni to'laydi va faqat isbot muvaffaqiyatli bo'lsa, deltani qo'llaydi.
+- Xost Merkle ildiz snapshotlarini va nullifier holatini olish uchun faqat o'qish uchun `ConfidentialLedger` xususiyatini ochib beradi; Kotodama kutubxonasi guvohlarni yig'ish yordamchilari va sxemani tekshirishni ta'minlaydi.
+- Pointer-ABI hujjatlari tasdiqlovchi bufer tartibini va ro'yxatga olish kitobi tutqichlarini aniqlashtirish uchun yangilandi.
 
-### Proving Keys
-- Proving keys remain off-ledger but are referenced by content-addressed identifiers (`pk_cid`, `pk_hash`, `pk_len`) published alongside verifier metadata.
-- Wallet SDKs fetch PK data, verify hashes, and cache locally.
+## Tugun qobiliyati bo'yicha muzokaralar
+- Handshake `feature_bits.confidential` ni `ConfidentialFeatureDigest { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }` bilan birga reklama qiladi. Validator ishtiroki uchun `confidential.enabled=true`, `assume_valid=false`, bir xil verifier backend identifikatorlari va mos keladigan dayjestlar talab qilinadi; mos kelmasligi `HandshakeConfidentialMismatch` bilan qoʻl siqishda muvaffaqiyatsizlikka uchraydi.
+- Konfiguratsiya faqat kuzatuvchi tugunlari uchun `assume_valid` ni qo'llab-quvvatlaydi: o'chirilganda, maxfiy ko'rsatmalarga duch kelsangiz, vahimasiz `UnsupportedInstruction` deterministik beradi; yoqilganda, kuzatuvchilar dalillarni tasdiqlamasdan e'lon qilingan holat deltalarini qo'llaydilar.
+- Agar mahalliy imkoniyatlar o'chirilgan bo'lsa, Mempool maxfiy tranzaksiyalarni rad etadi. G'iybat filtrlari o'lcham chegaralari ichida noma'lum tasdiqlovchi identifikatorlarni ko'r-ko'rona yo'naltirish bilan birga, mos keladigan qobiliyatsiz himoyalangan tranzaktsiyalarni tengdoshlarga yuborishdan qochadi.
 
-### Pedersen & Poseidon Parameters
-- Separate registries (`PedersenParams`, `PoseidonParams`) mirror verifier lifecycle controls, each with `params_id`, hashes of generators/constants, activation, deprecation, and withdraw heights.
+### Azizillo va bekor qiluvchini saqlash siyosatini ko'rsating
 
-## Deterministic Ordering & Nullifiers
-- Each asset maintains a `CommitmentTree` with `next_leaf_index`; blocks append commitments in deterministic order: iterate transactions in block order; within each transaction iterate shielded outputs by ascending serialized `output_idx`.
-- `note_position` is derived from the tree offsets but **not** part of the nullifier; it only feeds membership paths within the proof witness.
-- Nullifier stability under reorgs is guaranteed by the PRF design; the PRF input binds `{ nk, note_preimage_hash, asset_id, chain_id, params_id }`, and anchors reference historical Merkle roots limited by `max_anchor_age_blocks`.
+Maxfiy daftarlar eslatmaning yangiligini isbotlash uchun etarli tarixni saqlashi kerak
+boshqaruvga asoslangan auditlarni takrorlang. Birlamchi siyosat, tomonidan amalga oshiriladi
+`ConfidentialLedger`, bu:
 
-## Ledger Flow
-1. **MintConfidential { asset_id, amount, recipient_hint }**
-   - Requires asset policy `Convertible` or `ShieldedOnly`; admission checks asset authority, retrieves current `params_id`, samples `rho`, emits commitment, updates Merkle tree.
-   - Emits `ConfidentialEvent::Shielded` with the new commitment, Merkle root delta, and transaction call hash for audit trails.
-2. **TransferConfidential { asset_id, proof, circuit_id, version, nullifiers, new_commitments, enc_payloads, anchor_root, memo }**
-   - VM syscall verifies proof using registry entry; host ensures nullifiers unused, commitments appended deterministically, anchor is recent.
-   - Ledger records `NullifierSet` entries, stores encrypted payloads for recipients/auditors, and emits `ConfidentialEvent::Transferred` summarising nullifiers, ordered outputs, proof hash, and Merkle roots.
-3. **RevealConfidential { asset_id, proof, circuit_id, version, nullifier, amount, recipient_account, anchor_root }**
-   - Available only for `Convertible` assets; proof validates note value equals revealed amount, ledger credits transparent balance, and burns the shielded note by marking the nullifier spent.
-   - Emits `ConfidentialEvent::Unshielded` with the public amount, consumed nullifiers, proof identifiers, and transaction call hash.
+- **Nullifikatorni ushlab turish:** sarflangan bekor qiluvchilarni *minimal* `730` kun (24) davomida saqlang
+  oy) xarajat balandligidan keyin yoki agar uzoqroq bo'lsa, regulyator tomonidan belgilangan oyna.
+  Operatorlar oynani `confidential.retention.nullifier_days` orqali kengaytirishlari mumkin.
+  Saqlash oynasidan kichik bo'lmagan nullifierlar Torii orqali so'raladigan bo'lib qolishi MERAQA
+  auditorlar ikki marta xarajat yo'qligini isbotlash mumkin.
+- **Oshkora Azizillo:** shaffof ochiladi (`RevealConfidential`)
+  blok yakunlangandan so'ng darhol tegishli eslatma majburiyatlari, lekin
+  iste'mol qilingan nullifier yuqoridagi saqlash qoidasiga bo'ysunadi. Oshkora bilan bog'liq
+  hodisalar (`ConfidentialEvent::Unshielded`) davlat miqdorini, oluvchini,
+  va isboti hash shunday rekonstruksiya tarixiy vahiylarni kesish kerak emas
+  shifrlangan matn.
+- **Chegara nazorat punktlari: ** majburiyat chegaralari aylanma nazorat punktlarini saqlaydi
+  kattaroq `max_anchor_age_blocks` va saqlash oynasini qamrab oladi. Tugunlar
+  ixcham eski nazorat punktlari faqat intervaldagi barcha bekor qiluvchilarning muddati tugaganidan keyin.
+- **Eskirgan dayjestni tuzatish:** agar `HandshakeConfidentialMismatch` ko'tarilgan bo'lsa
+  Driftni hazm qilish uchun operatorlar (1) nullifierni ushlab turish oynalarini tekshirishlari kerak
+  klaster bo'ylab tekislang, (2) `iroha_cli app confidential verify-ledger` ni ishga tushiring
+  saqlangan nullifier to'plamiga qarshi digestni qayta tiklash va (3) qayta joylashtirish
+  yangilangan manifest. Vaqtdan oldin kesilgan har qanday nullifiers dan tiklanishi kerak
+  tarmoqqa qayta ulanishdan oldin sovuq saqlash.Operatsiyalar kitobida mahalliy bekor qilishni hujjatlash; boshqaruv siyosati kengaymoqda
+saqlash oynasi tugun konfiguratsiyasi va arxivni saqlash rejalarini yangilashi kerak
+qulflangan qadam.
 
-## Data Model Additions
-- `ConfidentialConfig` (new config section) with enablement flag, `assume_valid`, gas/limit knobs, anchor window, verifier backend.
-- `ConfidentialNote`, `ConfidentialTransfer`, and `ConfidentialMint` Norito schemas with explicit version byte (`CONFIDENTIAL_ASSET_V1 = 0x01`).
-- `ConfidentialEncryptedPayload` wraps AEAD memo bytes with `{ version, ephemeral_pubkey, nonce, ciphertext }`, defaulting to `version = CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1` for the XChaCha20-Poly1305 layout.
-- Canonical key-derivation vectors live in `docs/source/confidential_key_vectors.json`; both the CLI and Torii endpoint regress against these fixtures. Wallet-facing derivatives for the spend/nullifier/viewing ladder are published in `fixtures/confidential/keyset_derivation_v1.json` and exercised by the Rust + Swift SDK tests to guarantee cross-language parity.
-- `asset::AssetDefinition` gains `confidential_policy: AssetConfidentialPolicy { mode, vk_set_hash, poseidon_params_id, pedersen_params_id, pending_transition }`.
-- `ZkAssetState` persists the `(backend, name, commitment)` binding for transfer/unshield verifiers; execution rejects proofs whose referenced or inline verifying key fails to match the registered commitment and verifies transfer/unshield proofs against the resolved backend key before mutating state.
-- `CommitmentTree` (per asset with frontier checkpoints), `NullifierSet` keyed by `(chain_id, asset_id, nullifier)`, `ZkVerifierEntry`, `PedersenParams`, `PoseidonParams` stored in world state.
-- Mempool maintains transient `NullifierIndex` and `AnchorIndex` structures for early duplicate detection and anchor age checks.
-- Norito schema updates include canonical ordering for public inputs; round-trip tests ensure encoding determinism.
-- Encrypted payload roundtrips are locked in via unit tests (`crates/iroha_data_model/src/confidential.rs`), and the wallet key-derivation vectors above anchor the AEAD envelope derivations for auditors. `norito.md` documents the on-wire header for the envelope.
+### Ko'chirish va tiklash oqimi
 
-## IVM Integration & Syscall
-- Introduce `VERIFY_CONFIDENTIAL_PROOF` syscall accepting:
-  - `circuit_id`, `version`, `scheme`, `public_inputs`, `proof`, and resulting `ConfidentialStateDelta { asset_id, nullifiers, commitments, enc_payloads }`.
-  - Syscall loads verifier metadata from registry, enforces size/time limits, charges deterministic gas, and only applies delta if proof succeeds.
-- Host exposes read-only `ConfidentialLedger` trait for retrieving Merkle root snapshots and nullifier status; Kotodama library provides witness assembly helpers and schema validation.
-- Pointer-ABI docs updated to clarify proof buffer layout and registry handles.
+1. Terish paytida `IrohaNetwork` e'lon qilingan imkoniyatlarni solishtiradi. Har qanday nomuvofiqlik `HandshakeConfidentialMismatch` ni oshiradi; ulanish yopiladi va peer hech qachon `Ready` ga ko'tarilmasdan kashfiyot navbatida qoladi.
+2. Muvaffaqiyatsizlik tarmoq xizmati jurnali (shu jumladan masofaviy dayjest va backend) orqali yuzaga keladi va Sumeragi hech qachon taklif yoki ovoz berish uchun tengdoshni rejalashtirmaydi.
+3. Operatorlar tekshiruv registrlari va parametrlar toʻplamini (`vk_set_hash`, `pedersen_params_id`, `poseidon_params_id`) yoki `next_conf_features` ni kelishilgan `next_conf_features` bilan moslashtirish orqali tuzatadi. Dijest mos kelgandan so'ng, keyingi qo'l siqish avtomatik ravishda muvaffaqiyatli bo'ladi.
+4. Agar eski tengdosh blokni translyatsiya qilishga muvaffaq bo'lsa (masalan, arxivni takrorlash orqali), validatorlar uni `BlockRejectionReason::ConfidentialFeatureDigestMismatch` bilan qat'iy rad etadi va buxgalteriya hisobi holatini tarmoq bo'ylab izchil saqlaydi.
 
-## Node Capability Negotiation
-- Handshake advertises `feature_bits.confidential` together with a `ConfidentialFeatureDigest { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }`. Validator participation requires `confidential.enabled=true`, `assume_valid=false`, identical verifier backend identifiers, and matching digests; mismatches fail the handshake with `HandshakeConfidentialMismatch`.
-- Config supports `assume_valid` for observer nodes only: when disabled, encountering confidential instructions yields deterministic `UnsupportedInstruction` without panic; when enabled, observers apply declared state deltas without verifying proofs.
-- Mempool rejects confidential transactions if local capability is disabled. Gossip filters avoid sending shielded transactions to peers without matching capability while blind-forwarding unknown verifier IDs within size limits.
+### Qayta o'ynash uchun xavfsiz qo'l siqish oqimi
 
-### Reveal Pruning & Nullifier Retention Policy
+1. Har bir chiqish urinishi yangi Shovqin/X25519 asosiy materialini ajratadi. Imzolangan qoʻl siqish yuki (`handshake_signature_payload`) mahalliy va masofaviy vaqtinchalik ochiq kalitlarni, Norito kodli reklama qilingan rozetka manzilini va `handshake_chain_id` bilan tuzilganda zanjir identifikatorini birlashtiradi. Xabar tugunni tark etishidan oldin AEAD shifrlangan.
+2. Javob beruvchi foydali yukni teng/mahalliy kalit tartibi teskari hisoblab chiqadi va `HandshakeHelloV1` ichiga o'rnatilgan Ed25519 imzosini tekshiradi. Efemer kalitlar ham, e'lon qilingan manzil ham imzo domenining bir qismi bo'lganligi sababli, olingan xabarni boshqa tengdoshga qarshi takrorlash yoki eskirgan ulanishni tiklash aniq tekshirilmaydi.
+3. Maxfiy qobiliyat bayroqlari va `ConfidentialFeatureDigest` `HandshakeConfidentialMeta` ichida harakatlanadi. Qabul qiluvchi `{ enabled, assume_valid, verifier_backend, digest }` kortejini mahalliy konfiguratsiya qilingan `ConfidentialHandshakeCaps` bilan taqqoslaydi; har qanday nomuvofiqlik `Ready` ga transport oʻtishdan oldin `HandshakeConfidentialMismatch` bilan erta chiqadi.
+4. Qayta ulanishdan oldin operatorlar dayjestni qayta hisoblashi (`compute_confidential_feature_digest` orqali) va tugunlarni yangilangan registrlar/siyosatlar bilan qayta ishga tushirishi SHART. Eski dayjestlarni reklama qilayotgan tengdoshlar qo'l siqishda davom etmay, eski holatni validator to'plamiga qayta kirishiga yo'l qo'ymaydi.
+5. Muvaffaqiyat va nosozliklar `iroha_p2p::peer` standart hisoblagichlarini (`handshake_failure_count`, xato taksonomiyasi yordamchilari) yangilaydi va masofaviy tengdosh identifikatori va barmoq izini sindirish bilan belgilangan tizimli jurnal yozuvlarini chiqaradi. Qayta o'ynashga urinishlar yoki tarqatish paytida noto'g'ri konfiguratsiyalarni aniqlash uchun ushbu ko'rsatkichlarni kuzatib boring.## Kalitlarni boshqarish va foydali yuklar
+- Hisob uchun kalitlarni hosil qilish ierarxiyasi:
+  - `sk_spend` → `nk` (nullifier kaliti), `ivk` (kirish ko'rish kaliti), `ovk` (chiqish ko'rish kaliti), `fvk`.
+- Shifrlangan eslatma yuklamalari ECDH-dan olingan umumiy kalitlarga ega AEAD-dan foydalanadi; ixtiyoriy auditor ko'rinishi kalitlari har bir aktiv siyosati natijalariga biriktirilishi mumkin.
+- CLI qo'shimchalari: `confidential create-keys`, `confidential send`, `confidential export-view-key`, eslatmalar shifrini ochish uchun auditor asboblari va Grafana oflayn konvertlarni ishlab chiqarish/tekshirish uchun `iroha app zk envelope` yordamchisi. Torii `POST /v1/confidential/derive-keyset` orqali bir xil hosila oqimini ochib beradi, ham hex va base64 shakllarini qaytaradi, shuning uchun hamyonlar asosiy ierarxiyalarni dasturiy tarzda olishlari mumkin.
 
-Confidential ledgers must retain enough history to prove note freshness and to
-replay governance-driven audits. The default policy, enforced by
-`ConfidentialLedger`, is:
-
-- **Nullifier retention:** keep spent nullifiers for *minimum* `730` days (24
-  months) after spend height, or the regulator-mandated window if longer.
-  Operators may extend the window via `confidential.retention.nullifier_days`.
-  Nullifiers younger than the retention window MUST remain queryable via Torii so
-  auditors can prove double-spend absence.
-- **Reveal pruning:** transparent reveals (`RevealConfidential`) prune the
-  associated note commitments immediately after the block finalises, but the
-  consumed nullifier remains subject to the retention rule above. Reveal-related
-  events (`ConfidentialEvent::Unshielded`) record the public amount, recipient,
-  and proof hash so reconstructing historic reveals does not require the pruned
-  ciphertext.
-- **Frontier checkpoints:** commitment frontiers maintain rolling checkpoints
-  covering the larger of `max_anchor_age_blocks` and the retention window. Nodes
-  compact older checkpoints only after all nullifiers within the interval expire.
-- **Stale digest remediation:** if `HandshakeConfidentialMismatch` is raised due
-  to digest drift, operators should (1) verify that nullifier retention windows
-  align across the cluster, (2) run `iroha_cli app confidential verify-ledger` to
-  regenerate the digest against the retained nullifier set, and (3) redeploy the
-  refreshed manifest. Any nullifiers pruned prematurely must be restored from
-  cold storage before rejoining the network.
-
-Document local overrides in the operations runbook; governance policies extending
-the retention window must update node configuration and archival storage plans in
-lockstep.
-
-### Eviction & Recovery Flow
-
-1. During dial, `IrohaNetwork` compares the advertised capabilities. Any mismatch raises `HandshakeConfidentialMismatch`; the connection is closed and the peer remains in the discovery queue without ever being promoted to `Ready`.
-2. The failure is surfaced via the network service log (including the remote digest and backend), and Sumeragi never schedules the peer for proposal or voting.
-3. Operators remediate by aligning verifier registries and parameter sets (`vk_set_hash`, `pedersen_params_id`, `poseidon_params_id`) or by staging `next_conf_features` with an agreed `activation_height`. Once the digest matches, the next handshake succeeds automatically.
-4. If a stale peer manages to broadcast a block (e.g., via archival replay), validators reject it deterministically with `BlockRejectionReason::ConfidentialFeatureDigestMismatch`, keeping ledger state consistent across the network.
-
-### Replay-safe handshake flow
-
-1. Each outbound attempt allocates fresh Noise/X25519 key material. The handshake payload that is signed (`handshake_signature_payload`) concatenates the local and remote ephemeral public keys, the Norito-encoded advertised socket address, and—when compiled with `handshake_chain_id`—the chain identifier. The message is AEAD-encrypted before it leaves the node.
-2. The responder recomputes the payload with the peer/local key order reversed and verifies the Ed25519 signature embedded in `HandshakeHelloV1`. Because both ephemeral keys and the advertised address are part of the signature domain, replaying a captured message against another peer or recovering a stale connection fails verification deterministically.
-3. Confidential capability flags and the `ConfidentialFeatureDigest` travel inside `HandshakeConfidentialMeta`. The receiver compares the tuple `{ enabled, assume_valid, verifier_backend, digest }` against its locally configured `ConfidentialHandshakeCaps`; any mismatch exits early with `HandshakeConfidentialMismatch` before the transport transitions to `Ready`.
-4. Operators MUST recompute the digest (via `compute_confidential_feature_digest`) and restart nodes with the updated registries/policies before reconnecting. Peers advertising old digests continue to fail the handshake, preventing stale state from re-entering the validator set.
-5. Handshake successes and failures update the standard `iroha_p2p::peer` counters (`handshake_failure_count`, error taxonomy helpers) and emit structured log entries tagged with the remote peer ID and digest fingerprint. Monitor these indicators to catch replay attempts or misconfigurations during rollout.
-
-## Key Management & Payloads
-- Per-account key derivation hierarchy:
-  - `sk_spend` → `nk` (nullifier key), `ivk` (incoming viewing key), `ovk` (outgoing viewing key), `fvk`.
-- Encrypted note payloads use AEAD with ECDH-derived shared keys; optional auditor view keys may be attached to outputs per asset policy.
-- CLI additions: `confidential create-keys`, `confidential send`, `confidential export-view-key`, auditor tooling for decrypting memos, and the `iroha app zk envelope` helper for producing/inspecting Norito memo envelopes offline. Torii exposes the same derivation flow via `POST /v1/confidential/derive-keyset`, returning both hex and base64 forms so wallets can fetch key hierarchies programmatically.
-
-## Gas, Limits & DoS Controls
-- Deterministic gas schedule:
-  - Halo2 (Plonkish): base `250_000` gas + `2_000` gas per public input.
-  - `5` gas per proof byte, plus per-nullifier (`300`) and per-commitment (`500`) charges.
-  - Operators may override these constants via the node configuration (`confidential.gas.{proof_base, per_public_input, per_proof_byte, per_nullifier, per_commitment}`); changes propagate at startup or when the config layer hot-reloads and are applied deterministically across the cluster.
-- Hard limits (configurable defaults):
+## Gaz, limitlar va DoS boshqaruvlari
+- deterministik gaz jadvali:
+  - Halo2 (Plonkish): tayanch `250_000` gaz + `2_000` har bir ommaviy kirish uchun gaz.
+  - Har bir isbot bayti uchun `5` gaz, ortiqcha har bir nullifier (`300`) va har bir majburiyat (`500`) toʻlovlari.
+  - Operatorlar tugun konfiguratsiyasi (`confidential.gas.{proof_base, per_public_input, per_proof_byte, per_nullifier, per_commitment}`) orqali bu konstantalarni bekor qilishi mumkin; o'zgarishlar ishga tushirilganda yoki konfiguratsiya qatlami qayta yuklanganda tarqaladi va klaster bo'ylab aniq qo'llaniladi.
+- Qattiq chegaralar (sozlanishi mumkin bo'lgan standart):
 - `max_proof_size_bytes = 262_144`.
 - `max_nullifiers_per_tx = 8`, `max_commitments_per_tx = 8`, `max_confidential_ops_per_block = 256`.
-- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. Proofs that exceed `verify_timeout_ms` abort the instruction deterministically (governance ballots emit `proof verification exceeded timeout`, `VerifyProof` returns an error).
-- Additional quotas ensure liveness: `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block`, and `max_public_inputs` bound block builders; `reorg_depth_bound` (≥ `max_anchor_age_blocks`) governs frontier checkpoint retention.
-- Runtime execution now rejects transactions that exceed these per-transaction or per-block limits, emitting deterministic `InvalidParameter` errors and leaving ledger state unchanged.
-- Mempool prefilters confidential transactions by `vk_id`, proof length, and anchor age before invoking the verifier to keep resource usage bounded.
-- Verification halts deterministically on timeout or bound violation; transactions fail with explicit errors. SIMD backends are optional but do not alter gas accounting.
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. `verify_timeout_ms` dan oshgan dalillar ko'rsatmani aniq bekor qiladi (boshqaruv byulletenlari `proof verification exceeded timeout` chiqaradi, `VerifyProof` xatoni qaytaradi).
+- Qo'shimcha kvotalar jonlilikni ta'minlaydi: `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block` va `max_public_inputs` bog'langan blok quruvchilar; `reorg_depth_bound` (≥ `max_anchor_age_blocks`) chegara nazorat punktini saqlashni boshqaradi.
+- Ish vaqtining bajarilishi endi ushbu tranzaksiya yoki blok limitlaridan oshib ketadigan tranzaktsiyalarni rad etadi, deterministik `InvalidParameter` xatolarini chiqaradi va daftar holatini o'zgarishsiz qoldiradi.
+- Mempool resursdan foydalanishni chegaralangan holda saqlash uchun tekshirgichni chaqirishdan oldin maxfiy tranzaktsiyalarni `vk_id`, isbot uzunligi va langar yoshi bo'yicha oldindan filtrlaydi.
+- Vaqt tugashi yoki majburiyatlarning buzilishi bilan tekshirish qat'iy ravishda to'xtatiladi; tranzaktsiyalar aniq xatolar bilan muvaffaqiyatsizlikka uchraydi. SIMD orqa uchlari ixtiyoriy, lekin gaz hisobini o'zgartirmaydi.
 
-### Calibration Baselines & Acceptance Gates
-- **Reference platforms.** Calibration runs MUST cover the three hardware profiles below. Runs failing to capture all profiles are rejected during review.
-
-  | Profile | Architecture | CPU / Instance | Compiler flags | Purpose |
+### Kalibrlash asoslari va qabul qilish eshiklari
+- **Malumot platformalari.** Kalibrlash ishlari quyida keltirilgan uchta apparat profilini qamrab olishi SHART. Barcha profillarni yozib ololmaydigan yugurishlar ko'rib chiqish vaqtida rad etiladi.| Profil | Arxitektura | CPU / Instance | Kompilyator bayroqlari | Maqsad |
   | --- | --- | --- | --- | --- |
-  | `baseline-simd-neutral` | `x86_64` | AMD EPYC 7B12 (32c) or Intel Xeon Gold 6430 (24c) | `RUSTFLAGS="-C target-feature=-avx,-avx2,-fma"` | Establish floor values without vector intrinsics; used to tune fallback cost tables. |
-  | `baseline-avx2` | `x86_64` | Intel Xeon Gold 6430 (24c) | default release | Validates AVX2 path; checks that SIMD speedups stay within tolerance of neutral gas. |
-  | `baseline-neon` | `aarch64` | AWS Graviton3 (c7g.4xlarge) | default release | Ensures NEON backend remains deterministic and aligned with x86 schedules. |
+  | `baseline-simd-neutral` | `x86_64` | AMD EPYC 7B12 (32c) yoki Intel Xeon Gold 6430 (24c) | `RUSTFLAGS="-C target-feature=-avx,-avx2,-fma"` | Vektor intrinsiklarisiz zamin qiymatlarini o'rnatish; zaxira xarajatlar jadvallarini sozlash uchun ishlatiladi. |
+  | `baseline-avx2` | `x86_64` | Intel Xeon Gold 6430 (24c) | standart versiya | AVX2 yo'lini tasdiqlaydi; SIMD tezlashuvining neytral gazga tolerantlik darajasida qolishini tekshiradi. |
+  | `baseline-neon` | `aarch64` | AWS Graviton3 (c7g.4xlarge) | standart versiya | NEON backend deterministik va x86 jadvallariga mos kelishini ta'minlaydi. |
 
-- **Benchmark harness.** All gas calibration reports MUST be produced with:
+- **Benchmark jabduqlar.** Gazni kalibrlash bo'yicha barcha hisobotlar quyidagilar bilan tayyorlanishi kerak:
   - `CRITERION_HOME=target/criterion cargo bench -p iroha_core isi_gas_calibration -- --sample-size 200 --warm-up-time 5 --save-baseline <profile-label>`
-  - `cargo test -p iroha_core bench_repro -- --ignored` to confirm the deterministic fixture.
-  - `CRITERION_HOME=target/criterion cargo bench -p ivm gas_calibration -- --sample-size 200 --warm-up-time 5 --save-baseline <profile-label>` whenever VM opcode costs change.
+  - Deterministik moslamani tasdiqlash uchun `cargo test -p iroha_core bench_repro -- --ignored`.
+  - `CRITERION_HOME=target/criterion cargo bench -p ivm gas_calibration -- --sample-size 200 --warm-up-time 5 --save-baseline <profile-label>` VM opcode xarajatlari har doim o'zgarganda.
 
-- **Fixed randomness.** Export `IROHA_CONF_GAS_SEED=conf-gas-seed-2026Q1` before running benches so `iroha_test_samples::gen_account_in` switches to the deterministic `KeyPair::from_seed` path. The harness prints `IROHA_CONF_GAS_SEED_ACTIVE=…` once; if the variable is missing, review MUST fail. Any new calibration utilities must continue honouring this env var when introducing auxiliary randomness.
+- ** Ruxsat etilgan tasodifiylik.** `IROHA_CONF_GAS_SEED=conf-gas-seed-2026Q1` o'rindiqlarini ishga tushirishdan oldin eksport qiling, shunda `iroha_test_samples::gen_account_in` deterministik `KeyPair::from_seed` yo'liga o'tadi. Jabduqlar `IROHA_CONF_GAS_SEED_ACTIVE=…` bir marta chop etadi; agar o'zgaruvchi yo'q bo'lsa, ko'rib chiqish muvaffaqiyatsizlikka uchradi. Har qanday yangi kalibrlash yordam dasturlari yordamchi tasodifiylikni kiritishda ushbu env varni hurmat qilishni davom ettirishi kerak.
 
-- **Result capture.**
-  - Upload Criterion summaries (`target/criterion/**/raw.csv`) for each profile into the release artefact.
-  - Store derived metrics (`ns/op`, `gas/op`, `ns/gas`) in `docs/source/confidential_assets_calibration.md` along with the git commit and compiler version used.
-  - Maintain the last two baselines per profile; delete older snapshots once the newest report is validated.
+- **Natijani olish.**
+  - Har bir profil uchun mezon xulosalarini (`target/criterion/**/raw.csv`) chiqarish artefaktiga yuklang.
+  - Olingan ko'rsatkichlarni (`ns/op`, `gas/op`, `ns/gas`) `docs/source/confidential_assets_calibration.md` da, foydalanilgan git commit va kompilyator versiyasi bilan birga saqlang.
+  - Har bir profil uchun oxirgi ikkita asosiy chiziqni saqlang; eng yangi hisobot tasdiqlangandan so'ng eski suratlarni o'chirib tashlang.
 
-- **Acceptance tolerances.**
-  - Gas deltas between `baseline-simd-neutral` and `baseline-avx2` MUST remain ≤ ±1.5%.
-  - Gas deltas between `baseline-simd-neutral` and `baseline-neon` MUST remain ≤ ±2.0%.
-  - Calibration proposals exceeding these thresholds require either schedule adjustments or an RFC explaining the discrepancy and mitigation.
+- **Qabul qilish tolerantliklari.**
+  - `baseline-simd-neutral` va `baseline-avx2` oralig'idagi gaz deltalari ≤ ±1,5% BO'LISHI KERAK.
+  - `baseline-simd-neutral` va `baseline-neon` oralig'idagi gaz deltalari ≤ ±2,0% QO'YISHI KERAK.
+  - Ushbu chegaralardan oshib ketgan kalibrlash takliflari jadvalga tuzatishlar kiritishni yoki nomuvofiqlik va yumshatishni tushuntiruvchi RFCni talab qiladi.
 
-- **Review checklist.** Submitters are responsible for:
-  - Including `uname -a`, `/proc/cpuinfo` excerpts (model, stepping), and `rustc -Vv` in the calibration log.
-  - Verifying `IROHA_CONF_GAS_SEED` echoed in the bench output (the benches print the active seed).
-  - Ensuring pacemaker and confidential verifier feature flags mirror production (`--features confidential,telemetry` when running benches with Telemetry).
+- **Tekshirish roʻyxatini koʻrib chiqing.** Taqdimotchilar quyidagilar uchun javobgardirlar:
+  - Kalibrlash jurnaliga `uname -a`, `/proc/cpuinfo` parchalari (model, qadam) va `rustc -Vv` kiradi.
+  - `IROHA_CONF_GAS_SEED` dastgoh chiqishida aks-sado berilganligini tekshirish (skameykalar faol urug'ni chop etadi).
+  - Elektron yurak stimulyatori va konfidensial tekshirgich funksiyalarini ko'zgu ishlab chiqarishni ta'minlash (`--features confidential,telemetry` Telemetriya bilan skameykalarda ishlayotganda).
 
-## Config & Operations
-- `iroha_config` gains `[confidential]` section:
+## Konfiguratsiya va operatsiyalar
+- `iroha_config` `[confidential]` qismini oladi:
   ```toml
   [confidential]
   enabled = true
@@ -332,64 +309,60 @@ lockstep.
   registry_max_params_entries = 32
   registry_max_delta_per_block = 4
   ```
-- Telemetry emits aggregate metrics: `confidential_proof_verified`, `confidential_verifier_latency_ms`, `confidential_proof_bytes_total`, `confidential_nullifier_spent`, `confidential_commitments_appended`, `confidential_mempool_rejected_total{reason}`, and `confidential_policy_transitions_total`, never exposing plaintext data.
-- RPC surfaces:
+- Telemetriya agregat koʻrsatkichlarni chiqaradi: `confidential_proof_verified`, `confidential_verifier_latency_ms`, `confidential_proof_bytes_total`, `confidential_nullifier_spent`, `confidential_commitments_appended`, `confidential_commitments_appended`, Grafana, hech qachon taʼsir qilmaydi. ochiq matnli ma'lumotlar.
+- RPC sirtlari:
   - `GET /confidential/capabilities`
   - `GET /confidential/zk_registry`
-  - `GET /confidential/params`
+  - `GET /confidential/params`## Sinov strategiyasi
+- Determinizm: bloklar ichida tasodifiy tranzaksiyalarni aralashtirish bir xil Merkle ildizlari va nullifier to'plamlarini beradi.
+- Qayta tuzilishga chidamlilik: langar bilan ko'p blokli reorglarni simulyatsiya qilish; nullifiers barqaror qoladi va eskirgan langarlar rad etiladi.
+- Gaz invariantlari: SIMD tezlashuvi bo'lgan va bo'lmagan tugunlarda bir xil gazdan foydalanishni tekshiring.
+- Chegaraviy test: o'lchamdagi / gaz shiftidagi dalillar, maksimal kirish / chiqish hisoblari, vaqt tugashi.
+- Hayotiy tsikl: tekshirgich va parametrlarni faollashtirish/eskirish uchun boshqaruv operatsiyalari, aylanish xarajatlari testlari.
+- FSM siyosati: ruxsat etilgan/ruxsat etilmagan o'tishlar, kutilayotgan o'tish kechikishlari va samarali balandliklar atrofida mempulni rad etish.
+- Favqulodda ro'yxatga olish kitobi: favqulodda olib qo'yish ta'sirlangan aktivlarni `withdraw_height` da muzlatib qo'yadi va keyin dalillarni rad etadi.
+- Imkoniyatlar chegarasi: mos kelmaydigan `conf_features` rad etish bloklari bo'lgan validatorlar; `assume_valid=true` bilan kuzatuvchilar konsensusga ta'sir qilmasdan turib.
+- Davlat ekvivalentligi: validator/to'liq/kuzatuvchi tugunlari kanonik zanjirda bir xil holat ildizlarini hosil qiladi.
+- Salbiy noaniqlik: noto'g'ri shakllangan dalillar, katta hajmdagi foydali yuklar va bekor qiluvchi to'qnashuvlar qat'iy ravishda rad etadi.
 
-## Testing Strategy
-- Determinism: randomized transaction shuffling within blocks yields identical Merkle roots and nullifier sets.
-- Reorg resilience: simulate multi-block reorgs with anchors; nullifiers remain stable and stale anchors rejected.
-- Gas invariants: verify identical gas usage across nodes with and without SIMD acceleration.
-- Boundary testing: proofs at size/gas ceilings, max in/out counts, timeout enforcement.
-- Lifecycle: governance operations for verifier and parameter activation/deprecation, rotation spend tests.
-- Policy FSM: allowed/disallowed transitions, pending transition delays, and mempool rejection around effective heights.
-- Registry emergencies: emergency withdrawal freezes affected assets at `withdraw_height` and rejects proofs afterwards.
-- Capability gating: validators with mismatched `conf_features` reject blocks; observers with `assume_valid=true` keep up without affecting consensus.
-- State equivalence: validator/full/observer nodes produce identical state roots on the canonical chain.
-- Negative fuzzing: malformed proofs, oversized payloads, and nullifier collisions reject deterministically.
+## Ajoyib ish
+- Benchmark Halo2 parametrlar to'plamini (sxema o'lchami, qidirish strategiyasi) va natijalarni kalibrlash kitobiga yozib oling, shunda gaz/vaqt tugashining sukut bo'yicha parametrlari keyingi `confidential_assets_calibration.md` yangilanishi bilan birga yangilanishi mumkin.
+- Boshqaruv loyihasi imzolangandan so'ng tasdiqlangan ish jarayonini Torii ga ulab, auditorlik ma'lumotlarini oshkor qilish siyosati va tegishli tanlab ko'rish API'larini yakunlang.
+- SDKni amalga oshiruvchilar uchun konvert formatini hujjatlashtirib, ko'p qabul qiluvchi chiqishi va paketli eslatmalarni qamrab olish uchun guvohlarni shifrlash sxemasini kengaytiring.
+- Sxemalar, registrlar va parametrlarni aylantirish tartib-qoidalarining tashqi xavfsizlik tekshiruvini o'tkazish va ichki audit hisobotlari yonida topilmalarni arxivlash.
+- Hamyon sotuvchilari bir xil attestatsiya semantikasini amalga oshirishi uchun auditor xarajatlarini solishtirish API-larini belgilang va ko'rish kaliti ko'rsatmalarini nashr eting.## Amalga oshirish bosqichlari
+1. **M0 fazasi — Kemani to‘xtatish**
+   - ✅ Nullifier hosilasi endi Poseidon PRF dizayniga (`nk`, `rho`, `asset_id`, `chain_id`) amal qiladi va buxgalteriya hisobini yangilashda deterministik majburiyatlarni buyurtma qilish amalga oshiriladi.
+   - ✅ Amalga oshirish deterministik xatolar bilan byudjetdan ortiq tranzaktsiyalarni rad etib, isbot o'lchami chegaralarini va har bir tranzaksiya/blok uchun maxfiy kvotalarni qo'llaydi.
+   - ✅ P2P qoʻl siqish `ConfidentialFeatureDigest` (backend dayjesti + registr barmoq izlari)ni reklama qiladi va `HandshakeConfidentialMismatch` orqali aniq nomuvofiqliklarni bartaraf etadi.
+   - ✅ Maxfiy ijro yo'llaridagi vahimalarni olib tashlang va mos keladigan qobiliyatsiz tugunlar uchun rolli eshiklarni qo'shing.
+   - ⚪ Chegara oʻtkazish punktlari uchun tekshirish muddati tugashi byudjetlarini va chuqurlik chegaralarini oʻzgartirishni taʼminlash.
+     - ✅ Tasdiqlash muddati tugaydigan byudjetlar amalga oshirildi; `verify_timeout_ms` dan oshgan dalillar endi deterministik ravishda muvaffaqiyatsizlikka uchraydi.
+     - ✅ Chegara nazorat punktlari endi `reorg_depth_bound` ni hurmat qiladi, sozlangan oynadan eski boʻlgan nazorat punktlarini kesib, deterministik suratlarni saqlaydi.
+   - `AssetConfidentialPolicy`, FSM siyosati va yalpiz/o'tkazish/oshkor qilish ko'rsatmalari uchun ijro eshiklarini joriy qiling.
+   - Blok sarlavhalarida `conf_features` so'rovini bajaring va registr/parametr dayjestlari farqlanganda validator ishtirokini rad eting.
+2. **M1 bosqich — registrlar va parametrlar**
+   - Land `ZkVerifierEntry`, `PedersenParams` va `PoseidonParams` registrlari boshqaruv operatsiyalari, genezis ankrajlari va keshlarni boshqarish.
+   - Ro'yxatga olish kitobini qidirish, gaz jadvali identifikatorlari, sxemalarni xeshlash va o'lchamlarni tekshirishni talab qilish uchun simli tizim.
+   - Shifrlangan foydali yuk formati v1, hamyon kalitini olish vektorlarini jo'natish va maxfiy kalitlarni boshqarish uchun CLI yordami.
+3. **M2 fazasi — gaz va ishlash**
+   - Deterministik gaz jadvalini, blokli hisoblagichlarni va telemetriya bilan taqqoslanadigan jabduqlarni amalga oshiring (kechikish vaqtini, isbot o'lchamlarini, mempulni rad etishni tekshiring).
+   - Harden CommitmentTree nazorat punktlari, LRU yuklash va ko'p aktivli ish yuklari uchun bekor qiluvchi indekslar.
+4. **M3 fazasi — aylanish va hamyon asboblari**
+   - Ko'p parametrli va ko'p versiyali isbotni qabul qilishni yoqish; boshqaruvga asoslangan faollashtirish/eskirishni o'tish davri kitoblari bilan qo'llab-quvvatlash.
+   - Hamyon SDK/CLI migratsiya oqimlarini, auditor skanerlash ish oqimlarini va sarflangan mablag'larni solishtirish vositalarini taqdim eting.
+5. **M4 bosqich — Audit va operatsiyalar**
+   - Auditorning asosiy ish oqimlarini, tanlab ochish API'larini va operatsion ish kitoblarini taqdim eting.
+   - Tashqi kriptografiya/xavfsizlik tekshiruvini rejalashtiring va natijalarni `status.md` da chop eting.
 
-## Outstanding Work
-- Benchmark Halo2 parameter sets (circuit size, lookup strategy) and record the results in the calibration playbook so gas/timeout defaults can be updated alongside the next `confidential_assets_calibration.md` refresh.
-- Finalize auditor disclosure policies and associated selective-viewing APIs, wiring the approved workflow into Torii once the governance draft is signed off.
-- Extend the witness encryption scheme to cover multi-recipient outputs and batched memos, documenting the envelope format for SDK implementers.
-- Commission an external security review of circuits, registries, and parameter-rotation procedures and archive the findings next to the internal audit reports.
-- Specify auditor spentness reconciliation APIs and publish view-key scope guidance so wallet vendors can implement the same attestation semantics.
+Har bir bosqich blokcheyn tarmog'i uchun deterministik bajarilish kafolatlarini saqlab qolish uchun yo'l xaritasi bosqichlarini va tegishli testlarni yangilaydi.
 
-## Implementation Phasing
-1. **Phase M0 — Stop-Ship Hardening**
-   - ✅ Nullifier derivation now follows the Poseidon PRF design (`nk`, `rho`, `asset_id`, `chain_id`) with deterministic commitment ordering enforced in ledger updates.
-   - ✅ Execution enforces proof size caps and per-transaction/per-block confidential quotas, rejecting over-budget transactions with deterministic errors.
-   - ✅ P2P handshake advertises `ConfidentialFeatureDigest` (backend digest + registry fingerprints) and fails mismatches deterministically via `HandshakeConfidentialMismatch`.
-   - ✅ Remove panics in confidential execution paths and add role gating for nodes without matching capability.
-   - ⚪ Enforce verifier timeout budgets and reorg depth bounds for frontier checkpoints.
-     - ✅ Verification timeout budgets enforced; proofs exceeding `verify_timeout_ms` now fail deterministically.
-     - ✅ Frontier checkpoints now respect `reorg_depth_bound`, pruning checkpoints older than the configured window while keeping deterministic snapshots.
-   - Introduce `AssetConfidentialPolicy`, policy FSM, and enforcement gates for mint/transfer/reveal instructions.
-   - Commit `conf_features` in block headers and refuse validator participation when registry/parameter digests diverge.
-2. **Phase M1 — Registries & Parameters**
-   - Land `ZkVerifierEntry`, `PedersenParams`, and `PoseidonParams` registries with governance ops, genesis anchoring, and cache management.
-   - Wire syscall to require registry lookups, gas schedule IDs, schema hashing, and size checks.
-   - Ship encrypted payload format v1, wallet key derivation vectors, and CLI support for confidential key management.
-3. **Phase M2 — Gas & Performance**
-   - Implement deterministic gas schedule, per-block counters, and benchmark harnesses with telemetry (verify latency, proof sizes, mempool rejections).
-   - Harden CommitmentTree checkpoints, LRU loading, and nullifier indices for multi-asset workloads.
-4. **Phase M3 — Rotation & Wallet Tooling**
-   - Enable multi-parameter and multi-version proof acceptance; support governance-driven activation/deprecation with transition runbooks.
-   - Deliver wallet SDK/CLI migration flows, auditor scanning workflows, and spentness reconciliation tooling.
-5. **Phase M4 — Audit & Ops**
-   - Provide auditor key workflows, selective disclosure APIs, and operational runbooks.
-   - Schedule external cryptography/security review and publish findings in `status.md`.
+### SDK va armatura qamrovi (M1 bosqich)
 
-Each phase updates roadmap milestones and associated tests to maintain deterministic execution guarantees for the blockchain network.
-
-### SDK & Fixture Coverage (Phase M1)
-
-Encrypted payload v1 now ships with canonical fixtures so every SDK produces the
-same Norito envelopes and transaction hashes. The golden artefacts live in
-`fixtures/confidential/wallet_flows_v1.json` and are exercised directly by the
-Rust and Swift suites (`crates/iroha_data_model/tests/confidential_wallet_fixtures.rs`,
+Shifrlangan foydali yuk v1 endi kanonik qurilmalar bilan birga keladi, shuning uchun har bir SDK ishlab chiqaradi
+bir xil Norito konvertlari va tranzaksiya xeshlari. Oltin buyumlar yashaydi
+`fixtures/confidential/wallet_flows_v1.json` va bevosita tomonidan amalga oshiriladi
+Rust va Swift to'plamlari (`crates/iroha_data_model/tests/confidential_wallet_fixtures.rs`,
 `IrohaSwift/Tests/IrohaSwiftTests/ConfidentialWalletFixturesTests.swift`):
 
 ```bash
@@ -398,22 +371,20 @@ cargo test -p iroha_data_model confidential_wallet_fixtures
 
 # Swift parity (builds the same envelopes via TxBuilder/NativeBridge)
 cd IrohaSwift && swift test --filter ConfidentialWalletFixturesTests
-```
+```Har bir moslama ish identifikatorini, imzolangan tranzaksiya hexini va kutilganini qayd qiladi
+hash. Swift enkoderi hali korpusni ishlab chiqara olmasa - `zk-transfer-basic`
+hali ham `ZkTransfer` quruvchisi tomonidan himoyalangan - sinov to'plami `XCTSkip` chiqaradi, shuning uchun
+yo'l xaritasi hali ham bog'lanishni talab qiladigan oqimlarni aniq ko'rsatadi. Armatura yangilanmoqda
+format versiyasiga to'sqinlik qilmasdan fayl SDK-larni saqlab, ikkala to'plamda ham muvaffaqiyatsizlikka uchraydi
+va Rust ma'lumotnomasini qulflash bosqichida amalga oshirish.
 
-Every fixture records the case identifier, signed transaction hex, and expected
-hash. When the Swift encoder cannot yet produce the case—`zk-transfer-basic` is
-still gated by the `ZkTransfer` builder—the test suite emits `XCTSkip` so the
-roadmap clearly tracks which flows still require bindings. Updating the fixture
-file without bumping the format version will fail both suites, keeping the SDKs
-and Rust reference implementation in lock-step.
-
-#### Swift builders
-`TxBuilder` exposes asynchronous and callback-based helpers for every
-confidential request (`IrohaSwift/Sources/IrohaSwift/TxBuilder.swift:1183`).
-The builders rely on the `connect_norito_bridge` exports
+#### Tez quruvchilar
+`TxBuilder` har bir kishi uchun asinxron va qayta qo'ng'iroqqa asoslangan yordamchilarni ochib beradi.
+maxfiy so'rov (`IrohaSwift/Sources/IrohaSwift/TxBuilder.swift:1183`).
+Quruvchilar `connect_norito_bridge` eksportiga tayanadilar
 (`crates/connect_norito_bridge/src/lib.rs:3337`,
-`IrohaSwift/Sources/IrohaSwift/NativeBridge.swift:1014`) so the generated
-payloads match the Rust host encoders byte-for-byte. Example:
+`IrohaSwift/Sources/IrohaSwift/NativeBridge.swift:1014`) shuning uchun yaratilgan
+foydali yuklar Rust xost kodlovchilariga bayt-bayt mos keladi. Misol:
 
 ```swift
 let account = AccountId.make(publicKey: keypair.publicKey, domain: "wonderland")
@@ -430,18 +401,18 @@ try await TxBuilder(client: client)
     .submit(registerZkAsset: request, keypair: keypair)
 ```
 
-Shielding/unshielding follow the same pattern (`submit(shield:)`,
-`submit(unshield:)`), and the Swift fixture tests re-run the builders with
-deterministic key material to guarantee the generated transaction hashes remain
-equal to the ones stored in `wallet_flows_v1.json`.
+Himoyalash/ekrandan chiqarish bir xil naqshga amal qiladi (`submit(shield:)`,
+`submit(unshield:)`) va Swift armatura sinovlari quruvchilarni qayta ishlaydi.
+yaratilgan tranzaksiya xeshlarini kafolatlash uchun deterministik asosiy material
+`wallet_flows_v1.json` da saqlanganlarga teng.
 
-#### JavaScript builders
-The JavaScript SDK mirrors the same flows via the transaction helpers exported
-from `javascript/iroha_js/src/transaction.js`. Builders such as
-`buildRegisterZkAssetTransaction` and `buildRegisterZkAssetInstruction`
-(`javascript/iroha_js/src/instructionBuilders.js:1832`) normalise verifying key
-identifiers and emit Norito payloads that the Rust host can accept without any
-adapters. Example:
+#### JavaScript quruvchilari
+JavaScript SDK eksport qilingan tranzaksiya yordamchilari orqali bir xil oqimlarni aks ettiradi
+`javascript/iroha_js/src/transaction.js` dan. kabi quruvchilar
+`buildRegisterZkAssetTransaction` va `buildRegisterZkAssetInstruction`
+(`javascript/iroha_js/src/instructionBuilders.js:1832`) tekshirish kalitini normallashtiradi
+identifikatorlar va Rust xosti hech qanday holda qabul qilishi mumkin bo'lgan Norito foydali yuklarni chiqaradi
+adapterlar. Misol:
 
 ```js
 import {
@@ -466,37 +437,35 @@ const signed = signTransaction(unsigned, myKeypair);
 await new ToriiClient({ baseUrl: "https://torii" }).submitTransaction(signed);
 ```
 
-Shield, transfer, and unshield builders follow the same pattern, giving JS
-callers the same ergonomics as Swift and Rust. Tests under
-`javascript/iroha_js/test/transactionBuilder.test.js` cover the normalisation
-logic while the fixtures above keep the signed transaction bytes consistent.
+Shield, transfer va unshield quruvchilar bir xil naqshga amal qilib, JS beradi
+qo'ng'iroq qiluvchilar Swift va Rust bilan bir xil ergonomikaga ega. Sinovlar ostida
+`javascript/iroha_js/test/transactionBuilder.test.js` normallashtirishni qamrab oladi
+mantiq, yuqoridagi moslamalar imzolangan tranzaksiya baytlarini izchil saqlaydi.
 
-### Telemetry & Monitoring (Phase M2)
+### Telemetriya va monitoring (M2 bosqichi)
 
-Phase M2 now exports CommitmentTree health directly via Prometheus and Grafana:
+Faza M2 endi CommitmentTree sog‘lig‘ini to‘g‘ridan-to‘g‘ri Prometheus va Grafana orqali eksport qiladi:
 
-- `iroha_confidential_tree_commitments`, `iroha_confidential_tree_depth`, `iroha_confidential_root_history_entries`, and `iroha_confidential_frontier_checkpoints` expose the live Merkle frontier per asset while `iroha_confidential_root_evictions_total` / `iroha_confidential_frontier_evictions_total` count the LRU trims enforced by `zk.root_history_cap` and the checkpoint depth window.
-- `iroha_confidential_frontier_last_checkpoint_height` and `iroha_confidential_frontier_last_checkpoint_commitments` publish the height + commitment count of the most recent frontier checkpoint so reorg drills and rollbacks can prove that checkpoints advance and retain the expected payload volume.
-- The Grafana board (`dashboards/grafana/confidential_assets.json`) includes a depth series, eviction-rate panels, and the existing verifier cache widgets so operators can prove that CommitmentTree depth never collapses even as checkpoints churn.
-- Alert `ConfidentialTreeDepthZero` (in `dashboards/alerts/confidential_assets_rules.yml`) trips once commitments are observed but the reported depth sticks at zero for five minutes.
+- `iroha_confidential_tree_commitments`, `iroha_confidential_tree_depth`, `iroha_confidential_root_history_entries` va `iroha_confidential_frontier_checkpoints` har bir aktiv uchun jonli Merkle chegarasini ochib beradi, `iroha_confidential_root_evictions_total` / Grafana tomonidan hisoblab chiqilgan `zk.root_history_cap` va nazorat punkti chuqurligi oynasi.
+- `iroha_confidential_frontier_last_checkpoint_height` va `iroha_confidential_frontier_last_checkpoint_commitments` eng so'nggi chegara nazorat punktining balandligi + majburiyatlari sonini e'lon qiladi, shuning uchun qayta tashkil etish mashqlari va orqaga qaytarish nazorat punktlari oldinga siljishi va kutilgan yuk hajmini saqlab qolishini isbotlashi mumkin.
+- Grafana platasi (`dashboards/grafana/confidential_assets.json`) chuqurlik seriyasini, evakuatsiya tezligi panellarini va mavjud tekshirgich kesh vidjetlarini o'z ichiga oladi, shuning uchun operatorlar CommitmentTree chuqurligi hatto nazorat nuqtalari ishlamay qolganda ham hech qachon qulab tushmasligini isbotlashlari mumkin.
+- Ogohlantirish `ConfidentialTreeDepthZero` (`dashboards/alerts/confidential_assets_rules.yml` da) majburiyatlar bajarilgandan so'ng uchadi, lekin xabar qilingan chuqurlik besh daqiqa davomida nol bo'lib qoladi.
 
-You can verify the metrics locally before wiring Grafana:
+Grafana simini ulashdan oldin ko'rsatkichlarni mahalliy sifatida tekshirishingiz mumkin:
 
 ```bash
 curl -s http://127.0.0.1:8180/metrics \
   | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="xor#wonderland"}'
 ```
 
-Pair this with `rg 'iroha_confidential_tree_depth'` on the same scrape to confirm that depth grows with new commitments while eviction counters only increase when the history caps trim entries. These values must line up with the Grafana dashboard export you attach to governance evidence bundles.
+Buni `rg 'iroha_confidential_tree_depth'` bilan bir xil qirib tashlash bilan bog'lang, bu chuqurlik yangi majburiyatlar bilan o'sib borishini tasdiqlang, ko'chirish hisoblagichlari esa faqat yozuvlarni qisqartirganda ko'payadi. Bu qiymatlar siz boshqaruv dalillari toʻplamlariga biriktiradigan Grafana boshqaruv paneli eksportiga mos kelishi kerak.
 
-#### Gas schedule telemetry & alerts
+#### Gaz jadvali telemetriyasi va ogohlantirishlarFaza M2, shuningdek, sozlanishi mumkin bo'lgan gaz ko'paytirgichlarini telemetriya quvuriga ulaydi, shunda operatorlar har bir validator chiqarishni tasdiqlashdan oldin bir xil tekshirish xarajatlarini taqsimlashini isbotlashlari mumkin:
 
-Phase M2 also threads the configurable gas multipliers into the telemetry pipeline so operators can prove that every validator shares the same verification costs before approving a release:
+- `iroha_confidential_gas_base_verify` nometall `confidential.gas.proof_base` (standart `250_000`).
+- `iroha_confidential_gas_per_public_input`, `iroha_confidential_gas_per_proof_byte`, `iroha_confidential_gas_per_nullifier` va `iroha_confidential_gas_per_commitment` `ConfidentialConfig` da tegishli tugmachalarini aks ettiradi. Qiymatlar ishga tushirilganda va konfiguratsiya har doim qayta yuklanganda yangilanadi; `irohad` (`crates/irohad/src/main.rs:1591,1642`) faol jadvalni `Telemetry::set_confidential_gas_schedule` orqali o'tkazadi.
 
-- `iroha_confidential_gas_base_verify` mirrors `confidential.gas.proof_base` (default `250_000`).
-- `iroha_confidential_gas_per_public_input`, `iroha_confidential_gas_per_proof_byte`, `iroha_confidential_gas_per_nullifier`, and `iroha_confidential_gas_per_commitment` mirror their respective knobs in `ConfidentialConfig`. Values update at start-up and whenever the config hot-reloads; `irohad` (`crates/irohad/src/main.rs:1591,1642`) pushes the active schedule through `Telemetry::set_confidential_gas_schedule`.
-
-Scrape the gauges alongside the CommitmentTree metrics to confirm the knobs are identical across peers:
+Tutqichlar tengdoshlar orasida bir xil ekanligini tasdiqlash uchun o'lchagichlarni CommitmentTree ko'rsatkichlari bilan birga qirib tashlang:
 
 ```bash
 # compare active multipliers across validators
@@ -506,11 +475,11 @@ for host in validator-a validator-b validator-c; do
 done
 ```
 
-Grafana dashboard `confidential_assets.json` now includes a “Gas Schedule” panel that renders the five gauges and highlights divergence. Alert rules in `dashboards/alerts/confidential_assets_rules.yml` cover:
-- `ConfidentialGasMismatch`: checks the max/min of each multiplier across all scrape targets and pages when any diverge for more than 3 minutes, prompting operators to align `confidential.gas` via hot-reload or redeploy.
-- `ConfidentialGasTelemetryMissing`: warns when Prometheus cannot scrape any of the five multipliers for 5 minutes, indicating a missing scrape target or disabled telemetry.
+Grafana asboblar paneli `confidential_assets.json` endi “Gaz jadvali” panelini o‘z ichiga oladi, u beshta o‘lchagichni ko‘rsatadi va farqni ta’kidlaydi. `dashboards/alerts/confidential_assets_rules.yml` da ogohlantirish qoidalari:
+- `ConfidentialGasMismatch`: 3 daqiqadan ko'proq vaqt davomida bir-biridan uzoqlashganda, barcha qirqish maqsadlari va sahifalar bo'ylab har bir multiplikatorning maksimal/daqiqasini tekshiradi, bu esa operatorlarni issiq qayta yuklash yoki qayta joylashtirish orqali `confidential.gas` ni moslashtirishga undaydi.
+- `ConfidentialGasTelemetryMissing`: Prometheus 5 daqiqa davomida beshta koʻpaytirgichdan birortasini qirib tashlay olmaganida ogohlantiradi, bu qirqish maqsadi yoʻqligini yoki oʻchirilgan telemetriyani koʻrsatadi.
 
-Keep the following PromQL handy for on-call investigations:
+Qo'ng'iroq bo'yicha tekshiruvlar uchun quyidagi PromQL-ni qulay saqlang:
 
 ```promql
 # ensure every multiplier matches across validators (uses the same projection as the alert)
@@ -518,4 +487,4 @@ Keep the following PromQL handy for on-call investigations:
   - min without(instance, job) (iroha_confidential_gas_per_public_input)) == 0
 ```
 
-Deviation should remain zero outside of controlled config rollouts. When changing the gas table, capture before/after scrapes, attach them to the change request, and update `docs/source/confidential_assets_calibration.md` with the new multipliers so governance reviewers can link the telemetry evidence to the calibration report.
+Boshqariladigan konfiguratsiyalar tashqarisida og'ish nolga teng bo'lishi kerak. Gaz jadvalini o'zgartirganda, qirib tashlashdan oldin/keyin oling, ularni o'zgartirish so'roviga qo'shing va `docs/source/confidential_assets_calibration.md` ni yangi multiplikatorlar bilan yangilang, shunda boshqaruv tekshiruvchilari telemetriya dalillarini kalibrlash hisobotiga bog'lashlari mumkin.

@@ -7,94 +7,92 @@ generator: scripts/sync_docs_i18n.py
 source_hash: e7116d28e32d8bd77434edd6767427cc3d2ae0624f4de132b1d0cec3c7d44b86
 source_last_modified: "2025-12-29T18:16:35.938246+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Product Filing (开发备案) Template
-% Hyperledger Iroha Compliance Working Group
-% 2026-05-06
+% SM2/SM3/SM4 ཐོན་རྫས་ཀྱི་ས་ཁྲ་ (开发备案) ཊེམ་པེལེཊ་
+% Hyperledger Iroha བསྟར་སྤྱོད་ལས་བྱེད་སྡེ་ཚན།
+% ༢༠༢༦-༠༥-༠༦
 
-# Instructions
+# བཀོད༌རྒྱ
 
-Use this template when submitting a *product development filing* to a provincial
-or municipal State Cryptography Administration (SCA) office before distributing
-SM-enabled binaries or source artefacts from within mainland China. Replace the
-placeholders with project-specific details, export the completed form as PDF if
-required, and attach the artefacts referenced in the checklist.
+ཊེམ་པེལེཊི་འདི་ *ཐོན་སྐྱེད་གོང་འཕེལ་གྱི་ཡིག་ཆ་* མངའ་སྡེ་ཅིག་ལུ་བཙུགས་པའི་སྐབས་ལག་ལེན་འཐབ།
+ཡང་ན་ ཁྲོམ་སྡེའི་མངའ་སྡེའི་ཡིག་གཟུགས་བདག་སྐྱོང་ (SCA) ཡིག་ཚང་ བཀྲམ་སྤེལ་མ་འབད་བའི་ཧེ་མ།
+SM-enabled གཉིས་ལྡན་ཡང་ན་ རྒྱ་ནག་ལས་ འབྱུང་ཁུངས་ཅ་ཆས་ཚུ་ཨིན། ཚབ་བཙུགས་ནི།
+ལས་འགུལ་གྱི་དམིགས་བསལ་ཁ་གསལ་ཡོད་མི་ས་གནས་ཚུ་ཨིན་པ་ཅིན་ མཇུག་བསྡུ་ཡོད་པའི་འབྲི་ཤོག་འདི་ པི་ཌི་ཨེཕ་སྦེ་ཕྱིར་འདྲེན་འབད།
+དགོས་མཁོ་དང་ བརྟག་ཞིབ་ཐོ་ཡིག་ནང་ གཞི་བསྟུན་འབད་ཡོད་པའི་ ཅ་ཆས་ཚུ་ མཉམ་སྦྲགས་འབད།
 
-# 1. Applicant & Product Summary
+# 1. ཞུ་ཡིག་དང་ཐོན་སྐྱེད་བཅུད་བསྡུས།
 
-| Field | Value |
-|-------|-------|
-| Organisation name | {{ ORGANISATION }} |
-| Registered address | {{ ADDRESS }} |
-| Legal representative | {{ LEGAL_REP }} |
-| Primary contact (name / title / email / phone) | {{ CONTACT }} |
-| Product name | Hyperledger Iroha {{ RELEASE_NAME }} |
-| Product version / build ID | {{ VERSION }} |
-| Filing type | Product development (开发备案) |
-| Filing date | {{ YYYY-MM-DD }} |
+| ཕིལཌ་ | གནས་གོང་ |
+|-------|--|-------------------------------------------------------------------------
+| སྒྲིག་འཛུགས་ཀྱི་མིང་ | {{ ཨོ་རྒྱན་ }} |
+| ཐོ་བཀོད་འབད་ཡོད་པའི་ཁ་བྱང་། | {{ ADDRESS .} |
+| ཁྲིམས་དོན་ངོ་ཚབ་ | { { LEGAL_REP }} |
+| གཞི་རིམ་འབྲེལ་བ་ (མིང་ / མགོ་ཡིག་ / གློག་འཕྲིན་ / ཁ་པར་) | {{ CONTACT }} |
+| ཐོན་རྫས་མིང་ | Hyperledger Iroha {{ RELEASE_NAME 18NT0000003X |
+| ཐོན་སྐྱེད་ཐོན་རིམ་/བཟོ་བསྐྲུན་ཨའི་ཌི་ | {{ ནོར་འཁྲུལ་ }} |
+| ཡིག་སྣོད་དབྱེ་བ་ | ཐོན་རྫས་འཕེལ་རྒྱས་ (开发备案) |
+| ཡིག་ཆའི་ཚེས་གྲངས་ | {YYYY-MM-DD |
 
-# 2. Cryptography Usage Overview
+# 2. ཀྲོབ་མདའ་ལག་ལེན་འཐབ་ཐངས་ཀྱི་སྤྱིར་བཏང་བལྟ་སྟངས།
 
-- Supported algorithms: `SM2`, `SM3`, `SM4` (provide usage matrix below).
-- Usage context:
-  | Algorithm | Component | Purpose | Deterministic safeguards |
+- རྒྱབ་སྐྱོར་འབད་ཡོད་པའི་ཨཱལ་གོ་རི་དམ་: `SM2`, `SM3`, `SM4` (འོག་གི་ལག་ལེན་གྱི་མེ་ཊིགསི་བྱིན་ནི།)
+- ལག་ལེན་སྐབས་དོན།
+  | ཨཱལ་གོ་རི་དམ་ | ཆ་ཤས་ | དམིགས་ཡུལ། | གཏན་འབེབས་ཉེན་སྲུང་། |
   |-----------|-----------|---------|--------------------------|
-  | SM2 | {{ COMPONENT }} | {{ PURPOSE }} | RFC6979 + canonical r∥s enforcement |
-  | SM3 | {{ COMPONENT }} | {{ PURPOSE }} | Deterministic hashing via `Sm3Digest` |
-  | SM4 | {{ COMPONENT }} | {{ PURPOSE }} | AEAD (GCM/CCM) with enforced nonce policy |
-- Non-SM algorithms in build: {{ OTHER_ALGORITHMS }} (for completeness).
+  | SM2 | { { COMPONENT )} | {{ པུར་པོན }} | RFC6979 + ཁྲིམས་ལུགས་ཀྱི་ r∥s བཀག་འཛིན་ |
+  | SM3 | { { COMPONENT )} | {{ པུར་པོན }} | `Sm3Digest` བརྒྱུད་དེ་ གཏན་འབེབས་ཧ་ཤིང་། |
+  | SM4 | { { COMPONENT )} | {{ པུར་པོན }} | AEAD (GCM/CCM) གིས་ བཀག་ཆ་འབད་མི་ ནོནསི་སྲིད་བྱུས་དང་གཅིག་ཁར་ |
+- བཟོ་བསྐྲུན་ནང་མེན་པའི་ཨེསི་ཨེམ་ཨཱལ་གོ་རི་དམ་ཚུ་: {{ OTHER_ALGORIMS , ) (མཇུག་བསྡུ་གི་དོན་ལུ་)།
 
-# 3. Development & Supply Chain Controls
+# 3. གོང་འཕེལ་དང་མཁོ་སྤྲོད་ཀྱི་རྒྱུན་རིམ་ཚོད་འཛིན།
 
-- Source code repository: {{ REPOSITORY_URL }}
-- Deterministic build instructions:
+- འབྱུང་ཁུངས་ཨང་རྟགས་མཛོད་ཁང་: { REPOSITORY_URL }}
+- གཏན་འབེབས་བཟོ་བའི་བསྐྲུན་པའི་བཀོད་རྒྱ་ཚུ།
   1. `git clone {{ REPOSITORY_URL }} && git checkout {{ COMMIT_SHA }}`
-  2. `cargo build --workspace --locked --release --features "sm sm-ffi-openssl"` (adjust as needed).
-  3. SBOM generated via `cargo auditable` / CycloneDX (`{{ SBOM_PATH }}`).
-- Continuous integration environment summary:
-  | Item | Value |
-  |------|-------|
-  | Build OS / version | {{ BUILD_OS }} |
-  | Compiler toolchain | {{ TOOLCHAIN }} |
-  | OpenSSL / Tongsuo source | {{ OPENSSL_SOURCE }} |
-  | Reproducibility checksum | {{ CHECKSUM }} |
+  2. `cargo build --workspace --locked --release --features "sm sm-ffi-openssl"` (དགོས་མཁོའི་བདེ་སྒྲིག་)།
+  3. `cargo auditable` བརྒྱུད་དེ་བཟོ་བཏོན་བྱས། (`{{ SBOM_PATH }}`)
+- མུ་མཐུད་མཉམ་བསྡོམས་མཐའ་འཁོར་བཅུད་བསྡུས།
+  | རྣམ་གྲངས་ | གནས་གོང་ |
+  |-----|-|-----------------------------------
+  | OS / ཐོན་རིམ་བཟོ་བསྐྲུན་འབད། | { { BUILD_OS #} |
+  | བསྡུ་སྒྲིག་འབད་མི་ལག་ཆས་རྒྱུན་ཚད། | {{ TOOLCHAIN ​​}} |
+  | OpenSSL / ཊོང་སུའོ་འབྱུང་ཁུངས་ | {{ ཨོཔ་ཨེན་ཨེསི་ཨེལ་_སོ་ཡུ་ཨར་སི |
+  | བསྐྱར་བཟོ་འབད་བཏུབ་པའི་ བརྟག་དཔྱད། | { { ཆ ་སིག་སམ་ ་} |
 
-# 4. Key Management & Security
+# 4. ལྡེ་མིག་དང་བདེ་འཇགས།
 
-- Default enabled SM features: {{ DEFAULTS }} (e.g., verify-only).
-- Configuration flags required for signing: {{ CONFIG_FLAGS }}.
-- Key custody approach:
-  | Item | Details |
-  |------|---------|
-  | Key generation tool | {{ KEY_TOOL }} |
-  | Storage medium | {{ STORAGE_MEDIUM }} |
-  | Backup policy | {{ BACKUP_POLICY }} |
-  | Access controls | {{ ACCESS_CONTROLS }} |
-- Incident response contacts (24/7):
-  | Role | Name | Phone | Email |
-  |------|------|-------|-------|
-  | Crypto lead | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
-  | Platform ops | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
-  | Legal liaison | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
+- སྔོན་སྒྲིག་ལྕོགས་ཅན་བཟོ་ཡོད་མི་ ཨེསི་ཨེམ་ཁྱད་རྣམ་: {{ DEFAULTS }} (དཔེར་ན་ བདེན་དཔྱད་འབད་-རྐྱངམ་ཅིག་)།
+- མཚན་རྟགས་བཀོད་ནིའི་དོན་ལུ་དགོ་པའི་རིམ་སྒྲིག་དར་ཆ་ཚུ་: { { CONFIG_FLAGS }}.
+- གཙོ་བོ་བདག་འཛིན་ཐབས་ལམ།
+  | རྣམ་གྲངས་ | ཁ་གསལ་ |
+  |------|--------------------------------------------------------------------
+  | གཙོ་རིམ་ལག་ཆས། | {ཀེ་_TOOL }} |
+  | གསོག་འཇོག་བརྒྱུད་ལམ་ | {{STORAGE_MEDIUM }} |
+  | རྒྱབ་ཐག་སྲིད་བྱུས་ | { རྒྱབ་ལྗོངས་_POLICY |
+  | འཛུལ་སྤྱོད་ཚད་འཛིན་ཚུ་ | { ཨེ་སི་སི་_CONTROLS .} |
+- བྱུང་རྐྱེན་ལན་འདེབས་འབྲེལ་བ་ (༢༤/༧):
+  | འགན་ཁུར་ | མིང | ཁ་པར་ | གློག་འཕྲིན་ |
+  |-------|-------------------|-----------|
+  | ཀིརིཔ་ཊོ་ལིཌ་ | {་་་་་་་་ }} | {        }} | {{ ཨེ་ཨེམ་ཨེ་ཨེལ་ }} |
+  | སྟེགས་རིས་ | {་་་་་་་་ }} | {        }} | {{ ཨེ་ཨེམ་ཨེ་ཨེལ་ }} |
+  | ཁྲིམས་དོན་འབྲེལ་བ། | {་་་་་་་་ }} | {        }} | {{ ཨེ་ཨེམ་ཨེ་ཨེལ་ }} |
 
-# 5. Attachments Checklist
+# 5. མཉམ་མཐུད་དཔྱད་གཞི།- [ ] འབྱུང་ཁུངས་ཨང་རྟགས་པར་ལེན་ (`{{ SOURCE_ARCHIVE }}`) དང་ཧེཤ་།
+- [ ] གཏན་འབེབས་བཟོ་བསྐྲུན་ཡིག་ཆ་ / བསྐྱར་བཟོ་འབད་ཚུགས་པའི་དྲན་ཐོ།
+- [ ] SBOM (`{{ SBOM_PATH }}`) དང་བརྟེན་པའི་མངོན་རྟགས་ (`Cargo.lock` མཛུབ་མོའི་པར་རིས།)
+- [ ] གཏན་འབེབས་བརྟག་དཔྱད་ཡིག་ཆ་ (`scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`).
+- [ ] ཊེ་ལི་མི་ཊི་ ཌེཤ་བོརཌ་ ཕྱིར་གཏོང་ ཨེསི་ཨེམ་ བལྟ་རྟོག་འབད་ཚུགས་པའི་ སྟོན་པ།
+- [ ] ཕྱིར་འདྲེན་-ཚད་འཛིན་གསལ་བཤད།(ཊེམ་པེལེཊི་སོ་སོར་བལྟ།)
+- [ ] རྩིས་ཞིབ་སྙན་ཞུ་ ཡང་ན་ ཕྱོགས་གསུམ་པའི་བརྟག་ཞིབ་ཚུ་ (ཧེ་མ་ལས་མཇུག་བསྡུ་བ་ཅིན་)།
 
-- [ ] Source code snapshot (`{{ SOURCE_ARCHIVE }}`) and hash.
-- [ ] Deterministic build script / reproducibility notes.
-- [ ] SBOM (`{{ SBOM_PATH }}`) and dependency manifest (`Cargo.lock` fingerprint).
-- [ ] Deterministic test transcripts (`scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`).
-- [ ] Telemetry dashboard export demonstrating SM observability.
-- [ ] Export-control statement (see separate template).
-- [ ] Audit reports or third-party assessments (if already completed).
+# ༦ ཞུ་ཡིག་ཕུལ་མི་གསལ་བསྒྲགས།
 
-# 6. Applicant Declaration
+> གོང་འཁོད་ཀྱི་བརྡ་དོན་འདི་ གཏན་གཏན་སྦེ་ཡོདཔ་སྦེ་ ངེས་གཏན་བཟོཝ་ཨིན།
+> ཀིརིཔ་ཊོ་གཱ་ར་ཕིག་གི་ལས་འགན་འདི་ འཇུག་སྤྱོད་འབད་བཏུབ་པའི་ པི་ཨར་སི་ཁྲིམས་ལུགས་དང་སྒྲིག་གཞི་ཚུ་དང་འཁྲིལ་ཏེ་ཨིན།
+> དེ་ལས་ ལས་སྡེ་འདི་གིས་ ཉུང་ཤོས་རང་ བཙུགས་ཡོད་པའི་ཅ་ཆས་ཚུ་ བདག་འཛིན་འཐབ་འོང་།
+> ལོ་གསུམ།
 
-> I confirm that the above information is accurate, that the disclosed
-> cryptographic functionality complies with applicable PRC laws and regulations,
-> and that the organisation will maintain the submitted artefacts for at least
-> three years.
-
-- Signature (legal representative): ________________________
-- Date: ________________________
-
+- མཚན་རྟགས་ (ཁྲིམས་མཐུན་ངོ་ཚབ།): ________________________
+- སྤྱི་ཚེས: ________________________

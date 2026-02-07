@@ -6,55 +6,56 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 8bb3e19ca5eb661d202b5e3b9cd118207ded277e8ff717e16a342b71e7a67857
 source_last_modified: "2026-01-03T18:07:59.200257+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# AND6 EU Legal Sign-off Memo Template
+# اور 6 EU قانونی سائن آف میمو ٹیمپلیٹ
 
-This memo records the legal review required by roadmap item **AND6** before the
-EU (ETSI/GDPR) artefact packet is submitted to regulators. Counsel should clone
-this template per release, populate the fields below, and store the signed copy
-alongside the immutable artefacts referenced in the memo.
+اس میمو میں روڈ میپ آئٹم ** اور 6 ** کے ذریعہ مطلوبہ قانونی جائزہ ریکارڈ کیا گیا ہے
+EU (ETSI/GDPR) آرٹ فیکٹ پیکٹ ریگولیٹرز کو پیش کیا جاتا ہے۔ وکیل کو کلون کرنا چاہئے
+یہ ٹیمپلیٹ فی ریلیز ، نیچے والے فیلڈز کو آباد کریں ، اور دستخط شدہ کاپی اسٹور کریں
+میمو میں حوالہ کردہ غیر منقولہ نوادرات کے ساتھ ساتھ۔
 
-## Summary
+## خلاصہ
 
-- **Release / Train:** `<e.g., 2026.1 GA>`
-- **Review date:** `<YYYY-MM-DD>`
-- **Counsel / Reviewer:** `<name + organisation>`
-- **Scope:** `ETSI EN 319 401 security target, GDPR DPIA summary, SBOM attestation`
-- **Associated tickets:** `<governance or legal issue IDs>`
+- ** ریلیز / ٹرین: ** `<e.g., 2026.1 GA>`
+- ** جائزہ کی تاریخ: ** `<YYYY-MM-DD>`
+- ** کونسل / جائزہ لینے والا: ** `<name + organisation>`
+- ** دائرہ کار: ** `ETSI EN 319 401 security target, GDPR DPIA summary, SBOM attestation`
+- ** وابستہ ٹکٹ: ** `<governance or legal issue IDs>`
 
-## Artefact Checklist
+## آرٹ فیکٹ چیک لسٹ
 
-| Artefact | SHA-256 | Location / Link | Notes |
-|----------|---------|-----------------|-------|
-| `security_target.md` | `<hash>` | `docs/source/compliance/android/eu/security_target.md` + governance archive | Confirm release identifiers & threat model adjustments. |
-| `gdpr_dpia_summary.md` | `<hash>` | Same directory / localization mirrors | Ensure redaction policy references match `sdk/android/telemetry_redaction.md`. |
-| `sbom_attestation.md` | `<hash>` | Same directory + cosign bundle in evidence bucket | Verify CycloneDX + provenance signatures. |
-| Evidence log row | `<hash>` | `docs/source/compliance/android/evidence_log.csv` | Row number `<n>` |
-| Device-lab contingency bundle | `<hash>` | `artifacts/android/device_lab_contingency/<YYYYMMDD>/*.tgz` | Confirms failover rehearsal tied to this release. |
+| نوادرات | SHA-256 | مقام / لنک | نوٹ |
+| ---------- | --------- | ----------------- | ------- |
+| `security_target.md` | `<hash>` | `docs/source/compliance/android/eu/security_target.md` + گورننس آرکائیو | رہائی کے شناخت کنندگان اور دھمکی کے ماڈل ایڈجسٹمنٹ کی تصدیق کریں۔ |
+| `gdpr_dpia_summary.md` | `<hash>` | ایک ہی ڈائرکٹری / لوکلائزیشن آئینے | یقینی بنائیں کہ Redaction پالیسی کے حوالہ جات `sdk/android/telemetry_redaction.md` سے مماثل ہیں۔ |
+| `sbom_attestation.md` | `<hash>` | ثبوت بالٹی میں ایک ہی ڈائرکٹری + کوسائن بنڈل | cyclonedx + پروویژن دستخطوں کی تصدیق کریں۔ |
+| ثبوت لاگ قطار | `<hash>` | `docs/source/compliance/android/evidence_log.csv` | قطار نمبر `<n>` |
+| ڈیوائس لیب ہنگامی بنڈل | `<hash>` | `artifacts/android/device_lab_contingency/<YYYYMMDD>/*.tgz` | اس ریلیز سے منسلک فیل اوور ریہرسل کی تصدیق کرتا ہے۔ |
 
-> Attach additional rows if the packet contains more files (for example, privacy
-> appendices or DPIA translations). Every artefact must reference its immutable
-> upload target and the Buildkite job that produced it.
+> اضافی قطاریں منسلک کریں اگر پیکٹ میں مزید فائلیں ہوں (مثال کے طور پر ، رازداری
+> ضمیمہ یا ڈی پی آئی اے کے ترجمے)۔ ہر نوادرات کو اس کے ناقابل تسخیر کا حوالہ دینا چاہئے
+> ہدف اور بلڈکائٹ جاب اپ لوڈ کریں جس نے اسے تیار کیا۔
 
-## Findings & Exceptions
+## نتائج اور مستثنیات
 
-- `None.` *(Replace with bullet list covering residual risks, compensating
-  controls, or required follow-up actions.)*
+- `None.` *(گولیوں کی فہرست کے ساتھ بدل دیں ، بقایا خطرات کو پورا کرتے ہوئے ، معاوضہ
+  کنٹرول ، یا مطلوبہ فالو اپ اقدامات۔)*
 
-## Approval
+## منظوری
 
-- **Decision:** `<Approved / Approved with conditions / Blocked>`
-- **Signature / Timestamp:** `<digital signature or email reference>`
-- **Follow-up owners:** `<team + due date for any conditions>`
+- ** فیصلہ: ** `<Approved / Approved with conditions / Blocked>`
+- ** دستخط / ٹائم اسٹیمپ: ** `<digital signature or email reference>`
+- ** فالو اپ مالکان: ** `<team + due date for any conditions>`
 
-Upload the final memo to the governance evidence bucket, copy the SHA-256 into
-`docs/source/compliance/android/evidence_log.csv`, and link the upload path in
-`status.md`. If the decision is “Blocked,” escalate to the AND6 steering
-committee and document remediation steps in both the roadmap hot-list and the
-device-lab contingency log.
+حتمی میمو کو گورننس شواہد کی بالٹی میں اپ لوڈ کریں ، SHA-256 میں کاپی کریں
+`docs/source/compliance/android/evidence_log.csv` ، اور اپ لوڈ کے راستے کو لنک کریں
+`status.md`۔ اگر فیصلہ "مسدود" ہے تو ، اور 6 اسٹیئرنگ میں اضافہ کریں
+کمیٹی اور دستاویز کے تدارک کے اقدامات دونوں روڈ میپ ہاٹ لسٹ اور دونوں میں
+ڈیوائس لیب ہنگامی لاگ

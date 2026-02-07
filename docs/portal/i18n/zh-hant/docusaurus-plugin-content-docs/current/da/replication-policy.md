@@ -4,65 +4,67 @@ direction: ltr
 source: docs/portal/docs/da/replication-policy.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-title: Data Availability Replication Policy
-sidebar_label: Replication Policy
-description: Governance-enforced retention profiles applied to all DA ingest submissions.
+標題：數據可用性複制策略
+sidebar_label：複製策略
+描述：適用於所有 DA 攝取提交的治理強制保留配置文件。
 ---
 
-:::note Canonical Source
+:::注意規範來源
 :::
 
-# Data Availability Replication Policy (DA-4)
+# 數據可用性複制策略 (DA-4)
 
-_Status: In Progress — Owners: Core Protocol WG / Storage Team / SRE_
+_狀態：進行中 — 所有者：核心協議工作組/存儲團隊/SRE_
 
-The DA ingestion pipeline now enforces deterministic retention targets for
-every blob class described in `roadmap.md` (workstream DA-4). Torii refuses to
-persist caller-provided retention envelopes that do not match the configured
-policy, guaranteeing that every validator/storage node retains the required
-number of epochs and replicas without relying on submitter intent.
+DA 攝取管道現在強制執行確定性保留目標
+`roadmap.md`（工作流 DA-4）中描述的每個 Blob 類。 Torii 拒絕
+保留調用者提供的與配置不匹配的保留信封
+策略，保證每個驗證器/存儲節點保留所需的
+紀元和副本的數量，而不依賴於提交者的意圖。
 
-## Default policy
+## 默認策略
 
-| Blob class | Hot retention | Cold retention | Required replicas | Storage class | Governance tag |
-|------------|---------------|----------------|-------------------|----------------|----------------|
-| `taikai_segment` | 24 hours | 14 days | 5 | `hot` | `da.taikai.live` |
-| `nexus_lane_sidecar` | 6 hours | 7 days | 4 | `warm` | `da.sidecar` |
-| `governance_artifact` | 12 hours | 180 days | 3 | `cold` | `da.governance` |
-| _Default (all other classes)_ | 6 hours | 30 days | 3 | `warm` | `da.default` |
+|斑點類|熱保持|保冷|所需副本 |存儲類|治理標籤|
+|------------------------|--------------|----------------|--------------------------------|----------------|----------------|
+| `taikai_segment` | 24小時| 14 天 | 5 | `hot` | `da.taikai.live` |
+| `nexus_lane_sidecar` | 6 小時 | 7 天 | 4 | `warm` | `da.sidecar` |
+| `governance_artifact` | 12 小時 | 180 天 | 3 | `cold` | `da.governance` |
+| _默認（所有其他類）_ | 6 小時 | 30 天 | 3 | `warm` | `da.default` |
 
-These values are embedded in `torii.da_ingest.replication_policy` and applied to
-all `/v1/da/ingest` submissions. Torii rewrites manifests with the enforced
-retention profile and emits a warning when callers provide mismatched values so
-operators can detect stale SDKs.
+這些值嵌入在 `torii.da_ingest.replication_policy` 中並應用於
+所有 `/v1/da/ingest` 提交內容。 Torii 使用強制重寫清單
+保留配置文件並在調用者提供不匹配的值時發出警告，以便
+運營商可以檢測過時的 SDK。
 
-### Taikai availability classes
+### Taikai 可用性課程
 
-Taikai routing manifests (`taikai.trm`) declare an `availability_class`
-(`hot`, `warm`, or `cold`). Torii enforces the matching policy before chunking
-so operators can scale replica counts per stream without editing the global
-table. Defaults:
+Taikai 路由清單 (`taikai.trm`) 聲明 `availability_class`
+（`hot`、`warm` 或 `cold`）。 Torii 在分塊之前強制執行匹配策略
+因此操作員可以擴展每個流的副本數量，而無需編輯全局
+表。默認值：
 
-| Availability class | Hot retention | Cold retention | Required replicas | Storage class | Governance tag |
-|--------------------|---------------|----------------|-------------------|----------------|----------------|
-| `hot` | 24 hours | 14 days | 5 | `hot` | `da.taikai.live` |
-| `warm` | 6 hours | 30 days | 4 | `warm` | `da.taikai.warm` |
-| `cold` | 1 hour | 180 days | 3 | `cold` | `da.taikai.archive` |
+|可用性等級 |熱保持|保冷|所需副本 |存儲類|治理標籤|
+|--------------------|-------------|----------------|--------------------------------|----------------|----------------|
+| `hot` | 24小時| 14 天 | 5 | `hot` | `da.taikai.live` |
+| `warm` | 6 小時 | 30 天 | 4 | `warm` | `da.taikai.warm` |
+| `cold` | 1小時| 180 天 | 3 | `cold` | `da.taikai.archive` |
 
-Missing hints default to `hot` so live broadcasts retain the strongest policy.
-Override the defaults via
-`torii.da_ingest.replication_policy.taikai_availability` if your network uses
-different targets.
+缺失提示默認為 `hot`，因此直播保留最強策略。
+通過覆蓋默認值
+`torii.da_ingest.replication_policy.taikai_availability` 如果您的網絡使用
+不同的目標。
 
-## Configuration
+## 配置
 
-The policy lives under `torii.da_ingest.replication_policy` and exposes a
-*default* template plus an array of per-class overrides. Class identifiers are
-case-insensitive and accept `taikai_segment`, `nexus_lane_sidecar`,
-`governance_artifact`, or `custom:<u16>` for governance-approved extensions.
-Storage classes accept `hot`, `warm`, or `cold`.
+該保單位於 `torii.da_ingest.replication_policy` 下，並公開了
+*默認*模板加上每個類覆蓋的數組。類標識符是
+不區分大小寫並接受 `taikai_segment`、`nexus_lane_sidecar`、
+`governance_artifact` 或 `custom:<u16>` 用於治理批准的擴展。
+存儲類別接受 `hot`、`warm` 或 `cold`。
 
 ```toml
 [torii.da_ingest.replication_policy.default_retention]
@@ -82,12 +84,12 @@ storage_class = "hot"
 governance_tag = "da.taikai.live"
 ```
 
-Leave the block untouched to run with the defaults listed above. To tighten a
-class, update the matching override; to change the baseline for new classes,
-edit `default_retention`.
+保持塊不變，以使用上面列出的默認值運行。擰緊一個
+類，更新匹配的覆蓋；更改新類的基線，
+編輯 `default_retention`。
 
-Taikai availability classes can be overridden independently via
-`torii.da_ingest.replication_policy.taikai_availability`:
+Taikai 可用性類可以通過獨立覆蓋
+`torii.da_ingest.replication_policy.taikai_availability`：
 
 ```toml
 [[torii.da_ingest.replication_policy.taikai_availability]]
@@ -100,30 +102,30 @@ storage_class = "cold"
 governance_tag = "da.taikai.archive"
 ```
 
-## Enforcement semantics
+## 強制語義
 
-- Torii replaces the user-supplied `RetentionPolicy` with the enforced profile
-  before chunking or manifest emission.
-- Pre-built manifests that declare a mismatched retention profile are rejected
-  with `400 schema mismatch` so stale clients cannot weaken the contract.
-- Every override event is logged (`blob_class`, submitted vs expected policy)
-  to surface non-compliant callers during rollout.
+- Torii 使用強製配置文件替換用戶提供的 `RetentionPolicy`
+  在分塊或顯式發射之前。
+- 聲明不匹配保留配置文件的預構建清單將被拒絕
+  與 `400 schema mismatch` 因此過時的客戶不能削弱合同。
+- 記錄每個覆蓋事件（`blob_class`，已提交與預期策略）
+  在推出期間顯示不合規的呼叫者。
 
-See [Data Availability Ingest Plan](ingest-plan.md) (Validation checklist) for the updated gate
-covering retention enforcement.
+請參閱[數據可用性攝取計劃](ingest-plan.md)（驗證清單）了解更新後的門
+涵蓋保留執行。
 
-## Re-replication workflow (DA-4 follow-up)
+## 重新復制工作流程（DA-4 後續）
 
-Retention enforcement is only the first step. Operators must also prove that
-live manifests and replication orders stay aligned with the configured policy so
-that SoraFS can automatically re-replicate out-of-compliance blobs.
+保留強制執行只是第一步。運營商還必須證明
+實時清單和復制訂單與配置的策略保持一致，因此
+SoraFS 可以自動重新復制不合規的 blob。
 
-1. **Watch for drift.** Torii emits
-   `overriding DA retention policy to match configured network baseline` whenever
-   a caller submits stale retention values. Pair that log with
-   `torii_sorafs_replication_*` telemetry to spot replica shortfalls or delayed
-   redeployments.
-2. **Diff intent vs live replicas.** Use the new audit helper:
+1. **注意漂移。 ** Torii 發出
+   `overriding DA retention policy to match configured network baseline` 每當
+   調用者提交過時的保留值。將該日誌與
+   `torii_sorafs_replication_*` 遙測發現副本短缺或延遲
+   重新部署。
+2. **意圖與實時副本的區別。 ** 使用新的審計助手：
 
    ```bash
    cargo xtask da-replication-audit \
@@ -133,29 +135,29 @@ that SoraFS can automatically re-replicate out-of-compliance blobs.
      --json-out artifacts/da/replication_audit.json
    ```
 
-   The command loads `torii.da_ingest.replication_policy` from the provided
-   config, decodes each manifest (JSON or Norito), and optionally matches any
-   `ReplicationOrderV1` payloads by manifest digest. The summary flags two
-   conditions:
+   該命令從提供的加載 `torii.da_ingest.replication_policy`
+   配置，解碼每個清單（JSON 或 Norito），並可選擇匹配任何
+   `ReplicationOrderV1` 清單摘要的有效負載。摘要標記了兩個
+   條件：
 
-   - `policy_mismatch` – the manifest retention profile diverges from the enforced
-     policy (this should never happen unless Torii is misconfigured).
-   - `replica_shortfall` – the live replication order requests fewer replicas than
-     `RetentionPolicy.required_replicas` or provides fewer assignments than its
-     target.
+   - `policy_mismatch` – 清單保留配置文件與強制執行的不同
+     策略（除非 Torii 配置錯誤，否則這種情況永遠不會發生）。
+   - `replica_shortfall` – 實時復制訂單請求的副本數少於
+     `RetentionPolicy.required_replicas` 或提供比其更少的分配
+     目標。
 
-   A non-zero exit status indicates an active shortfall so CI/on-call automation
-   can page immediately. Attach the JSON report to the
+   非零退出狀態表示存在活躍短缺，因此 CI/on-call 自動化
+   可以立即尋呼。將 JSON 報告附加到
    `docs/examples/da_manifest_review_template.md`
-   packet for Parliament votes.
-3. **Trigger re-replication.** When the audit reports a shortfall, issue a fresh
-   `ReplicationOrderV1` via the governance tooling described in
-   [SoraFS storage capacity marketplace](../sorafs/storage-capacity-marketplace.md) and re-run the audit
-   until the replica set converges. For emergency overrides, pair the CLI output
-   with `iroha app da prove-availability` so that SREs can reference the same digest
-   and PDP evidence.
+   議會投票的數據包。
+3. **觸發重新復制。 ** 當審計報告不足時，發出新的
+   `ReplicationOrderV1` 通過中描述的治理工具
+   [SoraFS存儲容量市場](../sorafs/storage-capacity-marketplace.md)並重新運行審核
+   直到副本集收斂。對於緊急覆蓋，請將 CLI 輸出配對
+   與 `iroha app da prove-availability` 以便 SRE 可以引用相同的摘要
+   和 PDP 證據。
 
-Regression coverage lives in `integration_tests/tests/da/replication_policy.rs`;
-the suite submits a mismatched retention policy to `/v1/da/ingest` and verifies
-that the fetched manifest exposes the enforced profile instead of the caller
-intent.
+回歸覆蓋範圍位於 `integration_tests/tests/da/replication_policy.rs` 中；
+該套件向 `/v1/da/ingest` 提交不匹配的保留策略並驗證
+獲取的清單公開強製配置文件而不是調用者
+意圖。

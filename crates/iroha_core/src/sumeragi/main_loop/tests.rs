@@ -14726,11 +14726,14 @@ async fn rebuild_qcs_from_cached_votes_skips_empty_roster() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn rebuild_qcs_from_cached_votes_uses_snapshot_roster() {
-    let mut harness = test_actor_harness(4).await;
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
-    let block = sample_block(1, 0, None);
+    let parent = actor.state.view().latest_block_hash();
+    let block = sample_block(2, 0, parent);
     let block_hash = block.hash();
-    let height = 1;
+    let height = 2;
     let view = block.header().view_change_index();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     actor.pending.pending_blocks.insert(
@@ -14823,6 +14826,27 @@ async fn rebuild_qcs_from_cached_votes_uses_snapshot_roster() {
             vote,
         );
     }
+
+    let signature_topology = super::topology_for_view(
+        &super::network_topology::Topology::new(commit_topology.clone()),
+        height,
+        view,
+        super::PERMISSIONED_TAG,
+        Some(prf_seed_for_chain(&actor.common_config.chain)),
+    );
+    let valid_signers = actor.qc_signers_for_votes(
+        Phase::Commit,
+        block_hash,
+        height,
+        view,
+        epoch,
+        &signature_topology,
+    );
+    assert_eq!(
+        valid_signers.len(),
+        snapshot_roster.len(),
+        "expected all cached votes to validate before QC rebuild"
+    );
 
     actor.rebuild_qcs_from_cached_votes(&actor.effective_commit_topology());
 
@@ -36277,8 +36301,9 @@ async fn qc_signers_for_votes_revalidates_on_roster_hash_mismatch() {
     let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
     let key = (vote.phase, vote.height, vote.view, vote.epoch, vote.signer);
     let roster_hash = HashOf::new(&signature_topology.as_ref().to_vec());
-    let membership_hash = HashOf::new(&super::roster::canonicalize_roster(
+    let membership_hash = HashOf::new(&super::roster::canonicalize_roster_for_mode(
         signature_topology.as_ref().to_vec(),
+        consensus_mode,
     ));
     actor.vote_log.insert(key, vote.clone());
     actor.vote_validation_cache.insert(
@@ -36387,8 +36412,10 @@ async fn qc_signers_for_votes_skips_membership_hash_mismatch() {
             .public_key()
             .clone(),
     )];
-    let mismatched_membership_hash =
-        HashOf::new(&super::roster::canonicalize_roster(mismatched_roster));
+    let mismatched_membership_hash = HashOf::new(&super::roster::canonicalize_roster_for_mode(
+        mismatched_roster,
+        consensus_mode,
+    ));
     actor.vote_log.insert(key, vote.clone());
     actor.vote_validation_cache.insert(
         key,
@@ -36518,8 +36545,9 @@ async fn qc_signers_for_votes_ignores_lower_view_after_higher_view_vote() {
         let signature_topology =
             super::topology_for_view(&topology, height, vote.view, mode_tag, prf_seed);
         let roster_hash = HashOf::new(&signature_topology.as_ref().to_vec());
-        let membership_hash = HashOf::new(&super::roster::canonicalize_roster(
+        let membership_hash = HashOf::new(&super::roster::canonicalize_roster_for_mode(
             signature_topology.as_ref().to_vec(),
+            consensus_mode,
         ));
         actor.vote_log.insert(key, vote.clone());
         actor.vote_validation_cache.insert(
@@ -36659,8 +36687,9 @@ async fn qc_signers_for_votes_does_not_ignore_lower_view_vote_from_other_peer() 
         let signature_topology =
             super::topology_for_view(&topology, height, vote.view, mode_tag, prf_seed);
         let roster_hash = HashOf::new(&signature_topology.as_ref().to_vec());
-        let membership_hash = HashOf::new(&super::roster::canonicalize_roster(
+        let membership_hash = HashOf::new(&super::roster::canonicalize_roster_for_mode(
             signature_topology.as_ref().to_vec(),
+            consensus_mode,
         ));
         actor.vote_log.insert(key, vote.clone());
         actor.vote_validation_cache.insert(

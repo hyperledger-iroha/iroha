@@ -7,48 +7,47 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 3065571b34a226a5871c4fb68063f9419e48074b20096de215f440bdf54a4e59
 source_last_modified: "2025-12-29T18:16:35.943236+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Procedure for scheduling the Cargo.lock refresh required by the SM spike.
+//! SM spike လိုအပ်သော Cargo.lock ပြန်လည်စတင်ခြင်းအား အချိန်ဇယားဆွဲခြင်းအတွက် လုပ်ထုံးလုပ်နည်း။
 
 # SM Feature `Cargo.lock` Refresh Plan
 
-The `sm` feature spike for `iroha_crypto` originally could not complete `cargo check` while `--locked` was enforced. This note records the coordination steps for a sanctioned `Cargo.lock` update and tracks the current status of that need.
+`sm` သည် `iroha_crypto` အတွက် မူလက `cargo check` ကို `--locked` အား ပြဌာန်းထားစဉ်တွင် ပြီးမြောက်အောင် မလုပ်ဆောင်နိုင်ခဲ့ပါ။ ဤမှတ်စုသည် ဒဏ်ခတ်ပိတ်ဆို့ထားသော `Cargo.lock` အပ်ဒိတ်အတွက် ညှိနှိုင်းဆောင်ရွက်မှုအဆင့်များကို မှတ်တမ်းတင်ပြီး ထိုလိုအပ်ချက်၏ လက်ရှိအခြေအနေကို ခြေရာခံပါသည်။
 
-> **2026-02-12 update:** Recent validation shows the optional `sm` feature now builds with the existing lockfile (`cargo check -p iroha_crypto --features sm --locked` succeeds in 7.9 s cold/0.23 s warm). The dependency set already contains `base64ct`, `ghash`, `opaque-debug`, `pem-rfc7468`, `pkcs8`, `polyval`, `primeorder`, `sm2`, `sm3`, `sm4`, and `sm4-gcm`, so no immediate lock refresh is required. Keep the procedure below on standby for future dependency bumps or new optional crates.
+> **2026-02-12 အပ်ဒိတ်-** မကြာသေးမီက တရားဝင်အတည်ပြုမှုသည် လက်ရှိသော့ခတ်ဖိုင်ဖြင့် တည်ဆောက်ထားသော ရွေးချယ်နိုင်သော `sm` အင်္ဂါရပ်ကို ပြသသည် (`cargo check -p iroha_crypto --features sm --locked` သည် 7.9 စက္ကန့် အအေး/ 0.23 စက္ကန့် ပူနွေးမှုတွင် အောင်မြင်သည်)။ မှီခိုမှုအစုံတွင် `base64ct`၊ `ghash`၊ `opaque-debug`၊ `pem-rfc7468`၊ `pkcs8`၊ `polyval`၊ I180NI00 ပါရှိပြီး၊ `sm2`၊ `sm3`၊ `sm4` နှင့် `sm4-gcm` ထို့ကြောင့် ချက်ချင်းလော့ခ်ပြန်လည်စတင်ရန် မလိုအပ်ပါ။ အနာဂတ် မှီခိုမှုဆိုင်ရာ အဖုအထစ်များ သို့မဟုတ် ရွေးချယ်နိုင်သော သေတ္တာအသစ်များအတွက် အောက်ပါလုပ်ငန်းစဉ်ကို အသင့်အနေအထားတွင်ထားပါ။
 
-## Why the refresh is needed
-- Earlier iterations of the spike required adding optional crates that were missing from the lockfile. Current lock snapshots already include the RustCrypto stack (`sm2`, `sm3`, `sm4`, supporting codecs, and AES helpers).
-- Repository policy still blocks opportunistic lockfile edits; if a future dependency upgrade is necessary, the procedure below remains applicable.
-- Retain this plan so the team can execute a controlled refresh when new SM-related dependencies are introduced or existing ones need version bumps.
+## ဘာကြောင့် ပြန်လည်ဆန်းသစ်ဖို့ လိုအပ်တာလဲ။
+- သော့ခတ်ဖိုင်မှ ပျောက်ဆုံးနေသော ရွေးချယ်နိုင်သော သေတ္တာများကို အစောပိုင်းတွင် ထပ်လောင်းခြင်း လိုအပ်သည်။ လက်ရှိသော့ခတ်မှု လျှပ်တစ်ပြက်များတွင် RustCrypto stack (`sm2`၊ `sm3`၊ `sm4`၊ ကုဒ်ဒစ်များကို ပံ့ပိုးပေးသည့် နှင့် AES အကူအညီပေးသူများ) ပါဝင်ပြီးသားဖြစ်သည်။
+- Repository ပေါ်လစီသည် အခွင့်အရေးကောင်း lockfile တည်းဖြတ်မှုများကို ပိတ်ဆို့ဆဲဖြစ်သည်။ အနာဂတ်တွင် မှီခိုမှု အဆင့်မြှင့်တင်မှု လိုအပ်ပါက၊ အောက်ဖော်ပြပါ လုပ်ထုံးလုပ်နည်းသည် ဆက်လက် အသုံးပြုနိုင်မည်ဖြစ်သည်။
+- SM နှင့်ပတ်သက်သော မှီခိုမှုအသစ်များကို မိတ်ဆက်သည့်အခါ သို့မဟုတ် ရှိပြီးသားအရာများသည် ဗားရှင်းအဖုအထစ်များ လိုအပ်သည့်အခါတွင် ထိန်းချုပ်ထားသော ပြန်လည်ဆန်းသစ်မှုကို လုပ်ဆောင်နိုင်စေရန် ဤအစီအစဉ်ကို ထိန်းသိမ်းထားပါ။
 
-## Proposed coordination steps
-1. **Raise request in Crypto WG + Release Eng sync (owner: @crypto-wg lead).**
-   - Reference `docs/source/crypto/sm_program.md` and note the optional nature of the feature.
-   - Confirm there are no concurrent lockfile change windows (e.g., dependency freezes).
-2. **Prepare patch with lock diff (owner: @release-eng).**
-   - Execute `scripts/sm_lock_refresh.sh` (after approval) to update only the required crates.
-   - Capture `cargo tree -p iroha_crypto --features sm` output (script emits `target/sm_dep_tree.txt`).
-3. **Security review (owner: @security-reviews).**
-   - Verify new crates/versions match the audit register and licensing expectations.
-   - Record hashes in supply-chain tracker.
-4. **Merge window execution.**
-   - Submit PR containing only the lockfile delta, dependency tree snapshot (attached as artifact), and updated audit notes.
-   - Ensure CI runs with `cargo check -p iroha_crypto --features sm` before merge.
-5. **Follow-up tasks.**
-   - Update `docs/source/crypto/sm_program.md` action item checklist.
-   - Notify SDK team that the feature can be compiled locally with `--features sm`.
-
-## Timeline & owners
-| Step | Target | Owner | Status |
+## အဆိုပြုညှိနှိုင်းအဆင့်
+1. ** Crypto WG + Release Eng sync (ပိုင်ရှင်- @crypto-wg ဦးဆောင်) တွင် တောင်းဆိုမှုကို မြှင့်တင်ပါ။**
+   - အကိုးအကား `docs/source/crypto/sm_program.md` နှင့် အင်္ဂါရပ်၏ ရွေးချယ်နိုင်သော သဘောသဘာဝကို မှတ်သားပါ။
+   - တစ်ပြိုင်တည်း သော့ခတ်ဖိုင်ပြောင်းလဲမှု ဝင်းဒိုးများ မရှိပါ (ဥပမာ၊ မှီခိုမှု ရပ်တန့်ခြင်း) ကို အတည်ပြုပါ။
+2. **သော့ခတ်မှုကွဲပြားမှုနှင့်အတူ patch ကိုပြင်ဆင်ပါ (ပိုင်ရှင်- @release-eng)။**
+   - လိုအပ်သောသေတ္တာများကိုသာအပ်ဒိတ်လုပ်ရန် `scripts/sm_lock_refresh.sh` (ခွင့်ပြုချက်ပြီးနောက်) ကိုလုပ်ဆောင်ပါ။
+   - `cargo tree -p iroha_crypto --features sm` အထွက်ကို ဖမ်းယူပါ (script က `target/sm_dep_tree.txt`) ကိုထုတ်ပါတယ်။
+3. **လုံခြုံရေးသုံးသပ်ချက် (ပိုင်ရှင်- @security-reviews)**
+   - စာရင်းစစ်မှတ်ပုံတင်ခြင်းနှင့် လိုင်စင်မျှော်လင့်ချက်များနှင့် ကိုက်ညီသော သေတ္တာများ/ဗားရှင်းအသစ်များကို စစ်ဆေးပါ။
+   - ထောက်ပံ့ရေးကွင်းဆက်ခြေရာခံကိရိယာတွင် hash များကိုမှတ်တမ်းတင်ပါ။
+4. **ဝင်းဒိုးကို ပေါင်းစည်းခြင်း လုပ်ဆောင်ခြင်း**
+   - lockfile မြစ်ဝကျွန်းပေါ်ဒေသ၊ မှီခိုမှုသစ်ပင်လျှပ်တစ်ပြက် (ရှေးဟောင်းပစ္စည်းအဖြစ် ပူးတွဲပါ) နှင့် မွမ်းမံထားသော စာရင်းစစ်မှတ်စုများသာပါရှိသော PR ကို တင်သွင်းပါ။
+   - ပေါင်းစည်းခြင်းမပြုမီ `cargo check -p iroha_crypto --features sm` နှင့် CI အလုပ်လုပ်ကြောင်း သေချာပါစေ။
+5. **နောက်ဆက်တွဲ အလုပ်များ**
+   - `docs/source/crypto/sm_program.md` လုပ်ဆောင်ချက်ကို စစ်ဆေးရန်စာရင်းကို အပ်ဒိတ်လုပ်ပါ။
+   - အင်္ဂါရပ်ကို `--features sm` ဖြင့် စက်တွင်း၌ စုစည်းနိုင်သည်ဟု SDK အဖွဲ့အား အကြောင်းကြားပါ။## Timeline & လုပ်ရပါတယ်။
+| အဆင့် | ပစ်မှတ် | ပိုင်ရှင် | အဆင့်အတန်း |
 |------|--------|-------|--------|
-| Request agenda slot in next Crypto WG call | 2025-01-22 | Crypto WG lead | ✅ Completed (review concluded spike can proceed without refresh) |
-| Draft selective `cargo update` command + sanity diff | 2025-01-24 | Release Engineering | ⚪ On standby (reactivate if new crates appear) |
-| Security review of new crates | 2025-01-27 | Security Reviews | ⚪ On standby (reuse audit checklist when refresh resumes) |
-| Merge lockfile update PR | 2025-01-29 | Release Engineering | ⚪ On standby |
-| Update SM program doc checklist | After merge | Crypto WG lead | ✅ Addressed via `docs/source/crypto/sm_program.md` entry (2026-02-12) |
+| လာမည့် Crypto WG ခေါ်ဆိုမှု | တွင် အစီအစဉ်စလော့ကို တောင်းဆိုပါ။ 2025-01-22 | Crypto WG ခဲ | ✅ Completed (ပြန်လည်သုံးသပ်ခြင်း နိဂုံးချုပ်သည် ဆူးမပါ) ပြန်လည်ဆန်းသစ်ခြင်း |
+| ရွေးချယ်ထားသော `cargo update` မူကြမ်း + sanity diff | 2025-01-24 | အင်ဂျင်နီယာဌာန | ⚪ အသင့်အနေအထားတွင် (သေတ္တာအသစ်များပေါ်လာပါက ပြန်လည်အသက်သွင်းပါ) |
+| သစ်သေတ္တာများ | လုံခြုံရေးပြန်လည်သုံးသပ်ခြင်း။ 2025-01-27 | လုံခြုံရေးသုံးသပ်ချက်များ | ⚪ အသင့်အနေအထားတွင် (ပြန်လည်စတင်သည့်အခါ စာရင်းစစ်စာရင်းကို ပြန်သုံးပါ) |
+| lockfile update PR | ပေါင်းစည်းပါ။ 2025-01-29 | အင်ဂျင်နီယာဌာန | ⚪ အသင့်အနေအထား |
+| SM ပရိုဂရမ် doc စစ်ဆေးရန်စာရင်း | အပ်ဒိတ်လုပ်ပါ။ ပေါင်းစည်းပြီးနောက် | Crypto WG ခဲ | ✅ Addressed via `docs/source/crypto/sm_program.md` entry (2026-02-12) |
 
-## Notes
-- Keep any future refresh restricted to the SM-related crates listed above (and supporting helpers like `rfc6979`), avoiding workspace-wide `cargo update`.
-- If any transitive dependencies introduce MSRV drift, surface it before merge.
-- Once merged, enable an ephemeral CI job to monitor build times for the `sm` feature.
+## မှတ်ချက်
+- အထက်တွင်ဖော်ပြထားသော SM-ဆက်စပ်သေတ္တာများ (နှင့် `rfc6979` ကဲ့သို့သော အထောက်အကူပေးသူများ)၊ အလုပ်နေရာကျယ်သော `cargo update` ကို ရှောင်ရှားခြင်းဖြင့် အနာဂတ်ပြန်လည်ဆန်းသစ်မှုမှန်သမျှကို ကန့်သတ်ထားပါ။
+- အကူးအပြောင်း မှီခိုမှု တစ်စုံတစ်ရာသည် MSRV ပျံ့လွင့်မှုကို မိတ်ဆက်ပါက၊ ပေါင်းစည်းခြင်းမပြုမီ ၎င်းကို ဖော်ပြပါ။
+- ပေါင်းစည်းပြီးသည်နှင့် `sm` အင်္ဂါရပ်အတွက် တည်ဆောက်ချိန်များကို စောင့်ကြည့်ရန် ပေါ်ပင် CI အလုပ်တစ်ခုကို ဖွင့်ပါ။

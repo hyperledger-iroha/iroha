@@ -8,48 +8,50 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Norito-RPC Adoption Schedule
 sidebar_label: Norito-RPC adoption
 description: Cross-SDK rollout plan, evidence checklist, and automation hooks for roadmap item NRPC-4.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-> Canonical planning notes live in `docs/source/torii/norito_rpc_adoption_schedule.md`.  
-> This portal copy distils the rollout expectations for SDK authors, operators, and reviewers.
+> Kanonik rejalashtirish qaydlari `docs/source/torii/norito_rpc_adoption_schedule.md` da yashaydi.  
+> Ushbu portal nusxasi SDK mualliflari, operatorlari va ko'rib chiquvchilari uchun taqdimotni kutadi.
 
-## Objectives
+## Maqsadlar
 
-- Align every SDK (Rust CLI, Python, JavaScript, Swift, Android) on the binary Norito-RPC transport ahead of the AND4 production toggle.
-- Keep phase gates, evidence bundles, and telemetry hooks deterministic so governance can audit the rollout.
-- Make it trivial to capture fixture and canary evidence with the shared helpers that roadmap NRPC-4 calls out.
+- Ikkilik Norito-RPC transportida har bir SDK (Rust CLI, Python, JavaScript, Swift, Android) ni AND4 ishlab chiqarish o'tish tugmasidan oldin tekislang.
+- Fazali eshiklar, dalillar to'plamlari va telemetriya ilgaklarini deterministik saqlang, shunda boshqaruv provayderni tekshirishi mumkin.
+- NRPC-4 yo'l xaritasi chaqiradigan umumiy yordamchilar yordamida armatura va kanareyka dalillarini qo'lga kiritishni ahamiyatsiz qiling.
 
-## Phase timeline
+## Faza xronologiyasi
 
-| Phase | Window | Scope | Exit Criteria |
+| Bosqich | Oyna | Qo'llash doirasi | Chiqish mezonlari |
 |-------|--------|-------|---------------|
-| **P0 – Lab parity** | Q2 2025 | Rust CLI + Python smoke suites run `/v1/norito-rpc` in CI, JS helper passes unit tests, Android mock harness exercises dual transports. | `python/iroha_python/scripts/run_norito_rpc_smoke.sh` and `javascript/iroha_js/test/noritoRpcClient.test.js` green in CI; Android harness wired into `./gradlew test`. |
-| **P1 – SDK preview** | Q3 2025 | Shared fixture bundle checked in, `scripts/run_norito_rpc_fixtures.sh --sdk <label>` records logs + JSON in `artifacts/norito_rpc/`, optional Norito transport flags exposed in SDK samples. | Fixture manifest signed, README updates show opt-in usage, Swift preview API available behind the IOS2 flag. |
-| **P2 – Staging / AND4 preview** | Q1 2026 | Staging Torii pools prefer Norito, Android AND4 preview clients and Swift IOS2 parity suites default to the binary transport, telemetry dashboard `dashboards/grafana/torii_norito_rpc_observability.json` populated. | `docs/source/torii/norito_rpc_stage_reports.md` captures the canary, `scripts/telemetry/test_torii_norito_rpc_alerts.sh` passes, Android mock harness replay captures success/error cases. |
-| **P3 – Production GA** | Q4 2026 | Norito becomes the default transport for all SDKs; JSON remains a brownout fallback. Release jobs archive parity artefacts with every tag. | Release checklist bundles Norito smoke output for Rust/JS/Python/Swift/Android; Alert thresholds for Norito vs JSON error-rate SLOs enforced; `status.md` and release notes cite GA evidence. |
+| **P0 – Laboratoriya pariteti** | Q22025 | Rust CLI + Python tutun to'plamlari CIda `/v1/norito-rpc` ishlaydi, JS yordamchisi birlik testlaridan o'tadi, Android soxta jabduqlar ikki tomonlama transportni mashq qiladi. | CIda `python/iroha_python/scripts/run_norito_rpc_smoke.sh` va `javascript/iroha_js/test/noritoRpcClient.test.js` yashil; Android jabduqlari `./gradlew test` ga ulangan. |
+| **P1 – SDK oldindan ko‘rish** | Q32025 | Umumiy jihozlar toʻplami tekshirildi, `scripts/run_norito_rpc_fixtures.sh --sdk <label>` jurnallar + JSON `artifacts/norito_rpc/` da, SDK namunalarida koʻrsatilgan ixtiyoriy Norito transport bayroqlari. | Fikstura manifesti imzolandi, README yangilanishlari obunadan foydalanishni koʻrsatadi, Swift oldindan koʻrish APIsi IOS2 bayrogʻi ortida mavjud. |
+| **P2 – Sahnalashtirish / AND4 oldindan ko‘rish** | Q12026 | Staging Torii hovuzlari Norito, Android AND4 oldindan koʻrish mijozlari va Swift IOS2 paritet toʻplamlarini ikkilik transport uchun sukut boʻyicha afzal koʻradi, `dashboards/grafana/torii_norito_rpc_observability.json` toʻldirilgan telemetriya asboblar paneli. | `docs/source/torii/norito_rpc_stage_reports.md` kanareykani suratga oladi, `scripts/telemetry/test_torii_norito_rpc_alerts.sh` o'tadi, Android soxta jabduqlar takrorlash muvaffaqiyat/xato holatlarini suratga oladi. |
+| **P3 – Ishlab chiqarish GA** | Q42026 | Norito barcha SDKlar uchun standart transportga aylanadi; JSON qo'ng'irchoq bo'lib qolmoqda. Har bir teg bilan ish arxivi paritet artefaktlarini chiqaring. | Rust/JS/Python/Swift/Android uchun Norito tutun chiqishi nazorat roʻyxati paketlarini chiqaring; Norito va JSON xatolik darajasidagi SLOlar uchun ogohlantirish chegaralari; `status.md` va nashr yozuvlari GA dalillarini keltiradi. |
 
-## SDK deliverables & CI hooks
+## SDK yetkazib berish va CI ilgaklari
 
-- **Rust CLI & integration harness** – extend `iroha_cli pipeline` smoke tests to force the Norito transport once `cargo xtask norito-rpc-verify` lands. Guard with `cargo test -p integration_tests -- norito_streaming` (lab) and `cargo xtask norito-rpc-verify` (staging/GA), storing artefacts under `artifacts/norito_rpc/`.
-- **Python SDK** – default the release smoke (`python/iroha_python/scripts/release_smoke.sh`) to Norito RPC, keep `run_norito_rpc_smoke.sh` as the CI entrypoint, and document parity handling in `python/iroha_python/README.md`. CI target: `PYTHON_BIN=python3 python/iroha_python/scripts/run_norito_rpc_smoke.sh`.
-- **JavaScript SDK** – stabilise `NoritoRpcClient`, let governance/query helpers default to Norito when `toriiClientConfig.transport.preferred === "norito_rpc"`, and capture end-to-end samples in `javascript/iroha_js/recipes/`. CI must run `npm test` plus the dockerised `npm run test:norito-rpc` job before publish; provenance uploads Norito smoke logs under `javascript/iroha_js/artifacts/`.
-- **Swift SDK** – wire the Norito bridge transport behind the IOS2 flag, mirror the fixture cadence, and ensure the Connect/Norito parity suite runs inside the Buildkite lanes referenced in `docs/source/sdk/swift/index.md`.
-- **Android SDK** – AND4 preview clients and the mock Torii harness adopt Norito, with retry/backoff telemetry documented in `docs/source/sdk/android/networking.md`. The harness shares fixtures with other SDKs via `scripts/run_norito_rpc_fixtures.sh --sdk android`.
+- **Rust CLI va integratsiya jabduqlar** – `iroha_cli pipeline` tutun sinovlarini `cargo xtask norito-rpc-verify` erga tushganidan keyin Norito tashishni majburlash uchun kengaytiring. `artifacts/norito_rpc/` ostida artefaktlarni saqlaydigan `cargo test -p integration_tests -- norito_streaming` (laboratoriya) va `cargo xtask norito-rpc-verify` (sahnalash/GA) bilan qo'riqlash.
+- **Python SDK** – sukut bo‘yicha chiquvchi tutunni (`python/iroha_python/scripts/release_smoke.sh`) Norito RPC ga o‘rnating, `run_norito_rpc_smoke.sh` ni CI kirish nuqtasi sifatida saqlang va `python/iroha_python/README.md` da hujjat pariteti bilan ishlash. CI maqsadi: `PYTHON_BIN=python3 python/iroha_python/scripts/run_norito_rpc_smoke.sh`.
+- **JavaScript SDK** – `NoritoRpcClient` ni barqarorlashtiring, boshqaruv/so‘rov yordamchilariga `toriiClientConfig.transport.preferred === "norito_rpc"` bo‘lganda Norito ga sukut bo‘lsin va `javascript/iroha_js/recipes/` da oxirigacha namunalarni oling. CI nashr qilishdan oldin `npm test` va dokerlashtirilgan `npm run test:norito-rpc` ishni bajarishi kerak; provenance yuklaydi Norito tutun jurnallari `javascript/iroha_js/artifacts/` ostida.
+- **Swift SDK** – Norito ko‘prigini IOS2 bayrog‘i orqasiga o‘tkazing, armatura kadansini aks ettiring va Connect/Norito paritet to‘plami `docs/source/sdk/swift/index.md` da havola qilingan Buildkite yo‘laklarida ishlashiga ishonch hosil qiling.
+- **Android SDK** – AND4 oldindan ko‘rish mijozlari va soxta Torii jabduqlari Norito ni qabul qiladi, `docs/source/sdk/android/networking.md` da hujjatlashtirilgan qayta urinish/orqaga qaytish telemetriyasi bilan. Jabduqlar `scripts/run_norito_rpc_fixtures.sh --sdk android` orqali boshqa SDKlar bilan jihozlarni baham ko'radi.
 
-## Evidence & automation
+## Dalillar va avtomatlashtirish
 
-- `scripts/run_norito_rpc_fixtures.sh` wraps `cargo xtask norito-rpc-verify`, captures stdout/stderr, and emits `fixtures.<sdk>.summary.json` so SDK owners have a deterministic artefact to attach to `status.md`. Use `--sdk <label>` and `--out artifacts/norito_rpc/<stamp>/` to keep CI bundles tidy.
-- `cargo xtask norito-rpc-verify` enforces schema hash parity (`fixtures/norito_rpc/schema_hashes.json`) and fails if Torii returns `X-Iroha-Error-Code: schema_mismatch`. Pair every failure with a JSON fallback capture for debugging.
-- `scripts/telemetry/test_torii_norito_rpc_alerts.sh` and `dashboards/grafana/torii_norito_rpc_observability.json` define the alert contracts for NRPC-2. Run the script after every dashboard edit and store the `promtool` output in the canary bundle.
-- `docs/source/runbooks/torii_norito_rpc_canary.md` describes the staging and production drills; update it whenever fixture hashes or alert gates change.
+- `scripts/run_norito_rpc_fixtures.sh` `cargo xtask norito-rpc-verify` ni oʻrab oladi, stdout/stderr ni oladi va `fixtures.<sdk>.summary.json` chiqaradi, shuning uchun SDK egalari `status.md` ga biriktirish uchun deterministik artefaktga ega. CI paketlarini tartibli saqlash uchun `--sdk <label>` va `--out artifacts/norito_rpc/<stamp>/` dan foydalaning.
+- `cargo xtask norito-rpc-verify` sxema xesh paritetini (`fixtures/norito_rpc/schema_hashes.json`) qo'llaydi va agar Torii `X-Iroha-Error-Code: schema_mismatch` qaytarsa, bajarilmaydi. Nosozliklarni tuzatish uchun har bir nosozlikni JSON zaxira nusxasi bilan bog‘lang.
+- `scripts/telemetry/test_torii_norito_rpc_alerts.sh` va `dashboards/grafana/torii_norito_rpc_observability.json` NRPC-2 uchun ogohlantirish shartnomalarini belgilaydi. Har bir boshqaruv paneli tahriridan so'ng skriptni ishga tushiring va `promtool` chiqishini kanareykalar to'plamida saqlang.
+- `docs/source/runbooks/torii_norito_rpc_canary.md` bosqichma-bosqich va ishlab chiqarish mashqlarini tavsiflaydi; armatura xeshlari yoki ogohlantirish eshiklari o'zgarganda uni yangilang.
 
-## Reviewer checklist
+## Tekshiruvchi nazorat ro'yxati
 
-Before ticking an NRPC-4 milestone, confirm:
+NRPC-4 bosqichini belgilashdan oldin quyidagilarni tasdiqlang:
 
-1. Latest fixture bundle hashes match `fixtures/norito_rpc/schema_hashes.json` and the corresponding CI artefact recorded under `artifacts/norito_rpc/<stamp>/`.
-2. SDK README / portal docs describe how to force JSON fallback and cite the Norito transport default.
-3. Telemetry dashboards show dual-stack error-rate panels with alert links, and the Alertmanager dry run (`scripts/telemetry/test_torii_norito_rpc_alerts.sh`) is attached to the tracker.
-4. The adoption schedule here matches the tracker entry (`docs/source/torii/norito_rpc_tracker.md`) and the roadmap (NRPC-4) references the same evidence bundle.
+1. So'nggi armatura to'plami xeshlari `fixtures/norito_rpc/schema_hashes.json` va `artifacts/norito_rpc/<stamp>/` ostida qayd etilgan mos keladigan CI artefaktiga mos keladi.
+2. SDK README / portal hujjatlari JSON-ni qayta tiklashni qanday majburlash kerakligini tasvirlaydi va Norito standart transportini keltiradi.
+3. Telemetriya asboblar panelida ogohlantirish havolalari bilan ikki qavatli xatolik darajasi panellari ko'rsatilgan va Alertmanager quruq ishlashi (`scripts/telemetry/test_torii_norito_rpc_alerts.sh`) trekerga biriktirilgan.
+4. Bu yerda qabul qilish jadvali kuzatuvchi yozuviga (`docs/source/torii/norito_rpc_tracker.md`) mos keladi va yo‘l xaritasi (NRPC-4) bir xil dalillar to‘plamiga havola qiladi.
 
-Staying disciplined on the schedule keeps cross-SDK behaviour predictable and lets governance audit Norito-RPC adoption without bespoke requests.
+Jadvalda intizomli bo'lish SDK o'rtasidagi xatti-harakatni oldindan aytish mumkin bo'ladi va boshqaruv auditi Norito-RPCni buyurtmasiz qabul qilish imkonini beradi.

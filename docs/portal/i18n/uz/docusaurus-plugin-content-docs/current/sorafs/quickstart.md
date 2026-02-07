@@ -4,44 +4,46 @@ direction: ltr
 source: docs/portal/docs/sorafs/quickstart.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# SoraFS Quickstart
+# SoraFS Tez boshlash
 
-This hands-on guide walks through the deterministic SF-1 chunker profile,
-manifest signing, and multi-provider fetch flow that underpin the SoraFS
-storage pipeline. Pair it with the [manifest pipeline deep dive](manifest-pipeline.md)
-for design notes and CLI flag reference material.
+Ushbu amaliy qo'llanma deterministik SF-1 chunker profili bo'ylab yuradi,
+manifest imzosi va SoraFS ni asoslaydigan ko'p provayderli olib kelish oqimi
+saqlash quvur liniyasi. Uni [manifest quvur liniyasiga chuqur sho'ng'ish](manifest-pipeline.md) bilan bog'lang
+dizayn eslatmalari va CLI bayrog'i ma'lumotnomasi uchun.
 
-## Prerequisites
+## Old shartlar
 
-- Rust toolchain (`rustup update`), workspace cloned locally.
-- Optional: [OpenSSL-generated Ed25519 keypair](https://github.com/hyperledger-iroha/iroha/tree/master/defaults/dev-keys#readme)
-  for signing manifests.
-- Optional: Node.js ≥ 18 if you plan to preview the Docusaurus portal.
+- Rust asboblar zanjiri (`rustup update`), ish maydoni mahalliy klonlangan.
+- Majburiy emas: [OpenSSL tomonidan yaratilgan Ed25519 klaviatura](https://github.com/hyperledger-iroha/iroha/tree/master/defaults/dev-keys#readme)
+  manifestlarni imzolash uchun.
+- Majburiy emas: Node.js ≥ 18, agar siz Docusaurus portalini oldindan ko'rishni rejalashtirmoqchi bo'lsangiz.
 
-Set `export RUST_LOG=info` while experimenting to surface helpful CLI messages.
+Foydali CLI xabarlarini ko'rsatish uchun tajriba o'tkazayotganda `export RUST_LOG=info` ni o'rnating.
 
-## 1. Refresh the deterministic fixtures
+## 1. Deterministik moslamalarni yangilang
 
-Regenerate the canonical SF-1 chunking vectors. The command also emits signed
-manifest envelopes when `--signing-key` is supplied; use `--allow-unsigned`
-during local development only.
+Kanonik SF-1 bo'linish vektorlarini qayta tiklang. Buyruq shuningdek, imzolangan xabarni chiqaradi
+`--signing-key` taqdim etilganda manifest konvertlari; `--allow-unsigned` dan foydalaning
+faqat mahalliy rivojlanish davrida.
 
 ```bash
 cargo run -p sorafs_chunker --bin export_vectors -- --allow-unsigned
 ```
 
-Outputs:
+Chiqishlar:
 
 - `fixtures/sorafs_chunker/sf1_profile_v1.{json,rs,ts,go}`
 - `fixtures/sorafs_chunker/manifest_blake3.json`
-- `fixtures/sorafs_chunker/manifest_signatures.json` (if signed)
+- `fixtures/sorafs_chunker/manifest_signatures.json` (agar imzolangan bo'lsa)
 - `fuzz/sorafs_chunker/sf1_profile_v1_{input,backpressure}.json`
 
-## 2. Chunk a payload and inspect the plan
+## 2. Foydali yukni ajratib oling va rejani tekshiring
 
-Use `sorafs_chunker` to chunk an arbitrary file or archive:
+Ixtiyoriy fayl yoki arxivni qismlarga ajratish uchun `sorafs_chunker` dan foydalaning:
 
 ```bash
 echo "SoraFS deterministic chunking" > /tmp/docs.txt
@@ -49,23 +51,23 @@ cargo run -p sorafs_chunker --bin sorafs-chunk-dump -- /tmp/docs.txt \
   > /tmp/docs.chunk-plan.json
 ```
 
-Key fields:
+Asosiy maydonlar:
 
-- `profile` / `break_mask` – confirms the `sorafs.sf1@1.0.0` parameters.
-- `chunks[]` – ordered offsets, lengths, and chunk BLAKE3 digests.
+- `profile` / `break_mask` - `sorafs.sf1@1.0.0` parametrlarini tasdiqlaydi.
+- `chunks[]` – buyurtma qilingan ofsetlar, uzunliklar va BLAKE3 parchalari.
 
-For larger fixtures, run the proptest-backed regression to ensure streaming and
-batch chunking stay in sync:
+Kattaroq moslamalar uchun oqim va oqimni ta'minlash uchun proptest tomonidan qo'llab-quvvatlanadigan regressiyani ishga tushiring
+ommaviy yig'ish sinxronlashtiriladi:
 
 ```bash
 cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ```
 
-## 3. Build and sign a manifest
+## 3. Manifest tuzing va imzolang
 
-Wrap the chunk plan, aliases, and governance signatures into a manifest using
-`sorafs-manifest-stub`. The command below showcases a single-file payload; pass
-a directory path to package a tree (the CLI walks it lexicographically).
+Bo'lak rejasi, taxalluslar va boshqaruv imzolarini manifestga o'rash
+`sorafs-manifest-stub`. Quyidagi buyruq bitta faylli foydali yukni ko'rsatadi; o'tish
+daraxtni qadoqlash uchun katalog yo'li (CLI uni leksikografik jihatdan boshqaradi).
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
@@ -77,21 +79,21 @@ cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
   --allow-unsigned
 ```
 
-Review `/tmp/docs.report.json` for:
+`/tmp/docs.report.json`ni ko'rib chiqing:
 
-- `chunking.chunk_digest_sha3_256` – SHA3 digest of offsets/lengths, matches the
-  chunker fixtures.
-- `manifest.manifest_blake3` – BLAKE3 digest signed in the manifest envelope.
-- `chunk_fetch_specs[]` – ordered fetch instructions for orchestrators.
+- `chunking.chunk_digest_sha3_256` – ofset/uzunliklarning SHA3 dayjestiga mos keladi
+  chunker armatura.
+- `manifest.manifest_blake3` – manifest konvertda imzolangan BLAKE3 dayjesti.
+- `chunk_fetch_specs[]` - orkestrlar uchun buyurtma qilingan yuklash ko'rsatmalari.
 
-When ready to supply real signatures, add `--signing-key` and `--signer`
-arguments. The command verifies every Ed25519 signature before writing the
-envelope.
+Haqiqiy imzolarni taqdim etishga tayyor bo'lgach, `--signing-key` va `--signer` qo'shing
+argumentlar. Buyruq yozishdan oldin har bir Ed25519 imzosini tekshiradi
+konvert.
 
-## 4. Simulate multi-provider retrieval
+## 4. Ko'p provayderlarni qidirishni taqlid qiling
 
-Use the developer fetch CLI to replay the chunk plan against one or more
-providers. This is ideal for CI smoke tests and orchestrator prototyping.
+Bir yoki bir nechta bo'laklar rejasini takrorlash uchun ishlab chiquvchining CLI fetchidan foydalaning
+provayderlar. Bu CI tutun sinovlari va orkestr prototipi uchun ideal.
 
 ```bash
 cargo run -p sorafs_car --bin sorafs_fetch -- \
@@ -101,27 +103,27 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
   --json-out=/tmp/docs.fetch-report.json
 ```
 
-Assertions:
+Taʼkidlar:
 
-- `payload_digest_hex` must match the manifest report.
-- `provider_reports[]` surfaces success/failure counts per provider.
-- Non-zero `chunk_retry_total` highlights back-pressure adjustments.
-- Pass `--max-peers=<n>` to limit the number of providers scheduled for a run
-  and keep CI simulations focused on the primary candidates.
-- `--retry-budget=<n>` overrides the default per-chunk retry count (3) so you
-  can surface orchestrator regressions faster when injecting failures.
+- `payload_digest_hex` manifest hisobotiga mos kelishi kerak.
+- `provider_reports[]` har bir provayderning muvaffaqiyat/qobiliyatsizligini ko'rsatadi.
+- Nol bo'lmagan `chunk_retry_total` orqa bosim sozlamalarini ta'kidlaydi.
+- Ishga rejalashtirilgan provayderlar sonini cheklash uchun `--max-peers=<n>` dan o'ting
+  va CI simulyatsiyalarini asosiy nomzodlarga qaratib turing.
+- `--retry-budget=<n>` har bir parcha uchun standart qayta urinishlar sonini (3) bekor qiladi, shuning uchun siz
+  nosozliklarni in'ektsiya qilishda orkestr regressiyalarini tezroq yuzaga chiqarishi mumkin.
 
-Add `--expect-payload-digest=<hex>` and `--expect-payload-len=<bytes>` to fail
-fast when the reconstructed payload deviates from the manifest.
+Muvaffaqiyatsiz bo'lish uchun `--expect-payload-digest=<hex>` va `--expect-payload-len=<bytes>` qo'shing
+rekonstruksiya qilingan foydali yuk manifestdan chetga chiqqanda tez.
 
-## 5. Next steps
+## 5. Keyingi qadamlar
 
-- **Governance integration** – pipe the manifest digest and
-  `manifest_signatures.json` into the council workflow so the Pin Registry can
-  advertise availability.
-- **Registry negotiation** – consult [`sorafs/chunker_registry.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/chunker_registry.md)
-  before registering new profiles. Automation should prefer canonical handles
-  (`namespace.name@semver`) over numeric IDs.
-- **CI automation** – add the commands above to release pipelines so docs,
-  fixtures, and artifacts publish deterministic manifests alongside signed
+- **Boshqaruv integratsiyasi** – manifest dayjestini va
+  `manifest_signatures.json` kengash ish oqimiga kirishi uchun Pin Registry mumkin
+  mavjudligini e'lon qilish.
+- **Ro‘yxatga olish bo‘yicha muzokaralar** – maslahatlashing [`sorafs/chunker_registry.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/chunker_registry.md)
+  yangi profillarni ro'yxatdan o'tkazishdan oldin. Avtomatlashtirish kanonik tutqichlarni afzal ko'rishi kerak
+  (`namespace.name@semver`) raqamli identifikatorlar ustida.
+- **CI automation** – hujjatlarni chiqarish uchun yuqoridagi buyruqlarni qo‘shing.
+  armatura va artefaktlar imzolanganlar bilan birga deterministik manifestlarni nashr etadi
   metadata.

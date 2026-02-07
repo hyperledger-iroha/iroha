@@ -7,54 +7,55 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 8bb3e19ca5eb661d202b5e3b9cd118207ded277e8ff717e16a342b71e7a67857
 source_last_modified: "2025-12-29T18:16:35.926037+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# AND6 EU Legal Sign-off Memo Template
+# AND6 የአውሮፓ ህብረት ህጋዊ የመግቢያ ማስታወሻ አብነት
 
-This memo records the legal review required by roadmap item **AND6** before the
-EU (ETSI/GDPR) artefact packet is submitted to regulators. Counsel should clone
-this template per release, populate the fields below, and store the signed copy
-alongside the immutable artefacts referenced in the memo.
+ይህ ማስታወሻ በፍኖተ ካርታ ንጥል **AND6** የተጠየቀውን የህግ ግምገማ ከቀዳሚው በፊት ይመዘግባል
+EU (ETSI/GDPR) የጥበብ እሽግ ለተቆጣጠሪዎች ገብቷል። ምክሩ መዝለል አለበት።
+ይህ አብነት በእያንዳንዱ ልቀት፣ ከታች ያሉትን መስኮች ይሙሉ እና የተፈረመውን ቅጂ ያከማቹ
+በማስታወሻው ውስጥ ከተጠቀሱት የማይለወጡ ቅርሶች ጎን ለጎን።
 
-## Summary
+## ማጠቃለያ
 
-- **Release / Train:** `<e.g., 2026.1 GA>`
-- **Review date:** `<YYYY-MM-DD>`
-- **Counsel / Reviewer:** `<name + organisation>`
-- **Scope:** `ETSI EN 319 401 security target, GDPR DPIA summary, SBOM attestation`
-- **Associated tickets:** `<governance or legal issue IDs>`
+- ** መልቀቅ / ባቡር: ** `<e.g., 2026.1 GA>`
+- ** የግምገማ ቀን:** `<YYYY-MM-DD>`
+- ** ምክር / ገምጋሚ: ** `<name + organisation>`
+- ** ወሰን: *** `ETSI EN 319 401 security target, GDPR DPIA summary, SBOM attestation`
+- ** የተቆራኙ ቲኬቶች: ** `<governance or legal issue IDs>`
 
-## Artefact Checklist
+## የአርቴፍክት ማረጋገጫ ዝርዝር
 
-| Artefact | SHA-256 | Location / Link | Notes |
-|----------|---------|-----------------|-------|
-| `security_target.md` | `<hash>` | `docs/source/compliance/android/eu/security_target.md` + governance archive | Confirm release identifiers & threat model adjustments. |
-| `gdpr_dpia_summary.md` | `<hash>` | Same directory / localization mirrors | Ensure redaction policy references match `sdk/android/telemetry_redaction.md`. |
-| `sbom_attestation.md` | `<hash>` | Same directory + cosign bundle in evidence bucket | Verify CycloneDX + provenance signatures. |
-| Evidence log row | `<hash>` | `docs/source/compliance/android/evidence_log.csv` | Row number `<n>` |
-| Device-lab contingency bundle | `<hash>` | `artifacts/android/device_lab_contingency/<YYYYMMDD>/*.tgz` | Confirms failover rehearsal tied to this release. |
+| Artefact | SHA-256 | አካባቢ / አገናኝ | ማስታወሻ |
+|-------|--------|
+| `security_target.md` | `<hash>` | `docs/source/compliance/android/eu/security_target.md` + የአስተዳደር መዝገብ | የመልቀቂያ መለያዎችን እና የማስፈራሪያ ሞዴል ማስተካከያዎችን ያረጋግጡ። |
+| `gdpr_dpia_summary.md` | `<hash>` | ተመሳሳይ ማውጫ / የትርጉም መስተዋቶች | የማሻሻያ ፖሊሲ ማጣቀሻዎች ከ`sdk/android/telemetry_redaction.md` ጋር መዛመዱን ያረጋግጡ። |
+| `sbom_attestation.md` | `<hash>` | ተመሳሳይ ማውጫ + ኮሲንግ ጥቅል በማስረጃ ባልዲ | CycloneDX + የፕሮቬንሽን ፊርማዎችን ያረጋግጡ። |
+| የማስረጃ መዝገብ ረድፍ | `<hash>` | `docs/source/compliance/android/evidence_log.csv` | የረድፍ ቁጥር `<n>` |
+| የመሣሪያ-ላብራቶሪ የአደጋ ጊዜ ጥቅል | `<hash>` | `artifacts/android/device_lab_contingency/<YYYYMMDD>/*.tgz` | ከዚህ ልቀት ጋር የተያያዘ ያልተሳካ ልምምዱን ያረጋግጣል። |
 
-> Attach additional rows if the packet contains more files (for example, privacy
-> appendices or DPIA translations). Every artefact must reference its immutable
-> upload target and the Buildkite job that produced it.
+> ፓኬቱ ተጨማሪ ፋይሎችን ከያዘ ተጨማሪ ረድፎችን ያያይዙ (ለምሳሌ፡ ግላዊነት
+> አባሪዎች ወይም DPIA ትርጉሞች)። እያንዳንዱ ቅርስ የማይለወጥ መጠቀስ አለበት።
+> ሰቀላ ዒላማ እና Buildkite ሥራ ያፈራው.
 
-## Findings & Exceptions
+## ግኝቶች እና ልዩነቶች
 
-- `None.` *(Replace with bullet list covering residual risks, compensating
-  controls, or required follow-up actions.)*
+- `None.` *(የቀሩ ስጋቶችን በሚሸፍነው በጥይት ዝርዝር ይተኩ
+  ይቆጣጠራል፣ ወይም የሚፈለጉ የክትትል እርምጃዎች።)*
 
-## Approval
+## ማጽደቅ
 
-- **Decision:** `<Approved / Approved with conditions / Blocked>`
-- **Signature / Timestamp:** `<digital signature or email reference>`
-- **Follow-up owners:** `<team + due date for any conditions>`
+- ** ውሳኔ: ** `<Approved / Approved with conditions / Blocked>`
+- ** ፊርማ / የጊዜ ማህተም: ** `<digital signature or email reference>`
+- ** ተከታይ ባለቤቶች: ** `<team + due date for any conditions>`
 
-Upload the final memo to the governance evidence bucket, copy the SHA-256 into
-`docs/source/compliance/android/evidence_log.csv`, and link the upload path in
-`status.md`. If the decision is “Blocked,” escalate to the AND6 steering
-committee and document remediation steps in both the roadmap hot-list and the
-device-lab contingency log.
+የመጨረሻውን ማስታወሻ ወደ የአስተዳደር ማስረጃ ባልዲ ይስቀሉ፣ SHA-256ን ይቅዱ
+`docs/source/compliance/android/evidence_log.csv`፣ እና የሰቀላ ዱካውን ወደ ውስጥ ያገናኙ
+`status.md`. ውሳኔው "ታግዷል" ከሆነ ወደ ብአዴን6 መሪነት ይሂዱ
+ኮሚቴ እና ሰነድ የማሻሻያ እርምጃዎች በሁለቱም የመንገድ ካርታ ትኩስ ዝርዝር እና በ
+የመሣሪያ-ላብራቶሪ የድንገተኛነት መዝገብ.

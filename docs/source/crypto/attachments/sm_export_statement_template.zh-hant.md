@@ -7,50 +7,50 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 6742d2b87b8fbbc1493c5ae2704147b0f8d5d23af78004c2c9a112fe881efb11
 source_last_modified: "2025-12-29T18:16:35.937402+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Export-Control Statement Template
-% Hyperledger Iroha Compliance Working Group
+% SM2/SM3/SM4 出口管制聲明模板
+% Hyperledger Iroha 合規工作組
 % 2026-05-06
 
-# Usage
+# 用法
 
-Embed this statement in release notes, manifests, or legal correspondence when
-distributing SM-enabled artefacts. Update the placeholders to match the release,
-jurisdiction, and applicable license exceptions. Retain a signed copy with the
-release checklist.
+在以下情況下將此聲明嵌入到發行說明、清單或法律信函中：
+分發支持 SM 的文物。更新佔位符以匹配版本，
+管轄權和適用的許可例外情況。保留一份簽名副本
+發布清單。
 
-# Statement
+# 聲明
 
-> **Product:** Hyperledger Iroha {{ RELEASE_VERSION }} (`{{ ARTEFACT_ID }}`)
+> **產品：** Hyperledger Iroha {{ RELEASE_VERSION }} (`{{ ARTEFACT_ID }}`)
 >
-> **Algorithms Included:** SM2 digital signature, SM3 hashing, SM4 symmetric
-> encryption (GCM/CCM)
+> **包含的算法：** SM2 數字簽名、SM3 哈希、SM4 對稱
+> 加密（GCM/CCM）
 >
-> **Export Classification:** United States EAR Category 5, Part 2 (5D002.c.1);
-> European Union Regulation 2021/821 Annex 1, 5D002.
+> **出口分類：** 美國 EAR 類別 5，第 2 部分 (5D002.c.1)；
+> 歐盟法規 2021/821 附件 1, 5D002。
 >
-> **License Exception(s):** {{ LICENSE_EXCEPTION }} (e.g., ENC §740.17(b)(2),
-> TSU §740.13 for source distribution).
+> **許可證例外：** {{ LICENSE_EXCEPTION }}（例如，ENC §740.17(b)(2)，
+> TSU §740.13 用於源代碼分發）。
 >
-> **Distribution Scope:** {{ DISTRIBUTION_SCOPE }} (e.g., “Global, excluding
-> embargoed territories listed in 15 CFR 746”).
+> **分發範圍：** {{ DISTRIBUTION_SCOPE }}（例如，“全球，不包括
+> 15 CFR 746 中列出的禁運地區”）。
 >
-> **Operator Obligations:** Recipients must comply with applicable export,
-> import, and usage regulations. Deployments within the People’s Republic of
-> China require product and usage filings with the State Cryptography
-> Administration and adherence to mainland data residency requirements.
+> **運營商義務：** 接收者必須遵守適用的出口、
+> 進口和使用規定。在中華人民共和國境內的部署
+> 中國要求向國家密碼局備案產品和使用情況
+> 管理並遵守大陸數據駐留要求。
 >
-> **Contact:** {{ LEGAL_CONTACT_NAME }} — {{ LEGAL_CONTACT_EMAIL }} /
-> {{ LEGAL_CONTACT_PHONE }}
+> **聯繫方式：** {{ LEGAL_CONTACT_NAME }} — {{ LEGAL_CONTACT_EMAIL }} /
+> {{LEGAL_CONTACT_PHONE}}
 >
-> This statement accompanies the cryptography compliance checklist and filing
-> templates provided in `docs/source/crypto/sm_compliance_brief.md`. Retain this
-> document and associated filings for a minimum of three years.
+> 本聲明附有密碼學合規性檢查表和備案
+> `docs/source/crypto/sm_compliance_brief.md` 中提供的模板。保留這個
+> 文件和相關備案文件至少保存三年。
 
-# Signature
+# 簽名
 
-- Authorised representative: ________________________
-- Title: ________________________
-- Date: ________________________
-
+- 授權代表：________________________
+- 頭銜：___________________
+- 日期：___________________

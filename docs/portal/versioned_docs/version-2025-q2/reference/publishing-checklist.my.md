@@ -7,50 +7,51 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 9be80e0138e1e8aa453c703c53069837b24f29f6b463d14c846a01b015918f24
 source_last_modified: "2025-12-29T18:16:35.907815+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Publishing Checklist
+# ထုတ်ပြန်ခြင်းစာရင်း
 
-Use this checklist whenever you update the developer portal. It ensures that the
-CI build, GitHub Pages deployment, and manual smoke tests cover every section
-before a release or roadmap milestone lands.
+developer portal ကို အပ်ဒိတ်လုပ်သည့်အခါတိုင်း ဤစစ်ဆေးမှုစာရင်းကို အသုံးပြုပါ။ ဒါမှ
+CI တည်ဆောက်မှု၊ GitHub စာမျက်နှာများ ဖြန့်ကျက်ခြင်းနှင့် လက်စွဲမီးခိုးစမ်းသပ်မှုများသည် ကဏ္ဍတိုင်းတွင် အကျုံးဝင်သည်။
+မထုတ်ပြန်မီ သို့မဟုတ် လမ်းပြမြေပုံ မှတ်တိုင်များ ရှိလာပါသည်။
 
 ## 1. Local validation
 
-- `npm run sync-openapi` (when Torii OpenAPI changes).
-- `npm run build` – confirm the `Build on Iroha with confidence` hero copy still
-  appears in `build/index.html`.
-- `cd build && sha256sum -c checksums.sha256` – verify the checksum manifest the
-  build generated.
-- Spot-check the markdown you touched via `npm run start` and the live reload
-  server.
+- `npm run sync-openapi` (Torii OpenAPI ပြောင်းလဲမှု)။
+- `npm run build` - `Build on Iroha with confidence` ဟီးရိုးမိတ္တူကို အတည်ပြုပါ
+  `build/index.html` တွင်ပေါ်လာသည်။
+- `cd build && sha256sum -c checksums.sha256` - checksum manifest ကိုစစ်ဆေးပါ။
+  build generated ။
+- `npm run start` နှင့် တိုက်ရိုက်ပြန်တင်ခြင်းမှတစ်ဆင့် သင်ထိတွေ့ခဲ့သော အမှတ်အသားကို အစက်ချစစ်ဆေးပါ
+  ဆာဗာ။
 
-## 2. Pull request checks
+## 2. တောင်းဆိုချက်စစ်ဆေးမှုများကို ဆွဲထုတ်ပါ။
 
-- Verify the `docs-portal-build` job succeeded in `.github/workflows/check-docs.yml`.
-- Confirm `ci/check_docs_portal.sh` ran (CI logs show the hero smoke check).
-- Ensure the preview workflow uploaded a manifest (`build/checksums.sha256`) and
-  that `sha256sum -c` passed in CI.
-- Add the published preview URL from the GitHub Pages environment to the PR
-  description.
+- `docs-portal-build` အလုပ် `.github/workflows/check-docs.yml` အောင်မြင်ကြောင်း အတည်ပြုပါ။
+- `ci/check_docs_portal.sh` ပြေးကြောင်း အတည်ပြုပါ (CI မှတ်တမ်းများက ဟီးရိုးမီးခိုးစစ်ဆေးခြင်းကို ပြသည်)။
+- မန်နီးဖက်စ် (`build/checksums.sha256`) အပ်လုဒ်လုပ်ထားသည့် အစမ်းကြည့်ရှုခြင်းလုပ်ငန်းအသွားအလာကို သေချာစေပါ
+  `sha256sum -c` သည် CI တွင် အောင်မြင်သည်။
+- GitHub Pages ပတ်ဝန်းကျင်မှ ထုတ်ဝေထားသော အကြိုကြည့်ရှုခြင်း URL ကို PR သို့ ထည့်ပါ။
+  ဖော်ပြချက်။
 
-## 3. Section sign-off
+## 3. အပိုင်းကို ဆိုင်းဘုတ်ပိတ်ပါ။
 
-| Section | Owner | Checklist |
-|---------|-------|-----------|
-| Homepage | DevRel | Hero copy renders, quickstart cards link to valid routes, CTA buttons resolve. |
-| Norito | Norito WG | Overview and getting-started guides reference the latest CLI flags and Norito schema docs. |
-| SoraFS | Storage Team | Quickstart runs to completion, manifest report fields documented, fetch simulation instructions verified. |
-| SDK guides | SDK leads | Rust/Python/JS guides compile the current examples and link to live repos. |
-| Reference | Docs/DevRel | Index lists the newest specs, Norito codec reference matches `norito.md`. |
-| Preview artifact | Docs/DevRel | `docs-portal-preview` artifact attached to the PR, smoke checks pass, link shared with reviewers. |
+| ပုဒ်မ | ပိုင်ရှင် | စစ်ဆေးရန်စာရင်း |
+|---------|------|-----------|
+| ပင်မစာမျက်နှာ | DevRel | Hero မိတ္တူပြန်ဆိုခြင်း၊ အမြန်စတင်ကတ်များ လင့်ခ်ချိတ်ခြင်း၊ CTA ခလုတ်များကို ဖြေရှင်းပါ။ |
+| Norito | Norito WG | ခြုံငုံသုံးသပ်ချက်နှင့် စတင်ခြင်းလမ်းညွှန်များသည် နောက်ဆုံးပေါ် CLI အလံများနှင့် Norito schema docs ကိုရည်ညွှန်းသည်။ |
+| SoraFS | သိုလှောင်ရေးအဖွဲ့ | Quickstart သည် ပြီးမြောက်ရန်၊ မှတ်တမ်းပြုစုထားသော အစီရင်ခံစာအကွက်များကို ထုတ်ဖော်ပြသရန်၊ သရုပ်ဖော်ခြင်းဆိုင်ရာ ညွှန်ကြားချက်များကို ရယူရန် အတည်ပြုပြီးဖြစ်သည်။ |
+| SDK လမ်းညွှန်များ | SDK ဦးဆောင် | Rust/Python/JS လမ်းညွှန်များသည် လက်ရှိနမူနာများကို စုစည်းပြီး live repos သို့ ချိတ်ဆက်ပါ။ |
+| ကိုးကား | Docs/DevRel | Index သည် Norito codec ရည်ညွှန်းချက် `norito.md` နှင့် ကိုက်ညီသော နောက်ဆုံးပေါ် specs များကို ဖော်ပြပါသည်။ |
+| အကြိုကြည့်ရှုခြင်း | Docs/DevRel | `docs-portal-preview` PR တွင် ပူးတွဲပါရှိသည့် ရှေးဟောင်းပစ္စည်း၊ မီးခိုးစစ်ဆေးမှုများ လက်မှတ်၊ လင့်ခ်ကို သုံးသပ်သူများနှင့် မျှဝေထားသည်။ |
 
-Mark each row as part of your PR review, or note any follow-up tasks so status
-tracking stays accurate.
+သင်၏ PR ပြန်လည်သုံးသပ်မှု၏ တစ်စိတ်တစ်ပိုင်းအဖြစ် အတန်းတစ်ခုစီကို အမှတ်အသားပြုပါ သို့မဟုတ် နောက်ဆက်တွဲလုပ်ဆောင်စရာများကို မှတ်သားထားပါ။
+ခြေရာခံခြင်းသည် တိကျသည်။
 
-## 4. Release notes
+## 4. ထုတ်ဝေမှုမှတ်စုများ
 
-- Include `https://docs.iroha.tech/` (or the environment URL
-  from the deployment job) in release notes and status updates.
-- Call out any new or changed sections explicitly so downstream teams know where
-  to re-run their own smoke tests.
+- `https://docs.iroha.tech/` (သို့မဟုတ် ပတ်ဝန်းကျင် URL ကို ထည့်သွင်းပါ။
+  ဖြန့်ကျက်ခြင်းအလုပ်မှ) ထုတ်ဝေမှုမှတ်စုများနှင့် အခြေအနေအပ်ဒိတ်များတွင်။
+- မည်သည့်နေရာတွင်မဆို အသစ် သို့မဟုတ် ပြောင်းလဲထားသော အပိုင်းများကို ပြတ်ပြတ်သားသား ခေါ်ဆို၍ ရေအောက်အသင်းများ မည်သည့်နေရာတွင် ရှိနေသည်ကို သိစေရန်
+  ၎င်းတို့၏ကိုယ်ပိုင်မီးခိုးစမ်းသပ်မှုများပြန်လည်လုပ်ဆောင်ရန်။

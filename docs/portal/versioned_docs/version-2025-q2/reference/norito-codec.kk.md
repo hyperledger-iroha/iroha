@@ -7,60 +7,61 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 38c0cedd4858656db8562c6612f9981df11a1b2292c05908c3671402ee96be9d
 source_last_modified: "2026-01-16T16:25:53.031576+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Norito Codec Reference
+№ Norito кодек анықтамасы
 
-Norito is Iroha’s canonical serialization layer. Every on-wire message, on-disk
-payload, and cross-component API uses Norito so nodes agree on identical bytes
-even when they run on different hardware. This page summarises the moving parts
-and points to the full specification in `norito.md`.
+Norito — Iroha канондық сериялау қабаты. Әрбір сымды хабарлама, дискідегі
+пайдалы жүктеме және кросс-компоненттік API Norito пайдаланады, сондықтан түйіндер бірдей байттармен келіседі
+олар әртүрлі жабдықта жұмыс істегенде де. Бұл бетте қозғалатын бөліктер жинақталған
+және `norito.md` ішіндегі толық сипаттаманы көрсетеді.
 
-## Core layout
+## Негізгі орналасу
 
-| Component | Purpose | Source |
+| Құрамдас | Мақсаты | Дереккөз |
 | --- | --- | --- |
-| **Header** | Negotiates features (packed structs/sequences, compact lengths, compression flags) and embeds a CRC64 checksum so payload integrity is checked before decode. | `norito::header` — see `norito.md` (“Header & Flags”, repository root) |
-| **Bare payload** | Deterministic value encoding used for hashing/comparison. The same layout is wrapped by the header for transport. | `norito::codec::{Encode, Decode}` |
-| **Compression** | Optional Zstd (and experimental GPU acceleration) activated via the `compression` flag byte. | `norito.md`, “Compression negotiation” |
+| **Тақырып** | Мүмкіндіктерді келіседі (оралған құрылымдар/тізбектер, ықшам ұзындықтар, қысу жалаулары) және CRC64 бақылау сомасын енгізеді, осылайша пайдалы жүктің тұтастығы декодтау алдында тексеріледі. | `norito::header` — `norito.md` қараңыз («Тақырып және жалаулар», репозиторий түбірі) |
+| **Бос пайдалы жүктеме** | Хэштеу/салыстыру үшін пайдаланылатын детерминистік мәнді кодтау. Дәл осындай орналасу тасымалдауға арналған тақырыппен оралған. | `norito::codec::{Encode, Decode}` |
+| **Сығу** | Қосымша Zstd (және эксперименттік GPU жеделдету) `compression` жалауша байты арқылы белсендірілген. | `norito.md`, «Сығу келіссөздері» |
 
-The full flag registry (packed-struct, packed-seq, compact lengths, compression)
-lives in `norito::header::flags`. `norito::header::Flags` exposes convenience
-checks for runtime inspection; reserved layout bits are rejected by decoders.
+Толық жалау тізілімі (қапталған-құрылым, бумаланған-сек, ықшам ұзындықтар, қысу)
+`norito::header::flags` тұрады. `norito::header::Flags` ыңғайлылықты көрсетеді
+орындау уақытын тексеруді тексереді; сақталған орналасу биттерін декодерлер қабылдамайды.
 
-## Derive support
+## Қолдау алыңыз
 
-`norito_derive` ships `Encode`, `Decode`, `IntoSchema`, and JSON helper derives.
-Key conventions:
+`norito_derive` `Encode`, `Decode`, `IntoSchema` және JSON көмекшісін жібереді.
+Негізгі конвенциялар:
 
-- Structs/enums derive packed layouts when the `packed-struct` feature is
-  enabled (default). Implementation lives in `crates/norito_derive/src/derive_struct.rs`
-  and the behaviour is documented in `norito.md` (“Packed layouts”).
-- Packed collections use fixed-width sequence headers and offsets in v1; only
-  per-value length prefixes are affected by `COMPACT_LEN`.
-- JSON helpers (`norito::json`) provide deterministic Norito-backed JSON for
-  open APIs. Use `norito::json::{to_json_pretty, from_json}` — never `serde_json`.
+- `packed-struct` мүмкіндігі болған кезде құрылымдар/сандар жинақталған макеттерді шығарады
+  қосылған (әдепкі). Іске асыру `crates/norito_derive/src/derive_struct.rs` ішінде өмір сүреді
+  және мінез-құлық `norito.md` («Бумаланған орналасулар») құжатталады.
+- Бумаланған жинақтар v1 жүйесінде бекітілген енді ретті тақырыптар мен ығысуларды пайдаланады; тек
+  әрбір мән ұзындығы префикстеріне `COMPACT_LEN` әсер етеді.
+- JSON көмекшілері (`norito::json`) үшін детерминирленген Norito қолдауы бар JSON қамтамасыз етеді
+  API интерфейстерін ашыңыз. `norito::json::{to_json_pretty, from_json}` пайдаланыңыз — ешқашан `serde_json`.
 
-## Multicodec & identifier tables
+## Мультикодек және идентификатор кестелері
 
-Norito keeps its multicodec assignments in `norito::multicodec`. The reference
-table (hashes, key types, payload descriptors) is maintained in `multicodec.md`
-at the repository root. When a new identifier is added:
+Norito мультикодек тағайындауларын `norito::multicodec` ішінде сақтайды. Анықтама
+кесте (хэштер, кілт түрлері, пайдалы жүктеме дескрипторлары) `multicodec.md` ішінде сақталады
+репозиторий түбірінде. Жаңа идентификатор қосылғанда:
 
-1. Update `norito::multicodec::registry`.
-2. Extend the table in `multicodec.md`.
-3. Regenerate downstream bindings (Python/Java) if they consume the map.
+1. `norito::multicodec::registry` жаңарту.
+2. `multicodec.md` ішіндегі кестені кеңейтіңіз.
+3. Төменгі ағынды байланыстыруларды (Python/Java) қалпына келтіріңіз, егер олар картаны пайдаланса.
 
-## Regenerating docs & fixtures
+## Құжаттар мен құрылғыларды қалпына келтіру
 
-With the portal currently hosting a prose summary, use the upstream Markdown
-sources as the source of truth:
+Порталда қазіргі уақытта прозалық қорытынды бар, жоғары ағынды Markdown пайдаланыңыз
+ақиқаттың қайнар көзі ретінде:
 
-- **Spec**: `norito.md`
-- **Multicodec table**: `multicodec.md`
-- **Benchmarks**: `crates/norito/benches/`
-- **Golden tests**: `crates/norito/tests/`
+- **Сипаттамасы**: `norito.md`
+- **Мультикодек кестесі**: `multicodec.md`
+- **Эталондар**: `crates/norito/benches/`
+- **Алтын сынақтар**: `crates/norito/tests/`
 
-When the Docusaurus automation goes live, the portal will be updated via a
-sync script (tracked in `docs/portal/scripts/`) that pulls the data from these
-files. Until then, keep this page aligned manually whenever the spec changes.
+Docusaurus автоматтандыруы іске қосылғанда, портал келесі арқылы жаңартылады.
+осылардан деректерді алатын синхрондау сценарийі (`docs/portal/scripts/` ішінде бақыланады).
+файлдар. Осы уақытқа дейін спецификация өзгерген сайын бұл бетті қолмен туралаңыз.

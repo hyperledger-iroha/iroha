@@ -7,119 +7,118 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 2e4c6ed5974f623906f51259a634bcad5df703bcec899630ae29f4669b289ab6
 source_last_modified: "2026-01-08T21:52:45.509525+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Bridge finality proofs
+# Կամուրջի վերջնական ապացույցներ
 
-This document describes the initial bridge finality proof surface for Iroha.
-The goal is to let external chains or light clients verify that an Iroha block
-is finalized without off‑chain computation or trusted relays.
+Այս փաստաթուղթը նկարագրում է Iroha-ի նախնական կամրջի վերջնականությունը պաշտպանող մակերեսը:
+Նպատակն է թույլ տալ արտաքին շղթաներին կամ թեթև հաճախորդներին ստուգել, որ Iroha բլոկը
+ավարտվում է առանց շղթայից դուրս հաշվարկների կամ վստահելի ռելեների:
 
-## Proof format
+## Ապացույցի ձևաչափ
 
-`BridgeFinalityProof` (Norito/JSON) contains:
+`BridgeFinalityProof` (Norito/JSON) պարունակում է.
 
-- `height`: block height.
-- `chain_id`: Iroha chain identifier to prevent cross-chain replay.
-- `block_header`: canonical `BlockHeader`.
-- `block_hash`: hash of the header (clients recompute to validate).
-- `commit_certificate`: validator set + signatures that finalized the block.
-- `validator_set_pops`: Proof-of-Possession bytes aligned with the validator set
-  order (required for BLS aggregate verification).
+- `height`՝ բլոկի բարձրությունը:
+- `chain_id`: Iroha շղթայի նույնացուցիչ՝ խաչաձեւ շղթայական կրկնությունը կանխելու համար:
+- `block_header`՝ կանոնական `BlockHeader`:
+- `block_hash`. վերնագրի հեշը (հաճախորդները նորից հաշվարկում են՝ վավերացնելու համար):
+- `commit_certificate`. վավերացնող հավաքածու + ստորագրություններ, որոնք վերջնականացրել են բլոկը:
+- `validator_set_pops`. Տիրապետման հաստատման բայթերը համընկնում են վավերացնողի հավաքածուի հետ
+  պատվեր (պահանջվում է BLS ագրեգատային ստուգման համար):
 
-The proof is self‑contained; no external manifests or opaque blobs are required.
-Retention: Torii serves finality proofs for the recent commit-certificate window
-(bounded by the configured history cap; defaults to 512 entries via
-`sumeragi.commit_cert_history_cap` / `SUMERAGI_COMMIT_CERT_HISTORY_CAP`). Clients
-should cache or anchor proofs if they need longer horizons.
-The canonical tuple is `(block_header, block_hash, commit_certificate)`: the
-hash of the header must match the hash inside the commit certificate, and the
-chain id binds the proof to a single ledger. Servers reject and log a
-`CommitCertificateHashMismatch` when the certificate points to a different block
-hash.
+Ապացույցը ինքնամփոփ է. արտաքին դրսևորումներ կամ անթափանց բշտիկներ չեն պահանջվում:
+Պահպանում․
+(սահմանափակված է կազմաձևված պատմության գլխարկով. լռելյայն է 512 մուտքի միջոցով
+`sumeragi.commit_cert_history_cap` / `SUMERAGI_COMMIT_CERT_HISTORY_CAP`): Հաճախորդներ
+պետք է քեշի կամ խարիսխի ապացույցներ, եթե դրանք ավելի երկար հորիզոնների կարիք ունեն:
+Կանոնական բազմակն է `(block_header, block_hash, commit_certificate)`
+վերնագրի հեշը պետք է համապատասխանի commit վկայագրի ներսում գտնվող հեշին, և
+շղթայի ID-ն ապացույցը կապում է մեկ մատյան: Սերվերները մերժում և գրանցում են ա
+`CommitCertificateHashMismatch`, երբ վկայագիրը մատնանշում է մեկ այլ բլոկի
+հաշ.
 
-## Commitment bundle
+## Պարտավորությունների փաթեթ
 
-`BridgeFinalityBundle` (Norito/JSON) extends the basic proof with an explicit
-commitment and justification:
+`BridgeFinalityBundle` (Norito/JSON) ընդլայնում է հիմնական ապացույցը բացահայտ
+պարտավորություն և հիմնավորում.
 
 - `commitment`: `{ chain_id, authority_set { id, validator_set, validator_set_hash, validator_set_hash_version }, block_height, block_hash, mmr_root?, mmr_leaf_index?, mmr_peaks?, next_authority_set? }`
-- `justification`: signatures from the authority set over the commitment
-  payload (reuses the commit-certificate signatures).
-- `block_header`, `commit_certificate`: same as the basic proof.
+- `justification`. ստորագրություններ ստանձնած պարտավորությունների վերաբերյալ լիազորված մարմնից
+  ծանրաբեռնվածություն (վերօգտագործում է պարտավորությունների վկայականի ստորագրությունները):
+- `block_header`, `commit_certificate`. նույնը, ինչ հիմնական ապացույցը:
 
-Current placeholder: `mmr_root`/`mmr_peaks` are derived by recomputing a
-block-hash MMR in memory; inclusion proofs are not yet returned. Clients can
-still verify the same hash via the commitment payload today.
+Ընթացիկ տեղապահ՝ `mmr_root`/`mmr_peaks` ստացվում է վերահաշվարկով
+block-hash MMR հիշողության մեջ; ներառման ապացույցները դեռ չեն վերադարձվել: Հաճախորդները կարող են
+դեռևս այսօր ստուգեք նույն հեշը պարտավորությունների բեռի միջոցով:
 
-MMR peaks are ordered left to right. Recompute `mmr_root` by bagging peaks
-from right to left: `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`.
+MMR գագաթները դասավորված են ձախից աջ: Վերահաշվարկեք `mmr_root`-ը՝ բարձելով գագաթները
+աջից ձախ՝ `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`:
 
-API: `GET /v1/bridge/finality/bundle/{height}` (Norito/JSON).
+API՝ `GET /v1/bridge/finality/bundle/{height}` (Norito/JSON):
 
-Verification is analogous to the basic proof: recompute `block_hash` from the
-header, verify the commit-certificate signatures, and check the commitment
-fields match the certificate and block hash. The bundle adds a commitment/
-justification wrapper for bridge protocols that prefer the separation.
+Ստուգումը նման է հիմնական ապացույցին. վերահաշվարկեք `block_hash`-ը
+վերնագիր, ստուգեք պարտավորությունների վկայականի ստորագրությունները և ստուգեք պարտավորությունը
+դաշտերը համապատասխանում են վկայականին և բլոկի հեշին: Փաթեթն ավելացնում է պարտավորություն/
+հիմնավորման փաթաթան կամուրջի արձանագրությունների համար, որոնք նախընտրում են բաժանումը:
 
-## Verification steps
+## Ստուգման քայլեր1. Վերհաշվարկեք `block_hash` `block_header`-ից; մերժել անհամապատասխանության մասին.
+2. Ստուգեք, որ `commit_certificate.block_hash` համապատասխանում է վերահաշվարկված `block_hash`-ին;
+   մերժել չհամընկնող վերնագիր/հանձնարարական վկայականների զույգերը:
+3. Ստուգեք, որ `chain_id` համապատասխանում է սպասվող Iroha շղթային:
+4. Վերհաշվարկեք `validator_set_hash` `commit_certificate.validator_set`-ից և
+   ստուգեք, որ այն համապատասխանում է գրանցված հեշին/տարբերակին:
+5. Համոզվեք, որ `validator_set_pops` երկարությունը համապատասխանում է վավերացնողի հավաքածուին և վավերացնում է
+   յուրաքանչյուր PoP իր BLS հանրային բանալու դեմ:
+6. Ստուգեք ստորագրությունները ստանձնման վկայականում վերնագրի հեշի դեմ՝ օգտագործելով
+   հղումով վավերացնող հանրային բանալիներ և ինդեքսներ. քվորումի կիրառում
+   (`2f+1`, երբ `n>3`, այլապես `n`) և մերժեք կրկնօրինակ/միջակայքից դուրս ինդեքսները:
+7. Ընտրովի կապվել վստահելի անցակետի հետ՝ համեմատելով վավերացնողի հավաքածուի հեշը
+   խարսխված արժեքի նկատմամբ (թույլ սուբյեկտիվության խարիսխ):
+8. Ընտրովի կապեք ակնկալվող դարաշրջանի խարիսխին, որպեսզի ապացուցեք ավելի հին/նորից
+   դարաշրջանները մերժվում են այնքան ժամանակ, քանի դեռ խարիսխը միտումնավոր չի պտտվում:
 
-1. Recompute `block_hash` from `block_header`; reject on mismatch.
-2. Check `commit_certificate.block_hash` matches the recomputed `block_hash`;
-   reject mismatched header/commit certificate pairs.
-3. Check `chain_id` matches the expected Iroha chain.
-4. Recompute `validator_set_hash` from `commit_certificate.validator_set` and
-   check it matches the recorded hash/version.
-5. Ensure `validator_set_pops` length matches the validator set and validate
-   each PoP against its BLS public key.
-6. Verify signatures in the commit certificate against the header hash using
-   the referenced validator public keys and indices; enforce quorum
-   (`2f+1` when `n>3`, else `n`) and reject duplicate/out‑of‑range indices.
-7. Optionally bind to a trusted checkpoint by comparing the validator set hash
-   to an anchored value (weak‑subjectivity anchor).
-8. Optionally bind to an expected epoch anchor so proofs from older/newer
-   epochs are rejected until the anchor is rotated intentionally.
+`BridgeFinalityVerifier` (`iroha_data_model::bridge`-ում) կիրառում է այս ստուգումները,
+շղթայի ID/բարձրության շեղումը մերժելը, վավերացնողի հավաքածուի հեշը/տարբերակի անհամապատասխանությունները, բացակայում են
+կամ անվավեր PoP-ներ, կրկնօրինակներ/դրանց շրջանակից դուրս ստորագրողներ, անվավեր ստորագրություններ և
+անսպասելի դարաշրջաններ՝ նախքան քվորումը հաշվելը, որպեսզի թեթև հաճախորդները կարողանան նորից օգտագործել մեկ սինգլը
+ստուգիչ.
 
-`BridgeFinalityVerifier` (in `iroha_data_model::bridge`) applies these checks,
-rejecting chain-id/height drift, validator-set hash/version mismatches, missing
-or invalid PoPs, duplicate/out-of-range signers, invalid signatures, and
-unexpected epochs before counting quorum so light clients can reuse a single
-verifier.
+## Հղման ստուգիչ
 
-## Reference verifier
+`BridgeFinalityVerifier` ընդունում է ակնկալվող `chain_id` գումարած կամընտիր վստահելի
+վավերացնող-սեթ և դարաշրջանային խարիսխներ: Այն պարտադրում է վերնագիր/բլոկ-հեշ/
+commit-certificate tuple, վավերացնում է վավերացնողի հավաքածուի հեշ/տարբերակը, ստուգում
+ստորագրություններ/քվորում գովազդվող վավերացնող ցուցակի դեմ և հետևում է ամենավերջին
+բարձրություն՝ հնացած/բաց թողնված ապացույցները մերժելու համար: Երբ խարիսխները մատակարարվում են, այն մերժվում է
+կրկնում է դարաշրջանների / ցուցակների միջև՝ հստակ `UnexpectedEpoch`/
+`UnexpectedValidatorSet` սխալներ; առանց խարիսխների ընդունում է առաջին ապացույցները
+վավերացնողի հավաքածուի հեշ և դարաշրջան, նախքան կրկնօրինակը/արտահաստատումը շարունակելը
+միջակայք/անբավարար ստորագրություններ՝ դետերմինիստական սխալներով:
 
-`BridgeFinalityVerifier` accepts an expected `chain_id` plus optional trusted
-validator-set and epoch anchors. It enforces the header/block-hash/
-commit-certificate tuple, validates validator-set hash/version, checks
-signatures/quorum against the advertised validator roster, and tracks the latest
-height to reject stale/skipped proofs. When anchors are supplied it rejects
-replays across epochs/rosters with explicit `UnexpectedEpoch`/
-`UnexpectedValidatorSet` errors; without anchors it adopts the first proof's
-validator-set hash and epoch before continuing to enforce duplicate/out-of-
-range/insufficient signatures with deterministic errors.
+## API մակերես
 
-## API surface
-
-- `GET /v1/bridge/finality/{height}` – returns `BridgeFinalityProof` for the
-  requested block height. Content negotiation via `Accept` supports Norito or
+- `GET /v1/bridge/finality/{height}` – վերադարձնում է `BridgeFinalityProof`
+  պահանջվող բլոկի բարձրությունը: Բովանդակության բանակցությունները `Accept`-ի միջոցով աջակցում են Norito կամ
   JSON.
-- `GET /v1/bridge/finality/bundle/{height}` – returns `BridgeFinalityBundle`
-  (commitment + justification + header/certificate) for the requested height.
+- `GET /v1/bridge/finality/bundle/{height}` – վերադարձնում է `BridgeFinalityBundle`
+  (պարտավորություն + հիմնավորում + վերնագիր / վկայագիր) պահանջվող բարձրության համար:
 
-## Notes and follow‑ups
+## Նշումներ և հետևություններ
 
-- Proofs are currently derived from stored commit certificates. The bounded
-  history follows the commit certificate retention window; clients should cache
-  anchor proofs if they need longer horizons. Requests outside the window return
-  `CommitCertificateNotFound(height)`; surface the error and fall back to an
-  anchored checkpoint.
-- A replayed or forged proof with mismatched `block_hash` (header vs.
-  certificate) is rejected with `CommitCertificateHashMismatch`; clients should
-  perform the same tuple check before signature verification and discard
-  mismatched payloads.
-- Future work can add MMR/authority‑set commitment chains to reduce proof size
-  the commit certificate inside richer commitment envelopes.
+- Ապացույցները ներկայումս ստացվում են պահված պարտավորությունների վկայականներից: Սահմանափակվածները
+  պատմությունը հետևում է պարտավորությունների վկայականի պահպանման պատուհանին. հաճախորդները պետք է պահեն
+  խարիսխի ապացույցներ, եթե նրանց ավելի երկար հորիզոններ են պետք: Պատուհանից դուրս վերադարձի հարցումներ
+  `CommitCertificateNotFound(height)`; բացահայտեք սխալը և նորից ընկեք an
+  խարսխված անցակետ.
+- Վերարտադրված կամ կեղծված ապացույց՝ անհամապատասխան `block_hash`-ով (վերնագիր ընդդեմ.
+  վկայական) մերժվում է `CommitCertificateHashMismatch`-ով; հաճախորդները պետք է
+  կատարել նույն կրկնակի ստուգումը նախքան ստորագրության ստուգումը և հեռացնել
+  անհամապատասխան բեռնատարներ.
+- Ապագա աշխատանքը կարող է ավելացնել MMR/հեղինակության կողմից սահմանված պարտավորությունների շղթաներ՝ ապացույցների չափը նվազեցնելու համար
+  պարտավորությունների վկայականը ավելի հարուստ պարտավորությունների ծրարներում:

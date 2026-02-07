@@ -7,43 +7,44 @@ generator: scripts/sync_docs_i18n.py
 source_hash: ba5f4fdc9221210a793fd0c2120d8cfb68487d7ddcbe67c208976798446ca5db
 source_last_modified: "2025-12-29T18:16:35.945760+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! SM program risk register for SM2/SM3/SM4 enablement.
+///! SM2/SM3/SM4 ལྕོགས་ཅན་གྱི་དོན་ལུ་ SM ལས་རིམ་གྱི་ཉེན་ཁ་ཐོ་བཀོད་འབད་ཡོདཔ།
 
-# SM Program Risk Register
+# ཨེས་ཨེམ་ལས་རིམ་ཉེན་ཁའི་ཐོ་འགོད།
 
-Last updated: 2025-03-12.
+མཐའ་མའི་དུས་མཐུན་བཟོ་ཡོདཔ།: ༢༠༢༥-༠༣-༡༢.
 
-This register expands on the summary in `sm_program.md`, pairing each risk with
-ownership, monitoring triggers, and the current mitigation state. The Crypto WG
-and Core Platform leads review this register at the weekly SM cadence; changes
-are reflected both here and in the public roadmap.
+ཐོ་བཀོད་འདི་གིས་ `sm_program.md` ནང་ལུ་ བཅུད་བསྡུས་འདི་ རྒྱ་སྐྱེད་འགྱོ་སྟེ་ ཉེན་ཁ་རེ་རེ་བཞིན་དུ་དང་ ཆ་སྒྲིག་འབདཝ་ཨིན།
+བདག་དབང་དང་ ལྟ་རྟོག་འབད་ཐངས་ཚུ་ དེ་ལས་ ད་ལྟོའི་མར་ཕབ་ཀྱི་གནས་སྟངས། ཀིརིཔ་ཊོ་ ཌབ་ལུ་ཇི་
+དང་ ཀོར་ གཞི་རྟེན་འགོ་ཁྲིད་ཚུ་གིས་ བདུན་ཕྲག་རེའི་ ཨེསི་ཨེམ་ གདམ་ཁའི་ནང་ ཐོ་བཀོད་འདི་ བསྐྱར་ཞིབ་འབདཝ་ཨིན། འགྱུར་བཅོས་
+འདི་དང་མི་མང་ལམ་གྱི་ས་ཁྲ་གཉིས་ཆ་རའི་ནང་ལུ་ བསམ་ཞིབ་འབདཝ་ཨིན།
 
-## Risk Summary
+## ཉེན་ཁའི་གནད་བསྡུས།
 
-| ID | Risk | Category | Probability | Impact | Severity | Owner | Mitigation | Status | Triggers |
-|----|------|----------|-------------|--------|----------|-------|------------|--------|----------|
-| R1 | External audit for RustCrypto SM crates not executed before validator signing GA | Supply chain | Medium | High | High | Crypto WG | Contract Trail of Bits/NCC Group, keep verify-only posture until report accepted | Mitigation in progress | Audit SOW unsigned by 2025-04-15 or audit report delayed past 2025-06-01 |
-| R2 | Deterministic nonce regressions across SDKs | Implementation | Medium | High | High | SDK Program Leads | Share fixtures across SDK CI, enforce canonical r∥s encoding, add cross-SDK tamper tests | Monitoring | Fixture drift detected in CI or SDK release without SM fixtures |
-| R3 | ISA-specific bugs in intrinsics (NEON/SIMD) | Performance | Low | Medium | Medium | Performance WG | Gate intrinsics behind feature flags, require CI coverage on ARM, maintain scalar fallback | Mitigation in progress | NEON benches fail or hardware regression uncovered in SM perf matrix |
-| R4 | Compliance ambiguity delaying SM adoption | Governance | Medium | Medium | Medium | Docs & Legal Liaison | Publish compliance brief, operator checklist, liaison with legal counsel prior to GA | Mitigation in progress | Legal review outstanding after 2025-05-01 or missing checklist updates |
-| R5 | FFI backend drift with provider updates | Integration | Medium | Medium | Medium | Platform Ops | Pin provider versions, add parity tests, keep OpenSSL/Tongsuo preview opt-in | Monitoring | Package update merged without parity run or preview enabled outside pilot scope |
+| ID | ཉེན་ཁ། དབྱེ་ཁག་ | འབྱུང་འགྱུར་ | ཕན་གནོད་ | ཚབས་ཆེན། | ཇོ་བདག་ | མར་ཕབ་ | གནས་ཚད་ | ཊི་རི་གར་ |
+|--|-|-|-|-|-|-|-|-|-|-|-༢----------------------------------------------------------------------------------------------------------------------------  -----                          
+| R1 | ཕྱི་རོལ་གྱི་རྩིས་ཞིབ་ RusCrypto SM crates འདི་ བདེན་དཔྱད་འབད་མི་གིས་ GA མཚན་རྟགས་བཀོད་པའི་ཧེ་མ་ ལག་ལེན་འཐབ་མ་བཏུབ། | བཀྲམ་སྤེལ་གྱི་རྒྱུན་རིམ་ | བར་མ། | མཐོ་ཚད་ | མཐོ་ཚད་ | ཀིརིཔ་ཊོ་ WG | བིཊི་/ཨེན་སི་སི་སྡེ་ཚན་གྱི་གན་རྒྱ་ལམ་ལུགས། སྙན་ཞུ་ངོས་ལེན་མ་འབད་ཚུན་ཚོད་ བདེན་དཔྱད་འབད་བཞག་དགོ། | མར་ཕབ་ཀྱི་ཡར་རྒྱས་ནང་ | རྩིས་ཞིབ་ཨེསི་ཨོ་ཝ་ ༢༠༢༥-༠༤-༡༥ ཡང་ན་ རྩིས་ཞིབ་སྙན་ཞུ་ ༢༠༢༥-༠༦-༠༡ ལས་ ཕྱིར་འགྱངས་འབད་ཡོདཔ་ཨིན། |
+| R2 | SDKs ནང་ གཏན་འབེབས་ nonce འགྱུར་ལྡོག་ཚུ་ | ལག་ལེན་འཐབ་ནི། | བར་མ། | མཐོ་ཚད་ | མཐོ་ཚད་ | ཨེསི་ཌི་ཀེ་ལས་རིམ་འགོ་ཁྲིད་ཚུ་ | ཨེསི་ཌི་ཀེ་སི་ཨའི་ ནང་འཁོད་ལུ་ བགོ་བཤའ་སྒྲིག་སྟངས་ཚུ་ ཀེ་ནོ་ནིག་ཨར་∥s ཨིན་ཀོ་ཌིང་ བསྟར་སྤྱོད་འབད་ཞིནམ་ལས་ ཕར་ཚུར་ཨེསི་ཌི་ཀེ་ ཊམ་པར་བརྟག་དཔྱད་ཚུ་ ཁ་སྐོང་བརྐྱབ། | ལྟ་རྟོག་འབད་ནི། | SM བདེ་སྒྲིག་མེད་པར་ CI ཡང་ན་ SDK གསར་བཏོན་ནང་ བཙག་འཐུའི་ཌིཕཊ་ བརྟག་དཔྱད་འབད་ཡོདཔ། |
+| R3 | ISA-དམིགས་བསལ་གྱི་འབུཔ་ (NEON/SIMD) | ལས་དོན་ | དམའ་བ་ | བར་མ། | བར་མ། | ལས་དོན་ WG | ཁྱད་རྣམ་གྱི་རྒྱལ་དར་ཚུ་གི་རྒྱབ་ཁར་ གཱེཊ་ མཉམ་སྦྲགས་རིག་པ་ ARM གུ་ CI ཁྱབ་ཚད་དགོཔ་ཨིན། མར་ཕབ་ཀྱི་ཡར་རྒྱས་ནང་ | བང་ཁྲི་ཚུ་ འཐུས་ཤོར་བྱུང་ཡོདཔ་ ཡང་ན་ ཨེསི་ཨེམ་ perf matrix ནང་ མཉེན་ཆས་འགྱུར་ལྡོག་ཚུ་ མཐོང་ཡོདཔ་ཨིན། |
+| R4 | མཐུན་སྒྲིག་མེད་པའི་ གསལ་ཏོག་ཏོ་ ཕྱིར་འགྱངས་ SM ཆ་འཇོག་ | གཞུང་སྐྱོང་ | བར་མ། | བར་མ། | བར་མ། | Docs & ཁྲིམས་མཐུན་འབྲེལ་འཐུད། | ཁྲིམས་དོན་གྱི་གྲོས་སྟོན་པ་དང་ འབྲེལ་མཐུན་ཚུ་ མདོར་བསྡུས་སྦེ་ བསྟར་སྤྱོད་འབད་ནི། GA | མར་ཕབ་ཀྱི་ཡར་རྒྱས་ནང་ | ༢༠༢༥-༠༥-༠༡ གི་ཤུལ་ལས་ ཁྲིམས་དོན་བསྐྱར་ཞིབ་ཀྱི་ ཁྱད་འཕགས་ཅན་ ཡང་ན་ བརྟག་ཞིབ་ཐོ་ཡིག་དུས་མཐུན་ཚུ་ བརླག་སྟོར་ཞུགས་ཡོདཔ་ཨིན། |
+| R5 | བྱིན་མི་དུས་མཐུན་ཚུ་དང་གཅིག་ཁར་ FFI རྒྱབ་རྟེན་ཌིཕཊ་ | མཉམ་བསྡོམས་ | བར་མ། | བར་མ། | བར་མ། | སྟེགས་རིས་ Ops | པིན་སྤྲོད་མི་ཐོན་རིམ་ཚུ་ ཆ་སྙོམས་བརྟག་དཔྱད་ཁ་སྐོང་འབད་ཞིནམ་ལས་ OpenSSL/Tongsoo སྔོན་ལྟའི་གདམ་ཁ་ཚུ་ བཞག | ལྟ་རྟོག་འབད་ནི། | ཐུམ་སྒྲིལ་དུས་མཐུན་བཟོ་མི་འདི་ ཆ་སྙོམས་རྒྱུག་ནི་དང་ ཡང་ན་ སྔོན་ལྟ་ལྕོགས་ཅན་བཟོ་ཡོདཔ་ ཡང་ན་ སྔོན་ལྟ་ལྕོགས་ཅན་བཟོ་ཡོདཔ་ མཁའ་འགྲུལ་ཁྱབ་ཁོངས། |
 
-## Review Cadence
+## དཔྱད་གཞིའི་ཆ་རྐྱེན།
 
-- Weekly Crypto WG sync (standing agenda item).
-- Monthly joint review with Platform Ops and Docs to confirm compliance posture.
-- Pre-release checkpoint: risk register freeze and attestation bundled with GA
-  artefacts.
+- བདུན་ཕྲག་རེའི་ ཀིརིཔ་ཊོ་ ཌབ་ལུ་ཇི་ མཉམ་འབྱུང་ (གནས་ལུགས་ཀྱི་ གྲོས་འཆར།)།
+- བསྟར་སྤྱོད་ཀྱི་གནས་སྟངས་གཏན་འཁེལ་བཟོ་ནིའི་དོན་ལུ་ པེལེཊི་ཕོརམ་དང་ ཡིག་ཆ་ཚུ་དང་གཅིག་ཁར་ ཟླ་རིམ་མཉམ་འབྲེལ་བསྐྱར་ཞིབ་འབད་ནི།
+- སྔོན་འགྲོའི་བཏོན་ཡོད་པའི་ ཞིབ་དཔྱད་ས་ཚིགས་: ཉེན་ཁ་ཐོ་བཀོད་ཀྱི་ གྱང་ཤུགས་དང་ ཇི་ཨེ་དང་གཅིག་ཁར་ བདེན་ཁུངས་བཀལ་ནི།
+  ཅ་རྙིང་།
 
-## Sign-off
+## མཚན་རྟགས་བཀོད་པ།
 
-| Role | Representative | Date | Notes |
-|------|----------------|------|-------|
-| Crypto WG Lead | (signature on file) | 2025-03-12 | Approved for publication and shared with WG backlog. |
-| Core Platform Lead | (signature on file) | 2025-03-12 | Accepted mitigations and monitoring cadence. |
+| འགན་ཁུར་ | ངོ་ཚབ་ | ཚེས་གྲངས་ | དྲན་ཐོ། |
+|---|--|-----------------------|------------------|
+| ཀིརིཔ་ཊོ་ཌབ་ལུ་ཇི་ལིཌ་ | (ཡིག་སྣོད་གུ་མཚན་རྟགས་) | ༢༠༢༥-༠༣-༡༢ | དཔར་བསྐྲུན་གྱི་དོན་ལུ་ ཆ་འཇོག་འབད་དེ་ WG backlog དང་ཅིག་ཁར་ བརྗེ་སོར་འབད་ཡོདཔ་ཨིན། |
+| Core སྟེགས་བུ་འགོ་འཛིན། | (ཡིག་སྣོད་གུ་མཚན་རྟགས་) | ༢༠༢༥-༠༣-༡༢ | མར་ཕབ་དང་ ལྟ་རྟོག་འབད་ནིའི་ གོ་གནས་ཚུ་ ངོས་ལེན་འབད་ཡོདཔ། |
 
-For historic approvals and meeting minutes, see `docs/source/crypto/sm_program.md`
-(`Communication Plan`) and the SM agenda archive linked from the Crypto WG
-workspace.
+རྒྱལ་རབས་ཀྱི་ཆ་འཇོག་དང་འཛོམས་འདུའི་སྐར་མ་ཚུ་གི་དོན་ལུ་ `docs/source/crypto/sm_program.md` ལུ་བལྟ།
+(`Communication Plan`) དང་ ཀིརིཔ་ཊོ་ཌབ་ལུ་ཇི་ལས་ འབྲེལ་མཐུད་འབད་ཡོད་པའི་ ཨེསི་ཨེམ་གྱི་ གྲོས་གཞི་གཏན་མཛོད་འདི་ཨིན།
+ལས་ཀའི་ས་སྟོང་།

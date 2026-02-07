@@ -279,10 +279,12 @@ impl Actor {
         signature_topology: &super::network_topology::Topology,
     ) -> (BTreeSet<ValidatorIndex>, QcSignerFilterStats) {
         let chain_id = &self.common_config.chain;
-        let (_, mode_tag, prf_seed) = self.consensus_context_for_height(height);
+        let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
         let roster_hash = HashOf::new(&signature_topology.as_ref().to_vec());
-        let canonical_roster =
-            super::roster::canonicalize_roster(signature_topology.as_ref().to_vec());
+        let canonical_roster = super::roster::canonicalize_roster_for_mode(
+            signature_topology.as_ref().to_vec(),
+            consensus_mode,
+        );
         let membership_hash = HashOf::new(&canonical_roster);
         let canonical_topology = super::network_topology::Topology::new(canonical_roster);
         let mut topology_by_view: BTreeMap<u64, super::network_topology::Topology> =

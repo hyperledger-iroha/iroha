@@ -6,29 +6,30 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 4d1af3021d94540c338c921ea8393a10dd918ee1549965cdc09fbc612c938444
 source_last_modified: "2026-01-03T18:07:58.457499+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Python SDK Quickstart
+# Краткое руководство по Python SDK
 
-The Python SDK (`iroha-python`) mirrors the Rust client helpers so you can
-interact with Torii from scripts, notebooks, or web backends. This quickstart
-covers installation, transaction submission, and event streaming. For deeper
-coverage see `python/iroha_python/README.md` in the repository.
+Python SDK (`iroha-python`) отражает помощники клиента Rust, поэтому вы можете
+взаимодействовать с Torii из сценариев, блокнотов или веб-серверов. Это краткое руководство
+охватывает установку, отправку транзакций и потоковую передачу событий. Для более глубокого
+покрытие см. в репозитории `python/iroha_python/README.md`.
 
-## 1. Install
+## 1. Установить
 
 ```bash
 pip install iroha-python
 ```
 
-Optional extras:
+Дополнительные опции:
 
-- `pip install aiohttp` if you plan to run the asynchronous variants of the
-  streaming helpers.
-- `pip install pynacl` when you need Ed25519 key derivation outside of the SDK.
+- `pip install aiohttp`, если вы планируете запускать асинхронные варианты
+  потоковые помощники.
+- `pip install pynacl`, когда вам нужно получить ключ Ed25519 вне SDK.
 
-## 2. Create a client and signers
+## 2. Создайте клиента и подписывающих лиц
 
 ```python
 from iroha_python import (
@@ -46,14 +47,14 @@ client = ToriiClient(
 )
 ```
 
-`ToriiClient` accepts additional keyword arguments such as `timeout_ms`,
-`max_retries`, and `tls_config`. The helper `resolve_torii_client_config`
-parses a JSON configuration payload if you want parity with the Rust CLI.
+`ToriiClient` принимает дополнительные аргументы ключевых слов, такие как `timeout_ms`,
+`max_retries` и `tls_config`. Помощник `resolve_torii_client_config`
+анализирует полезную нагрузку конфигурации JSON, если вы хотите обеспечить четность с интерфейсом командной строки Rust.
 
-## 3. Submit a transaction
+## 3. Отправьте транзакцию
 
-The SDK ships instruction builders and transaction helpers so you rarely build
-Norito payloads by hand:
+В состав SDK входят конструкторы инструкций и помощники транзакций, поэтому вам придется редко создавать
+Norito полезные нагрузки вручную:
 
 ```python
 from iroha_python import Instruction
@@ -72,15 +73,15 @@ envelope, status = client.build_and_submit_transaction(
 print("Final status:", status)
 ```
 
-`build_and_submit_transaction` returns both the signed envelope and the last
-observed status (e.g., `Committed`, `Rejected`). If you already have a signed
-transaction envelope use `client.submit_transaction_envelope(envelope)` or the
-JSON-centric `submit_transaction_json`.
+`build_and_submit_transaction` возвращает подписанный конверт и последний
+наблюдаемый статус (например, `Committed`, `Rejected`). Если у вас уже есть подписанный
+Конверт транзакции используйте `client.submit_transaction_envelope(envelope)` или
+JSON-ориентированный `submit_transaction_json`.
 
-## 4. Query state
+## 4. Состояние запроса
 
-All REST endpoints have JSON helpers and many expose typed dataclasses. For
-example, listing domains:
+Все конечные точки REST имеют помощники JSON, и многие из них предоставляют типизированные классы данных. Для
+пример, список доменов:
 
 ```python
 domains = client.list_domains_typed()
@@ -88,13 +89,13 @@ for domain in domains.items:
     print(domain.name)
 ```
 
-Pagination-aware helpers (e.g., `list_accounts_typed`) return an object that
-contains both `items` and `next_cursor`.
+Помощники с поддержкой разбиения на страницы (например, `list_accounts_typed`) возвращают объект, который
+содержит как `items`, так и `next_cursor`.
 
-## 5. Stream events
+## 5. Трансляция событий
 
-Torii SSE endpoints are exposed via generators. The SDK automatically resumes
-when `resume=True` and you provide an `EventCursor`.
+Torii Конечные точки SSE предоставляются через генераторы. SDK автоматически возобновляет работу
+когда `resume=True` и вы предоставляете `EventCursor`.
 
 ```python
 from iroha_python import PipelineEventFilterBox, EventCursor
@@ -110,19 +111,19 @@ for event in client.stream_pipeline_blocks(
     print("Block height", event.data.block.height)
 ```
 
-Other convenience methods include `stream_pipeline_transactions`,
-`stream_events` (with typed filter builders), and `stream_verifying_key_events`.
+Другие удобные методы включают `stream_pipeline_transactions`,
+`stream_events` (со сборщиками типизированных фильтров) и `stream_verifying_key_events`.
 
-## 6. Next steps
+## 6. Следующие шаги
 
-- Explore the examples under `python/iroha_python/src/iroha_python/examples/`
-  for end-to-end flows covering governance, ISO bridge helpers, and Connect.
-- Use `create_torii_client` / `resolve_torii_client_config` when you want to
-  bootstrap the client from an `iroha_config` JSON file or environment.
-- For Norito RPC or Connect-specific APIs, check the specialised modules such as
-  `iroha_python.norito_rpc` and `iroha_python.connect`.
+- Изучите примеры под `python/iroha_python/src/iroha_python/examples/`.
+  для сквозных потоков, охватывающих управление, помощники моста ISO и Connect.
+- Используйте `create_torii_client` / `resolve_torii_client_config`, когда хотите.
+  загрузите клиент из JSON-файла или среды `iroha_config`.
+- Для Norito RPC или API-интерфейсов Connect проверьте специализированные модули, такие как
+  `iroha_python.norito_rpc` и `iroha_python.connect`.
 
-With these building blocks you can exercise Torii from Python without writing
-your own HTTP glue or Norito codecs. As the SDK matures, additional high-level
-builders will be added; consult the README in the `python/iroha_python`
-directory for the latest status and migration notes.
+С помощью этих строительных блоков вы можете использовать Torii из Python без написания
+свой собственный HTTP-клей или кодеки Norito. По мере развития SDK появляются дополнительные высокоуровневые
+будут добавлены строители; обратитесь к README в `python/iroha_python`
+каталог для последнего статуса и заметок о миграции.

@@ -7,119 +7,118 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 2e4c6ed5974f623906f51259a634bcad5df703bcec899630ae29f4669b289ab6
 source_last_modified: "2026-01-08T21:52:45.509525+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Bridge finality proofs
+# የድልድይ የመጨረሻነት ማረጋገጫዎች
 
-This document describes the initial bridge finality proof surface for Iroha.
-The goal is to let external chains or light clients verify that an Iroha block
-is finalized without off‑chain computation or trusted relays.
+ይህ ሰነድ ለIroha የመጀመሪያ ድልድይ የመጨረሻነት ማረጋገጫ ገጽን ይገልጻል።
+ግቡ የውጭ ሰንሰለቶች ወይም የብርሃን ደንበኞች Iroha እገዳን እንዲያረጋግጡ ማድረግ ነው
+ያለ ሰንሰለት ስሌት ወይም የታመነ ማስተላለፎች ይጠናቀቃል።
 
-## Proof format
+## የማረጋገጫ ቅርጸት
 
-`BridgeFinalityProof` (Norito/JSON) contains:
+`BridgeFinalityProof` (Norito/JSON) የሚከተሉትን ያጠቃልላል
 
-- `height`: block height.
-- `chain_id`: Iroha chain identifier to prevent cross-chain replay.
-- `block_header`: canonical `BlockHeader`.
-- `block_hash`: hash of the header (clients recompute to validate).
-- `commit_certificate`: validator set + signatures that finalized the block.
-- `validator_set_pops`: Proof-of-Possession bytes aligned with the validator set
-  order (required for BLS aggregate verification).
+- `height`: የማገጃ ቁመት.
+- `chain_id`: Iroha ሰንሰለት መለያ ሰንሰለት ተሻጋሪ ዳግም መጫወትን ለመከላከል።
+- `block_header`: ቀኖናዊ `BlockHeader`.
+- `block_hash`፡ የርዕሱ ሃሽ (ደንበኞች ለማረጋገጥ እንደገና ይሰላሉ)።
+- `commit_certificate`: አረጋጋጭ ስብስብ + እገዳውን ያጠናቀቁ ፊርማዎች.
+- `validator_set_pops`፡ የይዞታ ማረጋገጫ ባይት ከማረጋገጫ ስብስብ ጋር የተስተካከለ
+  ትዕዛዝ (ለ BLS ድምር ማረጋገጫ ያስፈልጋል)።
 
-The proof is self‑contained; no external manifests or opaque blobs are required.
-Retention: Torii serves finality proofs for the recent commit-certificate window
-(bounded by the configured history cap; defaults to 512 entries via
-`sumeragi.commit_cert_history_cap` / `SUMERAGI_COMMIT_CERT_HISTORY_CAP`). Clients
-should cache or anchor proofs if they need longer horizons.
-The canonical tuple is `(block_header, block_hash, commit_certificate)`: the
-hash of the header must match the hash inside the commit certificate, and the
-chain id binds the proof to a single ledger. Servers reject and log a
-`CommitCertificateHashMismatch` when the certificate points to a different block
-hash.
+ማስረጃው ራሱን የቻለ ነው; ምንም ውጫዊ መገለጫዎች ወይም ግልጽ ያልሆኑ ነጠብጣቦች አያስፈልጉም።
+ማቆየት፡ Torii የመጨረሻ ማረጋገጫዎችን ለቅርብ ጊዜ የምስክር ወረቀት መስኮት ያገለግላል
+(በተቀናበረው የታሪክ ካፕ የተገደበ፤ በ 512 ግቤቶች ውስጥ ነባሪዎች በ
+`sumeragi.commit_cert_history_cap` / `SUMERAGI_COMMIT_CERT_HISTORY_CAP`)። ደንበኞች
+ረዘም ያለ እይታዎች ከፈለጉ መሸጎጫ ወይም መልህቅ ማረጋገጫዎች አለባቸው።
+ቀኖናዊው ቱፕል `(block_header, block_hash, commit_certificate)`: የ
+የራስጌው hash በቁርጠኝነት ሰርተፊኬት ውስጥ ካለው ሃሽ ጋር መዛመድ አለበት፣ እና የ
+የሰንሰለት መታወቂያ ማስረጃውን ከአንድ ደብተር ጋር ያስራል። አገልጋዮች ውድቅ አድርገው ሀ
+የምስክር ወረቀቱ ወደ ሌላ ብሎክ ሲጠቁም `CommitCertificateHashMismatch`
+ሃሽ
 
-## Commitment bundle
+## የቁርጠኝነት ጥቅል
 
-`BridgeFinalityBundle` (Norito/JSON) extends the basic proof with an explicit
-commitment and justification:
+`BridgeFinalityBundle` (Norito/JSON) መሰረታዊ ማስረጃውን በግልፅ ያራዝመዋል።
+ቁርጠኝነት እና ማረጋገጫ;
 
 - `commitment`: `{ chain_id, authority_set { id, validator_set, validator_set_hash, validator_set_hash_version }, block_height, block_hash, mmr_root?, mmr_leaf_index?, mmr_peaks?, next_authority_set? }`
-- `justification`: signatures from the authority set over the commitment
-  payload (reuses the commit-certificate signatures).
-- `block_header`, `commit_certificate`: same as the basic proof.
+- `justification`: በተሰጠው ቁርጠኝነት ላይ ከተቀመጠው ባለስልጣን ፊርማዎች
+  ክፍያ (የእውቅና ማረጋገጫ ፊርማዎችን እንደገና ይጠቀማል)።
+- `block_header`, `commit_certificate`: ከመሠረታዊ ማስረጃ ጋር ተመሳሳይ ነው.
 
-Current placeholder: `mmr_root`/`mmr_peaks` are derived by recomputing a
-block-hash MMR in memory; inclusion proofs are not yet returned. Clients can
-still verify the same hash via the commitment payload today.
+የአሁኑ ቦታ ያዥ፡ `mmr_root`/`mmr_peaks` የተገኙት ሀን እንደገና በማስላት ነው።
+የማገጃ-hash MMR በማህደረ ትውስታ; የማካተት ማረጋገጫዎች ገና አልተመለሱም። ደንበኞች ይችላሉ።
+አሁንም ተመሳሳዩን ሃሽ በቁርጠኝነት ክፍያ ዛሬ ያረጋግጡ።
 
-MMR peaks are ordered left to right. Recompute `mmr_root` by bagging peaks
-from right to left: `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`.
+የኤምኤምአር ጫፎች ከግራ ወደ ቀኝ ታዝዘዋል። ቁንጮዎችን በመያዝ `mmr_root`ን እንደገና ያስሉ።
+ከቀኝ ወደ ግራ: `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`.
 
-API: `GET /v1/bridge/finality/bundle/{height}` (Norito/JSON).
+ኤፒአይ፡ `GET /v1/bridge/finality/bundle/{height}` (Norito/JSON)።
 
-Verification is analogous to the basic proof: recompute `block_hash` from the
-header, verify the commit-certificate signatures, and check the commitment
-fields match the certificate and block hash. The bundle adds a commitment/
-justification wrapper for bridge protocols that prefer the separation.
+ማረጋገጫው ከመሠረታዊ ማረጋገጫው ጋር ተመሳሳይ ነው፡ `block_hash`ን እንደገና ያስሉ
+ራስጌ፣ የምስክር ወረቀት ፊርማዎችን ያረጋግጡ እና ቁርጠኝነትን ያረጋግጡ
+መስኮች የምስክር ወረቀቱን ይዛመዳሉ እና ሃሽ ያግዱ። ጥቅሉ ቁርጠኝነትን ይጨምራል/
+መለያየትን ለሚመርጡ የድልድይ ፕሮቶኮሎች የጽድቅ መጠቅለያ።
 
-## Verification steps
+## የማረጋገጫ ደረጃዎች1. `block_hash` ከ `block_header` እንደገና ማስላት; አለመመጣጠን ላይ አለመቀበል።
+2. `commit_certificate.block_hash` እንደገና ከተሰላው `block_hash` ጋር ይዛመዳል።
+   ያልተዛመደ ራስጌ/የእውቅና ማረጋገጫ ጥንዶችን አለመቀበል።
+3. `chain_id` ከተጠበቀው Iroha ሰንሰለት ጋር ይዛመዳል።
+4. `validator_set_hash` ከ `commit_certificate.validator_set` እና
+   ከተመዘገበው ሃሽ/ስሪት ጋር መዛመዱን ያረጋግጡ።
+5. የ`validator_set_pops` ርዝማኔ ከማረጋገጫው ስብስብ ጋር መዛመዱን ያረጋግጡ እና ያረጋግጡ
+   እያንዳንዱ ፖፒ ከ BLS የህዝብ ቁልፍ ጋር።
+6. ከራስጌ ሃሽ ጋር በተያያዙ የምስክር ወረቀቶች ውስጥ ፊርማዎችን ያረጋግጡ
+   የተጠቀሰው አረጋጋጭ የህዝብ ቁልፎች እና ኢንዴክሶች; ምልአተ ጉባኤን ማስፈጸም
+   (`2f+1` ጊዜ `n>3`፣ሌላ `n`) እና የተባዙ/ከክልል ውጭ ኢንዴክሶችን ውድቅ ያድርጉ።
+7. እንደ አማራጭ የአረጋጋጩን ስብስብ ሃሽ በማነፃፀር ከታመነ ፍተሻ ጋር ማሰር
+   ወደ መልህቅ እሴት (ደካማ ርዕሰ-ጉዳይ መልህቅ)።
+8. በአማራጭነት ከሚጠበቀው የኢፖክ መልህቅ ጋር በማያያዝ ከአሮጌ/ከአዲሱ የተገኘ ማረጋገጫ
+   መልህቁ ሆን ተብሎ እስኪዞር ድረስ ዘመናት ውድቅ ይደረጋሉ።
 
-1. Recompute `block_hash` from `block_header`; reject on mismatch.
-2. Check `commit_certificate.block_hash` matches the recomputed `block_hash`;
-   reject mismatched header/commit certificate pairs.
-3. Check `chain_id` matches the expected Iroha chain.
-4. Recompute `validator_set_hash` from `commit_certificate.validator_set` and
-   check it matches the recorded hash/version.
-5. Ensure `validator_set_pops` length matches the validator set and validate
-   each PoP against its BLS public key.
-6. Verify signatures in the commit certificate against the header hash using
-   the referenced validator public keys and indices; enforce quorum
-   (`2f+1` when `n>3`, else `n`) and reject duplicate/out‑of‑range indices.
-7. Optionally bind to a trusted checkpoint by comparing the validator set hash
-   to an anchored value (weak‑subjectivity anchor).
-8. Optionally bind to an expected epoch anchor so proofs from older/newer
-   epochs are rejected until the anchor is rotated intentionally.
+`BridgeFinalityVerifier` (በ`iroha_data_model::bridge`) እነዚህን ቼኮች ይተገበራል፣
+የሰንሰለት-መታወቂያ/ቁመት ተንሸራታች አለመቀበል፣አረጋጋጭ-ማስተካከያ ሃሽ/ስሪት አለመዛመጃ፣ጎደለ
+ወይም ልክ ያልሆኑ ፖፒዎች፣ የተባዙ/ከክልል ውጪ ፈራሚዎች፣ ልክ ያልሆኑ ፊርማዎች፣ እና
+ቀላል ደንበኞች አንድ ነጠላ እንደገና መጠቀም እንዲችሉ ምልአተ ጉባኤ ከመቁጠር በፊት ያልተጠበቁ ወቅቶች
+አረጋጋጭ.
 
-`BridgeFinalityVerifier` (in `iroha_data_model::bridge`) applies these checks,
-rejecting chain-id/height drift, validator-set hash/version mismatches, missing
-or invalid PoPs, duplicate/out-of-range signers, invalid signatures, and
-unexpected epochs before counting quorum so light clients can reuse a single
-verifier.
+## ዋቢ አረጋጋጭ
 
-## Reference verifier
+`BridgeFinalityVerifier` የሚጠበቀውን `chain_id` እና አማራጭ የታመነ ይቀበላል
+validator-ስብስብ እና ዘመን መልህቆች. ራስጌ/ብሎክ-ሃሽ/ን ያስፈጽማል
+ሰርተፊኬት tuple፣ አረጋጋጭ የተዘጋጀ ሃሽ/ስሪትን፣ ቼኮችን ያረጋግጣል
+ፊርማ/ ምልአተ ጉባኤ ከማስታወቂያ አረጋጋጭ ስም ዝርዝር ጋር ይቃረናል፣ እና የቅርብ ጊዜውን ይከታተላል
+የቆዩ/የተዘለሉ ማስረጃዎችን ላለመቀበል ቁመት። መልህቆች ሲቀርቡ ውድቅ ያደርጋል
+በኤፖክስ/ሮስተሮች ላይ በግልፅ `UnexpectedEpoch`/
+`UnexpectedValidatorSet` ስህተቶች; ያለ መልህቅ የመጀመሪያውን ማረጋገጫ ይቀበላል
+የተባዛ/ከማስወጣቱ በፊት መተግበሩን ከመቀጠልዎ በፊት አረጋጋጭ-ሃሽ እና ኢፖክ አዘጋጅቷል።
+ክልል / በቂ ያልሆነ ፊርማዎች ከመወሰኛ ስህተቶች ጋር።
 
-`BridgeFinalityVerifier` accepts an expected `chain_id` plus optional trusted
-validator-set and epoch anchors. It enforces the header/block-hash/
-commit-certificate tuple, validates validator-set hash/version, checks
-signatures/quorum against the advertised validator roster, and tracks the latest
-height to reject stale/skipped proofs. When anchors are supplied it rejects
-replays across epochs/rosters with explicit `UnexpectedEpoch`/
-`UnexpectedValidatorSet` errors; without anchors it adopts the first proof's
-validator-set hash and epoch before continuing to enforce duplicate/out-of-
-range/insufficient signatures with deterministic errors.
+## የኤፒአይ ወለል
 
-## API surface
+- `GET /v1/bridge/finality/{height}` - `BridgeFinalityProof` ለ
+  የተጠየቀው የማገጃ ቁመት. በ`Accept` በኩል የሚደረግ የይዘት ድርድር Norito ወይም ይደግፋል
+  ጄሰን
+- `GET /v1/bridge/finality/bundle/{height}` - `BridgeFinalityBundle` ይመልሳል
+  (ቁርጠኝነት + መጽደቅ + ራስጌ / የምስክር ወረቀት) ለተጠየቀው ቁመት.
 
-- `GET /v1/bridge/finality/{height}` – returns `BridgeFinalityProof` for the
-  requested block height. Content negotiation via `Accept` supports Norito or
-  JSON.
-- `GET /v1/bridge/finality/bundle/{height}` – returns `BridgeFinalityBundle`
-  (commitment + justification + header/certificate) for the requested height.
+## ማስታወሻዎች እና ክትትሎች
 
-## Notes and follow‑ups
-
-- Proofs are currently derived from stored commit certificates. The bounded
-  history follows the commit certificate retention window; clients should cache
-  anchor proofs if they need longer horizons. Requests outside the window return
-  `CommitCertificateNotFound(height)`; surface the error and fall back to an
-  anchored checkpoint.
-- A replayed or forged proof with mismatched `block_hash` (header vs.
-  certificate) is rejected with `CommitCertificateHashMismatch`; clients should
-  perform the same tuple check before signature verification and discard
-  mismatched payloads.
-- Future work can add MMR/authority‑set commitment chains to reduce proof size
-  the commit certificate inside richer commitment envelopes.
+- በአሁኑ ጊዜ ማረጋገጫዎች ከተከማቹ የቃል የምስክር ወረቀቶች የተገኙ ናቸው። የተገደበው
+  ታሪክ የምስክር ወረቀት ማቆየት መስኮት ይከተላል; ደንበኞች መሸጎጫ ማድረግ አለባቸው
+  ረጅም አድማስ ከፈለጉ መልህቅ ማረጋገጫዎች። ከመስኮቱ ውጭ ያሉ ጥያቄዎች ይመለሳሉ
+  `CommitCertificateNotFound(height)`; ስህተቱን ይግለጹ እና ወደ አንድ ይመለሱ
+  መልህቅ የፍተሻ ነጥብ.
+- በድጋሚ የተጫወተ ወይም የተጭበረበረ ማስረጃ ከማይዛመደው `block_hash` (ራስጌ ከ.
+  የምስክር ወረቀት) በ `CommitCertificateHashMismatch` ውድቅ ተደርጓል; ደንበኞች አለባቸው
+  ፊርማ ከማረጋገጡ በፊት ተመሳሳይ የ tuple ቼክ ያከናውኑ እና ያስወግዱት።
+  ያልተመጣጠነ ጭነት.
+- የወደፊት ስራ የማረጋገጡን መጠን ለመቀነስ MMR/የባለስልጣን-የቁርጠኝነት ሰንሰለቶችን መጨመር ይችላል።
+  በበለጸጉ የቃል ኪዳን ኤንቨሎፖች ውስጥ ያለው የምስክር ወረቀት።

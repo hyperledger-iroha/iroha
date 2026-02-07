@@ -7,48 +7,47 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 3065571b34a226a5871c4fb68063f9419e48074b20096de215f440bdf54a4e59
 source_last_modified: "2025-12-29T18:16:35.943236+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Procedure for scheduling the Cargo.lock refresh required by the SM spike.
+///! ཨེསི་ཨེམ་གྱིས་དགོ་པའི་ Cargo.lock གསརཔ་འདི་ དུས་ཚོད་བཀོད་ནིའི་དོན་ལུ་ བྱ་རིམ་ཅིག་ཨིན།
 
-# SM Feature `Cargo.lock` Refresh Plan
+# SM ཁྱད་ཆོས་`Cargo.lock` གསར་བསྐྲུན་འཆར་གཞི།
 
-The `sm` feature spike for `iroha_crypto` originally could not complete `cargo check` while `--locked` was enforced. This note records the coordination steps for a sanctioned `Cargo.lock` update and tracks the current status of that need.
+`sm` `iroha_crypto` གི་དོན་ལུ་ ངོ་མ་སྦེ་ `cargo check` མཇུག་བསྡུ་མ་ཚུགས་རུང་ `--locked` འདི་ བསྟར་སྤྱོད་འབད་ཡོདཔ་ཨིན། དྲན་འཛིན་འདི་གིས་ བཀག་ཆ་འབད་ཡོད་པའི་ `Cargo.lock` དུས་མཐུན་བཟོ་ནིའི་དོན་ལུ་ མཉམ་འབྲེལ་གྱི་གོ་རིམ་ཚུ་ཐོ་བཀོད་འབདཝ་ཨིནམ་དང་ དེ་གི་དགོས་མཁོའི་ ད་ལྟོའི་གནས་ཚད་འདི་ བརྟག་ཞིབ་འབདཝ་ཨིན།
 
-> **2026-02-12 update:** Recent validation shows the optional `sm` feature now builds with the existing lockfile (`cargo check -p iroha_crypto --features sm --locked` succeeds in 7.9 s cold/0.23 s warm). The dependency set already contains `base64ct`, `ghash`, `opaque-debug`, `pem-rfc7468`, `pkcs8`, `polyval`, `primeorder`, `sm2`, `sm3`, `sm4`, and `sm4-gcm`, so no immediate lock refresh is required. Keep the procedure below on standby for future dependency bumps or new optional crates.
+> **2026-02-12 update:** འཕྲལ་གྱི་བདེན་དཔྱད་ཀྱིས་ གདམ་ཁ་ཅན་གྱི་ `sm` ཁྱད་རྣམ་འདི་ ད་ལྟོ་ཡོད་པའི་ ལྡེ་མིག་ཡིག་སྣོད་ (`cargo check -p iroha_crypto --features sm --locked` གིས་ 7.9s བསིལ་དྲོད་/0.23s དྲོད་བཏགས་ནང་ མཐར་འཁྱོལ་བྱུངམ་ཨིན།) བརྟེན་པའི་ཆ་ཚན་འདི་ ཧེ་མ་ལས་རང་ `base64ct`, `ghash`, `opaque-debug`, `pem-rfc7468`, `pkcs8`, `polyval`, `polyval`, `polyval`, `--locked` `sm2`, `sm3`, `sm4`, དང་ `sm4-gcm`, དེ་འཕྲལ་ལས་ ལྡེ་མིག་གསརཔ་བཟོ་དགོཔ་མེདཔ་ཨིན། མ་འོངས་པའི་བརྟེན་པའི་ བམ་དང་ ཡང་ན་ གདམ་ཁ་ཅན་གྱི་ ཀེརཊ་གསརཔ་ཚུ་གི་དོན་ལུ་ གཤམ་གྱི་བྱ་རིམ་འདི་ གྲ་སྒྲིག་ནང་བཞག།
 
-## Why the refresh is needed
-- Earlier iterations of the spike required adding optional crates that were missing from the lockfile. Current lock snapshots already include the RustCrypto stack (`sm2`, `sm3`, `sm4`, supporting codecs, and AES helpers).
-- Repository policy still blocks opportunistic lockfile edits; if a future dependency upgrade is necessary, the procedure below remains applicable.
-- Retain this plan so the team can execute a controlled refresh when new SM-related dependencies are introduced or existing ones need version bumps.
+## གསར་བསྐྲུན་དགོས་པའི་ཕྱིར་རོ།
+- ཧེ་མའི་བསྐྱར་ལོག་ཚུ་ལུ་ མགུ་སྐོར་ཡིག་སྣོད་ནང་ལས་ བརླག་སྟོར་ཞུགས་མི་ གདམ་ཁ་ཅན་གྱི་ ཀེར་ཊི་ཚུ་ ཁ་སྐོང་འབད་དགོཔ་ཨིན། ད་ལྟོའི་ལྡེ་མིག་ཚུ་ ཧེ་མ་ལས་རང་ རསཊི་ཀིརིཔ་ཊོ་ བང་རིམ་ (`sm2`, `sm3`, `sm4`, རྒྱབ་སྐྱོར་གྱི་ཀོཌེཀསི་ཚུ་, དང་ ཨེ་ཨི་ཨེསི་གྲོགས་རམ་པ་) ཚུ་ཚུདཔ་ཨིན།
+- མཛོད་ཁང་གི་སྲིད་བྱུས་འདི་གིས་ ད་ལྟོ་ཡང་ གོ་སྐབས་ལྡན་པའི་ ལྡེ་མིག་ཡིག་སྣོད་ཞུན་དག་ཚུ་ བཀག་ཆ་འབདཝ་ཨིན། མ་འོངས་པའི་བརྟེན་པའི་ཡར་འཕར་ཅིག་དགོ་པ་ཅིན་ འོག་གི་བྱ་རིམ་འདི་ འཇུག་སྤྱོད་འབད་བཏུབ་སྦེ་རང་ ལུས་ཡོདཔ་ཨིན།
+- འཆར་གཞི་འདི་བཞག་སྟེ་ སྡེ་ཚན་འདི་གིས་ ཨེསི་ཨེམ་དང་འབྲེལ་བའི་ བརྟེན་པ་གསརཔ་ཚུ་ ངོ་སྤྲོད་འབད་བའི་སྐབས་ ཡང་ན་ ད་ལྟོ་ཡོད་མི་ཚུ་ལུ་ ཐོན་རིམ་གྱི་ བམ་དགོཔ་ད་ ཚད་འཛིན་འབད་དེ་ གསརཔ་བཟོ་ཚུགས།
 
-## Proposed coordination steps
-1. **Raise request in Crypto WG + Release Eng sync (owner: @crypto-wg lead).**
-   - Reference `docs/source/crypto/sm_program.md` and note the optional nature of the feature.
-   - Confirm there are no concurrent lockfile change windows (e.g., dependency freezes).
-2. **Prepare patch with lock diff (owner: @release-eng).**
-   - Execute `scripts/sm_lock_refresh.sh` (after approval) to update only the required crates.
-   - Capture `cargo tree -p iroha_crypto --features sm` output (script emits `target/sm_dep_tree.txt`).
-3. **Security review (owner: @security-reviews).**
-   - Verify new crates/versions match the audit register and licensing expectations.
-   - Record hashes in supply-chain tracker.
-4. **Merge window execution.**
-   - Submit PR containing only the lockfile delta, dependency tree snapshot (attached as artifact), and updated audit notes.
-   - Ensure CI runs with `cargo check -p iroha_crypto --features sm` before merge.
-5. **Follow-up tasks.**
-   - Update `docs/source/crypto/sm_program.md` action item checklist.
-   - Notify SDK team that the feature can be compiled locally with `--features sm`.
+## གྲོས་འཆར་བཀོད་པའི་མཉམ་འབྲེལ་གྱི་རིམ་པ་།
+1.*ཀིརིཔ་ཊོ་ཌབ་ལུ་ཇི་ + ཨིང་སིའི་མཉམ་འབྱུང་ (ཇོ་བདག་: @cryto-wg led) ནང་ ཞུ་བ་འབད།**
+   - གཞི་བསྟུན་ `docs/source/crypto/sm_program.md` དང་ ཁྱད་རྣམ་གྱི་གདམ་ཁ་ཅན་གྱི་རང་བཞིན་འདི་དྲན་འཛིན་འབད།
+   - དུས་མཉམ་གྱི་ལྡེ་མིག་ཡིག་སྣོད་བསྒྱུར་བཅོས་སྒོ་སྒྲིག་ཚུ་མེདཔ་ཨིན་ (དཔེར་ན་ བརྟེན་པའི་གྱང་ཤུགས་ཚུ་)།
+2.*ལྡེ་མིག་ཌིཕ་ (ཇོ་བདག་: @release-en),** དང་ཅིག་ཁར་གྲ་སྒྲིག་འབད།
+   - དགོས་མཁོའི་ ཀྲེཊ་ཚུ་རྐྱངམ་ཅིག་ དུས་མཐུན་བཟོ་ནི་ལུ་ `scripts/sm_lock_refresh.sh` ལག་ལེན་འཐབ།
+   - `cargo tree -p iroha_crypto --features sm` ཐོན་འབྲས་ (ཡིག་གཟུགས་འདི་ `target/sm_dep_tree.txt`) བཟུང་ཡོདཔ་ཨིན།
+3. **ཉེན་སྲུང་བསྐྱར་ཞིབ་ (ཇོ་བདག་: @security-reviews),**
+   - རྩིས་ཞིབ་ཐོ་བཀོད་དང་ ཆོག་ཐམ་གྱི་རེ་བ་ཚུ་དང་མཐུན་པའི་ ཀྲེཊ་གསརཔ་/ཐོན་རིམ་གསརཔ་ཚུ་ བདེན་དཔྱད་འབད།
+   - བཀྲམ་སྤེལ་-རིམ་སྒྲིག་རྗེས་འདེད་ནང་ ཧ་ཤི་ཚུ་ཐོ་བཀོད་འབད།
+༤ **སྒོ་སྒྲིག་བཀོལ་སྤྱོད་འབད་ནི།**
+   - PR འདི་ lockfilen delta དང་ བརྟེན་པའི་ཤིང་པར་རྐྱངམ་ཅིག་ཡོད་པའི་ PR འདི་ ཕུལ་ (ཅ་རྙིང་སྦེ་མཉམ་སྦྲགས་འབད་ཡོདཔ་) དང་ དུས་མཐུན་རྩིས་ཞིབ་དྲན་འཛིན་ཚུ་ དུས་མཐུན་བཟོ་དགོ།
+   - མཉམ་བསྡོམས་མ་འབད་བའི་ཧེ་མ་ `cargo check -p iroha_crypto --features sm` དང་གཅིག་ཁར་ CI ལུ་ངེས་པར་དུ་འགྱོཝ་ཨིན།
+5. **འོག་གི་ལས་ཀ་ཚུ།**
+   - བྱ་བ་རྣམ་གྲངས་ཞིབ་དཔྱད་ཐོ་ཡིག་ `docs/source/crypto/sm_program.md` དུས་མཐུན་བཟོ།
+   - ཁྱད་རྣམ་འདི་ `--features sm` དང་གཅིག་ཁར་ ནང་འཁོད་བསྡུ་སྒྲིག་འབད་ཚུགས་པའི་ SDK སྡེ་ཚན་ལུ་ བརྡ་བསྐུལ་འབད།## དུས་ཚོད་དང་བདག་པོ།
+| གོམ་པ་ | དམིགས་ཚད་ | ཇོ་བདག་ | གནས་ཚད་ |
+|-------------------------------------------- |
+| ཤུལ་མའི་ཀིརིཔ་ཊོ་ཌབ་ལུ་ཇི་ ཁ་པར་ནང་ ཞུ་བ་ གྲོས་འཆར། | ༢༠༢༥-༠༡-༢༢ | ཀིརིཔ་ཊོ་ WG ལིཌ་ | ✅ མཇུག་བསྡུ་ཡོད་པའི་ (བསྐྱར་ཞིབ་མཇུག་བསྡུ་ཡོད་པའི་ spike འདི་ གསརཔ་མེད་པར་ འགྱོ་ཚུགས།) |
+| སེལ་འཐུ་འབད། `cargo update` བརྡ་བཀོད་ + གཙང་སྦྲ་འཕྲོད་བསྟེན་ | ༢༠༢༥-༠༡-༢༤ | བཟོ་རིག | ⚪ standby གུ་ (ཀེར་ཊིསི་གསརཔ་འབྱུང་པ་ཅིན་ ལོག་ཤུགས་ལྡན་བཟོ་ནི།) |
+| ཀེརེཊ་གསརཔ་གི་ཉེན་སྲུང་བསྐྱར་ཞིབ་ | ༢༠༢༥-༠༡-༢༧ | ཉེན་སྲུང་བསྐྱར་ཞིབ། | ⚪ standby གུ་ (བསྐྱར་གསོ་འབད་བའི་སྐབས་ བསྐྱར་གསོ་འབད་བའི་སྐབས་ རྩིས་ཞིབ་ཐོ་ཡིག་ལོག་སྤྱོད་འབད་ནི།) |
+| མཉམ་བསྡོམས་བཀག་ཆའི་དུས་མཐུན་ PR | ༢༠༢༥-༠༡-༢༩ | བཟོ་རིག | ⚪ གཏན་བཟོའི་ཐོག་ |
+| ཨེསི་ཨེམ་ལས་རིམ་ ཌོཀ་ ཞིབ་དཔྱད་ཐོ་ཡིག་ དུས་མཐུན་བཟོ། | མཉམ་སྡེབ་འབད་བའི་ཤུལ་ལས་ | ཀིརིཔ་ཊོ་ WG ལིཌ་ | ✅ ཁ་བྱང་བཀོད་ཡོད། `docs/source/crypto/sm_program.md` འཛུལ་ཞུགས་ (༢༠༢༦-༠༢-༡༢) |
 
-## Timeline & owners
-| Step | Target | Owner | Status |
-|------|--------|-------|--------|
-| Request agenda slot in next Crypto WG call | 2025-01-22 | Crypto WG lead | ✅ Completed (review concluded spike can proceed without refresh) |
-| Draft selective `cargo update` command + sanity diff | 2025-01-24 | Release Engineering | ⚪ On standby (reactivate if new crates appear) |
-| Security review of new crates | 2025-01-27 | Security Reviews | ⚪ On standby (reuse audit checklist when refresh resumes) |
-| Merge lockfile update PR | 2025-01-29 | Release Engineering | ⚪ On standby |
-| Update SM program doc checklist | After merge | Crypto WG lead | ✅ Addressed via `docs/source/crypto/sm_program.md` entry (2026-02-12) |
-
-## Notes
-- Keep any future refresh restricted to the SM-related crates listed above (and supporting helpers like `rfc6979`), avoiding workspace-wide `cargo update`.
-- If any transitive dependencies introduce MSRV drift, surface it before merge.
-- Once merged, enable an ephemeral CI job to monitor build times for the `sm` feature.
+## དྲན་ཐོ།
+- གོང་འཁོད་ཐོ་བཀོད་འབད་ཡོད་པའི་ ཨེསི་ཨེམ་དང་འབྲེལ་བའི་ ཀེརེསི་ཚུ་ལུ་ མ་འོངས་པའི་གསརཔ་ག་ཅི་རང་འབད་རུང་ བཀག་ཆ་འབད་དེ་བཞག་དགོ། (དང་རྒྱབ་སྐྱོར་པ་ `rfc6979`) ལཱ་གི་ས་སྒོ་ ཁྱབ་ཆེཝ་ `cargo update` ལས་ བཀག་ཐབས་འབད་ནི།
+- གལ་སྲིད་ འགྱུར་བ་ག་ཅི་རང་འབད་རུང་ MSRV drift འདི་ མཉམ་སྡེབ་མ་འབད་བའི་ཧེ་མ་ ཁ་ཐོག་ལུ་འགྱོ།
+- མཉམ་བསྡོམས་འབད་ཚརཝ་ཅིག་ `cargo check` ཁྱད་རྣམ་གྱི་དོན་ལུ་ བཟོ་བསྐྲུན་གྱི་དུས་ཚོད་ཚུ་ བལྟ་རྟོག་འབད་ནི་ལུ་ eithemeral CI ལཱ་ཅིག་ ལྕོགས་ཅན་བཟོ།

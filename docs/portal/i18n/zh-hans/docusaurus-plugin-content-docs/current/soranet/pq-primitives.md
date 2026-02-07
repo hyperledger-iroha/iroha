@@ -8,29 +8,31 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraNet Post-Quantum Primitives
 sidebar_label: PQ Primitives
 description: Overview of the `soranet_pq` crate and how the SoraNet handshake consumes ML-KEM/ML-DSA helpers.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::注意规范来源
 :::
 
-The `soranet_pq` crate contains the post-quantum building blocks that every SoraNet
-relay, client, and tooling component relies on. It wraps the PQClean-backed Kyber
-(ML-KEM) and Dilithium (ML-DSA) suites and layers on protocol-friendly HKDF and
-hedged RNG helpers so all surfaces share identical implementations.
+`soranet_pq` 箱包含每个 SoraNet 所使用的后量子构建块
+中继、客户端和工具组件依赖。它封装了 PQClean 支持的 Kyber
+(ML-KEM) 和 Dilithium (ML-DSA) 套件和层位于协议友好的 HKDF 和
+对冲 RNG 助手，因此所有表面共享相同的实现。
 
-## What ships in `soranet_pq`
+## `soranet_pq` 中包含哪些内容
 
-- **ML-KEM-512/768/1024:** deterministic key generation, encapsulation, and
-  decapsulation helpers with constant-time error propagation.
-- **ML-DSA-44/65/87:** detached signing/verification wired for
-  domain-separated transcripts.
-- **Labelled HKDF:** `derive_labeled_hkdf` namespaces every derivation with the
-  handshake stage (`DH/es`, `KEM/1`, …) so hybrid transcripts stay collision-free.
-- **Hedged randomness:** `hedged_chacha20_rng` blends deterministic seeds
-  with live OS entropy and zeroizes intermediate state on drop.
+- **ML-KEM-512/768/1024：** 确定性密钥生成、封装和
+  具有恒定时间错误传播的解封装助手。
+- **ML-DSA-44/65/87：** 独立签名/验证有线
+  域分隔的转录本。
+- **标记为 HKDF:** `derive_labeled_hkdf` 命名空间的每个派生都带有
+  握手阶段（`DH/es`、`KEM/1`，...），因此混合转录本保持无碰撞。
+- **对冲随机性：** `hedged_chacha20_rng` 混合确定性种子
+  具有实时操作系统熵并在下降时将中间状态归零。
 
-All secrets sit inside `Zeroizing` containers and CI exercises the PQClean
-bindings on every supported platform.
+所有秘密都位于 `Zeroizing` 容器内，CI 执行 PQClean
+每个支持的平台上的绑定。
 
 ```rust
 use soranet_pq::{
@@ -53,21 +55,21 @@ let okm = derive_labeled_hkdf(
 ).unwrap();
 ```
 
-## How to consume it
+## 如何食用
 
-1. **Add the dependency** to crates that sit outside the workspace root:
+1. **将依赖项添加到位于工作区根目录之外的 crate：
 
    ```toml
    soranet_pq = { path = "../../crates/soranet_pq" }
    ```
 
-2. **Select the correct suite** at call sites. For the initial hybrid handshake
-   work, use `MlKemSuite::MlKem768` and `MlDsaSuite::MlDsa65`.
+2. **在呼叫站点选择正确的套件**。对于初始混合握手
+   工作，使用 `MlKemSuite::MlKem768` 和 `MlDsaSuite::MlDsa65`。
 
-3. **Derive keys with labels.** Use `HkdfDomain::soranet("KEM/1")` (and siblings)
-   so transcript chaining stays deterministic across nodes.
+3. **使用标签派生密钥。** 使用 `HkdfDomain::soranet("KEM/1")` （和同级）
+   因此转录本链接在节点之间保持确定性。
 
-4. **Use the hedged RNG** when sampling fallback secrets:
+4. **在对后备秘密进行采样时使用对冲 RNG**：
 
    ```rust
    use soranet_pq::{hedged_chacha20_rng, HedgedRngSeed};
@@ -75,13 +77,13 @@ let okm = derive_labeled_hkdf(
    let mut rng = hedged_chacha20_rng(HedgedRngSeed::new(b"snnet16", [0u8; 32]));
    ```
 
-The core SoraNet handshake and CID blinding helpers (`iroha_crypto::soranet`)
-pull these utilities directly, which means downstream crates inherit the same
-implementations without linking PQClean bindings themselves.
+核心 SoraNet 握手和 CID 致盲助手 (`iroha_crypto::soranet`)
+直接拉取这些实用程序，这意味着下游 crate 继承相同的
+无需链接 PQClean 绑定本身的实现。
 
-## Validation checklist
+## 验证清单
 
 - `cargo test -p soranet_pq --offline`
 - `cargo fmt --package soranet_pq`
-- Audit the README usage samples (`crates/soranet_pq/README.md`)
-- Update the SoraNet handshake design doc once hybrids land
+- 审核自述文件使用示例 (`crates/soranet_pq/README.md`)
+- 混合动力落地后更新 SoraNet 握手设计文档

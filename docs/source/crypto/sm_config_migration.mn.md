@@ -7,33 +7,34 @@ generator: scripts/sync_docs_i18n.py
 source_hash: ee9b1be07edfee6d71031362a5ea95138a6b743a7e596537c1b1c02ce8edef9f
 source_last_modified: "2026-01-22T14:45:02.068538+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! SM Configuration Migration
+//! SM тохиргооны шилжилт
 
-# SM Configuration Migration
+# SM тохиргооны шилжилт
 
-Rolling out the SM2/SM3/SM4 feature set requires more than compiling with the
-`sm` feature flag. Nodes gate the functionality behind the layered
-`iroha_config` profiles and expect the genesis manifest to carry matching
-defaults. This note captures the recommended workflow when promoting an
-existing network from “Ed25519-only” to “SM-enabled”.
+SM2/SM3/SM4 функцийн багцыг нэвтрүүлэх нь програмыг хөрвүүлэхээс илүү их зүйлийг шаарддаг
+`sm` онцлог туг. Зангилаанууд нь давхаргын ард функцийг хаадаг
+`iroha_config` профайл болон генезис манифест тохирохыг хүлээж байна
+өгөгдмөл. Энэ тэмдэглэл нь сурталчлах үед санал болгож буй ажлын урсгалыг агуулна
+одоо байгаа сүлжээг "Зөвхөн Ed25519"-ээс "SM-г идэвхжүүлсэн" хүртэл.
 
-## 1. Verify the Build Profile
+## 1. Бүтээлийн профайлыг шалгана уу
 
-- Compile the binaries with `--features sm`; add `sm-ffi-openssl` only when you
-  plan to exercise the OpenSSL/Tongsuo preview path. Builds without the `sm`
-  feature reject `sm2` signatures during admission even if the config enables
-  them.
-- Confirm CI publishes the `sm` artefacts and that all validation steps (`cargo
-  test -p iroha_crypto --features sm`, integration fixtures, fuzz suites) pass
-  on the exact binaries you intend to deploy.
+- `--features sm` ашиглан хоёртын файлуудыг эмхэтгэх; зөвхөн та үед `sm-ffi-openssl` нэмнэ
+  OpenSSL/Tongsuo урьдчилан харах замыг хэрэгжүүлэхээр төлөвлөж байна. `sm`гүйгээр бүтээдэг
+  тохиргоог идэвхжүүлсэн байсан ч боломж нь элсэлтийн явцад `sm2` гарын үсгээс татгалздаг.
+  тэд.
+- CI нь `sm` олдворуудыг нийтэлж, баталгаажуулах бүх алхмуудыг (` ачаа
+  test -p iroha_crypto --sm`, интеграцийн бэхэлгээ, fuzz suites) боломжуудтай
+  Таны байрлуулах гэж буй яг хоёртын файлууд дээр.
 
-## 2. Layer Configuration Overrides
+## 2. Давхаргын тохиргоог хүчингүй болгох
 
-`iroha_config` applies three tiers: `defaults` → `user` → `actual`. Ship the SM
-overrides in the `actual` profile that operators distribute to validators and
-leave `user` at Ed25519-only so the developer defaults remain unchanged.
+`iroha_config` нь гурван шатлалтай: `defaults` → `user` → `actual`. SM илгээнэ үү
+Операторууд баталгаажуулагчдад түгээдэг `actual` профайл дээр дарж бичдэг ба
+`user`-г зөвхөн Ed25519 дээр үлдээгээрэй, ингэснээр хөгжүүлэгчийн өгөгдмөл тохиргоо өөрчлөгдөхгүй хэвээр үлдэнэ.
 
 ```toml
 # defaults/actual/config.toml
@@ -44,49 +45,47 @@ allowed_signing = ["ed25519", "sm2"]      # keep sorted for deterministic manife
 sm2_distid_default = "CN12345678901234"   # organisation-specific distinguishing identifier
 ```
 
-Copy the same block into the `defaults/genesis` manifest via `kagami genesis
-generate …` (add `--allowed-signing sm2 --default-hash sm3-256` if you need
-overrides) so the `parameters` block and injected metadata agree with the
-runtime configuration. Peers refuse to start when the manifest and config
-snapshots diverge.
+Ижил блокийг `kagami genesis-ээр дамжуулан `defaults/genesis` манифест руу хуулна уу.
+…` (add `--зөвшөөрөгдсөн-гарын үсэг зурах sm2 --өгөгдмөл-хэш sm3-256` үүсгэх
+дарагдсан) тул `parameters` блок болон оруулсан мета өгөгдөл нь
+ажиллах цагийн тохиргоо. Үе тэнгийнхэн нь манифест болон тохиргоо хийх үед эхлүүлэхээс татгалздаг
+агшин зуурын зургууд хоорондоо ялгаатай.
 
-## 3. Regenerate Genesis Manifests
+## 3. Эхлэл Манифестуудыг сэргээ
 
-- Run `kagami genesis generate --consensus-mode <mode>` for every
-  environment and commit the updated JSON alongside the TOML overrides.
-- Sign the manifest (`kagami genesis sign …`) and distribute the `.nrt` payload.
-  Nodes that bootstrap from an unsigned JSON manifest derive the runtime crypto
-  configuration directly from the file—still subject to the same consistency
-  checks.
+- `kagami genesis generate --consensus-mode <mode>`-г тус бүрээр ажиллуул
+  орчинд тохируулж, TOML хүчингүй болгохын зэрэгцээ шинэчлэгдсэн JSON-г гүйцэтгэнэ.
+- Манифестт (`kagami genesis sign …`) гарын үсэг зурж, `.nrt` ачааллыг тараана.
+  Гарын үсэг зураагүй JSON манифестээс ачаалах зангилаа нь ажиллах цагийн криптог гаргаж авдаг
+  тохиргоог файлаас шууд хийх - ижил тууштай хэвээр байна
+  шалгалтууд.
 
-## 4. Validate Before Traffic
+## 4. Замын хөдөлгөөний өмнө баталгаажуулах
 
-- Provision a staging cluster with the new binaries and config, then verify:
-  - `/status` exposes `crypto.sm_helpers_available = true` once peers restart.
-  - Torii admission still rejects SM2 signatures while `sm2` is absent from
-    `allowed_signing` and accepts mixed Ed25519/SM2 batches when the list
-    includes both algorithms.
-  - `iroha_cli tools crypto sm2 export …` round-trips key material seeded via the new
-    defaults.
-- Run the integration smoke scripts that cover SM2 deterministic signatures and
-  SM3 hashing to confirm host/VM consistency.
+- Шинэ хоёртын файлууд болон тохиргоотой үе шаттай кластерыг хангаад, дараа нь баталгаажуулна уу:
+  - `/status` нь үе тэнгийнхэн дахин асаахад `crypto.sm_helpers_available = true`-г харуулж байна.
+  - Torii элсэлт нь SM2 гарын үсгээс татгалзсан хэвээр байхад `sm2` байхгүй байна.
+    `allowed_signing` ба жагсаалтад орсон үед Ed25519/SM2 холимог багцуудыг хүлээн авдаг.
+    алгоритмыг хоёуланг нь багтаасан болно.
+  - `iroha_cli tools crypto sm2 export …` хоёр талын хоёр талын гол материалыг шинээр нэвтрүүлсэн
+    өгөгдмөл.
+- SM2 детерминистик гарын үсэг болон хамрах интеграцийн утааны скриптүүдийг ажиллуулах
+  Хост/VM нийцтэй байдлыг баталгаажуулахын тулд SM3 хэшинг.
 
-## 5. Rollback Plan
+## 5. Буцах төлөвлөгөө- Буцах үйлдлийг баримтжуулах: `sm2`-г `allowed_signing`-аас устгаад сэргээх
+  `default_hash = "blake2b-256"`. Өөрчлөлтийг ижил `actual`-ээр хийнэ үү
+  профайл дамжуулах хоолой тул баталгаажуулагч бүр нэг хэвийн эргэлддэг.
+- SM манифестуудыг дискэн дээр хадгалах; таарахгүй тохиргоо болон үүслийг олж хардаг үе тэнгийнхэн
+  өгөгдөл эхлүүлэхээс татгалздаг бөгөөд энэ нь хэсэгчилсэн буцаалтаас хамгаалдаг.
+- Хэрэв OpenSSL/Tongsuo урьдчилан үзэх боломжтой бол идэвхгүй болгох алхмуудыг оруулна уу
+  `crypto.enable_sm_openssl_preview` болон хуваалцсан объектуудыг
+  ажиллах цагийн орчин.
 
-- Document the reversal: remove `sm2` from `allowed_signing` and restore
-  `default_hash = "blake2b-256"`. Push the change through the same `actual`
-  profile pipeline so every validator flips monotonically.
-- Keep the SM manifests on disk; peers that see mismatched config and genesis
-  data refuse to start, which protects against partial rollbacks.
-- If the OpenSSL/Tongsuo preview is involved, include the steps for disabling
-  `crypto.enable_sm_openssl_preview` and removing the shared objects from the
-  runtime environment.
+## Лавлах материал
 
-## Reference Material
-
-- [`docs/genesis.md`](../../genesis.md) – structure of the genesis manifest and
-  the `crypto` block.
+- [`docs/genesis.md`](../../genesis.md) – үүслийн манифестийн бүтэц ба
+  `crypto` блок.
 - [`docs/source/references/configuration.md`](../references/configuration.md) –
-  overview of `iroha_config` sections and defaults.
-- [`docs/source/crypto/sm_operator_rollout.md`](sm_operator_rollout.md) – end to
-  end operator checklist for shipping SM cryptography.
+  `iroha_config` хэсгүүд болон өгөгдмөлүүдийн тойм.
+- [`docs/source/crypto/sm_operator_rollout.md`](sm_operator_rollout.md) – төгсгөл
+  SM криптографийг тээвэрлэх эцсийн операторын хяналтын хуудас.

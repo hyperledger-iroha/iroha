@@ -7,43 +7,44 @@ generator: scripts/sync_docs_i18n.py
 source_hash: ba5f4fdc9221210a793fd0c2120d8cfb68487d7ddcbe67c208976798446ca5db
 source_last_modified: "2025-12-29T18:16:35.945760+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! SM program risk register for SM2/SM3/SM4 enablement.
+//! SM პროგრამის რისკის რეგისტრი SM2/SM3/SM4 ჩართვისთვის.
 
-# SM Program Risk Register
+# SM პროგრამის რისკის რეესტრი
 
-Last updated: 2025-03-12.
+ბოლო განახლება: 2025-03-12.
 
-This register expands on the summary in `sm_program.md`, pairing each risk with
-ownership, monitoring triggers, and the current mitigation state. The Crypto WG
-and Core Platform leads review this register at the weekly SM cadence; changes
-are reflected both here and in the public roadmap.
+ეს რეესტრი აფართოებს შეჯამებას `sm_program.md`-ში, აერთიანებს თითოეულ რისკს
+საკუთრება, მონიტორინგის ტრიგერები და არსებული შემარბილებელი მდგომარეობა. Crypto WG
+და ძირითადი პლატფორმის ლიდერები განიხილავენ ამ რეესტრს ყოველკვირეული SM კადენციის მიხედვით; ცვლილებები
+აისახება როგორც აქ, ასევე საჯარო საგზაო რუკაზე.
 
-## Risk Summary
+## რისკის შეჯამება
 
-| ID | Risk | Category | Probability | Impact | Severity | Owner | Mitigation | Status | Triggers |
-|----|------|----------|-------------|--------|----------|-------|------------|--------|----------|
-| R1 | External audit for RustCrypto SM crates not executed before validator signing GA | Supply chain | Medium | High | High | Crypto WG | Contract Trail of Bits/NCC Group, keep verify-only posture until report accepted | Mitigation in progress | Audit SOW unsigned by 2025-04-15 or audit report delayed past 2025-06-01 |
-| R2 | Deterministic nonce regressions across SDKs | Implementation | Medium | High | High | SDK Program Leads | Share fixtures across SDK CI, enforce canonical r∥s encoding, add cross-SDK tamper tests | Monitoring | Fixture drift detected in CI or SDK release without SM fixtures |
-| R3 | ISA-specific bugs in intrinsics (NEON/SIMD) | Performance | Low | Medium | Medium | Performance WG | Gate intrinsics behind feature flags, require CI coverage on ARM, maintain scalar fallback | Mitigation in progress | NEON benches fail or hardware regression uncovered in SM perf matrix |
-| R4 | Compliance ambiguity delaying SM adoption | Governance | Medium | Medium | Medium | Docs & Legal Liaison | Publish compliance brief, operator checklist, liaison with legal counsel prior to GA | Mitigation in progress | Legal review outstanding after 2025-05-01 or missing checklist updates |
-| R5 | FFI backend drift with provider updates | Integration | Medium | Medium | Medium | Platform Ops | Pin provider versions, add parity tests, keep OpenSSL/Tongsuo preview opt-in | Monitoring | Package update merged without parity run or preview enabled outside pilot scope |
+| ID | რისკი | კატეგორია | ალბათობა | ზემოქმედება | სიმძიმე | მფლობელი | შერბილება | სტატუსი | ტრიგერები |
+|----|------|----------|-----------|-------|---------|------|-----------|--------|------|
+| R1 | გარე აუდიტი RustCrypto SM ყუთებისთვის არ არის შესრულებული ვალიდატორის ხელმოწერამდე GA | მიწოდების ჯაჭვი | საშუალო | მაღალი | მაღალი | Crypto WG | Bits-ის კონტრაქტი/NCC ჯგუფი, შეინარჩუნეთ პოზა მხოლოდ გადამოწმების მიზნით, სანამ ანგარიში არ მიიღება | შერბილება მიმდინარეობს | აუდიტის SOW ხელმოუწერელი 2025-04-15 ან აუდიტის ანგარიში გადაიდო 2025-06-01 |
+| R2 | დეტერმინისტული არაერთგვაროვანი რეგრესია SDK-ებში | განხორციელება | საშუალო | მაღალი | მაღალი | SDK პროგრამა ლიდერობს | გააზიარეთ მოწყობილობები SDK CI-ში, განახორციელეთ კანონიკური r∥s კოდირება, დაამატეთ cross-SDK tamper ტესტები | მონიტორინგი | არმატურის დრიფტი აღმოჩენილია CI ან SDK გამოშვებაში SM მოწყობილობების გარეშე |
+| R3 | ISA-ს სპეციფიკური შეცდომები შიგადაშიგ (NEON/SIMD) | შესრულება | დაბალი | საშუალო | საშუალო | შესრულება WG | Gate intrinsics უკან ფუნქციური დროშებით, მოითხოვს CI დაფარვას ARM-ზე, შენარჩუნება სკალარული სარეზერვო | შერბილება მიმდინარეობს | NEON სკამები მარცხდება ან ტექნიკის რეგრესია გამოვლინდა SM perf მატრიცაში |
+| R4 | შესაბამისობის გაურკვევლობა აჭიანურებს SM-ის მიღებას | მმართველობა | საშუალო | საშუალო | საშუალო | Docs & Legal Liaison | გამოაქვეყნეთ შესაბამისობის ბრიფინგი, ოპერატორის საკონტროლო სია, ურთიერთობა იურიდიულ მრჩეველთან GA | შერბილება მიმდინარეობს | სამართლებრივი მიმოხილვა 2025-05-01 წლის შემდეგ ან გამოტოვებული საკონტროლო სიის განახლებები |
+| R5 | FFI backend დრიფტი პროვაიდერის განახლებებით | ინტეგრაცია | საშუალო | საშუალო | საშუალო | პლატფორმის ოპერაციები | დაამაგრეთ პროვაიდერის ვერსიები, დაამატეთ პარიტეტის ტესტები, შეინახეთ OpenSSL/Tongsuo წინასწარი გადახედვის არჩევა | მონიტორინგი | პაკეტის განახლება გაერთიანდა პარიტეტული გაშვების ან წინასწარი გადახედვის გარეშე, საპილოტე ფარგლების გარეთ |
 
-## Review Cadence
+## მიმოხილვა Cadence
 
-- Weekly Crypto WG sync (standing agenda item).
-- Monthly joint review with Platform Ops and Docs to confirm compliance posture.
-- Pre-release checkpoint: risk register freeze and attestation bundled with GA
-  artefacts.
+- ყოველკვირეული Crypto WG სინქრონიზაცია (დღის წესრიგის მუდმივი პუნქტი).
+- ყოველთვიური ერთობლივი მიმოხილვა Platform Ops-თან და Docs-თან შესაბამისობის პოზის დასადასტურებლად.
+- წინასწარი გაშვების საგუშაგო: რისკის რეესტრის გაყინვა და ატესტაცია შეფუთული GA
+  არტეფაქტები.
 
-## Sign-off
+## შესვლა
 
-| Role | Representative | Date | Notes |
+| როლი | წარმომადგენელი | თარიღი | შენიშვნები |
 |------|----------------|------|-------|
-| Crypto WG Lead | (signature on file) | 2025-03-12 | Approved for publication and shared with WG backlog. |
-| Core Platform Lead | (signature on file) | 2025-03-12 | Accepted mitigations and monitoring cadence. |
+| Crypto WG წამყვანი | (ხელმოწერა ფაილში) | 2025-03-12 | დამტკიცებულია გამოსაქვეყნებლად და გაზიარებულია WG-ის ჩამორჩენისთვის. |
+| ძირითადი პლატფორმის წამყვანი | (ხელმოწერა ფაილში) | 2025-03-12 | მიღებული შემარბილებელი საშუალებები და მონიტორინგის კადენცია. |
 
-For historic approvals and meeting minutes, see `docs/source/crypto/sm_program.md`
-(`Communication Plan`) and the SM agenda archive linked from the Crypto WG
-workspace.
+ისტორიული დამტკიცებებისა და შეხვედრის ოქმებისთვის იხილეთ `docs/source/crypto/sm_program.md`
+(`Communication Plan`) და SM დღის წესრიგის არქივი, რომელიც დაკავშირებულია Crypto WG-დან
+სამუშაო სივრცე.

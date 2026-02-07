@@ -6,91 +6,89 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 14f32b40ff71fa4eef698eac80d8d7dd27104b46b84523d735d054dedea1c47a
 source_last_modified: "2026-01-03T18:07:57.068055+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Sales & Usage Filing (销售/使用备案) Template
-% Hyperledger Iroha Compliance Working Group
-% 2026-05-06
+٪ SM2/SM3/SM4 سیلز اینڈ استعمال فائلنگ (销售/使用备案) ٹیمپلیٹ
+٪ Hyperledger Iroha تعمیل ورکنگ ورکنگ گروپ
+٪ 2026-05-06
 
-# Instructions
+# ہدایات
 
-Use this template when filing deployment usage with an SCA office for onshore
-operators. Provide one submission per deployment cluster or data space. Update
-the placeholders with operator-specific details and attach the evidence listed
-in the checklist.
+آن شور کے لئے ایس سی اے آفس کے ساتھ تعیناتی کا استعمال داخل کرتے وقت اس ٹیمپلیٹ کا استعمال کریں
+آپریٹرز تعیناتی کلسٹر یا ڈیٹا کی جگہ پر ایک جمع کرانے کی فراہمی کریں۔ تازہ کاری
+آپریٹر سے متعلق تفصیلات رکھنے والے پلیس ہولڈرز اور درج کردہ شواہد کو منسلک کریں
+چیک لسٹ میں
 
-# 1. Operator & Deployment Summary
+# 1. آپریٹر اور تعیناتی کا خلاصہ
 
-| Field | Value |
-|-------|-------|
-| Operator name | {{ OPERATOR_NAME }} |
-| Business registration ID | {{ REG_ID }} |
-| Registered address | {{ ADDRESS }} |
-| Primary contact (name / title / email / phone) | {{ CONTACT }} |
-| Deployment identifier | {{ DEPLOYMENT_ID }} |
-| Deployment location(s) | {{ LOCATIONS }} |
-| Filing type | Sales / Usage (销售/使用备案) |
-| Filing date | {{ YYYY-MM-DD }} |
+| فیلڈ | قیمت |
+| ------- | ------- |
+| آپریٹر کا نام | {{آپریٹر_ نام}} |
+| بزنس رجسٹریشن ID | {{reg_id}} |
+| رجسٹرڈ ایڈریس | {{ایڈریس}} |
+| بنیادی رابطہ (نام / عنوان / ای میل / فون) | {{رابطہ}} |
+| تعیناتی شناخت کنندہ | {{تعیناتی_ایڈ}} |
+| تعیناتی مقام (زبانیں) | {{مقامات}} |
+| فائلنگ کی قسم | فروخت / استعمال (销售 / 使用备案) |
+| فائلنگ کی تاریخ | {{yyyy-mm-dd}} |
 
-# 2. Deployment Details
+# 2. تعیناتی کی تفصیلات
 
-- Software build ID / hash: `{{ BUILD_HASH }}`
-- Build source: {{ BUILD_SOURCE }} (e.g., operator-built from source, vendor-provided binary).
-- Activation date: {{ ACTIVATION_DATE }}
-- Planned maintenance windows: {{ MAINTENANCE_CADENCE }}
-- Node roles participating in SM signing:
-  | Node | Role | SM features enabled | Key vault location |
-  |------|------|---------------------|--------------------|
-  | {{ NODE_ID }} | {{ ROLE }} | {{ FEATURES }} | {{ VAULT }} |
+- سافٹ ویئر بلڈ آئی ڈی / ہیش: `{{ BUILD_HASH }}`
+-بلڈ ماخذ: {{build_source}} (جیسے ، ماخذ سے آپریٹر بلٹ ، وینڈر فراہم کردہ بائنری)۔
+- چالو کرنے کی تاریخ: {{ایکٹیویشن_ڈیٹ}}
+- منصوبہ بند بحالی ونڈوز: {{بحالی_کیڈینس}}
+- ایس ایم سائننگ میں حصہ لینے والے نوڈ کردار:
+  | نوڈ | کردار | ایس ایم کی خصوصیات فعال | کلیدی والٹ مقام |
+  | ------ | ------ | ----------------------- | ---------------------- |
+  | {{node_id}} | {{کردار}} | {{خصوصیات}} | {{والٹ}} |
 
-# 3. Cryptographic Controls
+# 3. کریپٹوگرافک کنٹرولز
 
-- Allowed algorithms: {{ ALGORITHMS }} (ensure SM set matches configuration).
-- Key lifecycle summary:
-  | Stage | Description |
-  |-------|-------------|
-  | Generation | {{ KEY_GENERATION }} |
-  | Storage | {{ KEY_STORAGE }} |
-  | Rotation | {{ KEY_ROTATION }} |
-  | Revocation | {{ KEY_REVOCATION }} |
-- Distinct identity (`distid`) policy: {{ DISTID_POLICY }}
-- Configuration excerpt (`crypto` section): provide Norito/JSON snapshot with hashes.
+- اجازت شدہ الگورتھم: {{الگورتھم}} (یقینی بنائیں کہ ایس ایم سیٹ ترتیب سے ترتیب دیتا ہے)۔
+- کلیدی لائف سائیکل سمری:
+  | اسٹیج | تفصیل |
+  | ------- | --------------- |
+  | جنریشن | {{key_generation}} |
+  | اسٹوریج | {{key_storage}} |
+  | گردش | {{key_rotation}} |
+  | منسوخی | {{key_revocation}} |
+- الگ شناخت (`distid`) پالیسی: {{distid_policy}}
+- کنفیگریشن کا اقتباس (`crypto` سیکشن): Norito/JSON اسنیپ شاٹ کو ہیش کے ساتھ فراہم کریں۔
 
-# 4. Telemetry & Audit Trails
+# 4. ٹیلی میٹری اور آڈٹ ٹریلس
 
-- Monitoring endpoints: {{ METRICS_ENDPOINTS }} (`/metrics`, dashboards).
-- Logged metrics: `crypto.sm.verification_total`, `crypto.sm.sign_total`,
-  latency histograms, error counters.
-- Log retention policy: {{ LOG_RETENTION }} (≥ three years recommended).
-- Audit log storage location: {{ AUDIT_STORAGE }}
+- نگرانی کے اختتامی مقامات: {{میٹرکس_ینڈ پوائنٹس}} (`/metrics` ، ڈیش بورڈز)۔
+- لاگ ان میٹرکس: `crypto.sm.verification_total` ، `crypto.sm.sign_total` ،
+  لیٹینسی ہسٹگرامس ، غلطی کے کاؤنٹرز۔
+- لاگ برقرار رکھنے کی پالیسی: {{لاگ_رینشن}} (≥ تین سال تجویز کردہ)۔
+- آڈٹ لاگ اسٹوریج مقام: {{آڈٹ_ اسٹوریج}}
 
-# 5. Incident Response & Contacts
+# 5. واقعہ کا جواب اور رابطے
 
-| Role | Name | Phone | Email | SLA |
-|------|------|-------|-------|-----|
-| Security operations lead | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
-| Crypto on-call | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
-| Legal / compliance | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
-| Vendor support (if applicable) | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
+| کردار | نام | فون | ای میل | SLA |
+| ------ | ------ | ------- | ------- | ----- |
+| سیکیورٹی آپریشنز لیڈ | {{نام}} | {{فون}} | {{ای میل}} | {{SLA}} |
+| کریپٹو آن کال | {{نام}} | {{فون}} | {{ای میل}} | {{SLA}} |
+| قانونی / تعمیل | {{نام}} | {{فون}} | {{ای میل}} | {{SLA}} |
+| وینڈر سپورٹ (اگر قابل اطلاق ہے) | {{نام}} | {{فون}} | {{ای میل}} | {{SLA}} |
 
-# 6. Attachments Checklist
+# 6. منسلکات چیک لسٹ- [] ہیشس کے ساتھ کنفیگریشن اسنیپ شاٹ (Norito + JSON)۔
+- [] تعی .ن سازی کا ثبوت (ہیشس ، ایس بی او ایم ، تولیدی نوٹس)۔
+- [] ٹیلی میٹری ڈیش بورڈ برآمدات اور الرٹ تعریفیں۔
+- [] واقعہ کے ردعمل کا منصوبہ اور آن کال گردش دستاویز۔
+- [] آپریٹر کی تربیت کا اعتراف یا رن بک کی رسید۔
+- [] برآمدی کنٹرول کا بیان آئینہ دار نوادرات۔
+- [] متعلقہ معاہدہ معاہدوں یا پالیسی چھوٹ کی کاپیاں۔
 
-- [ ] Configuration snapshot (Norito + JSON) with hashes.
-- [ ] Proof of deterministic build (hashes, SBOM, reproducibility notes).
-- [ ] Telemetry dashboard exports and alert definitions.
-- [ ] Incident response plan and on-call rotation document.
-- [ ] Operator training acknowledgement or runbook receipt.
-- [ ] Export-control statement mirroring delivered artefacts.
-- [ ] Copies of relevant contractual agreements or policy waivers.
+# 7. آپریٹر اعلامیہ
 
-# 7. Operator Declaration
+> ہم تصدیق کرتے ہیں کہ مذکورہ بالا تعیناتی PRC کمرشل کے مطابق ہے
+> خفیہ نگاری کے ضوابط ، وہ ایس ایم سے چلنے والی خدمات دستاویزی دستاویزات کی پیروی کرتی ہیں
+> واقعہ کے جواب اور ٹیلی میٹری کی پالیسیاں ، اور یہ کہ آڈٹ نوادرات ہوں گے
+> کم از کم تین سال برقرار رہے۔
 
-> We confirm that the deployment listed above complies with PRC commercial
-> cryptography regulations, that SM-enabled services follow the documented
-> incident response and telemetry policies, and that audit artefacts will be
-> retained for at least three years.
-
-- Authorised signer: ________________________
-- Date: ________________________
-
+- مجاز دستخط کنندہ: ________________________
+- تاریخ: ________________________

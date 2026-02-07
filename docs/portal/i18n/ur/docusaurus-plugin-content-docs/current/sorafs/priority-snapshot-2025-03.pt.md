@@ -4,36 +4,38 @@ direction: rtl
 source: docs/portal/docs/sorafs/priority-snapshot-2025-03.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: priority-snapshot-2025-03
-title: Snapshot de prioridades - marco de 2025 (Beta)
-description: Espelho do snapshot de steering Nexus 2025-03; pendente de ACKs antes do rollout publico.
+ID: ترجیحی-snapshot-2025-03
+عنوان: ترجیحات سنیپ شاٹ - سنگ میل 2025 (بیٹا)
+تفصیل: اسٹیئرنگ اسنیپ شاٹ آئینہ Nexus 2025-03 ؛ عوامی رول آؤٹ سے پہلے زیر التواء ACKs۔
 ---
 
-> Fonte canonica: `docs/source/sorafs/priority_snapshot_2025-03.md`
+> کیننیکل ماخذ: `docs/source/sorafs/priority_snapshot_2025-03.md`
 >
-> Status: **Beta / aguardando ACKs de steering** (Networking, Storage, Docs leads).
+> حیثیت: ** بیٹا / اسٹیئرنگ ACKs کے منتظر ** (نیٹ ورکنگ ، اسٹوریج ، دستاویزات لیڈز)۔
 
-## Visao geral
+## جائزہ
 
-O snapshot de marco mantem as iniciativas de docs/content-network alinhadas aos
-tracks de entrega de SoraFS (SF-3, SF-6b, SF-9). Quando todos os leads fizerem
-acknowledge no canal steering do Nexus, remova a nota "Beta" acima.
+سنگ میل سنیپ شاٹ دستاویزات/مواد سے متعلق نیٹ ورک کے اقدامات کو جوڑتا ہے
+SoraFS (SF-3 ، SF-6B ، SF-9) کی ترسیل کی پٹریوں۔ جب تمام لیڈز کرتے ہیں
+Nexus اسٹیئرنگ چینل میں تسلیم کریں ، مذکورہ بالا "بیٹا" نوٹ کو ہٹا دیں۔
 
-### Threads de foco
+### فوکس تھریڈز
 
-1. **Circular snapshot de prioridades** - coletar acknowledgements e registra-los
-   nas atas do council de 2025-03-05.
-2. **Fechamento do kickoff Gateway/DNS** - ensaiar o novo facilitation kit (Secao 6
-   no runbook) antes do workshop 2025-03-03.
-3. **Migracao de runbooks de operador** - o portal `Runbook Index` esta live; exponha
-   a URL de beta preview apos o sign-off do onboarding de reviewers.
-4. **Threads de entrega SoraFS** - alinhar o trabalho restante de SF-3/6b/9 com o
-   plan/roadmap:
-   - `sorafs-node` PoR ingestion worker + status endpoint.
-   - Polimento de bindings CLI/SDK nas integracoes orchestrator Rust/JS/Swift.
-   - PoR coordinator runtime wiring e eventos GovernanceLog.
+1.
+   2025-03-05 کے کونسل منٹ میں۔
+2. ** گیٹ وے/ڈی این ایس کک آف بندش ** - نئی سہولت کٹ کی جانچ کریں (سیکشن 6
+   ورکشاپ سے پہلے رن بک میں) 2025-03-03۔
+3. ** آپریٹر رن بک ہجرت ** - `Runbook Index` پورٹل براہ راست ہے ؛ بے نقاب
+   جائزہ لینے والے کے بعد بورڈنگ سائن آف کے بعد بیٹا پیش نظارہ یو آر ایل۔
+4.
+   منصوبہ/روڈ میپ:
+   - `sorafs-node` PUR INGESTION ورکر + اختتامی نقطہ کی حیثیت۔
+   - زنگ/جے ایس/سوئفٹ آرکیسٹریٹر انضمام میں پالش کرنے والی سی ایل آئی/ایس ڈی کے پابندیاں۔
+   - پور کوآرڈینیٹر رن ٹائم وائرنگ اور گورننسیلوگ واقعات۔
 
-Veja o arquivo fonte para a tabela completa, o distribution checklist e log entries.
+مکمل جدول ، تقسیم کی فہرست اور لاگ ان اندراجات کے لئے ماخذ فائل دیکھیں۔

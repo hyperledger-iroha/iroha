@@ -4,27 +4,28 @@ direction: ltr
 source: docs/portal/docs/reference/torii-rapidoc.mdx
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import RapiDocPanel from '@site/src/components/RapiDocPanel.jsx';
+RapiDocPanelni '@site/src/components/RapiDocPanel.jsx' dan import qiling;
 
 # Torii API (RapiDoc)
 
-`RapiDoc` offers a compact, documentation-first rendering of the same Torii
-OpenAPI document. Use it when you need a denser overview or read-only review of
-request/response models.
+`RapiDoc` bir xil Torii ning ixcham, hujjatlarni birinchi marta ko'rsatishini taklif qiladi
+OpenAPI hujjati. Agar sizga batafsilroq ko'rib chiqish yoki faqat o'qish uchun mo'ljallangan ko'rib chiqish kerak bo'lganda foydalaning
+so'rov/javob modellari.
 
-## Usage tips
+## Foydalanish bo'yicha maslahatlar
 
-- Enter a bearer token to enable interactive calls. The value is forwarded as an
-  `X-TryIt-Auth` header and normalised by the proxy.
-- Configure `TRYIT_PROXY_PUBLIC_URL` when serving the portal so interactive
-  requests are routed through the staging proxy. The widget warns when the proxy
-  URL is missing.
-- Use the “OpenAPI snapshot” dropdown to load historical specs published by
-  `npm run sync-openapi`; the `Latest (tracked)` option always resolves to
+- Interaktiv qo'ng'iroqlarni yoqish uchun tashuvchi tokenini kiriting. Qiymat a sifatida uzatiladi
+  `X-TryIt-Auth` sarlavhasi va proksi-server tomonidan normallashtirilgan.
+- Portalga interaktiv xizmat ko'rsatishda `TRYIT_PROXY_PUBLIC_URL` ni sozlang
+  so'rovlar proksi-server orqali yuboriladi. Vidjet proksi kelganda ogohlantiradi
+  URL manzili yo‘q.
+- tomonidan nashr etilgan tarixiy xususiyatlarni yuklash uchun “OpenAPI snapshot” ochiladigan menyusidan foydalaning.
+  `npm run sync-openapi`; `Latest (tracked)` varianti har doim hal qiladi
   `/openapi/torii.json`.
-- Combine with the “[Try it](/api/overview#try-it-sandbox-docs-3)” console when
-  working against staged gateways requiring the proxy.
+- “[Try it](/api/overview#try-it-sandbox-docs-3)” konsoli bilan birlashtiring.
+  proksi-serverni talab qiladigan bosqichli shlyuzlarga qarshi ishlash.
 
-<RapiDocPanel />

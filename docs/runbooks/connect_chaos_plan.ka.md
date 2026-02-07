@@ -7,141 +7,137 @@ generator: scripts/sync_docs_i18n.py
 source_hash: b1d414173d2f43d403a6a1ba5cd59a645cb0b94f5765e69a00f7078b1e96b1cd
 source_last_modified: "2025-12-29T18:16:35.913527+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Connect Chaos & Fault Rehearsal Plan (IOS3 / IOS7)
+# დააკავშირეთ ქაოსი და გაუმართაობის რეპეტიციის გეგმა (IOS3 / IOS7)
 
-This playbook defines the repeatable chaos drills that satisfy the IOS3/IOS7
-roadmap action _“plan joint chaos rehearsal”_ (`roadmap.md:1527`). Pair it with
-the Connect preview runbook (`docs/runbooks/connect_session_preview_runbook.md`)
-when staging cross-SDK demos.
+ეს სათამაშო წიგნი განსაზღვრავს განმეორებად ქაოსის წვრთნებს, რომლებიც აკმაყოფილებს IOS3/IOS7-ს
+საგზაო რუკა ქმედება _"დაგეგმეთ ერთობლივი ქაოსის რეპეტიცია"_ (`roadmap.md:1527`). დააწყვილეთ იგი
+Connect preview runbook (`docs/runbooks/connect_session_preview_runbook.md`)
+cross-SDK დემოს დადგმისას.
 
-## Goals & Success Criteria
-- Exercise the shared Connect retry/back-off policy, offline queue limits, and
-  telemetry exporters under controlled faults without mutating production code.
-- Capture deterministic artefacts (`iroha connect queue inspect` output,
-  `connect.*` metrics snapshots, Swift/Android/JS SDK logs) so governance can
-  audit every drill.
-- Prove that wallets and dApps honour config changes (manifest drifts, salt
-  rotation, attestation failures) by surfacing the canonical `ConnectError`
-  category and redaction-safe telemetry events.
+## მიზნები და წარმატების კრიტერიუმები
+- განახორციელეთ გაზიარებული Connect-ის განმეორებითი ცდის/დაბრუნების პოლიტიკა, ხაზგარეშე რიგის ლიმიტები და
+  ტელემეტრიის ექსპორტიორები კონტროლირებადი ხარვეზების ქვეშ წარმოების კოდის მუტაციის გარეშე.
+- გადაიღეთ დეტერმინისტული არტეფაქტები (`iroha connect queue inspect` გამომავალი,
+  `connect.*` მეტრიკის სნეპშოტები, Swift/Android/JS SDK ჟურნალები), რათა მმართველობამ შეძლოს
+  აუდიტი ყოველი სავარჯიშო.
+- დაამტკიცეთ, რომ საფულეები და dApps პატივს სცემენ კონფიგურაციის ცვლილებებს (მანიფესტი დრიფტები, მარილი
+  როტაცია, ატესტაციის წარუმატებლობა) კანონიკური `ConnectError`-ის ზედაპირით
+  კატეგორიის და რედაქციისთვის უსაფრთხო ტელემეტრიული მოვლენები.
 
-## Prerequisites
-1. **Environment bootstrap**
-   - Start the demo Torii stack: `scripts/ios_demo/start.sh --telemetry-profile full`.
-   - Launch at least one SDK sample (`examples/ios/NoritoDemoXcode/NoritoDemoXcode`,
+## წინაპირობები
+1. **გარემოს ჩამტვირთავი **
+   - დაიწყეთ დემო Torii სტეკი: `scripts/ios_demo/start.sh --telemetry-profile full`.
+   - გაუშვით მინიმუმ ერთი SDK ნიმუში (`examples/ios/NoritoDemoXcode/NoritoDemoXcode`,
      `examples/ios/NoritoDemo`, Android `demo-connect`, JS `examples/connect`).
-2. **Instrumentation**
-   - Enable SDK diagnostics (`ConnectQueueDiagnostics`, `ConnectQueueStateTracker`,
-     `ConnectSessionDiagnostics` in Swift; `ConnectQueueJournal` + `ConnectQueueJournalTests`
-     equivalents in Android/JS).
-   - Ensure the CLI `iroha connect queue inspect --sid <sid> --metrics` resolves
-     the queue path produced by the SDK (`~/.iroha/connect/<sid>/state.json` and
+2. **ინსტრუმენტაცია**
+   - ჩართეთ SDK დიაგნოსტიკა (`ConnectQueueDiagnostics`, `ConnectQueueStateTracker`,
+     `ConnectSessionDiagnostics` სვიფტში; `ConnectQueueJournal` + `ConnectQueueJournalTests`
+     ეკვივალენტები Android/JS-ში).
+   - დარწმუნდით, რომ CLI `iroha connect queue inspect --sid <sid> --metrics` მოგვარდება
+     SDK-ის მიერ წარმოებული რიგის გზა (`~/.iroha/connect/<sid>/state.json` და
      `metrics.ndjson`).
-   - Wire telemetry exporters so the following time series are visible in
-     Grafana and via `scripts/swift_status_export.py telemetry`: `connect.queue_depth`,
+   - მავთულის ტელემეტრიის ექსპორტიორები, ასე რომ, შემდეგი დროის სერიები ჩანს
+     Grafana და `scripts/swift_status_export.py telemetry` მეშვეობით: `connect.queue_depth`,
      `connect.queue_dropped_total`, `connect.reconnects_total`,
      `connect.resume_latency_ms`, `swift.connect.frame_latency`,
      `android.telemetry.redaction.salt_version`.
-3. **Evidence folders** – create `artifacts/connect-chaos/<date>/` and store:
-   - raw logs (`*.log`), metrics snapshots (`*.json`), dashboard exports
-     (`*.png`), CLI outputs, and PagerDuty IDs.
+3. **მტკიცებულებების საქაღალდეები** – შექმენით `artifacts/connect-chaos/<date>/` და შეინახეთ:
+   - დაუმუშავებელი ჟურნალი (`*.log`), მეტრიკის სნეპშოტები (`*.json`), დაფის ექსპორტი
+     (`*.png`), CLI გამომავალი და PagerDuty ID.
 
-## Scenario Matrix
+## სცენარის მატრიცა| ID | ბრალია | ინექციის ნაბიჯები | მოსალოდნელი სიგნალები | მტკიცებულება |
+|----|-------|----------------|-----------------|---------|
+| C1 | WebSocket გათიშვა და ხელახლა დაკავშირება | შემოახვიეთ `/v1/connect/ws` პროქსის მიღმა (მაგ., `kubectl -n demo port-forward svc/torii 18080:8080` + `toxiproxy-cli toxic add ... timeout`) ან დროებით დაბლოკეთ სერვისი (`kubectl scale deploy/torii --replicas=0` ≤60 წმ.). აიძულეთ საფულე გააგრძელოს ჩარჩოების გაგზავნა ისე, რომ ხაზგარეშე რიგები გაივსოს. | `connect.reconnects_total` იზრდება, `connect.resume_latency_ms` იზრდება, მაგრამ რჩება - დაფის ანოტაცია გათიშვის ფანჯრისთვის.- ჟურნალის ამონაწერის ნიმუში ხელახლა დაკავშირებით + გადინების შეტყობინებებით. |
+| C2 | ხაზგარეშე რიგის გადადინება / TTL ვადა | შეასწორეთ ნიმუში რიგის ლიმიტების შესამცირებლად (Swift: Instantiate `ConnectQueueJournal.Configuration(maxRecordsPerQueue: 4, maxBytesPerQueue: 4096, retentionInterval: 30)` `ConnectSessionDiagnostics`-ში; Android/JS გამოიყენეთ შესაბამისი კონსტრუქტორები). შეაჩერეთ საფულე ≥2× `retentionInterval`-ისთვის, სანამ dApp განაგრძობს მოთხოვნებს რიგში. | `connect.queue_dropped_total{reason="overflow"}` და `{reason="ttl"}` ზრდა, `connect.queue_depth` პლატოები ახალ ლიმიტზე, SDK-ების ზედაპირი `ConnectError.QueueOverflow(limit: 4)` (ან `.QueueExpired`). `iroha connect queue inspect` აჩვენებს `state=Overflow`-ს `warn/drop` ჭვირნიშნით 100%. | - მეტრულ მრიცხველების სკრინშოტი.- CLI JSON გამომავალი ჩაწერის ზედმეტად.- Swift/Android ჟურნალის ფრაგმენტი, რომელიც შეიცავს `ConnectError` ხაზს. |
+| C3 | მანიფესტი დრიფტი / დაშვების უარყოფა | შეცვალეთ Connect მანიფესტი, რომელიც ემსახურება საფულეებს (მაგ., შეცვალეთ `docs/connect_swift_ios.md` ნიმუშის მანიფესტი, ან დაიწყეთ Torii `--connect-manifest-path`-ით, რომელიც მიუთითებს ასლზე, ​​სადაც `chain_id` ან `permissions`). მოითხოვეთ dApp-მა დამტკიცება და დარწმუნდით, რომ საფულე უარყოფს პოლიტიკას. | Torii აბრუნებს `HTTP 409`-ს `/v1/connect/session`-ისთვის `manifest_mismatch`-ით, SDK-ები ასხივებენ `ConnectError.Authorization.manifestMismatch(manifestVersion)`, ტელემეტრია ამაღლებს `connect.manifest_mismatch_total`-ს, ხოლო რიგები ცარიელი რჩება. (`state=Idle`). | - Torii ჟურნალის ამონაწერი, რომელიც გვიჩვენებს შეუსაბამობის აღმოჩენას.- SDK-ის ეკრანის ანაბეჭდი ზედაპირზე გამოჩენილი შეცდომის შესახებ.- მეტრიკის სნეპშოტი, რომელიც ადასტურებს, რომ ტესტის დროს რიგი კადრები არ არის. |
+| C4 | გასაღების როტაცია / მარილის ვერსიის მუწუკი | შეატრიალეთ Connect salt ან AEAD გასაღები სესიის შუა პერიოდში. დეველოპერის სტეკებში გადატვირთეთ Torii `CONNECT_SALT_VERSION=$((old+1))`-ით (ასახავს Android-ის რედაქციის მარილის ტესტს `docs/source/sdk/android/telemetry_schema_diff.md`-ში). შეინახეთ საფულე ხაზგარეშე, სანამ მარილის როტაცია არ დასრულდება, შემდეგ განაახლეთ. | რეზიუმეს პირველი მცდელობა წარუმატებელია `ConnectError.Authorization.invalidSalt`-ით, რიგები იშლება (dApp ჩამოაგდებს ქეშურ კადრებს `salt_version_mismatch` მიზეზით), ტელემეტრია ასხივებს `android.telemetry.redaction.salt_version` (Android) და `swift.connect.session_event{event="salt_rotation"}`. მეორე სესია SID განახლების შემდეგ წარმატებით დასრულდა. | - საინფორმაციო დაფის ანოტაცია მარილის ეპოქით ადრე/შემდეგ.- ჟურნალები, რომლებიც შეიცავს invalid-salt შეცდომას და შემდგომ წარმატებას.- `iroha connect queue inspect` გამომავალი აჩვენებს `state=Stalled`, რასაც მოჰყვება ახალი `state=Active`. || C5 | ატესტაცია / StrongBox წარუმატებლობა | Android საფულეებზე, დააკონფიგურირეთ `ConnectApproval`, რომ შეიცავდეს `attachments[]` + StrongBox ატესტაციას. გამოიყენეთ ატესტაციის აღკაზმულობა (`scripts/android_keystore_attestation.sh` `--inject-failure strongbox-simulated`-თან ერთად) ან შეცვალეთ ატესტაციის JSON dApp-ისთვის გადაცემამდე. | DApp უარყოფს დამტკიცებას `ConnectError.Authorization.invalidAttestation`-ით, Torii აღრიცხავს წარუმატებლობის მიზეზს, ექსპორტიორები აჯამებენ `connect.attestation_failed_total` და რიგი ასუფთავებს შეურაცხმყოფელ ჩანაწერს. Swift/JS dApps წერს შეცდომას სესიის გატარებისას. | - დამაგრების ჟურნალი შეყვანილი წარუმატებლობის ID-ით.- SDK შეცდომების ჟურნალი + ტელემეტრიის მრიცხველის აღბეჭდვა.- მტკიცებულება იმისა, რომ რიგმა ამოიღო ცუდი ჩარჩო (`recordsRemoved > 0`). |
 
-| ID | Fault | Injection steps | Expected signals | Evidence |
-|----|-------|-----------------|------------------|----------|
-| C1 | WebSocket outage & reconnect | Wrap `/v1/connect/ws` behind a proxy (e.g., `kubectl -n demo port-forward svc/torii 18080:8080` + `toxiproxy-cli toxic add ... timeout`) or temporarily block the service (`kubectl scale deploy/torii --replicas=0` for ≤60 s). Force the wallet to keep sending frames so offline queues fill. | `connect.reconnects_total` increments, `connect.resume_latency_ms` spikes but stays <1 s P95, queues enter `state=Draining` via `ConnectQueueStateTracker`. SDKs emit `ConnectError.Transport.reconnecting` once, then resume. | - `iroha connect queue inspect --sid <sid>` output showing non-zero `resume_attempts_total`.<br>- Dashboard annotation for outage window.<br>- Sample log excerpt with reconnect + drain messages. |
-| C2 | Offline queue overflow / TTL expiry | Patch the sample to shrink queue limits (Swift: instantiate `ConnectQueueJournal.Configuration(maxRecordsPerQueue: 4, maxBytesPerQueue: 4096, retentionInterval: 30)` inside `ConnectSessionDiagnostics`; Android/JS use corresponding constructors). Suspend the wallet for ≥2× `retentionInterval` while the dApp keeps enqueuing requests. | `connect.queue_dropped_total{reason="overflow"}` and `{reason="ttl"}` increment, `connect.queue_depth` plateaus at the new limit, SDKs surface `ConnectError.QueueOverflow(limit: 4)` (or `.QueueExpired`). `iroha connect queue inspect` shows `state=Overflow` with `warn/drop` watermarks at 100%. | - Screenshot of the metric counters.<br>- CLI JSON output capturing overflow.<br>- Swift/Android log snippet containing the `ConnectError` line. |
-| C3 | Manifest drift / admission rejection | Tamper with the Connect manifest served to wallets (e.g., modify `docs/connect_swift_ios.md` sample manifest, or start Torii with `--connect-manifest-path` pointing at a copy where `chain_id` or `permissions` differ). Have the dApp request approval and ensure the wallet rejects via policy. | Torii returns `HTTP 409` for `/v1/connect/session` with `manifest_mismatch`, SDKs emit `ConnectError.Authorization.manifestMismatch(manifestVersion)`, telemetry raises `connect.manifest_mismatch_total`, and queues remain empty (`state=Idle`). | - Torii log excerpt showing mismatch detection.<br>- SDK screenshot of surfaced error.<br>- Metrics snapshot proving no queued frames during the test. |
-| C4 | Key rotation / salt-version bump | Rotate the Connect salt or AEAD key mid-session. In dev stacks, restart Torii with `CONNECT_SALT_VERSION=$((old+1))` (mirrors the Android redaction salt test in `docs/source/sdk/android/telemetry_schema_diff.md`). Keep the wallet offline until salt rotation completes, then resume. | First resume attempt fails with `ConnectError.Authorization.invalidSalt`, queues flush (dApp drops cached frames with reason `salt_version_mismatch`), telemetry emits `android.telemetry.redaction.salt_version` (Android) and `swift.connect.session_event{event="salt_rotation"}`. Second session after SID refresh succeeds. | - Dashboard annotation with salt epoch before/after.<br>- Logs containing the invalid-salt error and subsequent success.<br>- `iroha connect queue inspect` output showing `state=Stalled` followed by fresh `state=Active`. |
-| C5 | Attestation / StrongBox failure | On Android wallets, configure `ConnectApproval` to include `attachments[]` + StrongBox attestation. Use the attestation harness (`scripts/android_keystore_attestation.sh` with `--inject-failure strongbox-simulated`) or tamper with the attestation JSON before handing to the dApp. | DApp rejects the approval with `ConnectError.Authorization.invalidAttestation`, Torii logs the failure reason, exporters bump `connect.attestation_failed_total`, and the queue purges the offending entry. Swift/JS dApps log the error while keeping the session alive. | - Harness log with injected failure ID.<br>- SDK error log + telemetry counter capture.<br>- Evidence that the queue removed the bad frame (`recordsRemoved > 0`). |
+## სცენარის დეტალები
 
-## Scenario Details
-
-### C1 — WebSocket outage & reconnect
-1. Wrap Torii behind a proxy (toxiproxy, Envoy, or a `kubectl port-forward`) so
-   you can toggle availability without killing the entire node.
-2. Trigger a 45 s outage:
+### C1 - WebSocket გათიშვა და ხელახლა დაკავშირება
+1. შემოახვიეთ Torii პროქსის (toxiproxy, Envoy, ან `kubectl port-forward`) უკან ასე
+   თქვენ შეგიძლიათ გადართოთ ხელმისაწვდომობა მთელი კვანძის მოკვლის გარეშე.
+2. გამორთვა 45 წამში:
    ```bash
    toxiproxy-cli toxic add connect-ws --type timeout --toxicity 1.0 --attribute timeout=45000
    sleep 45 && toxiproxy-cli toxic remove connect-ws --toxic timeout
    ```
-3. Observe telemetry dashboards and `scripts/swift_status_export.py telemetry
-   --json-out artifacts/connect-chaos/<date>/c1_metrics.json`.
-4. Dump queue state immediately after the outage:
+3. დააკვირდით ტელემეტრიის დაფებს და `სკრიპტებს/swift_status_export.py ტელემეტრიას
+   --json-out artifacts/connect-chaos//c1_metrics.json`.
+4. ნაგავსაყრელის რიგის მდგომარეობა გათიშვისთანავე:
    ```bash
    iroha connect queue inspect --sid "$SID" --metrics > artifacts/connect-chaos/<date>/c1_queue.txt
    ```
-5. Success = a single reconnect attempt, bounded queue growth, and automatic
-   drain after the proxy recovers.
+5. წარმატება = ხელახლა დაკავშირების ერთჯერადი მცდელობა, შემოსაზღვრული რიგის ზრდა და ავტომატური
+   გადინება პროქსის აღდგენის შემდეგ.
 
-### C2 — Offline queue overflow / TTL expiry
-1. Shrink queue thresholds in local builds:
-   - Swift: update the `ConnectQueueJournal` initializer inside your sample
-     (e.g., `examples/ios/NoritoDemoXcode/NoritoDemoXcode/ContentView.swift`)
-     to pass `ConnectQueueJournal.Configuration(maxRecordsPerQueue: 4, maxBytesPerQueue: 4096, retentionInterval: 30)`.
-   - Android/JS: pass the equivalent config object when constructing
+### C2 — ხაზგარეშე რიგის გადინება / TTL ვადა
+1. რიგების ზღურბლების შემცირება ლოკალურ შენობებში:
+   - Swift: განაახლეთ `ConnectQueueJournal` ინიციალატორი თქვენს ნიმუშში
+     (მაგ., `examples/ios/NoritoDemoXcode/NoritoDemoXcode/ContentView.swift`)
+     გაიაროს `ConnectQueueJournal.Configuration(maxRecordsPerQueue: 4, maxBytesPerQueue: 4096, retentionInterval: 30)`.
+   - Android/JS: კონსტრუირებისას გადაიტანეთ ექვივალენტური კონფიგურაციის ობიექტი
      `ConnectQueueJournal`.
-2. Suspend the wallet (simulator background or device airplane mode) for ≥60 s
-   while the dApp issues `ConnectClient.requestSignature(...)` calls.
-3. Use `ConnectQueueDiagnostics`/`ConnectQueueStateTracker` (Swift) or the JS
-   diagnostics helper to export the evidence bundle (`state.json`, `journal/*.to`,
+2. შეაჩერეთ საფულე (სიმულატორის ფონი ან მოწყობილობის თვითმფრინავის რეჟიმი) ≥60 წმ.
+   ხოლო dApp გასცემს `ConnectClient.requestSignature(...)` ზარებს.
+3. გამოიყენეთ `ConnectQueueDiagnostics`/`ConnectQueueStateTracker` (Swift) ან JS
+   დიაგნოსტიკური დამხმარე მტკიცებულებების ნაკრების ექსპორტისთვის (`state.json`, `journal/*.to`,
    `metrics.ndjson`).
-4. Success = overflow counters increment, SDK surfaces `ConnectError.QueueOverflow`
-   once, and the queue recovers after the wallet resumes.
+4. წარმატება = გადინების მრიცხველების ზრდა, SDK ზედაპირები `ConnectError.QueueOverflow`
+   ერთხელ და რიგი აღდგება საფულის განახლების შემდეგ.
 
-### C3 — Manifest drift / admission rejection
-1. Make a copy of the admission manifest, e.g.:
+### C3 - მანიფესტი დრიფტი / დაშვების უარყოფა
+1. გააკეთეთ დაშვების მანიფესტის ასლი, მაგ.:
    ```bash
    cp configs/connect_manifest.json /tmp/manifest_drift.json
    sed -i '' 's/"chain_id": ".*"/"chain_id": "bogus-chain"/' /tmp/manifest_drift.json
    ```
-2. Launch Torii with `--connect-manifest-path /tmp/manifest_drift.json` (or
-   update the docker compose/k8s config for the drill).
-3. Attempt to start a session from the wallet; expect HTTP 409.
-4. Capture Torii + SDK logs plus `connect.manifest_mismatch_total` from
-   the telemetry dashboard.
-5. Success = rejection without queue growth, plus the wallet displays the shared
-   taxonomy error (`ConnectError.Authorization.manifestMismatch`).
-
-### C4 — Key rotation / salt bump
-1. Record the current salt version from telemetry:
+2. გაუშვით Torii `--connect-manifest-path /tmp/manifest_drift.json`-ით (ან
+   განაახლეთ docker compose/k8s კონფიგურაცია საბურღისთვის).
+3. სცადეთ სესიის დაწყება საფულედან; ველით HTTP 409.
+4. გადაიღეთ Torii + SDK ჟურნალები პლუს `connect.manifest_mismatch_total`
+   ტელემეტრიის დაფა.
+5. წარმატება = უარი რიგის ზრდის გარეშე, პლუს საფულე აჩვენებს გაზიარებულს
+   ტაქსონომიის შეცდომა (`ConnectError.Authorization.manifestMismatch`).### C4 - გასაღების როტაცია / მარილის ნაკაწრი
+1. ჩაიწერეთ მარილის მიმდინარე ვერსია ტელემეტრიიდან:
    ```bash
    scripts/swift_status_export.py telemetry --json-out artifacts/connect-chaos/<date>/c4_before.json
    ```
-2. Restart Torii with a new salt (`CONNECT_SALT_VERSION=$((OLD+1))` or update the
-   config map). Keep the wallet offline until the restart completes.
-3. Resume the wallet; the first resume should fail with an invalid-salt error
-   and `connect.queue_dropped_total{reason="salt_version_mismatch"}` increments.
-4. Force the app to drop cached frames by deleting the session directory
-   (`rm -rf ~/.iroha/connect/<sid>` or the platform-specific cache clear), then
-   restart the session with fresh tokens.
-5. Success = telemetry shows the salt bump, the invalid resume event is logged
-   once, and the next session succeeds without manual intervention.
+2. გადატვირთეთ Torii ახალი მარილით (`CONNECT_SALT_VERSION=$((OLD+1))` ან განაახლეთ
+   კონფიგურაციის რუკა). შეინახეთ საფულე ხაზგარეშე გადატვირთვის დასრულებამდე.
+3. განაახლეთ საფულე; პირველი რეზიუმე უნდა ჩავარდეს არასწორი მარილის შეცდომით
+   და `connect.queue_dropped_total{reason="salt_version_mismatch"}` მატება.
+4. აიძულეთ აპი ჩამოაგდოს ქეშირებული ფრეიმები სესიების დირექტორიას წაშლით
+   (`rm -rf ~/.iroha/connect/<sid>` ან პლატფორმის სპეციფიკური ქეში გასუფთავებულია), მაშინ
+   განაახლეთ სესია ახალი ჟეტონებით.
+5. წარმატება = ტელემეტრია აჩვენებს მარილის ნაკაწრს, არასწორი რეზიუმეს მოვლენა არის ჩაწერილი
+   ერთხელ, და შემდეგი სესია წარმატებულია ხელით ჩარევის გარეშე.
 
-### C5 — Attestation / StrongBox failure
-1. Generate an attestation bundle using `scripts/android_keystore_attestation.sh`
-   (set `--inject-failure strongbox-simulated` to flip the signature bit).
-2. Have the wallet attach this bundle via its `ConnectApproval` API; the dApp
-   should validate and reject the payload.
-3. Verify telemetry (`connect.attestation_failed_total`, Swift/Android incident
-   metrics) and ensure the queue dropped the poisoned entry.
-4. Success = rejection is isolated to the bad approval, queues stay healthy,
-   and the attestation log is stored with the drill evidence.
+### C5 — ატესტაცია / StrongBox მარცხი
+1. შექმენით ატესტაციის ნაკრები `scripts/android_keystore_attestation.sh`-ის გამოყენებით
+   (დააყენეთ `--inject-failure strongbox-simulated` ხელმოწერის ბიტის გადასაბრუნებლად).
+2. სთხოვეთ საფულეს მიამაგროს ეს პაკეტი მისი `ConnectApproval` API-ით; dApp
+   უნდა დაადასტუროს და უარყოს დატვირთვა.
+3. გადაამოწმეთ ტელემეტრია (`connect.attestation_failed_total`, Swift/Android ინციდენტი
+   მეტრიკა) და დარწმუნდით, რომ რიგმა ჩამოაგდო მოწამლული ჩანაწერი.
+4. წარმატება = უარყოფა იზოლირებულია ცუდი მოწონებით, რიგები რჩება ჯანმრთელი,
+   ხოლო ატესტაციის ჟურნალი ინახება საბურღი მტკიცებულებებთან ერთად.
 
-## Evidence Checklist
-- `artifacts/connect-chaos/<date>/c*_metrics.json` exports from
+## მტკიცებულებათა ჩამონათვალი
+- `artifacts/connect-chaos/<date>/c*_metrics.json` ექსპორტს
   `scripts/swift_status_export.py telemetry`.
-- CLI outputs (`c*_queue.txt`) from `iroha connect queue inspect`.
-- SDK + Torii logs with timestamps and SID hashes.
-- Dashboard screenshots with annotations for each scenario.
-- PagerDuty / incident IDs if Sev 1/2 alerts fired.
+- CLI გამომავალი (`c*_queue.txt`) `iroha connect queue inspect`-დან.
+- SDK + Torii ჟურნალი დროის შტამპებით და SID ჰეშებით.
+- დაფის ეკრანის ანაბეჭდები ანოტაციებით თითოეული სცენარისთვის.
+- PagerDuty / ინციდენტის პირადობის მოწმობები, თუ Sev1/2 გაფრთხილებები გაშვებულია.
 
-Completing the full matrix once per quarter satisfies the roadmap gate and
-shows that Swift/Android/JS Connect implementations respond deterministically
-across the highest-risk failure modes.
+სრული მატრიცის შევსება კვარტალში ერთხელ აკმაყოფილებს საგზაო რუქის კარიბჭეს და
+გვიჩვენებს, რომ Swift/Android/JS Connect განხორციელებები განმსაზღვრელად რეაგირებენ
+ყველაზე მაღალი რისკის მარცხის რეჟიმებში.

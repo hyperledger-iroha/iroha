@@ -6,95 +6,93 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: e7116d28e32d8bd77434edd6767427cc3d2ae0624f4de132b1d0cec3c7d44b86
 source_last_modified: "2026-01-03T18:07:57.069144+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Product Filing (开发备案) Template
-% Hyperledger Iroha Compliance Working Group
+% SM2/SM3/SM4 製品ファイリング (开发备案) テンプレート
+% Hyperledger Iroha コンプライアンス ワーキング グループ
 % 2026-05-06
 
-# Instructions
+# 指示
 
-Use this template when submitting a *product development filing* to a provincial
-or municipal State Cryptography Administration (SCA) office before distributing
-SM-enabled binaries or source artefacts from within mainland China. Replace the
-placeholders with project-specific details, export the completed form as PDF if
-required, and attach the artefacts referenced in the checklist.
+*製品開発届出*を地方自治体に提出する場合は、このテンプレートを使用してください。
+または配布前に地方自治体の国家暗号局 (SCA) 事務所
+中国本土内からの SM 対応バイナリまたはソース アーティファクト。交換してください
+プロジェクト固有の詳細を含むプレースホルダー。必要に応じて、完成したフォームを PDF としてエクスポートします。
+必須であり、チェックリストで参照されている成果物を添付してください。
 
-# 1. Applicant & Product Summary
+# 1. 申請者と製品の概要
 
-| Field | Value |
-|-------|-------|
-| Organisation name | {{ ORGANISATION }} |
-| Registered address | {{ ADDRESS }} |
-| Legal representative | {{ LEGAL_REP }} |
-| Primary contact (name / title / email / phone) | {{ CONTACT }} |
-| Product name | Hyperledger Iroha {{ RELEASE_NAME }} |
-| Product version / build ID | {{ VERSION }} |
-| Filing type | Product development (开发备案) |
-| Filing date | {{ YYYY-MM-DD }} |
+|フィールド |値 |
+|------|------|
+|組織名 | {{ 組織 }} |
+|登録住所 | {{ アドレス }} |
+|法定代理人 | {{ LEGAL_REP }} |
+|主な連絡先 (名前 / 役職 / 電子メール / 電話番号) | {{ 連絡先 }} |
+|製品名 | Hyperledger Iroha {{ RELEASE_NAME }} |
+|製品バージョン / ビルド ID | {{ バージョン }} |
+|ファイリングタイプ |製品開発 (开发备案) |
+|出願日 | {{ YYYY-MM-DD }} |
 
-# 2. Cryptography Usage Overview
+# 2. 暗号化の使用概要
 
-- Supported algorithms: `SM2`, `SM3`, `SM4` (provide usage matrix below).
-- Usage context:
-  | Algorithm | Component | Purpose | Deterministic safeguards |
-  |-----------|-----------|---------|--------------------------|
-  | SM2 | {{ COMPONENT }} | {{ PURPOSE }} | RFC6979 + canonical r∥s enforcement |
-  | SM3 | {{ COMPONENT }} | {{ PURPOSE }} | Deterministic hashing via `Sm3Digest` |
-  | SM4 | {{ COMPONENT }} | {{ PURPOSE }} | AEAD (GCM/CCM) with enforced nonce policy |
-- Non-SM algorithms in build: {{ OTHER_ALGORITHMS }} (for completeness).
+- サポートされているアルゴリズム: `SM2`、`SM3`、`SM4` (以下の使用法マトリックスを提供します)。
+- 使用状況:
+  |アルゴリズム |コンポーネント |目的 |決定論的な保護手段 |
+  |----------|-----------|-----------|--------------------------|
+  | SM2 | {{ コンポーネント }} | {{ 目的 }} | RFC6979 + 正規の r∥s の施行 |
+  | SM3 | {{ コンポーネント }} | {{ 目的 }} | `Sm3Digest` による確定的ハッシュ |
+  | SM4 | {{ コンポーネント }} | {{ 目的 }} | nonce ポリシーを強制した AEAD (GCM/CCM) |
+- ビルド内の非 SM アルゴリズム: {{ OTHER_ALGORITHMS }} (完全を期すため)。
 
-# 3. Development & Supply Chain Controls
+#3. 開発とサプライチェーンの管理
 
-- Source code repository: {{ REPOSITORY_URL }}
-- Deterministic build instructions:
-  1. `git clone {{ REPOSITORY_URL }} && git checkout {{ COMMIT_SHA }}`
-  2. `cargo build --workspace --locked --release --features "sm sm-ffi-openssl"` (adjust as needed).
-  3. SBOM generated via `cargo auditable` / CycloneDX (`{{ SBOM_PATH }}`).
-- Continuous integration environment summary:
-  | Item | Value |
-  |------|-------|
-  | Build OS / version | {{ BUILD_OS }} |
-  | Compiler toolchain | {{ TOOLCHAIN }} |
-  | OpenSSL / Tongsuo source | {{ OPENSSL_SOURCE }} |
-  | Reproducibility checksum | {{ CHECKSUM }} |
+- ソースコード リポジトリ: {{ REPOSITORY_URL }}
+- 決定的なビルド手順:
+  1.`git clone {{ REPOSITORY_URL }} && git checkout {{ COMMIT_SHA }}`
+  2. `cargo build --workspace --locked --release --features "sm sm-ffi-openssl"` (必要に応じて調整します)。
+  3. `cargo auditable` / CycloneDX (`{{ SBOM_PATH }}`) 経由で生成された SBOM。
+- 継続的統合環境の概要:
+  |アイテム |値 |
+  |------|------|
+  |ビルドOS / バージョン | {{ ビルド OS }} |
+  |コンパイラ ツールチェーン | {{ ツールチェーン }} |
+  | OpenSSL / Tongsuo ソース | {{ OPENSSL_SOURCE }} |
+  |再現性チェックサム | {{ チェックサム }} |
 
-# 4. Key Management & Security
+#4. 鍵の管理とセキュリティ
 
-- Default enabled SM features: {{ DEFAULTS }} (e.g., verify-only).
-- Configuration flags required for signing: {{ CONFIG_FLAGS }}.
-- Key custody approach:
-  | Item | Details |
-  |------|---------|
-  | Key generation tool | {{ KEY_TOOL }} |
-  | Storage medium | {{ STORAGE_MEDIUM }} |
-  | Backup policy | {{ BACKUP_POLICY }} |
-  | Access controls | {{ ACCESS_CONTROLS }} |
-- Incident response contacts (24/7):
-  | Role | Name | Phone | Email |
-  |------|------|-------|-------|
-  | Crypto lead | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
-  | Platform ops | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
-  | Legal liaison | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
+- デフォルトで有効になっている SM 機能: {{ DEFAULTS }} (例: verify-only)。
+- 署名に必要な構成フラグ: {{ CONFIG_FLAGS }}。
+- 主要な保管アプローチ:
+  |アイテム |詳細 |
+  |-----|----------|
+  |鍵生成ツール | {{ KEY_TOOL }} |
+  |記憶媒体 | {{ STORAGE_MEDIUM }} |
+  |バックアップポリシー | {{ バックアップ_ポリシー }} |
+  |アクセス制御 | {{ アクセス_コントロール }} |
+- インシデント対応連絡先 (24 時間年中無休):
+  |役割 |名前 |電話 |電子メール |
+  |------|------|------|------|
+  |クリプトリード | {{ 名前 }} | {{ 電話 }} | {{ メール }} |
+  |プラットフォーム運用 | {{ 名前 }} | {{ 電話 }} | {{ メール }} |
+  |法的連絡 | {{ 名前 }} | {{ 電話 }} | {{ メール }} |
 
-# 5. Attachments Checklist
+# 5. 添付ファイルのチェックリスト- [ ] ソース コードのスナップショット (`{{ SOURCE_ARCHIVE }}`) とハッシュ。
+- [ ] 決定論的なビルド スクリプト / 再現性に関するメモ。
+- [ ] SBOM (`{{ SBOM_PATH }}`) および依存関係マニフェスト (`Cargo.lock` フィンガープリント)。
+- [ ] 決定論的テスト転写物 (`scripts/sm_openssl_smoke.sh`、`cargo test -p iroha_crypto sm`)。
+- [ ] SM 可観測性を示すテレメトリ ダッシュボードのエクスポート。
+- [ ] エクスポート制御ステートメント (別のテンプレートを参照)。
+- [ ] 監査レポートまたは第三者評価 (すでに完了している場合)。
 
-- [ ] Source code snapshot (`{{ SOURCE_ARCHIVE }}`) and hash.
-- [ ] Deterministic build script / reproducibility notes.
-- [ ] SBOM (`{{ SBOM_PATH }}`) and dependency manifest (`Cargo.lock` fingerprint).
-- [ ] Deterministic test transcripts (`scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`).
-- [ ] Telemetry dashboard export demonstrating SM observability.
-- [ ] Export-control statement (see separate template).
-- [ ] Audit reports or third-party assessments (if already completed).
+#6. 申請者の宣言
 
-# 6. Applicant Declaration
+> 上記の情報が正確であること、開示された情報が正しいことを確認します。
+> 暗号化機能は、適用される中国の法律および規制に準拠しています。
+> そして組織は提出された成果物を少なくとも一定期間維持すること
+> 3年。
 
-> I confirm that the above information is accurate, that the disclosed
-> cryptographic functionality complies with applicable PRC laws and regulations,
-> and that the organisation will maintain the submitted artefacts for at least
-> three years.
-
-- Signature (legal representative): ________________________
-- Date: ________________________
-
+- 署名 (法定代理人): ________________________
+- 日付: ________________________

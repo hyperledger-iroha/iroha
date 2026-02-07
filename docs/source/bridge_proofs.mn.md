@@ -7,38 +7,39 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 65aff839e8970e96edb07dfb9655cb4e79f56d1d885b7782647f5dc8f328027b
 source_last_modified: "2025-12-29T18:16:35.921274+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Bridge proofs
+# Гүүрний баталгаа
 
-Bridge proof submissions travel through the standard instruction path (`SubmitBridgeProof`) and land in the proof registry with a verified status. The current surface covers ICS-style Merkle proofs and transparent-ZK payloads with pinned retention and manifest binding.
+Гүүр нотлох баримтууд нь стандарт зааврын замаар (`SubmitBridgeProof`) дамжиж, баталгаажуулсан статустай баталгааны бүртгэлд ордог. Одоогийн гадаргуу нь ICS загварын Merkle proofs ба ил тод ZK ачааллыг бэхэлсэн хадгалалт, манифест холболттой хамардаг.
 
-## Acceptance rules
+## Хүлээн авах дүрэм
 
-- Ranges must be ordered/non-empty and respect `zk.bridge_proof_max_range_len` (0 disables the cap).
-- Optional height windows reject stale/future proofs: `zk.bridge_proof_max_past_age_blocks` and `zk.bridge_proof_max_future_drift_blocks` are measured against the block height that ingests the proof (0 disables the guardrails).
-- Bridge proofs may not overlap an existing proof for the same backend (pinned proofs are preserved and block overlaps).
-- Manifest hashes must be non-zero; payloads are size-capped by `zk.max_proof_size_bytes`.
-- ICS payloads honour the configured Merkle depth cap and verify the path using the declared hash function; transparent payloads must declare a non-empty backend label.
-- Pinned proofs are exempt from retention pruning; unpinned proofs still respect the global `zk.proof_history_cap`/grace/batch settings.
+- Хүрээ нь дараалсан/хоосон биш байх ёстой бөгөөд `zk.bridge_proof_max_range_len` (0 нь хязгаарыг идэвхгүй болгодог).
+- Нэмэлт өндөртэй цонхнууд нь хуучирсан/ирээдүйн баталгааг үгүйсгэдэг: `zk.bridge_proof_max_past_age_blocks` болон `zk.bridge_proof_max_future_drift_blocks` нь нотолгоог шингээж буй блокийн өндрөөр хэмжигддэг (0 нь хамгаалалтын хашлагыг идэвхгүй болгодог).
+- Гүүрний нотлох баримтууд нь ижил арын хэсэгт байгаа нотлох баримттай давхцахгүй байж болно (заасан нотлох баримтууд хадгалагдаж, давхцлыг блоклодог).
+- Манифест хэш нь тэгээс өөр байх ёстой; Ачааллын хэмжээ нь `zk.max_proof_size_bytes`-ээр хязгаарлагддаг.
+- ICS-ийн ачаалал нь тохируулсан Merkle гүний хязгаарыг дагаж мөрдөж, зарласан хэш функцийг ашиглан замыг баталгаажуулдаг; ил тод ачаалал нь хоосон биш арын шошгыг зарлах ёстой.
+- Хадгалагдсан нотлох баримтууд нь тайрахаас чөлөөлөгдөнө; тогтоогдоогүй нотолгоо нь дэлхийн `zk.proof_history_cap`/grace/batch тохиргоог хүндэтгэсээр байна.
 
-## Torii API surface
+## Torii API гадаргуу
 
-- `GET /v1/zk/proofs` and `GET /v1/zk/proofs/count` accept bridge-aware filters:
-  - `bridge_only=true` returns only bridge proofs.
-  - `bridge_pinned_only=true` narrows to pinned bridge proofs.
-  - `bridge_start_from_height` / `bridge_end_until_height` clamp the bridge range window.
-- `GET /v1/zk/proof/{backend}/{hash}` returns bridge metadata (range, manifest hash, payload summary) alongside the proof id/status/VK bindings.
-- The full Norito proof record (including payload bytes) remains available via `GET /v1/proofs/{proof_id}` for off-node verifiers.
+- `GET /v1/zk/proofs` болон `GET /v1/zk/proofs/count` нь гүүрийг мэддэг шүүлтүүрийг хүлээн авдаг:
+  - `bridge_only=true` нь зөвхөн гүүрний баталгааг буцаана.
+  - `bridge_pinned_only=true` нь бэхлэгдсэн гүүрний баталгаа хүртэл нарийсдаг.
+  - `bridge_start_from_height` / `bridge_end_until_height` гүүрний хүрээний цонхыг хавчих.
+- `GET /v1/zk/proof/{backend}/{hash}` нь нотлох id/status/VK холболтын зэрэгцээ гүүрний мета өгөгдлийг (муж, манифест хэш, ачааллын хураангуй) буцаана.
+- Norito баталгаажуулалтын бүрэн бичлэг (ачааллын байтыг оруулаад) нь `GET /v1/proofs/{proof_id}`-ээр дамжуулан зангилаанаас гадуурх баталгаажуулагчдад боломжтой хэвээр байна.
 
-## Bridge receipt events
+## Баримт хүлээн авах гүүрний үйл явдал
 
-Bridge lanes emit typed receipts via the `RecordBridgeReceipt` instruction. Executing this instruction
-records a `BridgeReceipt` payload and emits `DataEvent::Bridge(BridgeEvent::Emitted)` on the event
-stream, replacing the prior log-only stub. The CLI `iroha bridge emit-receipt` helper submits the
-typed instruction so indexers can consume receipts deterministically.
+Гүүрний замууд нь `RecordBridgeReceipt` заавраар бичигдсэн баримтыг гаргадаг. Энэ зааврыг биелүүлж байна
+`BridgeReceipt` ачааллыг бүртгэж, үйл явдал дээр `DataEvent::Bridge(BridgeEvent::Emitted)` ялгаруулдаг
+урсгал, өмнөх зөвхөн бүртгэлийн бүдүүвчийг солих. CLI `iroha bridge emit-receipt` туслах нь
+бичсэн заавар нь индексжүүлэгчид төлбөрийн баримтыг тодорхой хэмжээгээр ашиглах боломжтой.
 
-## External verification sketch (ICS)
+## Гадаад баталгаажуулалтын ноорог (ICS)
 
 ```rust
 use iroha_data_model::bridge::{BridgeHashFunction, BridgeProofPayload, BridgeProofRecord};

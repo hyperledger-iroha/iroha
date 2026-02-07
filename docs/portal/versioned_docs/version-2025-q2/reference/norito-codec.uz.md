@@ -7,60 +7,61 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 38c0cedd4858656db8562c6612f9981df11a1b2292c05908c3671402ee96be9d
 source_last_modified: "2026-01-16T16:25:53.031576+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Norito Codec Reference
+# Norito kodek ma'lumotnomasi
 
-Norito is Iroha’s canonical serialization layer. Every on-wire message, on-disk
-payload, and cross-component API uses Norito so nodes agree on identical bytes
-even when they run on different hardware. This page summarises the moving parts
-and points to the full specification in `norito.md`.
+Norito - Iroha ning kanonik ketma-ketlashtirish qatlami. Har bir simli xabar, diskdagi
+foydali yuk va o'zaro komponentli API Norito dan foydalanadi, shuning uchun tugunlar bir xil baytlarga rozi bo'ladi
+hatto ular turli xil qurilmalarda ishlaganda ham. Ushbu sahifa harakatlanuvchi qismlarni umumlashtiradi
+va `norito.md` da to'liq spetsifikatsiyaga ishora qiladi.
 
-## Core layout
+## Asosiy tartib
 
-| Component | Purpose | Source |
+| Komponent | Maqsad | Manba |
 | --- | --- | --- |
-| **Header** | Negotiates features (packed structs/sequences, compact lengths, compression flags) and embeds a CRC64 checksum so payload integrity is checked before decode. | `norito::header` — see `norito.md` (“Header & Flags”, repository root) |
-| **Bare payload** | Deterministic value encoding used for hashing/comparison. The same layout is wrapped by the header for transport. | `norito::codec::{Encode, Decode}` |
-| **Compression** | Optional Zstd (and experimental GPU acceleration) activated via the `compression` flag byte. | `norito.md`, “Compression negotiation” |
+| **Sarlavha** | Xususiyatlarni (to'plangan tuzilmalar/ketma-ketliklar, ixcham uzunliklar, siqish bayroqlari) muhokama qiladi va CRC64 nazorat summasini o'rnatadi, shuning uchun dekodlashdan oldin foydali yukning yaxlitligi tekshiriladi. | `norito::header` — qarang `norito.md` (“Sarlavha va bayroqlar”, ombor ildizi) |
+| **Yalang'och foydali yuk** | Xeshlash/taqqoslash uchun ishlatiladigan deterministik qiymat kodlash. Xuddi shu tartib tashish uchun sarlavha bilan o'ralgan. | `norito::codec::{Encode, Decode}` |
+| **Siqish** | `compression` bayroq bayti orqali faollashtirilgan ixtiyoriy Zstd (va eksperimental GPU tezlashuvi). | `norito.md`, "Siqish muzokaralari" |
 
-The full flag registry (packed-struct, packed-seq, compact lengths, compression)
-lives in `norito::header::flags`. `norito::header::Flags` exposes convenience
-checks for runtime inspection; reserved layout bits are rejected by decoders.
+To'liq bayroq registri (paketlangan-struct, packed-seq, ixcham uzunliklar, siqish)
+`norito::header::flags` da yashaydi. `norito::header::Flags` qulaylikni ochib beradi
+ish vaqtini tekshirish uchun tekshiruvlar; Zaxiralangan tartib bitlari dekoderlar tomonidan rad etiladi.
 
-## Derive support
+## Yordam oling
 
-`norito_derive` ships `Encode`, `Decode`, `IntoSchema`, and JSON helper derives.
-Key conventions:
+`norito_derive` `Encode`, `Decode`, `IntoSchema` va JSON yordamchisini yuboradi.
+Asosiy konventsiyalar:
 
-- Structs/enums derive packed layouts when the `packed-struct` feature is
-  enabled (default). Implementation lives in `crates/norito_derive/src/derive_struct.rs`
-  and the behaviour is documented in `norito.md` (“Packed layouts”).
-- Packed collections use fixed-width sequence headers and offsets in v1; only
-  per-value length prefixes are affected by `COMPACT_LEN`.
-- JSON helpers (`norito::json`) provide deterministic Norito-backed JSON for
-  open APIs. Use `norito::json::{to_json_pretty, from_json}` — never `serde_json`.
+- `packed-struct` xususiyati mavjud bo'lganda tuzilmalar/raqamlar to'plangan tartiblarni oladi
+  yoqilgan (standart). Amalga oshirish muddati `crates/norito_derive/src/derive_struct.rs`
+  va xatti-harakatlar `norito.md` ("Paketlangan sxemalar") da hujjatlashtirilgan.
+- Paketli kollektsiyalar v1 da belgilangan kenglikdagi ketma-ketlik sarlavhalari va ofsetlardan foydalanadi; faqat
+  har bir qiymat uzunligi prefikslariga `COMPACT_LEN` ta'sir qiladi.
+- JSON yordamchilari (`norito::json`) deterministik Norito tomonidan qo'llab-quvvatlanadigan JSONni ta'minlaydi.
+  ochiq API. `norito::json::{to_json_pretty, from_json}` dan foydalaning - hech qachon `serde_json`.
 
-## Multicodec & identifier tables
+## Multicodec va identifikatorlar jadvallari
 
-Norito keeps its multicodec assignments in `norito::multicodec`. The reference
-table (hashes, key types, payload descriptors) is maintained in `multicodec.md`
-at the repository root. When a new identifier is added:
+Norito multikodek tayinlashlarini `norito::multicodec` da saqlaydi. Malumot
+jadval (xeshlar, kalit turlari, foydali yuk deskriptorlari) `multicodec.md` da saqlanadi
+ombor ildizida. Yangi identifikator qo'shilganda:
 
-1. Update `norito::multicodec::registry`.
-2. Extend the table in `multicodec.md`.
-3. Regenerate downstream bindings (Python/Java) if they consume the map.
+1. `norito::multicodec::registry` ni yangilang.
+2. `multicodec.md` da jadvalni kengaytiring.
+3. Agar ular xaritani ishlatsa, quyi oqimlarni (Python/Java) qayta tiklang.
 
-## Regenerating docs & fixtures
+## Hujjatlar va jihozlarni qayta tiklash
 
-With the portal currently hosting a prose summary, use the upstream Markdown
-sources as the source of truth:
+Portalda nasriy xulosa mavjud bo'lsa, yuqoridagi Markdown-dan foydalaning
+manbalar haqiqat manbai sifatida:
 
 - **Spec**: `norito.md`
-- **Multicodec table**: `multicodec.md`
+- **Multicode jadvali**: `multicodec.md`
 - **Benchmarks**: `crates/norito/benches/`
-- **Golden tests**: `crates/norito/tests/`
+- **Oltin testlar**: `crates/norito/tests/`
 
-When the Docusaurus automation goes live, the portal will be updated via a
-sync script (tracked in `docs/portal/scripts/`) that pulls the data from these
-files. Until then, keep this page aligned manually whenever the spec changes.
+Docusaurus avtomatizatsiyasi ishga tushganda portal yangilanadi.
+sinxronlash skripti (`docs/portal/scripts/` da kuzatilgan) bulardan ma'lumotlarni oladi
+fayllar. Ungacha, spetsifikatsiya o'zgarganda, bu sahifani qo'lda tekislang.

@@ -4,58 +4,60 @@ direction: rtl
 source: docs/portal/docs/sorafs/chunker-registry.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: chunker-registry
-title: Registro de perfis de chunker da SoraFS
-sidebar_label: Registro de chunker
-description: IDs de perfil, parametros e plano de negociacao para o registro de chunker da SoraFS.
+ID: چنکر رجسٹری
+عنوان: SoraFS چنکر پروفائل رجسٹری
+سائڈبار_لیبل: چنکر رجسٹریشن
+تفصیل: SoraFS چنکر رجسٹری کے لئے پروفائل IDs ، پیرامیٹرز اور تجارتی منصوبہ۔
 ---
 
-:::note Fonte canonica
-Esta pagina espelha `docs/source/sorafs/chunker_registry.md`. Mantenha ambas as copias sincronizadas.
+::: نوٹ کینونیکل ماخذ
+یہ صفحہ `docs/source/sorafs/chunker_registry.md` کا آئینہ دار ہے۔ دونوں کاپیاں ہم آہنگ رکھیں۔
 :::
 
-## Registro de perfis de chunker da SoraFS (SF-2a)
+## SoraFS (SF-2A) چنکر پروفائلز کی رجسٹریشن
 
-A stack SoraFS negocia o comportamento de chunking via um registro pequeno com namespace.
-Cada perfil atribui parametros CDC deterministas, metadados semver e o digest/multicodec esperado usado em manifests e arquivos CAR.
+SoraFS اسٹیک ایک چھوٹے نام کی جگہ والے رجسٹر کے ذریعہ chunking سلوک پر بات چیت کرتا ہے۔
+ہر پروفائل ڈٹرمینسٹک سی ڈی سی پیرامیٹرز ، سیمور میٹا ڈیٹا ، اور متوقع ڈائجسٹ/ملٹی کوڈیک کو ظاہر کرتا ہے جو منشور اور کار فائلوں میں استعمال ہوتا ہے۔
 
-Autores de perfis devem consultar
-[`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md)
-para os metadados requeridos, a checklist de validacao e o modelo de proposta antes de submeter novas entradas.
-Uma vez que a governanca aprove uma mudanca, siga o
-[checklist de rollout do registro](./chunker-registry-rollout-checklist.md) e o
-[playbook de manifest em staging](./staging-manifest-playbook) para promover
-os fixtures a staging e producao.
+پروفائل مصنفین سے مشورہ کرنا چاہئے
+[`docs/source/sorafs/chunker_profile_authoring.md`] (./chunker-profile-authoring.md)
+مطلوبہ میٹا ڈیٹا کے لئے ، نئی اندراجات جمع کروانے سے پہلے توثیق کی چیک لسٹ اور تجویز ٹیمپلیٹ۔
+ایک بار جب گورننس کسی تبدیلی کی منظوری دے تو اس کی پیروی کریں
+[رجسٹری رول آؤٹ چیک لسٹ] (./chunker-registry-rollout-checklist.md) اور دی
+[اسٹیجنگ مینی فیسٹ پلے بک] (./staging-manifest-playbook) فروغ دینے کے لئے
+اسٹیجنگ اور پروڈکشن کے لئے فکسچر۔
 
-### Perfis
+### پروفائلز
 
-| Namespace | Nome | SemVer | ID de perfil | Min (bytes) | Target (bytes) | Max (bytes) | Mascara de quebra | Multihash | Aliases | Notas |
-|-----------|------|--------|-------------|-------------|----------------|-------------|------------------|-----------|--------|-------|
-| `sorafs`  | `sf1` | `1.0.0` | `1` | 65536 | 262144 | 524288 | `0x0000ffff` | `0x1f` (BLAKE3-256) | `["sorafs.sf1@1.0.0", "sorafs.sf1@1.0.0"]` | Perfil canonico usado em fixtures SF-1 |
+| نام کی جگہ | نام | سیمور | پروفائل ID | منٹ (بائٹس) | ہدف (بائٹس) | زیادہ سے زیادہ (بائٹس) | بریکنگ کاجل | ملٹی ہش | عرفیوس | نوٹ |
+| ----------- | ------ | -------- | --------------- | ------------- | ------------------ | ------------------ | ---------------------- | ---------------------------------------------------- |
+| `sorafs` | `sf1` | `1.0.0` | `1` | 65536 | 262144 | 524288 | `0x0000ffff` | `0x1f` (Blake3-256) | `["sorafs.sf1@1.0.0", "sorafs.sf1@1.0.0"]` | SF-1 فکسچر میں استعمال شدہ کیننیکل پروفائل |
 
-O registro vive no codigo como `sorafs_manifest::chunker_registry` (governado por [`chunker_registry_charter.md`](./chunker-registry-charter.md)). Cada entrada
-e expressa como um `ChunkerProfileDescriptor` com:
+ریکارڈ `sorafs_manifest::chunker_registry` ([`chunker_registry_charter.md`] (./chunker-registry-charter.md) کے طور پر کوڈ میں رہتا ہے۔ ہر اندراج
+اور `ChunkerProfileDescriptor` کے ساتھ اظہار کیا:
 
-* `namespace` - agrupamento logico de perfis relacionados (ex., `sorafs`).
-* `name` - rotulo legivel para humanos (`sf1`, `sf1-fast`, ...).
-* `semver` - cadeia de versao semantica para o conjunto de parametros.
-* `profile` - o `ChunkProfile` real (min/target/max/mask).
-* `multihash_code` - o multihash usado ao produzir digests de chunk (`0x1f`
-  para o default da SoraFS).
+* `namespace` - متعلقہ پروفائلز کی منطقی گروپ بندی (جیسے ، `sorafs`)۔
+* `name` - انسانی پڑھنے کے قابل لیبل (`sf1` ، `sf1-fast` ، ...)۔
+* `semver` - پیرامیٹر سیٹ کے لئے سیمنٹک ورژن سٹرنگ۔
+* `profile` - اصل `ChunkProfile` (کم سے کم/ہدف/زیادہ سے زیادہ/ماسک)۔
+* `multihash_code` - ملٹی ہاش استعمال کیا جاتا ہے جب حصہ ڈائجسٹس تیار کرتے وقت (`0x1f`
+  SoraFS کے پہلے سے طے شدہ)۔
 
-O manifest serializa perfis via `ChunkingProfileV1`. A estrutura registra os metadados
- do registro (namespace, name, semver) junto com os parametros CDC brutos
-e a lista de aliases mostrada acima. Consumidores devem primeiro tentar uma
-busca no registro por `profile_id` e recorrer aos parametros inline quando
-IDs desconhecidos aparecerem; a lista de aliases garante que clientes HTTP possam
-continuar enviando handles alternativos em `Accept-Chunker` sem adivinhar. As regras do
-charter do registro exigem que o handle canonico (`namespace.name@semver`) seja a
-primeira entrada em `profile_aliases`, seguida por quaisquer aliases alternativos.
+`ChunkingProfileV1` کے ذریعے مینی فیسٹ پروفائلز کو سیریلائز کرتا ہے۔ فریم ورک نے میٹا ڈیٹا ریکارڈ کیا
+ خام سی ڈی سی پیرامیٹرز کے ساتھ رجسٹری (نام کی جگہ ، نام ، سیمور) کی
+اور مذکورہ بالا عرفی خطوط کی فہرست۔ صارفین کو پہلے کوشش کرنی چاہئے a
+`profile_id` کے لئے رجسٹری تلاش کریں اور جب ان لائن پیرامیٹرز کا استعمال کریں
+نامعلوم IDs ظاہر ؛ عرفی کی فہرست اس بات کو یقینی بناتی ہے کہ HTTP کلائنٹ کر سکتے ہیں
+`Accept-Chunker` میں بغیر اندازہ کیے متبادل ہینڈلز بھیجنا جاری رکھیں۔ کے قواعد
+رجسٹری چارٹر کا تقاضا ہے کہ کیننیکل ہینڈل (`namespace.name@semver`) ہے
+`profile_aliases` میں پہلی اندراج ، اس کے بعد کوئی متبادل عرفی نام کی گئی۔
 
-Para inspecionar o registro a partir do tooling, execute o CLI helper:
+ٹولنگ سے رجسٹری کا معائنہ کرنے کے لئے ، سی ایل آئی مددگار چلائیں:
 
 ```
 $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
@@ -73,74 +75,70 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profi
     "multihash_code": 31
   }
 ]
-```
+```تمام CLI جھنڈے جو JSON لکھتے ہیں (`--json-out` ، `--por-json-out` ، `--por-proof-out` ،
+`--por-sample-out`) `-` کو بطور راستہ قبول کریں ، جو پے لوڈ کو اس کے بجائے stdout پر منتقل کرتا ہے
+ایک فائل بنائیں۔ اس سے برقرار رکھنے کے دوران ٹولنگ کے ل data ڈیٹا کو زنجیر بنانا آسان ہوجاتا ہے
+مرکزی رپورٹ پرنٹنگ کا پہلے سے طے شدہ سلوک۔
 
-Todas as flags do CLI que escrevem JSON (`--json-out`, `--por-json-out`, `--por-proof-out`,
-`--por-sample-out`) aceitam `-` como caminho, o que transmite o payload para stdout em vez de
-criar um arquivo. Isso torna facil encadear os dados para tooling mantendo o
-comportamento padrao de imprimir o relatorio principal.
-
-### Matriz de rollout e plano de implantacao
+### رول آؤٹ میٹرکس اور تعیناتی کا منصوبہ
 
 
-A tabela abaixo captura o status atual de suporte para `sorafs.sf1@1.0.0` nos
-componentes principais. "Bridge" refere-se a faixa CARv1 + SHA-256
-que requer negociacao explicita do cliente (`Accept-Chunker` + `Accept-Digest`).
+نیچے دیئے گئے جدول میں `sorafs.sf1@1.0.0` in کے لئے موجودہ سپورٹ کی حیثیت حاصل کی گئی ہے
+اہم اجزاء۔ "برج" سے مراد CARV1 + SHA-256 رینج ہے
+جس کے لئے گاہک (`Accept-Chunker` + `Accept-Digest`) کے ذریعہ واضح مذاکرات کی ضرورت ہے۔
 
-| Componente | Status | Notas |
-|-----------|--------|-------|
-| `sorafs_manifest_chunk_store` | ✅ Suportado | Valida o handle canonico + aliases, faz stream de relatorios via `--json-out=-` e aplica o charter do registro via `ensure_charter_compliance()`. |
-| `sorafs_manifest_stub` | ⚠️ Retirado | Builder de manifest fora de suporte; use `iroha app sorafs toolkit pack` para empacotamento CAR/manifest e mantenha `--plan=-` para revalidacao deterministica. |
-| `sorafs_provider_advert_stub` | ⚠️ Retirado | Helper de validacao offline apenas; provider adverts devem ser produzidos pelo pipeline de publicacao e validados via `/v1/sorafs/providers`. |
-| `sorafs_fetch` (developer orchestrator) | ✅ Suportado | Le `chunk_fetch_specs`, entende payloads de capacidade `range` e monta saida CARv2. |
-| Fixtures de SDK (Rust/Go/TS) | ✅ Suportado | Regeneradas via `export_vectors`; o handle canonico aparece primeiro em cada lista de aliases e e assinado por envelopes do conselho. |
-| Negociacao de perfil no gateway Torii | ✅ Suportado | Implementa a gramatica completa de `Accept-Chunker`, inclui headers `Content-Chunker` e expoe o bridge CARv1 apenas em solicitacoes explicitas de downgrade. |
+| اجزاء | حیثیت | نوٹ |
+| ----------- | -------- | ------- |
+| `sorafs_manifest_chunk_store` | ✅ سپورٹ | کیننیکل ہینڈل + عرفی ناموں کی توثیق کرتا ہے ، Iroha کے ذریعے رپورٹس کی رپورٹس کرتا ہے اور `ensure_charter_compliance()` کے ذریعے رجسٹری چارٹر کا اطلاق کرتا ہے۔ |
+| `sorafs_manifest_stub` | ⚠ ہٹا دیا گیا | سپورٹ سے باہر منشور بلڈر ؛ کار/مینی فیسٹ پیکیجنگ کے لئے `iroha app sorafs toolkit pack` استعمال کریں اور A18NI00000059x کو عین مطابق تعی .ن کے ل. رکھیں۔ |
+| `sorafs_provider_advert_stub` | ⚠ ہٹا دیا گیا | صرف آف لائن توثیق مددگار ؛ فراہم کنندہ اشتہارات کو پبلشنگ پائپ لائن کے ذریعہ تیار کیا جانا چاہئے اور `/v1/sorafs/providers` کے ذریعے توثیق کیا جانا چاہئے۔ |
+| `sorafs_fetch` (ڈویلپر آرکسٹریٹر) | ✅ سپورٹ | LE `chunk_fetch_specs` ، صلاحیت کے پے لوڈ کو سمجھتا ہے `range` اور MUNTS CARV2 آؤٹ پٹ۔ |
+| ایس ڈی کے فکسچر (زنگ/گو/ٹی ایس) | ✅ سپورٹ | `export_vectors` کے ذریعے دوبارہ پیدا ہوا ؛ کیننیکل ہینڈل عرفی ناموں کی ہر فہرست میں پہلے ظاہر ہوتا ہے اور بورڈ کے لفافوں کے ذریعہ اس پر دستخط ہوتے ہیں۔ |
+| گیٹ وے پر پروفائل مذاکرات Torii | ✅ سپورٹ | `Accept-Chunker` کے مکمل گرائمر کو نافذ کرتا ہے ، `Content-Chunker` ہیڈر شامل ہے ، اور صرف واضح ڈاون گریڈ درخواستوں پر CARV1 پل کو بے نقاب کرتا ہے۔ |
 
-Rollout de telemetria:
+ٹیلی میٹری رول آؤٹ:
 
-- **Telemetria de fetch de chunks** - o CLI Iroha `sorafs toolkit pack` emite digests de chunk, metadados CAR e raizes PoR para ingestao em dashboards.
-- **Provider adverts** - os payloads de adverts incluem metadados de capacidade e aliases; valide cobertura via `/v1/sorafs/providers` (ex., presenca da capacidade `range`).
-- **Monitoramento de gateway** - operadores devem reportar os pareamentos `Content-Chunker`/`Content-Digest` para detectar downgrades inesperados; espera-se que o uso do bridge tenda a zero antes da deprecacao.
+۔
+- ** فراہم کنندہ اشتہارات ** - اشتہاری پے لوڈ میں قابلیت کا میٹا ڈیٹا اور عرفیت شامل ہیں۔ `/v1/sorafs/providers` (جیسے ، صلاحیت کی موجودگی `range`) کے ذریعے کوریج کی توثیق کریں۔
+۔ توقع کی جاتی ہے کہ فرسودگی سے قبل پل کے استعمال سے صفر ہوجائے گا۔
 
-Politica de deprecacao: uma vez que um perfil sucessor seja ratificado, agende uma janela de publicacao dupla
-bridge CARv1 dos gateways em producao.
+فرسودگی کی پالیسی: ایک بار جب جانشین کی پروفائل کی توثیق ہوجائے تو ، ڈبل پبلشنگ ونڈو کا شیڈول بنائیں
+پیداوار میں گیٹ ویز کا کاروی 1 پل۔
 
-Para inspecionar um testemunho PoR especifico, forneca indices de chunk/segmento/folha e opcionalmente
-persista a prova no disco:
+کسی مخصوص پور ٹوکن کا معائنہ کرنے کے لئے ، حصہ/طبقہ/پتی کے اشاریے اور اختیاری طور پر فراہم کریں
+ڈسک پر ثبوت جاری رکھیں:
 
 ```
 $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-proof=0:0:0 --por-proof-out=leaf.proof.json
 ```
 
-Voce pode selecionar um perfil por id numerico (`--profile-id=1`) ou por handle de registro
-(`--profile=sorafs.sf1@1.0.0`); a forma handle e conveniente para scripts que
-encadeiam namespace/name/semver diretamente dos metadados de governanca.
+آپ عددی ID (`--profile-id=1`) کے ذریعہ یا رجسٹری ہینڈل کے ذریعہ ایک پروفائل منتخب کرسکتے ہیں
+(`--profile=sorafs.sf1@1.0.0`) ؛ ہینڈل فارم اسکرپٹ کے لئے آسان ہے
+سلسلہ نام کی جگہ/نام/سیمور براہ راست گورننس میٹا ڈیٹا سے۔
 
-Use `--promote-profile=<handle>` para emitir um bloco JSON de metadados (incluindo todos os aliases
-registrados) que pode ser colado em `chunker_registry_data.rs` ao promover um novo perfil padrao:
+میٹا ڈیٹا کے JSON بلاک کو آؤٹ پٹ کرنے کے لئے `--promote-profile=<handle>` استعمال کریں (تمام عرفی ناموں سمیت
+رجسٹرڈ) جس کو نئے ڈیفالٹ پروفائل کو فروغ دیتے وقت `chunker_registry_data.rs` میں چسپاں کیا جاسکتا ہے:
 
 ```
 $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
     --promote-profile=sorafs.sf1@1.0.0
-```
+```مرکزی رپورٹ (اور اختیاری پروف فائل) میں روٹ ڈائجسٹ ، نمونے والے پتے بائٹس شامل ہیں
+(ہیکس انکوڈڈ) اور بہن طبقہ/حصہ ڈائجسٹس تاکہ تصدیق کرنے والے
+`por_root_hex` کی قیمت کے خلاف 64 KIB/4 KIB پرتوں کی ہیش کو دوبارہ گنتی کریں۔
 
-O relatorio principal (e o arquivo de prova opcional) inclui o digest raiz, os bytes de folha amostrados
-(codificados em hex) e os digests irmaos de segmento/chunk para que os verificadores possam
-recalcular o hash das camadas de 64 KiB/4 KiB contra o valor `por_root_hex`.
-
-Para validar uma prova existente contra um payload, passe o caminho via
-`--por-proof-verify` (o CLI adiciona `"por_proof_verified": true` quando o testemunho
-corresponde a raiz calculada):
+کسی پے لوڈ کے خلاف موجودہ ثبوت کی توثیق کرنے کے لئے ، راستے کو راستے سے گزرنا
+`--por-proof-verify` (CLI `"por_proof_verified": true` کو شامل کرتا ہے جب کور
+حساب کتاب کی جڑ سے مطابقت رکھتا ہے):
 
 ```
 $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-proof-verify=leaf.proof.json
 ```
 
-Para amostragem em lote, use `--por-sample=<count>` e opcionalmente forneca um caminho de seed/saida.
-O CLI garante ordenacao deterministica (seeded com `splitmix64`) e truncara automaticamente quando
-a requisicao exceder as folhas disponiveis:
+بیچ کے نمونے لینے کے ل i ، `--por-sample=<count>` استعمال کریں اور اختیاری طور پر بیج/آؤٹ پٹ راستہ فراہم کریں۔
+سی ایل آئی ڈٹرمینسٹک آرڈرنگ کی ضمانت دیتا ہے (`splitmix64` کے ساتھ بیج) اور جب خود بخود تراش جائے گا
+درخواست دستیاب چادروں سے زیادہ ہے:
 
 ```
 $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
@@ -153,21 +151,21 @@ O manifest stub espelha os mesmos dados, o que e conveniente ao automatizar a se
 (`--profile=sorafs.sf1@1.0.0`) para que scripts de build evitem hard-codear IDs numericos:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
-[
+$ کارگو رن -پی sorafs_manifest-bin sorafs_manifest_stub--list-chunker-profiles
+کے بعد کے کے لئے کے آیا کے آیا کے آیا کے آیا کے آیا کے آیا کے آیا کے آیا کے آیا کے آیا کے آیا ، کے آیا کے ایل کے کے لئے کے یا.
   {
-    "profile_id": 1,
-    "namespace": "sorafs",
-    "name": "sf1",
-    "semver": "1.0.0",
-    "handle": "sorafs.sf1@1.0.0",
-    "min_size": 65536,
-    "target_size": 262144,
-    "max_size": 524288,
-    "break_mask": "0x0000ffff",
-    "multihash_code": 31
-  }
-]
+    "پروفائل_ آئی ڈی": 1 ،
+    "نام کی جگہ": "sorafs" ،
+    "نام": "SF1" ،
+    "سیمور": "1.0.0" ،
+    "ہینڈل": "sorafs.sf1@1.0.0" ،
+    "من_سائز": 65536 ،
+    "ٹارگٹ_سائز": 262144 ،
+    "میکس_سائز": 524288 ،
+    "بریک_ماسک": "0x0000fffff" ،
+    "ملٹی ہش_کوڈ": 31
+  دہ
+ن
 ```
 
 O campo `handle` (`namespace.name@semver`) corresponde ao que os CLIs aceitam via
@@ -178,11 +176,11 @@ O campo `handle` (`namespace.name@semver`) corresponde ao que os CLIs aceitam vi
 Gateways e clientes anunciam perfis suportados via provider adverts:
 
 ```
-ProviderAdvertBodyV1 {
-    ...
-    chunk_profile: profile_id (implicito via registro)
-    capabilities: [...]
-}
+پرووائڈر ایڈورٹ بائیڈ وی 1 {
+    8 رہنے کے بارے میں دن کے بولتے ہیں
+    chunk_profile: profile_id (رجسٹری کے ذریعے مضمر)
+    صلاحیتیں: [...]
+دہ
 ```
 
 O agendamento de chunks multi-source e anunciado via a capacidade `range`. O CLI aceita isso com
@@ -195,28 +193,28 @@ Ao solicitar dados CAR, clientes devem enviar um header `Accept-Chunker` listand
 
 ```
 
-Gateways selecionam um perfil suportado mutuamente (default `sorafs.sf1@1.0.0`)
-e refletem a decisao via o header de resposta `Content-Chunker`. Manifests
-embutem o perfil escolhido para que nos downstream possam validar o layout de chunks
-sem depender da negociacao HTTP.
+گیٹ وے باہمی تعاون یافتہ پروفائل منتخب کریں (ڈیفالٹ `sorafs.sf1@1.0.0`)
+اور رسپانس ہیڈر `Content-Chunker` کے ذریعے فیصلے کی عکاسی کریں۔ ظاہر
+منتخب کردہ پروفائل کو سرایت کریں تاکہ بہاو والے صارفین حصہ لے آؤٹ کی توثیق کرسکیں
+HTTP مذاکرات پر بھروسہ کیے بغیر۔
 
-### Suporte CAR
+### کار سپورٹ
 
-mantemos um caminho de exportacao CARv1+SHA-2:
+ہم ایک CARV1+SHA-2 برآمدی راستہ برقرار رکھتے ہیں:
 
-* **Caminho primario** - CARv2, digest de payload BLAKE3 (`0x1f` multihash),
-  `MultihashIndexSorted`, perfil de chunk registrado como acima.
-  PODEM expor esta variante quando o cliente omite `Accept-Chunker` ou solicita
-  `Accept-Digest: sha2-256`.
+*** بنیادی راستہ ** - CARV2 ، BLAKE3 پے لوڈ ڈائجسٹ (`0x1f` ملٹی ہش) ،
+  `MultihashIndexSorted` ، اوپر کے طور پر رجسٹرڈ ہے۔
+  جب مؤکل `Accept-Chunker` یا درخواستوں کو چھوڑ دیتا ہے تو اس مختلف حالت کو بے نقاب کرسکتا ہے
+  `Accept-Digest: sha2-256`۔
 
-adicionais para transicao, mas nao devem substituir o digest canonico.
+منتقلی کے لئے اضافی ، لیکن کیننیکل ڈائجسٹ کو تبدیل نہیں کرنا چاہئے۔
 
-### Conformidade
+### تعمیل
 
-* O perfil `sorafs.sf1@1.0.0` mapeia para os fixtures publicos em
-  `fixtures/sorafs_chunker` e os corpora registrados em
-  `fuzz/sorafs_chunker`. A paridade end-to-end e exercitada em Rust, Go e Node
-  via os testes fornecidos.
-* `chunker_registry::lookup_by_profile` afirma que os parametros do descriptor
-  correspondem a `ChunkProfile::DEFAULT` para evitar divergencia acidental.
-* Manifests produzidos por `iroha app sorafs toolkit pack` e `sorafs_manifest_stub` incluem os metadados do registro.
+* `sorafs.sf1@1.0.0` پروفائل میں عوامی فکسچر میں نقشہ تیار کرتا ہے
+  `fixtures/sorafs_chunker` اور کارپورا میں رجسٹرڈ
+  `fuzz/sorafs_chunker`۔ آخری سے آخر میں برابری کا استعمال زنگ ، گو اور نوڈ میں کیا جاتا ہے
+  فراہم کردہ ٹیسٹوں کے ذریعے۔
+* `chunker_registry::lookup_by_profile` بیان کرتا ہے کہ ڈسکرپٹر پیرامیٹرز
+  حادثاتی تغیر سے بچنے کے لئے `ChunkProfile::DEFAULT` سے مطابقت رکھتا ہے۔
+* `iroha app sorafs toolkit pack` اور `sorafs_manifest_stub` کے ذریعہ تیار کردہ منشور میں ریکارڈ میٹا ڈیٹا شامل ہے۔

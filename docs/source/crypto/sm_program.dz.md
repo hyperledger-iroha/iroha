@@ -7,183 +7,166 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 08e2e1e4a54390d9142d6788aad2385e93282a33423b9fc7f3418e3633f3f86a
 source_last_modified: "2026-01-23T23:46:10.134857+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! SM2/SM3/SM4 enablement architecture brief for Hyperledger Iroha v2.
+///! SM2/SM3/SM4 ལྕོགས་གྲུབ་ཅན་གྱི་བཟོ་རིགས་མདོར་བསྡུས་ Hyperledger Iroha v2.
 
-# SM Program Architecture Brief
+# SM ལས་རིམ་བཟོ་བཀོད།
 
-## Purpose
-Define the technical plan, supply-chain posture, and risk boundaries for introducing Chinese national cryptography (SM2/SM3/SM4) across the Iroha v2 stack while preserving deterministic execution and auditability.
+## དགོས༌དོན
+འཕྲུལ་རིག་འཆར་གཞི་དང་ བཀྲམ་སྤེལ་གྱི་རིམ་པ་ དེ་ལས་ ཉེན་ཁ་གི་མཚམས་ཚུ་ རྒྱ་ནག་རྒྱལ་ཡོངས་གསང་ཡིག་ (SM2/SM3/SM4) ངོ་སྤྲོད་འབད་ནི་གི་དོན་ལུ་ Iroha v2 བརྩེགས་བརྩེགས་ཚུ་ གསལ་སྟོན་འབད།
 
-## Scope
-- **Consensus-critical paths:** `iroha_crypto`, `iroha`, `irohad`, IVM host, Kotodama intrinsics.
-- **Client SDKs and tooling:** Rust CLI, Kagami, Python/JS/Swift SDKs, genesis utilities.
-- **Configuration & serialization:** `iroha_config` knobs, Norito data model tags, manifest handling, multicodec updates.
-- **Testing & compliance:** Unit/property/interop suites, Wycheproof harnesses, performance profiling, export/regulatory guidance. *(Status: RustCrypto-backed SM stack merged; optional `sm_proptest` fuzz suite and OpenSSL parity harness available for extended CI.)*
+## གོ་སྐབས
+- **མོས་མཐུན་-གལ་ཆེ་བའི་ལམ་ལུ:** `iroha_crypto`, `iroha`, Kotodama, Kotodama, Kotodama, ཧོསིཊ་, Kotodama, Kotodama, Kotodama, Kotodama, Kotodama,
+- **མཁོ་སྤྲོད་འབད་མི་ ཨེསི་ཌི་ཀེ་ཨེསི་དང་ ལག་ཆས།
+- **རིམ་སྒྲིག་དང་རིམ་སྒྲིག་:** `iroha_config` མཛུབ་མོ་, Kotodama གནད་སྡུད་དཔེ་ཚད་ངོ་རྟགས་, གསལ་སྟོན་འཛིན་སྐྱོང་ སྣ་མང་ཀོ་ཌེག་དུས་མཐུན་ཚུ།
+- **བརྟག་དཔྱད་དང་ བསྟར་སྤྱོད་:** ཡན་ལག་/རྒྱུ་དངོས་/བར་མཚམས་ཆ་ཚང་།, Wycheprofoof harness, ལཱ་འགན་གསལ་སྡུད་ ཕྱིར་འདྲེན་/ལྟ་རྟོག་ལམ་སྟོན་། *(གནས་སྟངས་: རཱསི་ཊི་ཀིརིཔ་ཊོ་བེག་ཊེཌ་ཨེསི་ཨེམ་བརྩེགས་བརྩེགས་མཉམ་བསྡོམས་འབད་ཡོདཔ།;གདམ་ཁ་ཅན་ `sm_proptest` fuzze དང་ OpenSL parity harness འདི་ bed CI གི་དོན་ལུ་འཐོབ་ཚུགསཔ་ཨིན།)*
 
-Out of scope: PQ algorithms, non-deterministic host acceleration in consensus paths; wasm/`no_std` builds are retired.
+ཁྱབ་ཁོངས་ལས་ཕྱི་ཁར་ PQ algorithms མོས་མཐུན་ལམ་ལུགས་ནང་ གཏན་འབེབས་མེན་པའི་ ཧོསིཊི་མགྱོགས་ཚད་ཚུ། wasm/`no_std` བཟོ་སྐྲུན་ཚུ་ དགོངས་ཞུ་འབད་ཡོདཔ་ཨིན།
 
-## Algorithm Inputs & Deliverables
-| Artifact | Owner | Due | Notes |
-|----------|-------|-----|-------|
-| SM algorithm feature design (`SM-P0`) | Crypto WG | 2025-02 | Feature gating, dependency audit, risk register. |
-| Core Rust integration (`SM-P1`) | Crypto WG / Data Model | 2025-03 | RustCrypto-based verify/hash/AEAD helpers, Norito extensions, fixtures. |
-| Signing + VM syscalls (`SM-P2`) | IVM Core / SDK Program | 2025-04 | Deterministic signing wrappers, syscalls, Kotodama coverage. |
-| Optional provider & ops enablement (`SM-P3`) | Platform Ops / Performance WG | 2025-06 | OpenSSL/Tongsuo backend, ARM intrinsics, telemetry, documentation. |
+## ཨཱལ་གོ་རི་དམ་ནང་འཇུག་དང་ གཏང་ཚུགསཔ།
+| ཅ་ཆས། | ཇོ་བདག་ | འདི་ | དྲན་ཐོ། |
+|------------------------------------------ |
+| ཨེསི་ཨེམ་ཨཱལ་གོ་རི་དམ་ཁྱད་རྣམ་བཟོ་བཀོད་ (`SM-P0`) | ཀིརིཔ་ཊོ་ WG | ༢༠༢༥-༠༢ | ཁྱད་རྣམ་གྱི་གཱ་ཊིང་ བརྟེན་རྩིས་ ཉེན་ཁའི་ཐོ་འགོད། |
+| ཀོར་རསཊ་མཉམ་བསྡོམས་ (`SM-P1`) | Crypto WG / གནས་སྡུད་དཔེ་སྟོན། | ༢༠༢༥-༠༣ | རསཊ་ཀིརིཔ་ཊོ་གཞི་བཞག་བདེན་དཔང་/ཧ་ཤི་/ཨེ་ཨི་ཨེ་ཌི་གྲོགས་རམ་པ་, Norito རྒྱ་བསྐྱེད་ཚུ། |
+| མཚན་རྟགས་ + ཝི་ཨེམ་ སི་ཀཱལ་ (`SM-P2`) | IVM ཀོར་ / ཨེསི་ཌི་ཀེ་ལས་རིམ་ | ༢༠༢༥-༠༤ | གཏན་འཁེལ་གྱི་མིང་རྟགས་བཀོད་སྒྲིག། |
+| གདམ་ཁ་ཅན་གྱི་བྱིན་མི་དང་ཨོཔ་ཚུ་ལྕོགས་ཅན་ (`SM-P3`) | སྟེགས་རིས་ / ལས་དོན་ WG | ༢༠༢༥-༠༦ | OpenSSL/Tongsoo backend, ཨེ་ཨར་ཨེམ་ནང་དོན་རིག་པ་ བརྒྱུད་འཕྲིན་ ཡིག་ཆ། |
 
-## Selected Libraries
-- **Primary:** RustCrypto crates (`sm2`, `sm3`, `sm4`) with `rfc6979` feature enabled and SM3 bound to deterministic nonces.
-- **Optional FFI:** OpenSSL 3.x provider API or Tongsuo for deployments requiring certified stacks or hardware engines; feature-gated and disabled by default in consensus binaries.
+## གདམ་འཐུ་འབད་ཡོད་པའི་དཔེ་མཛོད་ཚུ།
+- **གཞི་རིམ་:** རསཊ་ཀིརིཔ་ཊོ་ཀེརེསི་ (`sm2`, `sm3`, `sm4`) དང་ `rfc6979` ཁྱད་རྣམ་ལྕོགས་ཅན་བཟོ་སྟེ་ ཨེསི་ཨེམ་༣ གཏན་འབེབས་ནོན་སི་ལུ་ མཐུད་ཡོདཔ་ཨིན།
+- **གདམ་ཁ་ཅན་གྱི་ FFI:** OpenSSL 3.x བྱིན་མི་ཨེ་པི་ཨའི་ ཡང་ན་ ཊོང་སུའོ་ཚུ་ ལག་ཁྱེར་ཡོད་པའི་བརྩེགས་ཕུང་ཡང་ན་ མཐུན་རྐྱེན་འཕྲུལ་ཆས་དགོ་པའི་ བཀྲམ་སྤེལ་ཚུ་གི་དོན་ལུ་ཨིན། ཁྱད་རྣམ་-སྒོ་ཡོད་མི་དང་ མོས་མཐུན་གཉིས་ལྡན་ནང་ སྔོན་སྒྲིག་གིས་ ལྕོགས་མིན་བཟོ་ཡོདཔ།### དཔེར་མཛོད་མཉམ་བསྡོམས་གནས་བབ།
+- `iroha_crypto::sm` གིས་ ཨེསི་ཨེམ་༣ ཧ་ཤིང་དང་ ཨེསི་ཨེམ་༢ བདེན་དཔྱད་ དེ་ལས་ ཨེསི་ཨེམ་༤ ཇི་སི་ཨེམ་/སི་སི་ཨེམ་གྲོགས་རམ་པ་ཚུ་ མཉམ་བསྡོམ་ `sm` ཁྱད་རྣམ་འོག་ལུ་ གསལ་སྟོན་འབདཝ་ཨིན། `Sm2PrivateKey`.རྟགས་མཚན་/ཨི་རོ་ཧ་_ཀིརིཔ་ཊོ་/སི་ཨར་སི/sm.s:1049】【ཧ་ཊ།/ཨི་རོ་ཧ་_ཀིརིཔ་ཊོ་/སེརསི/sm.1128】ཀྲེ་ཊིས་/ཨི་རོ་ཧ་_ཀིརིསི་ཊ།/src/src/sm.1233】།
+- Norito/Norito-JSON ངོ་རྟགས་དང་ སྣ་མང་གྲོགས་རམ་པ་ཚུ་གིས་ SM2 མི་མང་ལྡེ་མིག་/མཚན་རྟགས་དང་ SM3/SM4 པེ་ལོཌི་ཚུ་ བཀབ་སྟེ་ བཀོད་རྒྱ་ཚུ་ རིམ་སྒྲིག་འབདཝ་ཨིན། 【ཀ་རེཊས/ཨི་རོ་ཧ་_གནས་སྡུད་_མོ་ཌེལ/སིའི་/ཐོ་བཀོད་.༤༠༧】 ཨི་རོ་ཧ་_གནས་སྡུད་_མོ་ཌེལ/བརྟག་དཔྱད་/sm_norito_rountrip.s:12】།
+- མིང་ཅན་-ཨེན་ཌི་གིས་ རཱསི་ཀིརིཔ་ཊོ་གཅིག་བསྡོམས་ (`sm3_sm4_vectors.rs`, `sm2_negative_vectors.rs`) དང་ CI གི་ `sm` ཁྱད་རྣམ་ལཱ་གཡོག་གི་ཆ་ཤས་ཅིག་སྦེ་ གཡོག་བཀོལཝ་ཨིན། Ed25519.【ཧ་_ཀིརིཔ་ཊོ/བརྟག་དཔྱད་/sm3_sm4_vectors.15】【ཚོད་ལྟའི་/ཨི་རོ་ཧ་_ཀིརིཔ་ཊོ་/བརྟག་དཔྱད་/sm2_negative_vectors.15】།
+- གདམ་ཁ་ཅན་གྱི་ `sm` ཁྱད་རྣམ་བཟོ་བསྐྲུན་བདེན་བཤད་: `cargo check -p iroha_crypto --features sm --locked` (cold 7.9s / དྲོ་དྲོ་ ༠.༢༣s) དང་ `cargo check -p iroha_crypto --no-default-features --features "std sm" --locked` (༡.༠s) གཉིས་ཆ་རང་ མཐར་འཁྱོལ་བྱུང་ཡོདཔ་ཨིན། enabling the feature adds 11 crates (`base64ct`, `ghash`, `opaque-debug`, `pem-rfc7468`, `pkcs8`, `polyval`, Kotodama, `sm3`, `sm4`, Kotodama, Hyperledger) `docs/source/crypto/sm_rustcrypto_spike.md` ནང་ཐོ་བཀོད་འབད་ཡོད་པའི་མཇུག་བསྡུ།【docs/ source/crytto/sm_rustcypto_spike.md:1】།
+- བཱའུན་སི་ཀསི་ཊལ་/ཇི་ཨེམ་ཨེསི་ཨེལ་ ལོག་པའི་བདེན་དཔྱད་སྒྲིག་བཀོད་ཚུ་ `crates/iroha_crypto/tests/fixtures/sm/sm2_negative_vectors.json` གི་འོག་ལུ་ཡོདཔ་ཨིན། providers.【crates/iroha_crypto/tests/sm2_negative_vectors.rs:1】【crates/iroha_crypto/tests/fixtures/sm/sm2_negative_vectors.json:1】
+- `sm-ffi-openssl` གིས་ ད་ལྟོ་ ཚོང་བསྒྱུར་འབད་མི་ OpenSSL 3.x ལག་ཆས་རྒྱུན་རྒྱུན་འདི་ བསྡུ་སྒྲིག་འབད་ཡོདཔ་ཨིན། 【crates/iroha_cypreso/Cargo.toml:59】།
+- `sm_accel` ད་ལྟ་ རན་ཊའིམ་ལུ་ AArch64 NEON ཤེས་རྟོགས་འབདཝ་ཨིན། དེ་ལས་ ཐགསཔ་ཚུ་ SM3/SM4 ཧུཀ་ཚུ་ x86_64/RISC-V བཀྲམ་སྟོན་བརྒྱུད་དེ་ རིམ་སྒྲིག་མཛུབ་མོ་ `crypto.sm_intrinsics` ལུ་གུས་བཏུད་འབད་བའི་སྐབས་ x86_64/RISC-V བཀྲམ་སྟོན་བརྒྱུད་དེ་ ཤེས་རྟོགས་འབདཝ་ཨིན། (I 18NI00000086X/`force-enable`/`force-disable`). ཝེག་ཊར་རྒྱབ་མཐའ་ཚུ་ བཀྲམ་སྤེལ་པ་ མེད་པའི་སྐབས་ ད་ལྟོ་ཡང་ རུ་ཊི་ཀིརིཔ་ཊོ་འགྲུལ་ལམ་བརྒྱུད་དེ་ ལམ་ཐིག་དང་ སྲིད་བྱུས་སོར་སྟོན་ཚུ་ ཧོསིཊི་/ཨི་རོ་ཧ་_ཀིརིཔ་ཊོ་/ཨེསི་ཨར་སི་/ཨེསི་ཨེམ་.ཨེསི་ཨེམ་ཨེསི་:༧༠༢【 ཀིརིནཊི་/ཨི་རོ་ཧ་_ཀིརིཔ་ཊོ་/ཨེསི་ཨར་སི་/ཨེསི་ཨེམ་ཨེསི་:༧༣༣】
 
-### Core Library Integration Status
-- `iroha_crypto::sm` exposes SM3 hashing, SM2 verification, and SM4 GCM/CCM helpers under the unified `sm` feature, with deterministic RFC 6979 signing paths available to SDKs via `Sm2PrivateKey`.【crates/iroha_crypto/src/sm.rs:1049】【crates/iroha_crypto/src/sm.rs:1128】【crates/iroha_crypto/src/sm.rs:1236】
-- Norito/Norito-JSON tags and multicodec helpers cover SM2 public keys/signatures and SM3/SM4 payloads so instructions serialize deterministically across hosts.【crates/iroha_data_model/src/isi/registry.rs:407】【crates/iroha_data_model/tests/sm_norito_roundtrip.rs:12】
-- Known-answer suites validate the RustCrypto integration (`sm3_sm4_vectors.rs`, `sm2_negative_vectors.rs`) and run as part of CI’s `sm` feature jobs, keeping verification deterministic while nodes continue signing with Ed25519.【crates/iroha_crypto/tests/sm3_sm4_vectors.rs:15】【crates/iroha_crypto/tests/sm2_negative_vectors.rs:1】
-- Optional `sm` feature build validation: `cargo check -p iroha_crypto --features sm --locked` (cold 7.9 s / warm 0.23 s) and `cargo check -p iroha_crypto --no-default-features --features "std sm" --locked` (1.0 s) both succeed; enabling the feature adds 11 crates (`base64ct`, `ghash`, `opaque-debug`, `pem-rfc7468`, `pkcs8`, `polyval`, `primeorder`, `sm2`, `sm3`, `sm4`, `sm4-gcm`). Findings recorded in `docs/source/crypto/sm_rustcrypto_spike.md`.【docs/source/crypto/sm_rustcrypto_spike.md:1】
-- BouncyCastle/GmSSL negative verification fixtures live under `crates/iroha_crypto/tests/fixtures/sm/sm2_negative_vectors.json`, ensuring canonical failure cases (r=0, s=0, distinguishing-ID mismatch, tampered public key) stay aligned with widely deployed providers.【crates/iroha_crypto/tests/sm2_negative_vectors.rs:1】【crates/iroha_crypto/tests/fixtures/sm/sm2_negative_vectors.json:1】
-- `sm-ffi-openssl` now compiles the vendored OpenSSL 3.x toolchain (`openssl` crate `vendored` feature) so preview builds and tests always target a modern SM-capable provider even when system LibreSSL/OpenSSL lacks SM algorithms.【crates/iroha_crypto/Cargo.toml:59】
-- `sm_accel` now detects AArch64 NEON at runtime and threads the SM3/SM4 hooks through x86_64/RISC-V dispatch while honouring the configuration knob `crypto.sm_intrinsics` (`auto`/`force-enable`/`force-disable`). When vector back-ends are absent the dispatcher still routes through the scalar RustCrypto path so benches and policy toggles behave consistently across hosts.【crates/iroha_crypto/src/sm.rs:702】【crates/iroha_crypto/src/sm.rs:733】
+### Norito ལས་འཆར་དང་ གནད་སྡུད་-དཔེ་རིས་ཀྱི་ ཁ་ཐོག་ཚུ།| Norito དབྱེ་བ་ / ཉོ་སྤྱོད་པ། | ངོ་ཚབ་ | བཀག་ཆ་དང་དྲན་ཐོ་ཚུ་ |
+|--------------------------------------------------------------------- |
+| `Sm3Digest` (`iroha_crypto::Sm3Digest`) | Bare: 32-byte blob · JSON: མཐོ་ཚད་ཧེགསི་ཡིག་རྒྱུན་ (`"4F4D..."`) | ཀེན་ནི་ཀལ་ Norito ཊུཔ་ལི་བཤུབ་ `[u8; 32]`. JSON/Bare Decoding གིས་ རིང་ཚད་ཚུ་ ≠32. |
+| `Sm2PublicKey` / `Sm2Signature` | མལ་ཊི་ཀོ་ཌེག་སྔོན་སྒྲིག་འབད་ཡོད་པའི་ བཱོལ་ (`0x1306` གནས་སྐབས་) | མི་མང་ལྡེ་མིག་ཚུ་གིས་ བསྡམ་མ་བཞག་པའི་ SEC1 གི་སྐུགས་ཚུ་ ཨེན་ཀོཌི་ཨིན། མཚན་རྟགས་ཚུ་ `(r∥s)` (bytes རེ་རེ་) DER དབྱེ་དཔྱད་འབད་མི་ཚུ་དང་གཅིག་ཁར་ཨིན། |
+| `Sm4Key` | Bare: 16-byte blob | Kotodama/CLI ལུ་ཐུག་རྐྱེན་བྱུང་མི་ wrapper ཟེརཝ་ཨིན། JSON རིམ་སྒྲིག་འདི་ ཤེས་བཞིན་དུ་ བཏོན་བཏང་ཡོདཔ་ཨིན། བཀོལ་སྤྱོད་པ་ཚུ་གིས་ ཝེལ་བིསི་ (གན་རྒྱ་) ཡང་ན་ སི་ཨེལ་ཨའི་ ཧེགསི་ (`--key-hex`) བརྒྱུད་དེ་ ལྡེ་མིག་ཚུ་ བརྒྱུད་སྤྲོད་འབད་དགོ། |
+| `sm4_gcm_seal/open` བཀོལ་སྤྱོད་བྱེད། | བློ་རིག་༤: Hyperledger | Key = ༡༦ བཱའིཊི། nonce = 12 བཱའིཊི། བཱའིཊི་༡༦ ལུ་གཏན་བཟོས་འབད་ཡོདཔ། `(ciphertext, tag)` སླར་ལོག་འབད། Kotodama/CLI གིས་ hex དང་ base64 གྲོགས་རམ་པ་གཉིས་ཆ་ར་ བཏོནམ་ཨིན།
+| `sm4_ccm_seal/open` བཀོལ་སྤྱོད་བྱེད། | 4 blobbs of 4 (key, nonce, aad, pappabased) + ངོ་རྟགས་རིང་ཚད་ `r14` ནང་། | བཱའིཊི་ ༧–༡༣ མེདཔ། ཏག་རིང་ཚད་ ∈ {4,6,8,10,12,14,16}. `sm` གིས་ `sm-ccm` དར་རྒྱབ་ཀྱི་རྒྱབ་ལུ་ CCM གསལ་སྟོན་འབདཝ་ཨིན། |
+| Kotodama ནང་དོན་རིག་པ་ (`sm::hash`, `sm::seal_gcm`, `sm::open_gcm`, ...) | གོང་འཁོད་ཀྱི་ SCALLs ལུ་སབ་ཁྲ་བཟོ། | ཨིན་པུཊི་བདེན་དཔྱད་མེ་ལོང་ཚུ་ ཧོསིཊི་ལམ་ལུགས་ཚུ་; མ་བདེན་པའི་ཚད་ཀྱིས་ `ExecutionError::Type` ཡར་སེང་། |
 
-### Norito Schema & Data-Model Surfaces
+ལག་ལེན་མགྱོགས་མྱུར་གཞི་བསྟུན་:
+- **SM3 གན་རྒྱ་/བརྟག་དཔྱད་:** `Sm3Digest::hash(b"...")` (Rust) ཡང་ན་ Kotodama `sm::hash(input_blob)`. JSON གིས་ ཧེགསི་ཡིག་འབྲུ་ ༦༤ རེ་བ་བསྐྱེདཔ་ཨིན།
+- **SM4 AEAD:** `iroha tools crypto sm4 gcm-seal --key-hex <32 hex> --nonce-hex <24 hex> --plaintext-hex …` གིས་ ཧེགསི་/བེསི་༦༤ སི་ཕར་ཊེགསི་+ཊེག་ཆ་ཚུ་ཐོབ་ཨིན། མཐུན་སྒྲིག་ `gcm-open` དང་ཅིག་ཁར་གསང་བཟོ་འབད།
+- **Multicodec ཡིག་རྒྱུན་ཚུ་:** SM2 མི་མང་ལྡེ་མིག་/མཚན་རྟགས་ཚུ་/གཞི་རྟེན་སྣ་མང་ཡིག་རྒྱུན་ལུ་ མིང་དཔྱད་འབདཝ་ཨིན་ `PublicKey::from_str`/`Signature::from_bytes` གིས་ངོས་ལེན་འབད་དེ་ Kotodama གསལ་སྟོན་དང་རྩིས་ཐོ་ཨའི་ཌི་ཚུ་གིས་ ཨེསི་ཨེམ་བརྡ་རྟགས་ཚུ་འབག་འགྱོཝ་ཨིན།
 
-| Norito type / consumer | Representation | Constraints & notes |
-|------------------------|----------------|---------------------|
-| `Sm3Digest` (`iroha_crypto::Sm3Digest`) | Bare: 32-byte blob · JSON: uppercase hex string (`"4F4D..."`) | Canonical Norito tuple wrapping `[u8; 32]`. JSON/Bare decoding rejects lengths ≠ 32. Round-trips covered by `sm_norito_roundtrip::sm3_digest_norito_roundtrip`. |
-| `Sm2PublicKey` / `Sm2Signature` | Multicodec prefixed blobs (`0x1306` provisional) | Public keys encode uncompressed SEC1 points; signatures are `(r∥s)` (32 bytes each) with DER parsing guards. |
-| `Sm4Key` | Bare: 16-byte blob | Zeroizing wrapper exposed to Kotodama/CLI. JSON serialization is deliberately omitted; operators should pass keys via blobs (contracts) or CLI hex (`--key-hex`). |
-| `sm4_gcm_seal/open` operands | Tuple of 4 blobs: `(key, nonce, aad, payload)` | Key = 16 bytes; nonce = 12 bytes; tag length fixed at 16 bytes. Returns `(ciphertext, tag)`; Kotodama/CLI emit both hex and base64 helpers.【crates/ivm/tests/sm_syscalls.rs:728】 |
-| `sm4_ccm_seal/open` operands | Tuple of 4 blobs (key, nonce, aad, payload) + tag length in `r14` | Nonce 7–13 bytes; tag length ∈ {4,6,8,10,12,14,16}. `sm` feature exposes CCM behind `sm-ccm` flag. |
-| Kotodama intrinsics (`sm::hash`, `sm::seal_gcm`, `sm::open_gcm`, …) | Map to SCALLs above | Input validation mirrors host rules; malformed sizes raise `ExecutionError::Type`. |
+གནས་སྡུད་དཔེ་སྟོན་གྱི་ ཉོ་སྤྱོད་འབད་མི་ཚུ་གིས་ SM4 ལྡེ་མིག་དང་ ངོ་རྟགས་ཚུ་ དུས་ཐུང་གི་ བློ་སྤོབས་སྦེ་ བརྩི་དགོ། ལྡེ་མིག་ངོ་མ་ཚུ་ རིམ་ཐེངས་གུ་ ནམ་ཡང་ གནས་མི་ཚུགས་པས། གན་རྒྱ་ཚུ་གིས་ རྩིས་ཞིབ་འབད་དགོ་པའི་སྐབས་ སི་ཕར་ཊེགསི་/ཊེག་ཐོན་འབྲས་ཚུ་རྐྱངམ་ཅིག་ གསོག་འཇོག་འབད་དགོཔ་དང་ ཡང་ན་ བཞུ་ནི་ཚུ་ ༼དཔེར་ན་ ལྡེ་མིག་གི་ཨེསི་ཨེམ་༣༽ གསོག་འཇོག་འབད་དགོ། ༼ལྡེ་མིག་གི་ཨེསི་ཨེམ་༣༽
 
-Usage quick reference:
-- **SM3 hashing in contracts/tests:** `Sm3Digest::hash(b"...")` (Rust) or Kotodama `sm::hash(input_blob)`. JSON expects 64 hex characters.
-- **SM4 AEAD via CLI:** `iroha tools crypto sm4 gcm-seal --key-hex <32 hex> --nonce-hex <24 hex> --plaintext-hex …` yields hex/base64 ciphertext+tag pairs. Decrypt with matching `gcm-open`.
-- **Multicodec strings:** SM2 public keys/signatures parse from/to the multibase string accepted by `PublicKey::from_str`/`Signature::from_bytes`, enabling Norito manifests and account IDs to carry SM signatories.
+### མཁོ་འདོན་དང་ ཆོག་ཐམ་ .
+| ཆ་ཤས་ | ཆོག་ཐམ་ | མར་ཕབ་ |
+|----------------------------------------- |
+| `sm2`, `sm3`, `sm4`, Apache-2.0 / ཨེམ་ཨའི་ཊི་ | ཡར་འཕེལ་གྱི་ཁས་བླངས་ཚུ་ འཚོལ་ཞིབ་འབདཝ་ཨིན། གལ་སྲིད་ ཚོང་པ་ཚུ་ བཏོན་གཏང་དགོ་པ་ཅིན་ ཚོང་པ་ བདེན་དཔྱད་འབད་མི་གིས་ ཇི་ཨེ་ལུ་ མཚན་རྟགས་བཀོད་པའི་ཧེ་མ་ ཕྱོགས་གསུམ་རྩིས་རྩིས་དུས་ཚོད་བཀོད་དགོ། |
+| `rfc6979` | Apache-2.0 / ཨེམ་ཨའི་ཊི་ | ཧེ་མ་ལས་ གཞན་མི་ཨཱལ་གོ་རི་དམ་ཚུ་ནང་ ལག་ལེན་འཐབ་ཨིན། བདེན་དཔང་འབད་ནི། `k` SM3 ཟས་བཅུད་དང་གཅིག་ཁར་ མཐུད་སྦྲེལ་འབད་ནི། |
+| གདམ་ཁ་ཅན་གྱི་ OpenSSL/Tongsoo | Apache-2.0 / BSD-style | `sm-ffi-openssl` ཁྱད་རྣམ་གྱི་རྒྱབ་ལུ་བཞག་དགོ། |### ཁྱད་ཆོས་ཀྱི་དར་དང་བདག་དབང་།
+| ཁ་ཐོག་ | སྔོན་སྒྲིག་ | རྒྱུན་སྐྱོང་པ་ | དྲན་ཐོ། |
+|------------------------------------------------- |
+| `iroha_crypto/sm-core`, `sm-ccm`, `sm` | Off | ཀིརིཔ་ཊོ་ WG | རསཊི་ཀིརིཔ་ཊོ་ཨེསི་ཨེམ་ གནའ་དུས་ཚུ་ལྕོགས་ཅན་བཟོཝ་ཨིན། `sm` བདེན་བཤད་འབད་ཡོད་པའི་ གསང་བཟོའི་དགོས་མཁོ་ཡོད་མི་ མཁོ་མངགས་འབད་མི་ཚུ་གི་དོན་ལུ་ སི་ཨེམ་གྲོགས་རམ་པ་ཚུ་ བསྡུ་སྒྲིག་འབདཝ་ཨིན། |
+| `ivm/sm` | Off | IVM ཀོར་སྡེ་ཚན། | ཨེསི་ཨེམ་སི་ཀཱལ་ (`sm3_hash`, `sm2_verify`, `sm4_gcm_*`, `sm4_ccm_*`). ཧོསིཊི་གི་སྒོ་སྒྲིག་འདི་ `crypto.allowed_signing` ལས་འབྱུང་ཡོདཔ་ཨིན། |
+| `iroha_crypto/sm_proptest` | Off | QA / ཀིརིཔ་ཊོ་ WG | ཁྱད་ཆོས་ཅན་གྱི་རྟགས་བཀོད་/མིང་རྟགས་ཚུ་ ཁྱབ་སྟེ་ཡོད་པའི་ རྒྱུ་དངོས་བརྟག་དཔྱད་འབད་ནི། རྒྱ་བསྐྱེད་སི་ཨའི་ ནང་རྐྱངམ་ཅིག་ལྕོགས་ཅན་བཟོཝ་ཨིན། |
+| `crypto.allowed_signing` + `default_hash` | `["ed25519"]`, `blake2b-256` | རིམ་སྒྲིག་ WG / བཀོལ་སྤྱོད་པ་ WG | `sm2` དང་ `sm3-256` གིས་ SM syscalls/signatures ལྕོགས་ཅན་བཟོཝ་ཨིན། `sm2` རྩ་བསྐྲད་གཏང་མི་འདི་གིས་ བདེན་བཤད་རྐྱངམ་ཅིག་ཐབས་ལམ་ལུ་སླར་ལོག་འབདཝ་ཨིན། |
+| གདམ་ཁ་ཅན་གྱི་ `sm-ffi-openssl` (སྔོན་ལྟ) | Off | སྟེགས་རིས་ Ops | OpenSSL/Tongsoo བྱིན་མི་གཅིག་བསྡོམས་ཀྱི་དོན་ལུ་ ས་གནས་འཛིན་མི་ཁྱད་རྣམ་། ལྷག་ལུས་ཚུ་ ལག་ཁྱེར་དང་ ཐུམ་སྒྲིལ་ཚུ་ SOPs ས་གཞི་ཚུན་ཚོད་ ཚུན་ཚོད་ ལྕོགས་མིན་ཨིན། |
 
-Data-model consumers should treat SM4 keys and tags as transient blobs; never persist raw keys on-chain. Contracts should store only ciphertext/tag outputs or derived digests (e.g., SM3 of the key) when auditing is required.
+དྲ་རྒྱའི་སྲིད་བྱུས་ད་ལྟ་`network.require_sm_handshake_match` དང་།
+`network.require_sm_openssl_preview_match` (གཉིས་ཆ་རང་ `true` ལུ་སྔོན་སྒྲིག་)། དར་ཆ་གནང་བ་གཉིས་ཆ་ར་བསལ་དོ།
+Ed25519-རྐྱངམ་གཅིག་ བལྟ་རྟོག་པ་ཚུ་གིས་ ཨེསི་ཨེམ་ལྕོགས་ཅན་བཟོ་ཡོད་པའི་བདེན་དཔྱད་ཚུ་དང་མཐུད་སའི་ སླ་བསྲེ་བཀྲམ་སྤེལ་ཚུ། མ་མཐུན་མི་འདི་
+`WARN` ལུ་ ནང་བསྐྱོད་འབད་ཡོདཔ་ཨིན་རུང་ མོས་མཐུན་གྱི་ མཐུད་མཚམས་ཚུ་ རྐྱེན་ངན་བཀག་ཐབས་ལུ་ སྔོན་སྒྲིག་ཚུ་ ལྕོགས་ཅན་བཟོ་བཞག་དགོ།
+SM-aware དང་ SM-debabed མཉམ་རོགས་ཀྱི་བར་ན་ཁྱད་པར་ཡོད།
+སི་ཨེལ་ཨའི་གིས་ `iroha_cli app sorfs sorfs sorfy sukhe u དུས་མཐུན་བཟོ་བའི་ཐོག་ལས་ འ་ནི་སོར་བསྒྱུར་ཚུ་ ཕྱིར་ཐོན་འབདཝ་ཨིན།
+--ཨ་རྟག་ར་ sm-handshake-mismatIKotodama--སྤྱིར་བཏང་ལུ་-sm-Opensl-སྔོན་ལྟ་-མི་སིམ་མེཊ་-༡༨ཨེན་ཨའི་༠༠༠༠༡༤--དགོས་མཁོ་-*ཨིན་ན།
+དམ་དམ་སྦེ་ བསྟར་སྤྱོད་འབད་ནིའི་དོན་ལུ་ རྒྱལ་དར་ཚུ།#### ཨོ་པན་ཨེསི་ཨེསི་ཨེལ་/ཊོང་སུའོ་སྔོན་ལྟ་ (`sm-ffi-openssl`)
+- **Scope.** སྔོན་ལྟ་རྐྱངམ་ཅིག་བྱིན་མི་ ཤིམ་ (`OpenSslProvider`) འདི་ OpenSSL རན་ཊའིམ་ཐོབ་ཚུགསཔ་ བདེན་དཔྱད་འབད་དེ་ OpenSSL-back-backed SM3 hashing, SM2 བདེན་དཔྱད་དང་ SM4-GCM གསང་བཟོ་/གསང་བཟོ་/གསང་བཟོ་/གསང་བཟོས་འདི་ གདམ་ཁ་ལྷག་ལུས་ཚུ་ ལྷག་ལུས་ནང་ བཀལ་ཡོདཔ་ཨིན། མོས་མཐུན་གཉིས་ལྡན་ཚུ་གིས་ རཱསི་ཊི་ཀིརིཔ་ཊོ་འགྲུལ་ལམ་འདི་འཕྲོ་མཐུད་དེ་ལག་ལེན་འཐབ་དགོ། FFI རྒྱབ་ཐག་འདི་ མཐའ་མཚམས་བདེན་དཔྱད་/མཚན་རྟགས་བཀོད་མི་ མཁའ་འགྲུལ་པ་ཚུ་གི་དོན་ལུ་ དམ་དམ་སྦེ་ གདམ་ཁ་རྐྱབ་ཨིན།
+- **སྔོན་སྒྲིག་དགོས་མཁོ གནས་ལུགས་འབྲེལ་མཐུད་འདི་ སེམས་ཤུགས་མེདཔ་བཟོཝ་ཨིན། བཀོལ་སྤྱོད་པ་གིས་འཛིན་སྐྱོང་འཐབ་མི་ ཌའི་ནམ་དཔེ་མཛོད་ཚུ་དགའ་གདམ་འབད།
+- **གོང་འཕེལ་གཏང་མི་ཐ་མག་བརྟག་དཔྱད་.** `scripts/sm_openssl_smoke.sh` གཡོག་བཀོལ་ནིའི་དོན་ལུ་ `cargo check -p iroha_crypto --features "sm sm-ffi-openssl"` འདི་གི་ཤུལ་ལས་ `cargo test -p iroha_crypto --features "sm sm-ffi-openssl" --test sm_openssl_smoke -- --nocapture` དང་། འདི་ཡང་ གོང་འཕེལ་གྱི་མགོ་ཡིག་ཚུ་ མ་ཐོབ་པའི་སྐབས་ གྲོགས་རམ་པ་ཚུ་ རང་བཞིན་གྱིས་ གོམ་འགྱོཝ་ཨིན་མས།
+- **Rust scaffolding.** `openssl_sm` མཐུད་ལམ་འདི་གིས་ ད་ལྟོ་ SM3 hayhing དང་ SM2 བདེན་དཔྱད་ (ZA prehash + SM2 ECDSA) དེ་ལས་ SM4 GCM གསང་ཡིག་/ཌེན་ཀིརིཔ་/ཌེཀ་ཀིརིཔ་ འདི་ སྔོན་ལྟ་གི་རྟགས་མཚན་དང་ ནུས་མེད་ལྡེ་མིག་/མེད་/ རྟགས་བཀོད་ཡོད་པའི་ རིང་ཚད་ཚུ་ བཀབ་སྟེ་ བཀོད་སྒྲིག་འབད་ཡོད་པའི་འཛོལ་བ་ཚུ་དང་གཅིག་ཁར་ ཨོ་པཱན་ཨེསི་ཨེསི་ཨེལ་བརྒྱུད་དེ་ བཀོད་སྒྲིག་འབདཝ་ཨིན། SM4 CCM འདི་ FFI ཁ་སྐོང་མ་ལྷོད་ཚུན་ཚོད་ འགྲུལ་བསྐྱོད་རྐྱངམ་ཅིག་སྦེ་རང་ ལུས་ཡོདཔ་ཨིན།
+- **Skip སྤྱོད་ལམ་བཏོན།** OpenSSL ≥3.0 མགོ་ཡིག་ཡང་ན་དཔེ་མཛོད་ཚུ་ དུ་པའི་བརྟག་དཔྱད་དཔར་བསྐྲུན་འབད་མེད་པའི་སྐབས་ མཆོང་ལྡེ་ཅིག་མེདཔ་ཨིན།
+- **རཱན་ཊའིམ་སྲུང་སྐྱོབས་ཚུ་.** OpenSSL སྔོན་ལྟ་འདི་སྔོན་སྒྲིག་གིས་ལྕོགས་མིན་བཟོཝ་ཨིན། རིམ་སྒྲིག་ (`crypto.enable_sm_openssl_preview` / `OpenSslProvider::set_preview_enabled(true)`) བརྒྱུད་དེ་ ཨེཕ་ཨེཕ་ཨའི་ འགྲུལ་ལམ་ལག་ལེན་འཐབ་ནི་ལུ་ དཔའ་བཅམ་པའི་ཧེ་མ་ ལྕོགས་ཅན་བཟོ། བཟོ་བསྐྲུན་གྱི་སྡེ་ཚན་འདི་ བདེན་དཔྱད་འབད་ཐབས་ལམ་ནང་ལུ་བཞག་དགོཔ་ཨིན། ༼`sm2` ལས་ `allowed_signing` ལས་ མཐོ་རིམ་ཤེས་ཚད་མཐར་འཁྱོལ་མི་ཚུ་ མཐོ་རིམ་ཤེས་ཚད་མཐར་འཁྱོལ་མི་ཚུན་ཚོད་ བརྟེན་ཏེ་ མཐའ་འཁོར་གནས་སྟངས་ཚུ་ སོ་སོ་སྦེ་བཞག་ནི་གི་དོན་ལས་ རསཊ་ཀིརིཔ་ཀྲོ་གི་ མགུ་ཐོམ་སི་སི་དང་ མཚན་རྟགས་བཀོད་མི་ཚུ་ བཀག་འཛིན་འབདཝ་ཨིན།
+- **ཐུམ་སྒྲིལ་ཞིབ་དཔྱད་ཐོ་ཡིག་.** བཀྲམ་སྤེལ་མངོན་གསལ་ནང་ བཀྲམ་སྤེལ་ཐོན་རིམ་དང་ གཞི་བཙུགས་འགྲུལ་ལམ་ དེ་ལས་ ཆིག་སྒྲིལ་ཧ་ཤེ་ཚུ་ ཡིག་ཆ་ཚུ་ཡིག་ཆ་བཟོ། བཀོལ་སྤྱོད་པ་ཚུ་གིས་ ཆ་འཇོག་གྲུབ་པའི་ ཨོ་པཱན་ཨེསི་ཨེལ་/ཊོང་སུའོ་བཟོ་བསྐྲུན་གཞི་བཙུགས་འབད་མི་ གཞི་བཙུགས་ཡིག་ཆ་ཚུ་བྱིན་དགོཔ་དང་ ཨོ་ཨེསི་བློ་གཏད་ཚོང་ཁང་ (དགོས་མཁོ་ཡོད་པ་ཅིན་) དང་གཅིག་ཁར་ཐོ་བཀོད་འབད་དགོཔ་དང་ ཉམས་བཅོས་སྒོ་སྒྲིག་ཚུ་གི་རྒྱབ་ཁར་ པིན་ཡར་བསྐྱེད་འབདཝ་ཨིན།
+- **ཤུལ་མམ་གྱི་རིམ་པ་།** མ་འོངས་པའི་ མཐོ་རིམ་གྱི་ SM4 CCM FFI མཐུད་སྦྱོར་དང་ CI དུ་པའི་ལས་ཀ་ (`ci/check_sm_openssl_stub.sh`) དང་ ཊེ་ལི་མི་ཊི་རི་ ཚུ་ ཁ་སྐོང་འབདཝ་ཨིན། `roadmap.md` ནང་ SM-P3.1.x གི་འོག་ལུ་ ཡར་འཕེལ་འབད།
 
-### Supply-Chain & Licensing
-| Component | License | Mitigation |
-|-----------|---------|-----------|
-| `sm2`, `sm3`, `sm4` | Apache-2.0 / MIT | Track upstream commits, vendor if lockstep releases required, schedule third-party audit before validator signing GA. |
-| `rfc6979` | Apache-2.0 / MIT | Already used in other algorithms; confirm deterministic `k` binding with SM3 digest. |
-| Optional OpenSSL/Tongsuo | Apache-2.0 / BSD-style | Keep behind `sm-ffi-openssl` feature, require explicit operator opt-in and packaging checklist. |
+#### གསང་ཨང་བདག་དབང་གི་དཔེ་ཚད།
+- **ཀིརིཔ་ཊོ་ ཌབ་ལུ་ཇི་:** ཨེསི་ཨེམ་སྒྲིག་སྟངས་ བསྟར་སྤྱོད་ཡིག་ཆ།
+- **IVM ཀོར་:** སི་ཀཱལ་ལག་ལེན་འཐབ་ཐངས་ཚུ་, Kotodama intrinsics, ཧོསིཊི་གཱེཊི།
+קונננוייייייייייי יייי ייי י癪 `crypto.allowed_signing`/`default_hash`, ボדדצייסיסססט סייייייייייייייייསྨནམ། קבלה.
+- **SDK ལས་རིམ་:** CLI/Kagami/SDKs, བརྗེ་སོར་གྱི་སྒྲིག་བཀོད་ཚུ་ནང་ལུ་ SM-appor ལག་ཆས་ཚུ།
+- ** Platform Ops & Promentance WG:** མགྱོགས་ཚད་ཧུཀ་, ཊེ་ལི་མི་ཊི་, བཀོལ་སྤྱོད་ལྕོགས་ཅན་བཟོ་ནི།
 
-### Feature Flags & Ownership
-| Surface | Default | Maintainer | Notes |
-|---------|---------|------------|-------|
-| `iroha_crypto/sm-core`, `sm-ccm`, `sm` | Off | Crypto WG | Enables RustCrypto SM primitives; `sm` bundles CCM helpers for clients that require authenticated encryption. |
-| `ivm/sm` | Off | IVM Core Team | Builds SM syscalls (`sm3_hash`, `sm2_verify`, `sm4_gcm_*`, `sm4_ccm_*`). Host gating derives from `crypto.allowed_signing` (presence of `sm2`). |
-| `iroha_crypto/sm_proptest` | Off | QA / Crypto WG | Property-test harness covering malformed signatures/tags. Enabled only in extended CI. |
-| `crypto.allowed_signing` + `default_hash` | `["ed25519"]`, `blake2b-256` | Config WG / Operators WG | Presence of `sm2` plus `sm3-256` hash enables SM syscalls/signatures; removing `sm2` returns to verify-only mode. |
-| Optional `sm-ffi-openssl` (preview) | Off | Platform Ops | Placeholder feature for OpenSSL/Tongsuo provider integration; remains disabled until certification & packaging SOPs land. |
+## རིམ་སྒྲིག་གནས་སྤོའི་རྩེད་རིམ།Ed25519-རྐྱངམ་གཅིག་ཡོངས་འབྲེལ་ལས་ ཨེསི་ཨེམ་ལྕོགས་ཅན་བཟོ་ཡོད་པའི་བཀྲམ་སྤེལ་ལུ་སྤོ་བཤུད་འབད་མི་བཀོལ་སྤྱོད་པ་ཚུ།
+༢༠༠༨ ལུ་ གོ་རིམ་ཅན་གྱི་བྱ་རིམ་འདི་ བལྟ།
+[`sm_config_migration.md`](sm_config_migration.md). ལམ་སྟོན་གྱིས་ཁ་དོག་བཟོ་བསྐྲུན།
+བདེན་དཔྱད། `iroha_config` བང་རིམ་ (`defaults` → `user` → `actual`).
+བསྐྱར་ཟློས་ `kagami` བརྒྱུད་དེ་ (དཔེར་ན་ `kagami genesis generate --allowed-signing sm2 --default-hash sm3-256`) སྔོན་སྒྲིག་འཕུར་འགྲུལ་བདེན་དཔྱད་དང་ བསྐོར་རྒྱབ་འབདཝ་ཨིན།
+འཆར་གཞི་བརྩམས་ཡོདཔ་ལས་ རིམ་སྒྲིག་པར་ཚུ་དང་ གསལ་སྟོན་འབདཝ་ཨིན།
+འཕུར་འགྲུལ་།
 
-Network policy now exposes `network.require_sm_handshake_match` and
-`network.require_sm_openssl_preview_match` (both default to `true`). Clearing either flag allows
-mixed deployments where Ed25519-only observers connect to SM-enabled validators; mismatches are
-logged at `WARN`, but consensus nodes should keep the defaults enabled to prevent accidental
-divergence between SM-aware and SM-disabled peers.
-The CLI surfaces these toggles via `iroha_cli app sorafs handshake update
---allow-sm-handshake-mismatch` and `--allow-sm-openssl-preview-mismatch`, or the matching `--require-*`
-flags to restore strict enforcement.
+## ཐག་གཅོད་སྲིད་བྱུས།
+- ཨེསི་ཌི་ཀེ་ཨེསི་ནང་ ཨེསི་ཨེམ་༢ མཚན་རྟགས་འགྲུལ་ལམ་ཆ་མཉམ་གྱི་དོན་ལུ་ RFC6979-derived nonce དང་ གདམ་ཁ་ཅན་གྱི་ཧོསིཊི་མིང་རྟགས་བཀོད་ནི། བདེན་དཔྱད་ཚུ་གིས་ ཀེ་ནོ་ནིག་ r∥s encodings རྐྱངམ་ཅིག་ངོས་ལེན་འབདཝ་ཨིན།
+- ཚད་འཛིན་-གནམ་གྲུ་བརྡ་སྤྲོད་ (རྒྱུན་ལམ་) ལུག་ Ed25519; གཞུང་སྐྱོང་གིས་ རྒྱ་སྐྱེད་འབད་ནི་ལུ་ ཆ་འཇོག་མ་འབད་བ་ཅིན་ གནས་སྡུད་-གནམ་གྲུ་གི་མིང་རྟགས་ཚུ་ ཚད་འཛིན་འབད་ཡོདཔ་ཨིན།
+- ནང་འཁོད་རིག་པ་ (ARM SM3/SM4) གིས་ རན་ཊའིམ་ཁྱད་རྣམ་བརྟག་དཔྱད་དང་མཉེན་ཆས་ཀྱི་ ཕོལཊི་ཚུ་དང་གཅིག་ཁར་ གཏན་འབེབས་བདེན་དཔྱད་/ཧེ་ཤི་བཀོལ་སྤྱོད་ཚུ་ལུ་ བཀག་ཆ་འབད་ཡོདཔ་ཨིན།
 
-#### OpenSSL/Tongsuo preview (`sm-ffi-openssl`)
-- **Scope.** Builds a preview-only provider shim (`OpenSslProvider`) that validates OpenSSL runtime availability and exposes OpenSSL-backed SM3 hashing, SM2 verification, and SM4-GCM encrypt/decrypt while remaining opt-in. Consensus binaries must continue using the RustCrypto path; the FFI backend is strictly opt-in for edge verification/signing pilots.
-- **Build prerequisites.** Compile with `cargo build -p iroha_crypto --features "sm sm-ffi-openssl"` and ensure the toolchain links against OpenSSL/Tongsuo 3.0+ (`libcrypto` with SM2/SM3/SM4 support). Static linking is discouraged; prefer dynamic libraries managed by the operator.
-- **Developer smoke test.** Run `scripts/sm_openssl_smoke.sh` to execute `cargo check -p iroha_crypto --features "sm sm-ffi-openssl"` followed by `cargo test -p iroha_crypto --features "sm sm-ffi-openssl" --test sm_openssl_smoke -- --nocapture`; the helper skips automatically when OpenSSL ≥ 3 development headers are unavailable (or `pkg-config` is missing) and surfaces smoke output so developers can see whether SM2 verification ran or fell back to the Rust implementation.
-- **Rust scaffolding.** The `openssl_sm` module now routes SM3 hashing, SM2 verification (ZA prehash + SM2 ECDSA), and SM4 GCM encrypt/decrypt through OpenSSL with structured errors covering preview toggles and invalid key/nonce/tag lengths; SM4 CCM remains pure-Rust-only until additional FFI shims land.
-- **Skip behaviour.** When OpenSSL ≥ 3.0 headers or libraries are absent the smoke test prints a skip banner (via `-- --nocapture`) but still exits successfully so CI can distinguish environment gaps from genuine regressions.
-- **Runtime guardrails.** The OpenSSL preview is disabled by default; enable it via configuration (`crypto.enable_sm_openssl_preview` / `OpenSslProvider::set_preview_enabled(true)`) before attempting to use the FFI path. Keep production clusters in verify-only mode (omit `sm2` from `allowed_signing`) until the provider graduates, rely on the deterministic RustCrypto fallback, and confine signing pilots to isolated environments.
-- **Packaging checklist.** Document the provider version, installation path, and integrity hashes in deployment manifests. Operators must provide installation scripts that install the approved OpenSSL/Tongsuo build, register it with the OS trust store (if required), and pin upgrades behind maintenance windows.
-- **Next steps.** Future milestones add deterministic SM4 CCM FFI bindings, CI smoke jobs (see `ci/check_sm_openssl_stub.sh`), and telemetry. Track progress under SM-P3.1.x in `roadmap.md`.
+## Norito & ཨེན་ཀོ་ཌིང་འཆར་གཞི།
+༡ `iroha_data_model` ནང་ `Sm2PublicKey`, `Sm2Signature`, `Sm3Digest`, `Sm4Key`.
+2. DER མགུ་ཐོམ་སི་སི་ཚུ་ བཀག་ཐབས་ལུ་ SM2 མཚན་རྟགས་ཚུ་ མཐོ་རིམ་-ཨེན་ཊི་ཡན་ ཝིཌི་ཊི་ `r∥s` གི་ཨེ་རེ་ (32+32 bytes) སྦེ་ རིམ་སྒྲིག་འབད། མཐུན་སྒྲིག་འབད་མི་ཚུ་ནང་ གཞི་བསྒྱུར་ཚུ་ འཛིན་སྐྱོང་འཐབ་ཡོདཔ། *(Done: `Sm2Signature` གྲོགས་རམ་པ་ཚུ་ནང་ ལག་ལེན་འཐབ་ཡོདཔ་ཨིན།
+3. ཐོ་བཀོད་སྣ་མང་ཀོ་ཌེག་ངོས་འཛིན་ (`sm3-256`, `sm2-pub`, `sm4-key`) མང་པོའི་རྩ་སྒྲིག་དང་དུས་མཐུན་སྒྲིག་བཀོད་ དེ་ལས་ ཌོཀ་ཚུ་ལག་ལེན་འཐབ་པ་ཅིན་ *(Prored: `sm2-pub` གནས་སྐབས་གསང་གྲངས་ `0x1306` གིས་ ད་ལྟོ་ འབྱུང་ཁུངས་ལྡེ་མིག་ཚུ་དང་གཅིག་ཁར་ བདེན་དཔྱད་འབད་ཡོདཔ་ཨིན།
+4. གསར་འགྱུར་ Kotodama གསེར་གྱི་བརྟག་དཔྱད་ཚུ་ སྒོར་སྒོར་དང་ སྐྱོན་ཆ་ཡོད་པའི་ ཨིན་ཀོ་ཌིང་ཚུ་ བཀག་ཆ་འབད་མི་ (ཐུང་/རིངམོ་ r ཡང་ན་ s, ནུས་མེད་གུག་གུགཔ་) ཚུ་ཨིན།## ཧོསཊི་དང་ཝི་ཨེམ་མཉམ་བསྡོམས་འཆར་གཞི།(SM-2)
+1. ད་ལྟོ་ཡོད་པའི་ GOST hash ཤིམ་ལུ་ མེ་ལོང་ འབད་མི་ ཧོསིཊི་ཕྱོགས་ལུ་ ལག་ལེན་འཐབ་ནི། `Sm3Digest::hash` reuse དང་ གཏན་འབེབས་འཛོལ་བ་འགྲུལ་ལམ་ཚུ་ ཕྱིར་བཏོན་འབད། *(ས་ཆ་: ཧོསིཊི་: བློ་བོའི་ཊི་ཨེལ་ཝི་སླར་ལོག་འབདཝ་ཨིན། `DefaultHost` ལག་ལེན་དང་ `sm_syscalls.rs` འགྱུར་ལྡོག་བལྟ།
+2. ཝི་ཨེམ་སི་ཀཱལ་ཐིག་ཁྲམ་འདི་ `sm2_verify` དང་གཅིག་ཁར་ r∥s མཚན་རྟགས་ངོས་ལེན་འབད་མི་དང་ ID དབྱེ་བ་ཕྱེ་ནི་ཚུ་ བདེན་དཔྱད་འབད་དེ་ སླར་ལོག་གསང་ཡིག་ཚུ་ ཆ་མེད་གཏང་ནི་ལུ་ འཐུས་ཤོར་བྱུང་མི་ སབ་ཁྲ་བཟོཝ་ཨིན། *(Done: host + Kotodama intrinsics སླར་ལོག་ `1/0`; ལོག་ལྟའི་ཁྱབ་ཁོངས་འདི་ མཚན་རྟགས་དང་ མི་མང་ལྡེ་མིག་ མ་བདེཝ་ ཊི་ཨེལ་ཝི་ དེ་ལས་ ཡུ་ཊི་ཨེཕ་-༨/མཐུན་སྒྲིག་འབད་ཡོདཔ་ `distid` paoks.
+3. `sm4_gcm_seal`/`sm4_gcm_open` (དང་གདམ་ཁ་ཅན་གྱི་CCM) syscalls འདི་ གསལ་ཏོག་ཏོ་སྦེ་ nonce/tag sizing (RFC 8998) བྱིན་དགོ། *(Done: GCM གིས་ གཏན་འཇགས་ ༡༢-བཱའིཊི་ནོན་སི་ + ༡༦-བཱའིཊ་ཊེག་ཚུ་ལག་ལེན་འཐབ་ཨིན། `sm::seal_ccm/open_ccm`.) ཡིག་ཆ་མེད་པའི་ལག་དེབ་ནང་ ཡིག་ཆ་ལོག་སྤྱོད་ཀྱི་སྲིད་བྱུས་ལོག་སྤྱོད་འབད་ཡོདཔ།*
+4. གློག་ཐག་ Kotodama དུ་པའི་གན་ཡིག་དང་ IVM མཉམ་བསྡོམས་བརྟག་དཔྱད་ཚུ་ ངེས་གཏན་དང་ ངན་པའི་གནད་དོན་ཚུ་ ཁྱབ་ཚུགསཔ་ཨིན། *(`crates/ivm/tests/kotodama_sm_syscalls.rs` SM3/SM2/SM4 གི་དོན་ལུ་ ཧོསིཊི་གི་ ཧོསིཊི་རི་གེ་རེ་ཤཱན་ བརྒྱུད་དེ་འབད་ཡོདཔ།)*
+༥ ཐོ་བཀོད་གསརཔ་ཁ་སྐོང་འབད་བའི་ཤུལ་ལས་ ཐོ་ཡིག་དང་ སྲིད་བྱུས་ དེ་ལས་ ཨེ་བི་ཨའི་ ཡིག་ཆ་ཚུ་ (`crates/ivm/docs/syscalls.md`) དང་ གསར་བསྐྲུན་འབད་བཅུགཔ་ཨིན།
 
-#### Code Ownership Snapshot
-- **Crypto WG:** `iroha_crypto`, SM fixtures, compliance documentation.
-- **IVM Core:** syscall implementations, Kotodama intrinsics, host gating.
-- **Config WG:** קונפיגורציית `crypto.allowed_signing`/`default_hash`, ולידציית מניפסט, חיווט קבלה.
-- **SDK Program:** SM-aware tooling across CLI/Kagami/SDKs, shared fixtures.
-- **Platform Ops & Performance WG:** acceleration hooks, telemetry, operator enablement.
+### ཧོསཊི་དང་ཝི་ཨེམ་མཉམ་བསྡོམས་གནས་ཚད།
+- སྔོན་སྒྲིག་ཧོསིཊི་, ཀོར་ཧོསིཊི་, དང་ ཌབ་ལུ་ཧོསིཊི་གིས་ ཨེསི་ཨེམ་༣/ཨེསི་ཨེམ་༢/ཨེསི་ཨེམ་༤ སི་ཀཱལ་ཚུ་ ཕྱིར་བཏོན་འབད་ཞིནམ་ལས་ `sm_enabled` གུ་སྒོ་བསྡམ་སྟེ་ རྒྱུག་པའི་དུས་ཚོད་ཀྱི་རྒྱལ་དར་འདི་ཨིན་པའི་སྐབས་ `PermissionDenied` སླར་ལོག་འབདཝ་ཨིན། རྫུན་གཏམ་/ཀྲེ་རེཊས/ཨེ་ཝི་ཨེམ་/སརཀ/ཧོསཊ།༩༡༥】】 】 】 ཨེ་ཨབ་མེ/ཀོར་_ཧོསཊ།༽      】 】 】 】 】  】  】  】  】  】  】  】 】  】  】  】  】 】  】 】  】  】  】  】  】  】  】 】 】src/mock_wsv.s:2307】
+- `crypto.allowed_signing` གཱེཊིང་འདི་ མདོང་ལམ་/བཀོད་ཁྱབ་/གནས་སྟངས་བརྒྱུད་དེ་ ཐགསཔ་སྦེ་བཟོ་སྟེ་ཡོདཔ་ལས་ ཐོན་སྐྱེད་ཀྱི་མཐུད་མཚམས་ཚུ་ རིམ་སྒྲིག་ཐོག་ལས་ གཏན་འབེབས་བཟོ་དགོཔ་ཨིན། `sm2` ཨེསི་ཨེམ་གྲོགས་རམ་སོར་ཚད། 【ཚོད་དཔག/ཨི་རོ་ཧ་_ཀོར་/ཨེསི་ཨར་སི/ཨེསི་མཱརཊ་ཁ་འབག་/ནུས་མེད་/ཧོསཊ། 170】 】 】 】 】 】 】 】 】  】 ཨེ་རོ་ཧ་_ཀོར་/སེརསི།      【ཧ་_ཀོར་/སརས/ཕྱིར་འཐེན/ཕྱིར་འཐེན།
+- ལྕོགས་མིན་གྱི་ཁྱབ་ཁོངས་ལག་ལེན་ཚུ་གིས་ ལྕོགས་ཅན་བཟོ་ཡོད་མི་དང་ ལྕོགས་མིན་བཟོ་ཡོད་པའི་འགྲུལ་ལམ་ (སྔོན་སྒྲིག་ཧོསིཊི་/ཀོར་ཧོསིཊི་/ཝ་སི་ཝི་ཧོསིཊི་) ཨེསི་ཨེམ་༣ ཧེ་ཤིང་དང་ ཨེསི་ཨེམ་༢ བདེན་དཔྱད་ དེ་ལས་ ཨེསི་ཨེམ་༤ ཇི་སི་ཨེམ་/སི་སི་ཨེམ་ སིལ་/ཁ་ཕྱེ། flows.【crates/ivm/tests/sm_syscalls.rs:129】【crates/ivm/tests/sm_syscalls.rs:733】【crates/ivm/tests/sm_syscalls.rs:1036】
 
-## Configuration Migration Playbook
+## རིམ་སྒྲིག
+- `crypto.allowed_signing`, `crypto.default_hash`, `crypto.sm2_distid_default`, དང་ གདམ་ཁ་ཅན་གྱི་ `crypto.enable_sm_openssl_preview` `iroha_config` ལུ་ཁ་སྐོང་འབད། གནད་སྡུད་དཔེ་སྟོན་གྱི་ ཁྱད་རྣམ་ཆུ་གཡུར་གྱི་ཁྱད་རྣམ་འདི་ ཀིརིཔ་ཊོ་ཀེརེཊ་ (`iroha_data_model` གིས་ `sm` གསལ་སྟོན་འབདཝ་ཨིན། → `iroha_crypto/sm`)
+- འཛུལ་ཞུགས་སྲིད་བྱུས་ཚུ་ལུ་ ཝ་ཡར་རིམ་སྒྲིག་འབད་ནི་ཨིནམ་ལས་ གསལ་སྟོན་/རིགས་མཚན་ཡིག་སྣོད་ཚུ་གིས་ ཆོག་པའི་ཨཱལ་གོ་རི་དམ་ཚུ་ ངེས་འཛིན་འབདཝ་ཨིན། digray གནམ་གྲུ་འདི་ སྔོན་སྒྲིག་གིས་ Ed25519 ལུ་ལུསཔ་ཨིན།### CLI & SDK ལཱ་ (SM-3)
+1. **Torii CLI** (`crates/iroha_cli`): ཨེསི་ཨེམ་༢ ལྡེ་མིག་ཇེན་/ཨིམ་པོརཊ་/ཕྱིར་འདྲེན་ (ཌི་སི་ཊིཌ་དྲན་ཤེས་ ཌིསི་ཊིཌ་དྲན་ཤེས་) ཨེསི་ཨེམ་༣ ཧ་ཤིང་གྲོགས་རམ་ཚུ་ དེ་ལས་ ཨེསི་ཨེམ་༤ ཨེ་ཨེ་ཨེ་ཌི་ གསང་བཟོ་/གསང་བཟོ་ཚུ་ ཁ་སྐོང་འབད། འབྲེལ་མཐུད་ཅན་གྱི་བརྡ་བཀོད་དང་ ཡིག་ཆ་ཚུ་ དུས་མཐུན་བཟོ།
+2. **Genesis ལག་ཆས་** (`xtask`, `scripts/`): ཆོག་པའི་བརྡ་མཚོན་དང་སྔོན་སྒྲིག་ཧེ་ཤེ་ཚུ་གསལ་བསྒྲགས་འབད་ནི་ལུ་ མངོན་གསལ་ཚུ་གསལ་བསྒྲགས་འབད་བཅུགཔ་ཨིན། *(Done: `RawGenesisTransaction` ད་ལྟ་`crypto` མ་མཐུན་པའི་ཨེསི་ཨེམ་སྒྲིག་སྟངས་དང་ སྔོན་སྒྲིག་/རིགས་མཚན་ཚུ་གིས་ པར་ལེན་འདི་ཁྱབ་བསྒྲགས་འབདཝ་ཨིན།)*
+3. **SDK ཁ་ཐོག་**:
+   - Rust (`iroha_client`): ཨེསི་ཨེམ་༢ མཚན་རྟགས་/བདེན་དཔྱད་གྲོགས་རམ་པ་ ཨེསི་ཨེམ་༣ ཧ་ཤིང་, ཨེསི་ཨེམ་༤ ཨེ་ཨི་ཨེ་ཌི་ wrawpers དང་ གཏན་འབེབས་སྔོན་སྒྲིག་ཚུ་ ཕྱིར་བཏོན་འབདཝ་ཨིན།
+   - པའི་ཐོན་/JS/Swift: རསཊ་ཨེ་པི་ཨའི་ མེ་ལོང་; སྐད་ཡིག་བརྒལ་བའི་བརྟག་དཔྱད་ཀྱི་དོན་ལུ་ `sm_known_answers.toml` ནང་ གནས་རིམ་ཅན་གྱི་སྒྲིག་བཀོད་ཚུ་ ལོག་སྟེ་ལག་ལེན་འཐབ།
+4. སི་ཨེལ་ཨའི་/ཨེསི་ཌི་ཀེ་ མགྱོགས་དྲགས་འགོ་བཙུགས་ཚུ་ནང་ ཨེསི་ཨེམ་ལྕོགས་ཅན་བཟོ་ནིའི་དོན་ལུ་ ཡིག་ཆ་བཀོལ་སྤྱོད་པའི་ལཱ་གི་རྒྱུན་རིམ་དང་ ཇེ་ཨེསི་ཨོ་ཨེན་/ཡམ་ཨེལ་རིམ་སྒྲིག་ཚུ་གིས་ ཨཱལ་གོ་རི་དམ་གསརཔ་གི་ངོ་རྟགས་ཚུ་ ངོས་ལེན་འབདཝ་ཨིན།
 
-Operators moving from Ed25519-only networks to SM-enabled deployments should
-follow the staged process in
-[`sm_config_migration.md`](sm_config_migration.md). The guide covers build
-validation, `iroha_config` layering (`defaults` → `user` → `actual`), genesis
-regeneration via `kagami` overrides (for example `kagami genesis generate --allowed-signing sm2 --default-hash sm3-256`), pre-flight validation, and rollback
-planning so configuration snapshots and manifests stay consistent across the
-fleet.
+#### CLI ཡར་རྒྱས།
+- `cargo run -p iroha_cli --features sm -- crypto sm2 keygen --distid CN12345678901234` གིས་ ད་ལྟོ་ `client.toml` དང་ `public_key_config`, `private_key_hex`, `distid`), `distid`) བརྡ་བཀོད་འདི་གིས་ གཏན་འབེབས་བཟོ་ནི་གི་དོན་ལུ་ `--seed-hex` ངོས་ལེན་འབདཝ་ཨིནམ་དང་ ཧོསིཊི་ཚུ་གིས་ལག་ལེན་འཐབ་མི་ RFC 6979 འབྱུང་ཁུངས་འདི་ མེ་ལོང་བཟོཝ་ཨིན།
+- `cargo xtask sm-operator-snippet --distid CN12345678901234` གིས་ ལྡེ་མིག་ཇེན་/ཕྱིར་འཐེན་རྒྱུན་རིམ་འདི་ བཀབ་སྟེ་ `sm2-key.json`/`client-sm2.toml` ཐོན་འབྲས་ཚུ་ གོམ་པ་གཅིག་ནང་ བྲིས། ཡིག་སྣོད་ཚུ་ བསྐྱར་ལོག་འབད་ནིའི་དོན་ལུ་ `--json-out <path|->` / `--snippet-out <path|->` ལག་ལེན་འཐབ། ཡང་ན་ རང་བཞིན་གྱི་དོན་ལུ་ `jq` བརྟེན་པ་བཏོན་གཏང་ནི།
+- `iroha_cli tools crypto sm2 import --private-key-hex <hex> [--distid ...]` གིས་ ད་ལྟོ་ཡོད་པའི་དངོས་པོ་ཚུ་ལས་ མེ་ཊ་ཌེ་ཊ་གཅིགཔོ་འདི་ བཏོནམ་ལས་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ འཛུལ་ཞུགས་མ་འབད་བའི་ཧེ་མ་ ཨའི་ཌི་ཚུ་ དབྱེ་བ་ཕྱེ་ཚུགས།
+- `iroha_cli tools crypto sm2 export --private-key-hex <hex> --emit-json` གིས་ རིམ་སྒྲིག་ཕྲ་རིང་ (`allowed_signing`/`sm2_distid_default` ལམ་སྟོན་ཚུ་རྩིས་ཏེ་) དཔར་བསྐྲུན་འབདཝ་ཨིནམ་དང་ ཡིག་ཚུགས་ཀྱི་དོན་ལུ་ གདམ་ཁ་ཅན་གྱི་ཐོག་ལས་ JSON ལྡེ་མིག་ཐོ་གཞུང་འདི་ ལོག་བཏོནམ་ཨིན།
+- `iroha_cli tools crypto sm3 hash --data <string>` གང་འདོད་ཀྱི་ དངུལ་ཁུག་ཚུ་; `--data-hex` / `--file` གཉིས་ལྡན་ཨིན་པུཊི་ཚུ་ ཁ་བསྡམས་ཡོདཔ་དང་ བརྡ་བཀོད་འདི་གིས་ གསལ་སྟོན་ལག་ཆས་ཀྱི་དོན་ལུ་ ཧེགསི་དང་ གཞི་རྟེན་༦༤ གཉིས་ཆ་ར་སྙན་ཞུ་འབདཝ་ཨིན།
+- `iroha_cli tools crypto sm4 gcm-seal --key-hex <KEY> --nonce-hex <NONCE> --plaintext-hex <PT>` (དང་ `gcm-open`) གིས་ ཧོསིཊི་ཨེསི་ཨེམ་༤-ཇི་སི་ཨེམ་གྲོགས་རམ་པ་ཚུ་ བཀབ་ཞིནམ་ལས་ ཁ་ཐོག་ལུ་ `ciphertext_hex`/`tag_hex` ཡང་ན་ པེལེནཊི་ཨེགསི་ཊི་ པེ་ལོཌི་ཚུ་ཨིན། `sm4 ccm-seal` / `sm4 ccm-open` གིས་ CCM གི་དོན་ལུ་ nonce རིང་ཚད་ (7–13 བཱའིཊི་) དང་ ངོ་རྟགས་རིང་ཚད་ (༤,༦,༨,༡༠,༡༢,༡༢,༡༤,༡༦) ཡོད་པའི་ UX དེ་ UX གཅིག་མཚུངས་སྦེ་བྱིནམ་ཨིན། བརྡ་བཀོད་གཉིས་ཆ་ར་གིས་ གདམ་ཁ་ཅན་སྦེ་ བཱའིཊི་ཚུ་ ཌིཀསི་ལུ་ བཏོནམ་ཨིན།## བརྟག་དཔྱད།
+### ཡན་ལག་/ཤེས་ལན་བརྟག་དཔྱད།
+- GM/T 0004 & GB/T 32905 SM3 གི་དོན་ལུ་ ཝེག་ཊར་ (དཔེར་ན་ `"abc"`)
+- ཇི་ཨེམ་/ཊི་ ༠༠༠༢ & ཨར་ཨེཕ་སི་ ༨༩༩༨ ཨེསི་ཨེམ་༤ (བཀག་ཆ་ + ཇི་སི་ཨེམ་/སི་སི་ཨེམ་) གི་དོན་ལུ་ ཝེག་ཊར་ཚུ།
+- GM/T 0003/GB/T 32918 དཔེ་ཚུ་ ཨེསི་ཨེམ་༢ (Z-value, མཚན་རྟགས་བདེན་དཔྱད་) དང་ ID ID ID ID ID ID ID `ALICE123@YAHOO.COM` དང་བཅས་པ་དང་།
+- གནས་སྐབས་སྒྲིག་ཆས་གནས་རིམ་ཡིག་སྣོད་: `crates/iroha_crypto/tests/fixtures/sm_known_answers.toml`.
+- Wycheproouf-derived SM2 འགྱུར་ལྡོག་ཆས་ (`crates/iroha_crypto/tests/sm2_wycheproof.rs`) གིས་ ད་ལྟོ་ ༥༢-case corpus འདི་ བང་རིམ་བཟོ་སྟེ་ (Annex D, SDK sepors) བིཊི་ཕིལཔ་དང་ བརྡ་འཕྲིན་-བརྡ་འཕྲིན་ དེ་ལས་ མཚན་རྟགས་བཀོད་ཡོད་པའི་ ངན་པའི་རིགས་ཚུ་ཡོདཔ་ཨིན། གཙང་སྦྲ་འཕྲོད་བསྟེན་གྱི་ JSON འདི་ `crates/iroha_crypto/tests/fixtures/wycheproof_sm2.json` ལུ་སྡོད་དོ་ཡོདཔ་ད་ `sm2_fuzz.rs` འདི་ ཐད་ཀར་དུ་ ཟ་སྤྱོད་འབདཝ་ལས་ དགའ་སྤྲོ་དང་ བརྡབ་གསིག་གཉིས་ཆ་ར་ fuzz/རྒྱུ་དངོས་ཀྱི་ རྒྱུག་འགྲན་ཚུ་ནང་ལུ་ མཐུན་སྒྲིག་འབད་དེ་ཡོདཔ་ཨིན། 아니라 영역니며, 필요 시내이이흝 내이 내흄 백업 루틴 추을 완료합니다.
+- `cargo xtask sm-wycheproof-sync --input <wycheproof-sm2.json>` (ཡང་ན་ `--input-url <https://…>`) གིས་ ཡར་རྒྱུན་གྱི་ བརྡབ་འགྱོ་མི་ (generator tag གདམ་ཁ་ཅན་) དང་ `crates/iroha_crypto/tests/fixtures/wycheproof_sm2.json` ཚུ་ བསྐྱར་འབྲི་འབདཝ་ཨིན། C2SP གིས་ གཞུང་འབྲེལ་གྱི་ ཀོར་པཱསི་འདི་ དཔར་བསྐྲུན་འབད་དེ་ ལག་ཐོག་ལས་ ཕོརཀ་ཚུ་ ཕབ་ལེན་འབད་དེ་ གྲོགས་རམ་འབད་མི་བརྒྱུད་དེ་ ལྟོ་བྱིན་དགོ། འདི་གིས་ ལྡེ་མིག་དང་ རྩིས་རྐྱབ་ནི་ དེ་ལས་ དར་ཚུ་ སྤྱིར་བཏང་སྦེ་བཟོ་སྟེ་ བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ ཁྱད་པར་ལུ་ རྒྱུ་མཚན་བཀོད་ཚུགས།
+- SM2/SM3 Norito `crates/iroha_data_model/tests/sm_norito_roundtrip.rs` ནང་ བདེན་དཔྱད་འབད་ཡོད་པའི་ སྐོར་རིམ་ཅིག་ཨིན།
+- `crates/ivm/tests/sm_syscalls.rs` (SM ཁྱད་རྣམ་) ནང་ SM3 ཧོསིཊི་སི་སི་ཀཱལ་རི་གེ་རེས།
+- SM2 `crates/ivm/tests/sm_syscalls.rs` ནང་ syscall འགྱུར་ལྡོག་བདེན་སྦྱོར་འབད་ (མཐར་འཁྱོལ་ + འཐུས་ཤོར་གྱི་གནད་དོན་)།
 
-## Deterministic Policy
-- Enforce RFC6979-derived nonces for all SM2 signing paths in SDKs and optional host signing; verifiers accept canonical r∥s encodings only.
-- Control-plane communication (streaming) remains Ed25519; SM2 limited to data-plane signatures unless governance approves expansion.
-- Intrinsics (ARM SM3/SM4) restricted to deterministic verification/hash operations with runtime feature detection and software fallback.
+### རྒྱུ་ནོར་དང་བསྐྱར་བཟོའི་བརྟག་དཔྱད།
+- ནུས་མེད་གུག་ཀྱོག་དང་ ཁྲིམས་ལུགས་མིན་པའི་ r/s དེ་ལས་ nonce ཚུ་ ལོག་ལག་ལེན་འཐབ་ནི་ལུ་ SM2 གི་དོན་ལུ་ Proptest. *(`crates/iroha_crypto/tests/sm2_fuzz.rs` ནང་ལུ་ཐོབ་ཚུགསཔ་ཨིན་, `sm_proptest` གི་རྒྱབ་ལུ་ཡོདཔ་ཨིན། `cargo test -p iroha_crypto --features "sm sm_proptest"`.
+- Wycheproouf SM4 ཝེག་ཊར་ (block/AES-Mode) ཐབས་ལམ་སྣ་ཚོགས་ཀྱི་དོན་ལུ་ བསྒྱུར་བཅོས་འབད་ཡོདཔ་ཨིན། SM2 ཁ་སྐོང་ཚུ་གི་དོན་ལུ་ རྗེས་སོར་གྱི་ཡར་འཐུ། ད་ལྟོ་ `sm3_sm4_vectors.rs` གིས་ ངོ་རྟགས་བིཊི་ཕིལཔ་དང་ བཏོག་བཏང་ཡོད་པའི་ ངོ་རྟགས་ཚུ་ དེ་ལས་ ཇི་སི་ཨེམ་དང་ སི་ཨེམ་གཉིས་ཆ་རའི་དོན་ལུ་ སི་ཕར་ཊེགསི་ཚུ་ བསྡམ་བཞག་མི་ཚུ་ ལག་ལེན་འཐབ་ཨིན།
 
-## Norito & Encoding Plan
-1. Extend algorithm enums in `iroha_data_model` with `Sm2PublicKey`, `Sm2Signature`, `Sm3Digest`, `Sm4Key`.
-2. Serialize SM2 signatures as big-endian fixed-width `r∥s` arrays (32+32 bytes) to avoid DER ambiguities; conversions handled in adapters. *(Done: implemented in `Sm2Signature` helpers; Norito/JSON round-trips in place.)*
-3. Register multicodec identifiers (`sm3-256`, `sm2-pub`, `sm4-key`) if using multiformats, update fixtures and docs. *(Progress: `sm2-pub` provisional code `0x1306` now validated with derived keys; SM3/SM4 codes pending final assignment, tracked via `sm_known_answers.toml`.)*
-4. Update Norito golden tests covering roundtrips and rejection of malformed encodings (short/long r or s, invalid curve parameters).
-
-## Host & VM Integration Plan (SM-2)
-1. Implement host-side `sm3_hash` syscall mirroring the existing GOST hash shim; reuse `Sm3Digest::hash` and expose deterministic error paths. *(Landed: host returns Blob TLV; see `DefaultHost` implementation and `sm_syscalls.rs` regression.)*
-2. Extend the VM syscall table with `sm2_verify` that accepts canonical r∥s signatures, validates distinguishing IDs, and maps failures to deterministic return codes. *(Done: host + Kotodama intrinsics return `1/0`; regression suite now covers truncated signatures, malformed public keys, non-blob TLVs, and UTF-8/empty/mismatched `distid` payloads.)*
-3. Provide `sm4_gcm_seal`/`sm4_gcm_open` (and optionally CCM) syscalls with explicit nonce/tag sizing (RFC 8998). *(Done: GCM uses fixed 12-byte nonces + 16-byte tags; CCM supports 7–13 byte nonces with tag lengths {4,6,8,10,12,14,16} controlled via `r14`; Kotodama exposes these as `sm::seal_gcm/open_gcm` and `sm::seal_ccm/open_ccm`.) Document nonce reuse policy in the developer handbook.*
-4. Wire Kotodama smoke contracts and IVM integration tests covering positive and negative cases (altered tags, malformed signatures, unsupported algorithms). *(Done via `crates/ivm/tests/kotodama_sm_syscalls.rs` mirroring host regressions for SM3/SM2/SM4.)*
-5. Update syscall allowlists, policies, and ABI docs (`crates/ivm/docs/syscalls.md`) and refresh hashed manifests after adding the new entries.
-
-### Host & VM Integration Status
-- DefaultHost, CoreHost, and WsvHost expose the SM3/SM2/SM4 syscalls and gate them on `sm_enabled`, returning `PermissionDenied` when the runtime flag is false.【crates/ivm/src/host.rs:915】【crates/ivm/src/core_host.rs:833】【crates/ivm/src/mock_wsv.rs:2307】
-- `crypto.allowed_signing` gating is threaded through pipeline/executor/state so production nodes opt in deterministically via configuration; adding `sm2` toggles SM helper availability.`【crates/iroha_core/src/smartcontracts/ivm/host.rs:170】【crates/iroha_core/src/state.rs:7673】【crates/iroha_core/src/executor.rs:683】
-- Regression coverage exercises both enabled and disabled paths (DefaultHost/CoreHost/WsvHost) for SM3 hashing, SM2 verification, and SM4 GCM/CCM seal/open flows.【crates/ivm/tests/sm_syscalls.rs:129】【crates/ivm/tests/sm_syscalls.rs:733】【crates/ivm/tests/sm_syscalls.rs:1036】
-
-## Configuration Threads
-- Add `crypto.allowed_signing`, `crypto.default_hash`, `crypto.sm2_distid_default`, and the optional `crypto.enable_sm_openssl_preview` to `iroha_config`. Ensure data-model feature plumbing mirrors the crypto crate (`iroha_data_model` exposes `sm` → `iroha_crypto/sm`).
-- Wire config to admission policies so manifests/genesis files define allowable algorithms; control-plane remains Ed25519 by default.
-
-### CLI & SDK Work (SM-3)
-1. **Torii CLI** (`crates/iroha_cli`): add SM2 keygen/import/export (distid aware), SM3 hashing helpers, and SM4 AEAD encrypt/decrypt commands. Update interactive prompts and docs.
-2. **Genesis tooling** (`xtask`, `scripts/`): allow manifests to declare allowed signing algorithms and default hashes, fail fast if SM is enabled without corresponding config knobs. *(Done: `RawGenesisTransaction` now carries a `crypto` block with `default_hash`/`allowed_signing`/`sm2_distid_default`; `ManifestCrypto::validate` and `kagami genesis validate` reject inconsistent SM settings and defaults/genesis manifest advertises the snapshot.)*
-3. **SDK surfaces**:
-   - Rust (`iroha_client`): expose SM2 signing/verification helpers, SM3 hashing, SM4 AEAD wrappers with deterministic defaults.
-   - Python/JS/Swift: mirror the Rust API; reuse staged fixtures in `sm_known_answers.toml` for cross-language tests.
-4. Document operator workflow for enabling SM in CLI/SDK quickstarts and ensure JSON/YAML configs accept the new algorithm tags.
-
-#### CLI progress
-- `cargo run -p iroha_cli --features sm -- crypto sm2 keygen --distid CN12345678901234` now emits a JSON payload describing the SM2 key pair together with a `client.toml` snippet (`public_key_config`, `private_key_hex`, `distid`). The command accepts `--seed-hex` for deterministic generation and mirrors the RFC 6979 derivation used by hosts.
-- `cargo xtask sm-operator-snippet --distid CN12345678901234` wraps the keygen/export flow, writing the same `sm2-key.json`/`client-sm2.toml` outputs in one step. Use `--json-out <path|->` / `--snippet-out <path|->` to redirect files or stream them to stdout, removing the `jq` dependency for automation.
-- `iroha_cli tools crypto sm2 import --private-key-hex <hex> [--distid ...]` derives the same metadata from existing material so operators can validate distinguishing IDs before admission.
-- `iroha_cli tools crypto sm2 export --private-key-hex <hex> --emit-json` prints the config snippet (including `allowed_signing`/`sm2_distid_default` guidance) and optionally re-emits the JSON key inventory for scripting.
-- `iroha_cli tools crypto sm3 hash --data <string>` hashes arbitrary payloads; `--data-hex` / `--file` cover binary inputs and the command reports both hex and base64 digests for manifest tooling.
-- `iroha_cli tools crypto sm4 gcm-seal --key-hex <KEY> --nonce-hex <NONCE> --plaintext-hex <PT>` (and `gcm-open`) wrap the host SM4-GCM helpers and surface `ciphertext_hex`/`tag_hex` or plaintext payloads. `sm4 ccm-seal` / `sm4 ccm-open` provide the same UX for CCM with nonce length (7–13 bytes) and tag length (4,6,8,10,12,14,16) validation baked in; both commands optionally emit raw bytes to disk.
-
-## Testing Strategy
-### Unit/Known Answer Tests
-- GM/T 0004 & GB/T 32905 vectors for SM3 (e.g., `"abc"`).
-- GM/T 0002 & RFC 8998 vectors for SM4 (block + GCM/CCM).
-- GM/T 0003/GB/T 32918 examples for SM2 (Z-value, signature verification), including Annex Example 1 with ID `ALICE123@YAHOO.COM`.
-- Interim fixture staging file: `crates/iroha_crypto/tests/fixtures/sm_known_answers.toml`.
-- Wycheproof-derived SM2 regression suite (`crates/iroha_crypto/tests/sm2_wycheproof.rs`) now carries a 52-case corpus that layers deterministic fixtures (Annex D, SDK seeds) with bit-flip, message-tamper, and truncated-signature negatives. The sanitized JSON lives in `crates/iroha_crypto/tests/fixtures/wycheproof_sm2.json`, and `sm2_fuzz.rs` consumes it directly so both happy-path and tamper scenarios stay aligned across fuzz/property runs. 벡터들은 표준 곡선뿐만 아니라 Annex 영역도 다루며, 필요 시 내장 `Sm2PublicKey` 검증 이후 BigInt 백업 루틴이 추적을 완료합니다.
-- `cargo xtask sm-wycheproof-sync --input <wycheproof-sm2.json>` (or `--input-url <https://…>`) deterministically trims any upstream drop (generator tag optional) and rewrites `crates/iroha_crypto/tests/fixtures/wycheproof_sm2.json`. Until C2SP publishes the official corpus, download forks manually and feed them through the helper; it normalises keys, counts, and flags so reviewers can reason over diffs.
-- SM2/SM3 Norito round-trips validated in `crates/iroha_data_model/tests/sm_norito_roundtrip.rs`.
-- SM3 host syscall regression in `crates/ivm/tests/sm_syscalls.rs` (SM feature).
-- SM2 verify syscall regression in `crates/ivm/tests/sm_syscalls.rs` (success + failure cases).
-
-### Property & Regression Tests
-- Proptest for SM2 rejecting invalid curves, non-canonical r/s, and reuse of nonces. *(Available in `crates/iroha_crypto/tests/sm2_fuzz.rs`, gated behind `sm_proptest`; enable via `cargo test -p iroha_crypto --features "sm sm_proptest"`.)*
-- Wycheproof SM4 vectors (block/AES-mode) adapted for varied modes; track upstream for SM2 additions. `sm3_sm4_vectors.rs` now exercises tag bit-flips, truncated tags, and ciphertext tampering for both GCM and CCM.
-
-### Interop & Performance
-- RustCrypto ↔ OpenSSL/Tongsuo parity suite for SM2 sign/verify, SM3 digests, and SM4 ECB/GCM lives in `crates/iroha_crypto/tests/sm_cli_matrix.rs`; invoke it with `scripts/sm_interop_matrix.sh`. CCM parity vectors now run in `sm3_sm4_vectors.rs`; CLI matrix support will follow once upstream CLIs expose CCM helpers.
-- SM3 NEON helper now runs the Armv8 compression/padding path end-to-end with runtime gating through `sm_accel::is_sm3_enabled` (feature + env overrides mirrored across SM3/SM4). Golden digests (zero/`"abc"`/long-block + randomized lengths) and forced-disable tests keep parity with the scalar RustCrypto backend, and the Criterion micro-bench (`crates/sm3_neon/benches/digest.rs`) captures scalar vs NEON throughput on AArch64 hosts.
-- Perf harness mirroring `scripts/gost_bench.sh` to compare Ed25519/SHA-2 vs SM2/SM3/SM4 and validate tolerance thresholds.
-
-#### Arm64 Baseline (local Apple Silicon; Criterion `sm_perf`, refreshed 2025-12-05)
-- `scripts/sm_perf.sh` now runs the Criterion bench and enforces medians against `crates/iroha_crypto/benches/sm_perf_baseline.json` (recorded on aarch64 macOS; tolerance 25 % by default, baseline metadata captures the host triple). The new `--mode` flag lets engineers capture scalar vs NEON vs `sm-neon-force` datapoints without editing the script; the current capture bundle (raw JSON + aggregated summary) lives under `artifacts/sm_perf/2026-03-lab/m3pro_native/` and stamps every payload with `cpu_label="m3-pro-native"`.
-- Acceleration modes now auto-select the scalar baseline as a comparison target. `scripts/sm_perf.sh` threads `--compare-baseline/--compare-tolerance/--compare-label` through `sm_perf_check`, emitting per-benchmark deltas against the scalar reference and failing when the slowdown exceeds the configured threshold. Per-benchmark tolerances from the baseline drive the comparison guard (SM3 is capped at 12 % on the Apple scalar baseline, while the SM3 comparison delta now permits up to 70 % against the scalar reference to avoid flapping); the Linux baselines reuse the same comparison map because they are exported from the `neoverse-proxy-macos` capture, and we will tighten them after a bare-metal Neoverse run if the medians differ. Pass `--compare-tolerance` explicitly when capturing stricter bounds (e.g., `--compare-tolerance 0.20`) and use `--compare-label` to annotate alternative reference hosts.
-- Baselines recorded on the CI reference machine now live in `crates/iroha_crypto/benches/sm_perf_baseline_aarch64_macos_scalar.json`, `sm_perf_baseline_aarch64_macos_auto.json`, and `sm_perf_baseline_aarch64_macos_neon_force.json`. Refresh them with `scripts/sm_perf.sh --mode scalar --write-baseline`, `--mode auto --write-baseline`, or `--mode neon-force --write-baseline` (set `SM_PERF_CPU_LABEL` before capturing) and archive the generated JSON alongside the run logs. Keep the aggregated helper output (`artifacts/.../aggregated.json`) with the PR so reviewers can audit every sample. Linux/Neoverse baselines now ship in `sm_perf_baseline_aarch64_unknown_linux_gnu_{mode}.json`, promoted from `artifacts/sm_perf/2026-03-lab/neoverse-proxy-macos/aggregated.json` (CPU label `neoverse-proxy-macos`, SM3 compare tolerance 0.70 for aarch64 macOS/Linux); rerun on bare-metal Neoverse hosts when available to tighten the tolerances.
-- Baseline JSON files may now carry an optional `tolerances` object to tighten guardrails per benchmark. Example:
+### སློབ་སྦྱོང་དང་ལས་རིམ།
+- RustCrypto ↔ ཨོཔ་ཨེསི་ཨེསི་ཨེལ་/ཊོང་སུའོ་ པེ་རིཊི་ཆ་ཚང་ ཨེསི་ཨེམ་༢ རྟགས་/བདེན་དཔྱད་ ཨེསི་ཨེམ་༣ བཞུ་བཅོས་དང་ ཨེསི་ཨེམ་༤ ཨི་སི་བྷི་/ཇི་སི་ཨེམ་འདི་ `crates/iroha_crypto/tests/sm_cli_matrix.rs` ནང་སྡོད་ཡོདཔ་ཨིན། `scripts/sm_interop_matrix.sh` དང་ཅིག་ཁར་ འབོད་བརྡ་འབདཝ་ཨིན། ད་ལྟ་ CCM འདྲ་མཉམ་གྱི་ཝེག་ཊར་ཚུ་ `sm3_sm4_vectors.rs` ནང་ལུ་འགྱོཝ་ཨིན། CLI matrix རྒྱབ་སྐྱོར་འདི་གིས་ CLIs གིས་ CCM གྲོགས་རམ་པ་ཚུ་ གསལ་སྟོན་འབད་ཚརཝ་ཅིག་ རྗེས་སུ་འཇུག་འོང་།
+- SM3 NEON གྲོགས་རམ་པ་གིས་ ད་ལྟོ་ Armv8 བསྡམ་བཞག་/པེ་ཌིང་འགྲུལ་ལམ་འདི་ མཇུག་ལས་མཇུག་ཚུན་ཚོད་ གཡོག་བཀོལཝ་ཨིན། གསེར་གྱི་བཞུ་ཁུ་ཚུ་ (zero/I00000272X/long-block + reglandized རིང་ཚད་ཚུ་) དང་ བཙན་ཤེད་ཀྱིས་ ལྕོགས་མིན་ཡོད་པའི་བརྟག་དཔྱད་ཚུ་གིས་ saccalar RustCrypto backend དང་ ཁྱད་ཚད་མའི་ཀོརོ་བེནཆ་ (`crates/sm3_neon/benches/digest.rs`) གིས་ འདྲ་མཉམ་སྦེ་བཞག་དོ་ཡོདཔ་ཨིན། (`crates/sm3_neon/benches/digest.rs`)
+- པརཕ་ ཧར་ནིས་ `scripts/gost_bench.sh` Ed25519/SHA-2 vs SM2/SM3/SM4 དང་ བདེན་དཔྱད་བཟོད་བསྲན་ཚད་གཞི་ཚུ་ ག་བསྡུར་རྐྱབ་ནིའི་དོན་ལུ་ མེ་ལོང་ འབད་ནི།#### Arm64 གཞི་རིམ་ (ས་གནས་ཨེ་པཱལ་སི་ཀོན་; ཚད་གཞི་ `sm_perf`, གསརཔ་ ༢༠༢༥-༡༢-༠༥)
+- `scripts/sm_perf.sh` ད་ལྟ་ `crates/iroha_crypto/benches/sm_perf_baseline.json` ལུ་འགོག་པའི་བར་ན་ བར་མཚམས་ཚུ་ བསྟར་སྤྱོད་འབདཝ་ཨིན། `--mode` དར་ཆ་འདི་གིས་ བཟོ་རིག་པ་ཚུ་གིས་ ཡིག་གཟུགས་ཞུན་དག་མ་འབད་བར་ nEON vs ION vs ION vs ION vs གི་གནས་སྡུད་བསྡུ་ལེན་འབད་བཅུགཔ་ཨིན། ད་ལྟའི་འཛིན་བཟུང་བཱན་ཌལ་ (raw JSON + བསྡོམས་རྩིས་བཅུད་བསྡུས་) འདི་ `artifacts/sm_perf/2026-03-lab/m3pro_native/` གི་འོག་ལུ་སྡོད་ནི་དང་ `cpu_label="m3-pro-native"` ཡོད་པའི་ པེ་ལོཌ་ག་ར་གི་འོག་ལུ་ཡོདཔ་ཨིན།
+- མགྱོགས་ཚད་ཐབས་ལམ་ཚུ་གིས་ ད་ལྟོ་ ག་བསྡུར་དམིགས་གཏད་ཅིག་སྦེ་ སི་ཀེ་ལར་གཞི་རྟེན་འདི་ རང་བཞིན་སྦེ་སེལ་འཐུ་འབདཝ་ཨིན། `scripts/sm_perf.sh` ཐགསཔ་ `--compare-baseline/--compare-tolerance/--compare-label` `sm_perf_check` བརྒྱུད་དེ་ `sm_perf_check` གིས་ scalar གཞི་བསྟུན་ལུ་ བརྡ་རྟགས་རེ་རེ་བཏོན་ཞིནམ་ལས་ མར་ཕབ་འདི་ རིམ་སྒྲིག་འབད་ཡོད་པའི་ཚད་གཞི་ལས་ལྷག་སྟེ་ཡོད་པའི་སྐབས་ འཐུས་ཤོར་འགྱོཝ་ཨིན། ག་བསྡུར་གྱི་བཀག་འཛིན་ལས་ གཞི་རྟེན་གྱི་ བཟོད་བསྲན་ཚུ་ (SM3 འདི་ Apple scalar གི་གཞི་རྟེན་གུ་ བརྒྱ་ཆ་༡༢ ལུ་ བསྡམ་བཞག་ཡོདཔ་ད་ SM3 ག་བསྡུར་གྱི་ delta འདི་ ད་ལྟོ་ scalar གི་གཞི་བསྟུན་ལས་ བརྒྱ་ཆ་༧༠ དེ་ཅིག་ འཕྱེལ་འགྱོ་བཅུགཔ་ཨིན།) ལི་ནགསི་གཞི་རྟེན་གྱིས་ ག་བསྡུར་གྱི་སབ་ཁྲ་གཅིགཔོ་འདི་ ལོག་སྟེ་ལག་ལེན་འཐབ་ཨིན། ག་ཅི་འབད་ཟེར་བ་ཅིན་ དེ་ཚུ་ `neoverse-proxy-macos` བཟུང་མི་ལས་ ཕྱིར་འདྲེན་འབད་ཡོདཔ་ལས་ བར་མཚམས་ཚུ་ སོ་སོ་སྦེ་ཡོད་པ་ཅིན་ ལྕགས་རིགས་ཀྱི་ ནིའུ་ཝར་སི་ གཡོག་བཀོལ་བའི་ཤུལ་ལས་ ང་བཅས་ཀྱིས་ དེ་ཚུ་ བཀག་ཚུགས། མཐའ་མཚམས་དམ་དྲག་ཚུ་ འཛིན་བཟུང་འབད་བའི་སྐབས་ `--compare-tolerance` གསལ་ཏོག་ཏོ་སྦེ་ བརྒྱུད་དེ་ (དཔེར་ན་ `--compare-tolerance 0.20`) དེ་ལས་ གདམ་ཁ་ཅན་གྱི་གཞི་བསྟུན་ཧོསིཊི་ཚུ་ བརྡ་སྟོན་འབད་ནི་ལུ་ `--compare-label` ལག་ལེན་འཐབ།
+- CI གཞི་བསྟུན་འཕྲུལ་ཆས་ནང་ཐོ་བཀོད་འབད་ཡོད་པའི་གཞི་རྟེན་ཚུ་ ད་ལྟོ་ `crates/iroha_crypto/benches/sm_perf_baseline_aarch64_macos_scalar.json`, `sm_perf_baseline_aarch64_macos_auto.json`, དང་ `sm_perf_baseline_aarch64_macos_neon_force.json` ནང་སྡོད་ཡོདཔ་ཨིན། དེ་ཚུ་ `scripts/sm_perf.sh --mode scalar --write-baseline` དང་ `--mode auto --write-baseline`, ཡང་ན་ `--mode neon-force --write-baseline` དང་གཅིག་ཁར་ གསརཔ་སྦེ་ གསརཔ་བཟོ་ཞིནམ་ལས་ བཟུང་མ་ཚར་བའི་ཧེ་མ་ `SM_PERF_CPU_LABEL` བཟོ་བཏོན་འབད་ཡོད་པའི་ JSON གཏན་མཛོད་འབད་དགོ། བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ དཔེ་ཚད་ག་ར་རྩིས་ཞིབ་འབད་བཏུབ་པའི་ PR དང་གཅིག་ཁར་ བསྡུ་སྒྲིག་འབད་ཡོད་པའི་ གྲོགས་རམ་གྱི་ ཐོན་འབྲས་ (`artifacts/.../aggregated.json`) བཞག་དགོ། ལི་ནགསི་/ནའོ་ཝར་གྱི་གཞི་རྟེན་ཚུ་ ད་ལྟོ་ `sm_perf_baseline_aarch64_unknown_linux_gnu_{mode}.json` ནང་ བཏངམ་ཨིན། དེ་ཡང་ `artifacts/sm_perf/2026-03-lab/neoverse-proxy-macos/aggregated.json` ལས་ ཁྱབ་སྤེལ་འབད་མི་ (CPU hart `neoverse-proxy-macos`, SM3 aarch64 macOS/Linux གི་དོན་ལུ་ བཟོད་བསྲན་ ༠.༧༠ ག་བསྡུར་འབདཝ་ཨིན།) བཟོད་བསྲན་ཚུ་ བཀག་ཆ་འབད་ཚུགས་པའི་སྐབས་ ལྕགས་རིགས་མེད་པའི་ ནིའུ་ཝར་སི་ ཧོསིཊ་ཚུ་ ལོག་སྟེ་ བཀལ་དགོ།
+- གཞི་རྟེན་JSON ཡིག་སྣོད་ཚུ་གིས་ ད་ལྟོ་ བེན་ཇ་མཱརཀ་རེ་ལུ་ བཀག་འཛིན་འབད་ནིའི་དོན་ལུ་ གདམ་ཁ་ཅན་གྱི་ `tolerances` དངོས་པོ་ཅིག་ འབག་འོང་། དཔེ:
   ```json
   {
     "benchmarks": { "...": 12.34 },
@@ -193,165 +176,150 @@ fleet.
     }
   }
   ```
-  `sm_perf_check` applies these fractional limits (8 % and 12 % in the example) while using the global CLI tolerance for any benchmarks not listed.
-- Comparison guards can also honour `compare_tolerances` in the comparison baseline. Use this to allow a looser delta against the scalar reference (for example, `\"sm3_vs_sha256_hash/sm3_hash\": 0.70` in the scalar baseline) while keeping the primary `tolerances` strict for direct baseline checks.
-- The checked-in Apple Silicon baselines now ship with concrete guardrails: SM2/SM4 operations allow 12–20 % drift depending on variance, while SM3/ChaCha comparisons sit at 8–12 %. The scalar baseline’s `sm3` tolerance is now tightened to 0.12; the `unknown_linux_gnu` files mirror the `neoverse-proxy-macos` export with the same tolerance map (SM3 compare 0.70) and metadata notes indicating they are shipped for the Linux gate until a bare-metal Neoverse rerun is available.
-- SM2 signing: 298 µs per op (Ed25519: 32 µs) ⇒ ~9.2× slower; verification: 267 µs (Ed25519: 41 µs) ⇒ ~6.5× slower.
-- SM3 hashing (4 KiB payload): 11.2 µs, effectively parity with SHA-256 at 11.3 µs (≈356 MiB/s vs 353 MiB/s).
-- SM4-GCM seal/open (1 KiB payload, 12-byte nonce): 15.5 µs vs ChaCha20-Poly1305 at 1.78 µs (≈64 MiB/s vs 525 MiB/s).
-- Benchmark artefacts (`target/criterion/sm_perf*`) captured for reproducibility; the Linux baselines are sourced from `artifacts/sm_perf/2026-03-lab/neoverse-proxy-macos/` (CPU label `neoverse-proxy-macos`, SM3 compare tolerance 0.70) and can be refreshed on bare-metal Neoverse hosts (`SM-4c.1`) once lab time opens to tighten tolerances.
+  `sm_perf_check` གིས་ དཔྱ་རྩིས་ཚད་གཞི་འདི་ཚུ་འཇུག་སྤྱོད་འབདཝ་ཨིན་ (དཔེར་ན་ ༨% དང་ ༡༢%) ཐོ་བཀོད་མ་འབད་བའི་ཚད་གཞི་གང་རུང་ཅིག་གི་དོན་ལུ་ ཡོངས་ཁྱབ་སི་ཨེལ་ཨའི་བཟོད་བསྲན་ལག་ལེན་འཐབ་ཨིན།
+- ག་བསྡུར་གྱི་སྲུང་སྐྱོབ་པ་ཚུ་གིས་ ག་བསྡུར་གཞི་རྟེན་ནང་ `compare_tolerances` ལུ་ཡང་ གུས་ཞབས་འབད་ཚུགས། འདི་ལག་ལེན་འཐབ། ཐད་ཀར་གཞི་རྟེན་ཞིབ་དཔྱད་ཚུ་གི་དོན་ལུ་ `tolerances` གཞི་རིམ་ `tolerances` འདི་ གཞི་རིམ་གྱི་ `tolerances` འདི་ དམ་དམ་སྦེ་བཞག་པའི་སྐབས་ལུ་ ལག་ལེན་འཐབ་དགོ།- ད་ལྟོ་ བརྟག་དཔྱད་འབད་མི་ Apple Silicon གི་གཞི་རྟེན་ཚུ་ བརྟན་བརྟན་གྱི་སྲུང་སྐྱོབ་ཚུ་དང་གཅིག་ཁར་ བཏངམ་ཨིན། ད་ལྟ་ ༠.༡༢ ལུ་ བཟོད་བསྲན་འབད་ཡོདཔ་ཨིན་པས། Kotodama ཡིག་སྣོད་ཚུ་གིས་ `neoverse-proxy-macos` བཟོད་བསྲན་སབ་ཁྲ་གཅིག་དང་གཅིག་ཁར་ ཕྱིར་འདྲེན་འབད་མི་འདི་ མེ་ལོང་ (SM3 ག་བསྡུར་ ༠.༧༠) དང་ མེ་ཊལ་ ལྕགས་རིགས་གསརཔ་ མ་ཐོན་ཚུན་ཚོད་ ལི་ནགསི་གཱེཊ་གི་དོན་ལུ་ བཏང་ཡོདཔ་ཨིན།
+- SM2 མཚན་རྟགས་བཀོད་པ་: ep རེ་ལུ་ 298μs (Ed25519: 32μs) ⇒ ~9.2× མགྱོགས་པ། བདེན་དཔྱད་: ༢༦༧μs (Ed25519: 41μs) ⇒ ~6.5× མགྱོགས་པ།
+- SM3 ཧ་ཤིང་ (4KiB པེ་ལོཌ): 11.2μs, 11.3μs (≈356MiB/s vs vs 353MiB/s) ལུ་ SHA-256 དང་ཅིག་ཁར་ ཕན་ནུས་ཅན་སྦེ་ ཆ་སྙོམས་སྦེ་ཡོདཔ་ཨིན།
+- SM4-GCM མཚོན་རྟགས་/ཁ་ཕྱེ/ཁ་ཕྱེ། (1KiB པེ་ལིབསི།, 12-byte nonce): 15.5μs 1.78μs ལུ་ ChaCha20-Poly1305 (≈64MiB/s vs 525MiB/s) ལུ།
+- བེན་ཀ་མཱརཀ་ ཅ་རྙིང་ (`target/criterion/sm_perf*`) བསྐྱར་བཟོ་འབད་ནི་གི་དོན་ལུ་ བཟུང་ཡོདཔ་ཨིན། ལི་ནགསི་གཞི་རྟེན་ཚུ་ `artifacts/sm_perf/2026-03-lab/neoverse-proxy-macos/` ལས་ འབྱུང་ཁུངས་བཟོ་སྟེ་ཡོདཔ་ཨིན། (CPU hart `neoverse-proxy-macos`, SM3 ཨེསི་ཨེམ་༣ ག་བསྡུར་བཟོད་བསྲན་ ༠.༧༠) དེ་ལས་ བཟོད་བསྲན་ཚུ་ བཟོད་བསྲན་འབད་ནི་ལུ་ དུས་ཚོད་བཀག་ཆ་འབད་ནི་གི་དོན་ལུ་ སྒོ་ཕྱེཝ་ཨིན།
 
-#### Cross-architecture capture checklist
-- Run `scripts/sm_perf_capture_helper.sh` **on the target machine** (x86_64 workstation, Neoverse ARM server, etc.). Pass `--cpu-label <host>` to stamp the captures and (when running in matrix mode) to pre-populate the generated plan/commands for lab scheduling. The helper prints mode-specific commands that:
-  1. execute the Criterion suite with the correct feature set, and
-  2. write medians into `crates/iroha_crypto/benches/sm_perf_baseline_${arch}_${os}_${mode}.json`.
-- Capture the scalar baseline first, then re-run the helper for `auto` (and `neon-force` on AArch64 platforms). Use a meaningful `SM_PERF_CPU_LABEL` so reviewers can trace host details in the JSON metadata.
-- After each run, archive the raw `target/criterion/sm_perf*` directory and include it in the PR together with the generated baselines. Tighten per-benchmark tolerances as soon as two consecutive runs stabilise (see `sm_perf_baseline_aarch64_macos_*.json` for reference formatting).
-- Record the medians + tolerances in this section and update `status.md`/`roadmap.md` when a new architecture is covered. The Linux baselines are now checked in from the `neoverse-proxy-macos` capture (metadata notes the export to the aarch64-unknown-linux-gnu gate); rerun on bare-metal Neoverse/x86_64 hosts as follow-ups when those lab slots are available.
+#### བཤུས་བསྐྲུན་པའི་ པར་ལེན་དཔྱད་ཐོ།
+- དམིགས་གཏད་འཕྲུལ་ཆས་** (x86_64 ལཱ་འབད་སའི་ས་ཁོངས་ ནིའུ་ཝར་སི་ཨར་ཨེམ་སར་བར་ལ་སོགས་པ་ཚུ་) - `scripts/sm_perf_capture_helper.sh` གཡོག་བཀོལ། བརྟག་དཔྱད་དུས་ཚོད་བཀོད་ནིའི་དོན་ལུ་ བཟོ་བཏོན་འབད་ཡོད་པའི་འཆར་གཞི་/བཀོད་རྒྱ་ཚུ་ སྔོན་སྒྲིག་འབད་ནི་ལུ་ `--cpu-label <host>` བརྒྱུད་དེ་ (མེ་ཊིགསི་ཐབས་ལམ་ནང་ གཡོག་བཀོལ་བའི་སྐབས་) གྲོགས་རམ་པ་དེ་གིས་ ཐབས་ལམ་དམིགས་བསལ་བརྡ་བཀོད་ཚུ་ དཔར་བསྐྲུན་འབདཝ་ཨིན་ དེ་ཡང་:
+  ༡ ཁྱད་ཚད་ཆ་ཚང་འདི་ ཁྱད་རྣམ་ཆ་ཚན་ངེས་བདེན་ ཆ་ཚན་དང་གཅིག་ཁར་ ལག་ལེན་འཐབ་ཨིན།
+  2. `crates/iroha_crypto/benches/sm_perf_baseline_${arch}_${os}_${mode}.json` ནང་ལུ་བར་མཚམས་བྲིས།
+- དང་པ་ scalar base འདི་ བསྡུ་སྒྲིག་འབད་ཞིནམ་ལས་ `auto` གི་དོན་ལུ་ གྲོགས་རམ་པ་ལོག་སྟེ་གཡོག་བཀོལ་དགོ། དོན་དག་ཅན་གྱི་ `SM_PERF_CPU_LABEL` འདི་ JSON མེ་ཊ་ཌེ་ཊ་ནང་ ཧོསིཊི་ཁ་གསལ་ཚུ་ འཚོལ་ཞིབ་འབད་ཚུགས།
+- གཡོག་བཀོལ་བའི་ཤུལ་ལས་ `target/criterion/sm_perf*` སྣོད་ཐོ་འདི་ གཏན་མཛོད་འབད་དེ་ བཟོ་བཏོན་འབད་ཡོད་པའི་གཞི་རྟེན་ཚུ་དང་གཅིག་ཁར་ PR ནང་ལུ་བཙུགས་དགོ། རིམ་མཐུན་གཉིས་ལྡན་གྱིས་ གཡོག་བཀོལ་བའི་བསྒང་ལས་ ཚད་གཞི་རེ་ལུ་ བཟོད་བསྲན་ཚུ་ མཚམས་འཇོག་འབད་ (གཞི་བསྟུན་རྩ་སྒྲིག་འབད་ནིའི་དོན་ལུ་ `sm_perf_baseline_aarch64_macos_*.json` ལུ་བལྟ།)
+- དབྱེ་ཚན་འདི་ནང་ བར་མཚམས་ + བཟོད་བསྲན་ཚུ་ཐོ་བཀོད་འབད་ཞིནམ་ལས་ བཟོ་བཀོད་གསརཔ་ཅིག་ཁྱབ་པའི་སྐབས་ `status.md`/`roadmap.md` དུས་མཐུན་བཟོ་དགོ། ལི་ནགསི་གཞི་རྟེན་ཚུ་ ད་ལྟོ་ `neoverse-proxy-macos` པར་ལེན་ལས་ ཞིབ་དཔྱད་འབད་ཡོདཔ་ཨིན། (མེ་ཊ་ཌེ་ཊ་གིས་ aaram64-nownder-lux-gnu gate ལུ་ཕྱིར་འདྲེན་འབད་མི་འདི་); ལྕགས་རིགས་ bare-metal Neoverse/x86_64 ཧོསིཊི་ཚུ་ བརྟག་དཔྱད་ཁང་དེ་ཚུ་ འཐོབ་ཚུགས་པའི་སྐབས་ རྗེས་འཇུག་སྦེ་ཨིན།
 
-#### ARMv8 SM3/SM4 intrinsics vs scalar paths
-`sm_accel` (see `crates/iroha_crypto/src/sm.rs:739`) provides the runtime dispatch layer for NEON-backed SM3/SM4 helpers. The feature is guarded at three levels:
+#### ARMv8 SM3/SM4 ནང་དོན་རིག་པ།
+`sm_accel` (`crates/iroha_crypto/src/sm.rs:739`) གིས་ NEON-back backed SM3/SM4 གྲོགས་རམ་གྱི་དོན་ལུ་ རན་ཊའིམ་གཏང་བང་རིམ་བྱིནམ་ཨིན། ཁྱད་རྣམ་འདི་ གནས་རིམ་གསུམ་ནང་ སྲུང་བཞག་འབདཝ་ཨིན།| བང་རིམ་ | ཚད་འཛིན། | དྲན་ཐོ། |
+|---------|-------------|-------------------------
+| དུས་ཚོད་བསྡུ་སྒྲིག་འབད་ནི། | `--features sm` (ད་ལྟ་ `sm-neon` ནང་ རང་བཞིན་གྱིས་ `aarch64`) ཡང་ན་ `sm-neon-force` (བརྟག་དཔྱད་/བེང་ཅི་རྟགས་) | NEON ཚད་གཞི་ཚུ་དང་འབྲེལ་མཐུད་ `sm3-neon`/`sm4-neon` ཚུ་བཟོ་བསྐྲུན་འབདཝ་ཨིན། |
+| གཡོག་བཀོལ་དུས་ཚོད་རང་བཞིན་-བརྟག་ཞིབ། | `sm4_neon::is_supported()` | AES/PMULL འདྲ་མཉམ་སྦེ་བཏོན་མི་ CPUs ནང་ལུ་རྐྱངམ་ཅིག་ བདེན་པ་ཨིན། VMs དེ་ གདོང་ཁེབས་ NEON ཡང་ན་ FEAT_SM4 འདི་ ཨིས་ཀེ་ལར་ཨང་རྟགས་ལུ་ལོག་འགྱོཝ་ཨིན། |
+| བཀོལ་སྤྱོད་པ་གིས་ བཀག་ཆ་འབད་ཡོདཔ། | `crypto.sm_intrinsics` (`auto`/`force-enable`/`force-disable`) | འགོ་བཙུགས་པའི་སྐབས་འཇུག་སྤྱོད་འབད་ཡོད་པའི་རིམ་སྒྲིག་-བསྒྱིར་མི་གཏང་ནི། བློ་གཏད་ཅན་གྱི་མཐའ་འཁོར་ནང་ གསལ་སྡུད་འབད་ནིའི་དོན་ལུ་ `force-enable` ལག་ལེན་འཐབ། |
 
-| Layer | Control | Notes |
-|-------|---------|-------|
-| Compile time | `--features sm` (now pulls in `sm-neon` automatically on `aarch64`) or `sm-neon-force` (tests/benchmarks) | Builds the NEON modules and links `sm3-neon`/`sm4-neon`. |
-| Runtime auto-detect | `sm4_neon::is_supported()` | Only true on CPUs that expose AES/PMULL equivalents (e.g., Apple M-series, Neoverse V1/N2). VMs that mask NEON or FEAT_SM4 fall back to scalar code. |
-| Operator override | `crypto.sm_intrinsics` (`auto`/`force-enable`/`force-disable`) | Config-driven dispatch applied at startup; use `force-enable` only for profiling in trusted environments and prefer `force-disable` when validating scalar fallbacks. |
+**ལཱ་འགན་ཡིག་ཆའི་ (Apple M3 Pro; `sm_perf_baseline_aarch64_macos_{mode}.json` ནང་ཐོ་བཀོད་འབད་ཡོད་པའི་བར་མཚམས་):**
 
-**Performance envelope (Apple M3 Pro; medians recorded in `sm_perf_baseline_aarch64_macos_{mode}.json`):**
+| ཐབས་ལམ་ | SM3 འཇུ་བྱེད་ (4KiB) | SM4-GCM མཚོན་རྟགས་ (1KiB) | དྲན་ཐོ། |
+|--|-|----------------------------------------------------------------------- |
+| Scalar | 11.6μs | 15.9μs | གཏན་འབེབས་ RusCrypto འགྲུལ་ལམ་; `sm` ཁྱད་རྣམ་འདི་ ག་སྟེ་ཡང་ ལག་ལེན་འཐབ་ཡོདཔ་ཨིན་རུང་ NEON འདི་ འཐོབ་མ་ཚུགསཔ་ཨིན། |
+| NEON auto | ~2.7× scalar ལས་མགྱོགས་པ། | ~2.3× scalar ལས་མགྱོགས་པ། | ད་ལྟའི་NEON ཀར་ནེལ་ (SM-5a.2c) གིས་ དུས་ཚོད་གཅིག་ལུ་ མིང་ཚིག་བཞི་ རྒྱ་སྐྱེད་འབད་དེ་ བང་རིམ་གཉིས་ལྡན་གྱི་ རླུང་འཕྲིན་ཨའུཊི་ལག་ལེན་འཐབ་ཨིན། ངེས་བདེན་ བར་མཚམས་ཚུ་ ཧོསིཊི་རེ་ལུ་ སོ་སོ་ཡོདཔ་ལས་ གཞི་རྟེན་ཇེ་ཨེསི་ཨོ་ཨེན་ མེ་ཊ་ཌེ་ཊ་ལུ་ གྲོས་བསྟུན་འབད། |
+| NEON གི་ཤུགས་ | མེ་ལོང་ NEON རང་བཞིན་ དེ་འབདཝ་ད་ ཕོལ་ལོག་འདི་ ཧྲིལ་བུ་སྦེ་ ལྕོགས་མིན་བཟོཝ་ཨིན། | རང་བཞིན་དང་འདྲ། | `scripts/sm_perf.sh --mode neon-force` བརྒྱུད་དེ་སྦྱོང་བརྡར་འབད་ཡོདཔ། སི་ཨའི་ དྲང་བདེན་གྱིས་ ཧོསིཊི་ཚུ་ལུ་ཡང་ བཞགཔ་ཨིན་ དེ་ཡང་ སི་ཀེ་ལར་ཐབས་ལམ་ལུ་ སྔོན་སྒྲིག་འབད་འོང་། |
 
-| Mode | SM3 digest (4 KiB) | SM4-GCM seal (1 KiB) | Notes |
-|------|-------------------|----------------------|-------|
-| Scalar | 11.6 µs | 15.9 µs | Deterministic RustCrypto path; used everywhere the `sm` feature is compiled but NEON is unavailable. |
-| NEON auto | ~2.7× faster than scalar | ~2.3× faster than scalar | Current NEON kernels (SM-5a.2c) widen the schedule four words at a time and use dual queue fan-out; exact medians vary per host, so consult the baseline JSON metadata. |
-| NEON force | Mirrors NEON auto but disables fallback entirely | Same as NEON auto | Exercised via `scripts/sm_perf.sh --mode neon-force`; keeps CI honest even on hosts that would default to scalar mode. |
+** Determinism དང་ བཀོལ་སྤྱོད་ལམ་སྟོན་**
+- མཉམ་གནས་རིག་པ་གིས་ བལྟ་བརྟོག་འབད་བཏུབ་པའི་གྲུབ་འབྲས་ཚུ་ ནམ་ཡང་བསྒྱུར་བཅོས་མ་འབད་ —`sm_accel` གིས་ `None` འདི་ མགྱོགས་དྲགས་ཅན་གྱི་འགྲུལ་ལམ་མེད་པའི་སྐབས་ སླར་ལོག་འབདཝ་ལས་ འོད་མདངས་ཅན་གྱི་གྲོགས་རམ་པ་འདི་ གཡོག་བཀོལ་དོ་ཡོདཔ་ཨིན། དེ་འབདཝ་ལས་ མོས་མཐུན་ཨང་རྟགས་འགྲུལ་ལམ་ཚུ་ ཨིསི་ཀེ་ལར་ལག་ལེན་འཐབ་ནི་འདི་ ངེས་བདེན་ཨིན་པ་ཅིན་ གཏན་འཁེལ་སྦེ་རང་ ལུས་ཡོདཔ་ཨིན།
+- NEON འགྲུལ་ལམ་འདི་ལག་ལེན་འཐབ་ཡོདཔ་ཨིན་ན་མེན་ན་ **not** ཚོང་འབྲེལ་གྱི་ཚད་མ་འདི་འབད། མགྱོགས་ཚད་འདི་ བརྡ་སྟོན་ཅིག་སྦེ་བརྩི་འཇོག་འབད་ཞིནམ་ལས་ གནས་རིམ་འདི་ ཊེ་ལི་མི་ཀྲི་བརྒྱུད་དེ་ གསལ་བཏོན་འབད། ༼དཔེར་ན་ `sm_intrinsics_enabled` འཇལ་ཚད་༽
+- ཨ་རྟག་ར་ `ci/check_sm_perf.sh` (ཡང་ན་ `make check-sm-perf`) འདི་ SM གསང་ཡིག་ལུ་ཨེབ་པའི་ཤུལ་ལས་ ཁྱད་ཚད་ལག་ལེན་འཐབ་པའི་ཤུལ་ལས་ ཚད་གཞི་འདི་གིས་ བཟོད་བསྲན་ཚུ་ གཞི་རྟེན་JSON རེ་རེ་ནང་བཙུགས་ཡོད་པའི་ བཟོད་བསྲན་ཚུ་ལག་ལེན་འཐབ་སྟེ་ བདེན་དཔྱད་འབདཝ་ཨིན།
+- བེན་ཀ་མཱརཀ་ཡང་ན་རྐྱེན་སེལ་འབད་བའི་སྐབས་ རིམ་སྒྲིག་དུས་ཚོད་ཀྱི་དར་ཆ་ཚུ་གུ་རིམ་སྒྲིག་འབད་ནིའི་མདུད་པ་ `crypto.sm_intrinsics` ལུ་དགའ་དགོ། `sm-neon-force` དང་གཅིག་ཁར་ ལོག་སྟེ་བསྡུ་སྒྲིག་འབད་མི་འདི་གིས་ scalar fark འདི་ ཡོངས་རྫོགས་སྦེ་ ལྕོགས་མིན་བཟོཝ་ཨིན་རུང་ `force-enable` གིས་ རན་དུས་ཚོད་བརྟག་དཔྱད་ལུ་ འཇམ་ཏོང་ཏོ་སྦེ་ ནུས་སྟོབས་བྱིནམ་ཨིན།
+- གདམ་ཁ་རྐྱབ་ཡོད་པའི་སྲིད་བྱུས་འདི་ གསར་བཏོན་དྲན་འཛིན་ཚུ་ནང་ ཡིག་ཆ་: བཟོ་བསྐྲུན་བཟོ་བསྐྲུན་ཚུ་གིས་ `Auto` ནང་ལུ་ སྲིད་བྱུས་འདི་བཞག་དགོཔ་ཨིན།
+- བཀྲམ་སྤེལ་དང་བརྟག་དཔྱད་ཀྱི་རྒྱུན་རིམ་ལུ་བརྩི་མཐོང་མ་འབད་ཚུན་ཚོད་ མཉམ་སྦྲགས་འབད་མི་ ཚོང་མགྲོན་པའི་ མཉམ་སྦྲགས་ཚོང་པ་ཚུ་ སླ་བསྲེ་རྐྱབ་མི་ སྐྱེལ་འདྲེན་གྱི་ གཉིས་ལྡན་ཚུ་ བཀག་ཐབས་འབད།#### x86_64 རོ་སེཊ་ཊ་གཞི་རྟེན་ (ཨེ་པཱལ་ཨེམ་༣ པྲོ་; བཟུང་ཡོདཔ། ༢༠༢༥-༡༢-༠༡)
+- གཞི་རྟེན་ཚུ་ `crates/iroha_crypto/benches/sm_perf_baseline_x86_64_macos_{scalar,auto,neon_force}.json` ནང་སྡོདཔ་ཨིན། (cpu_label=`m3-pro-rosetta`) རྭཝ་+ བསྡུ་སྒྲིག་ཚུ་ `artifacts/sm_perf/2026-03-lab/m3pro_rosetta/` གི་འོག་ལུ་ བསྡུ་སྒྲིག་འབད་ཡོདཔ་ཨིན།
+- x86_64 གུ་ཡོད་པའི་ བེརེ-མཱརཀ་ བཟོད་བསྲན་ཚུ་ ཨེསི་ཨེམ་༢ གི་དོན་ལུ་ བརྒྱ་ཆ་༢༠ དང་ ཨེཌི་༢༥༥༡༩/ཨེསི་ཨེཆ་ཨེ་-༢༥༦ གི་དོན་ལུ་ ༡༥ དེ་ལས་ ཨེསི་ཨེམ་༤/ཅ་ཅ་གི་དོན་ལུ་ ༡༢% ལུ་གཞི་སྒྲིག་འབདཝ་ཨིན། `scripts/sm_perf.sh` ད་ལྟ་ 25% གིས་ non-Arch64 ཧོསིཊི་གུ་ 25% གི་མགྱོགས་ཚད་ག་བསྡུར་གྱི་བཟོད་སྒོམ་འདི་ སྔོན་སྒྲིག་འབདཝ་ཨིན།
 
-**Determinism & deployment guidance**
-- Intrinsics never change observable results—`sm_accel` returns `None` when the accelerated path is unavailable so the scalar helper runs. Consensus code paths therefore remain deterministic as long as the scalar implementation is correct.
-- Do **not** gate business logic on whether the NEON path was used. Treat the acceleration purely as a perf hint and expose the status via telemetry only (e.g., `sm_intrinsics_enabled` gauge).
-- Always run `ci/check_sm_perf.sh` (or `make check-sm-perf`) after touching SM code so the Criterion harness validates both scalar and accelerated paths using the tolerances embedded in each baseline JSON.
-- When benchmarking or debugging, prefer the config knob `crypto.sm_intrinsics` over compile-time flags; recompiling with `sm-neon-force` disables the scalar fallback entirely, whereas `force-enable` simply nudges runtime detection.
-- Document the chosen policy in release notes: production builds should leave the policy in `Auto`, letting each validator discover hardware capabilities independently while still sharing the same binary artefacts.
-- Avoid shipping binaries that mix statically linked vendor intrinsics (e.g., third-party SM4 libraries) unless they respect the same dispatch and testing flow—otherwise perf regressions will not be caught by our baseline tooling.
+| བེན་ཇ་མཱརཀ་ | Scalar | རང་བཞིན་ | ནེའོན་-ཕོར་སི། | Auto vs སི་ཀཱ་ལར་ | ནེའོན་ དང་ སི་ཀཱ་ལར་ | ནེའོན་ vs རང་བཞིན་ |
+|---------------------------------------------------------------------------------------------------------------------------------------- ར་ར་ར་ཡོད་པའི་
+| sm2_vs_ed25519_རྟགས་མཚན་/ed25519_བརྡ་མཚོན་ |    ༥༧.༤༣ |  ༥༧.༡༢ |      ༥༥.༧༧ |          -༠.༥༣% |         -༢.༨༨% |        -༢.༣༦% |
+| sm2_vs_ed25519_རྟགས་/sm2_རྟགས་ |   ༥༧༢.༧༦ | ༥༦༨.༧༡ |     ༥༥༧.༨༣ |          -༠.༧༡% |         -༢.༦༡% |        -༡.༩༡% |
+| sm2_vs_ed25519_བདེན་དཔྱད་/བདེན་དཔྱད་/ed25519 |    ༦༩.༠༣ |  ༦༨.༤༢ |      ༦༦.༢༨ |          -༠.༨༨% |         -༣.༩༧% |        -༣.༡༢% |
+| sm2_vs_ed25519_བདེན་དཔྱད་/བདེན་དཔྱད་/sm2 |   ༥༢༡.༧༣ | ༥༡༤.༥༠ |     ༥༠༢.༡༧ |          -༡.༣༨% |         -༣.༧༥% |        -༢.༤༠% |
+| sm3_vs_ཤ256_ཧ་ཤ/ཤ256_hash |    ༡༦.༧༨ |  ༡༦.༥༨ |      ༡༦.༡༦ |          -༡.༡༩% |         -༣.༦༩% |        -༢.༥༢% |
+| sm3_vs_ཤ༢༥༦_ཧ་ཤ/སྨ3_ཧཤི |    ༡༥.༧༨ |  ༡༥.༥༡ |      ༡༥.༠༤ |          -༡.༧༡% |         -༤.༦༩% |        -༣.༠༣% |
+| sm4_vs_chacha20poly1305_གསང་བཟོ་/ཅ་ཅ་༢༠པོ་ལི་༡༣༥_གསང་བཟོས། |     ༡.༩༦ |   ༡.༩༧ |       ༡.༩༧ |           ༠.༣༩% |          ༠.༡༦% |        -༠.༢༣% |
+| sm4_vs_chacha20poly1305_གསང་བཟོ/sm4_gcm_dectript |    ༡༦.༢༦ |  ༡༦.༣༨ |      ༡༦.༢༦ |           ༠.༧༢% |         -༠.༠༡% |        -༠.༧༢% |
+| sm4_vs_chacha20poly1305_spreay/chacha20poly1305_གསང་བཟོ |     ༡.༩༦ |   ༢.༠༠ |       ༡.༩༣ |           2.23% |         -༡.༡༤% |        -༣.༣༠% |
+| sm4_vs_chacha20poly1305_spreay/sm4_gcm_script |    ༡༦.༦༠ |  ༡༦.༥༨ |      ༡༦.༡༥ |          -༠.༡༠% |         -༢.༦༦% |        -༢.༥༧% |
 
-#### x86_64 Rosetta baseline (Apple M3 Pro; captured 2025-12-01)
-- Baselines live in `crates/iroha_crypto/benches/sm_perf_baseline_x86_64_macos_{scalar,auto,neon_force}.json` (cpu_label=`m3-pro-rosetta`), with raw + aggregated captures under `artifacts/sm_perf/2026-03-lab/m3pro_rosetta/`.
-- Per-benchmark tolerances on x86_64 are set to 20 % for SM2, 15 % for Ed25519/SHA-256, and 12 % for SM4/ChaCha. `scripts/sm_perf.sh` now defaults the acceleration comparison tolerance to 25 % on non-AArch64 hosts so scalar-vs-auto stays tight while leaving the 5.25 slack on AArch64 for the shared `m3-pro-native` baseline until a Neoverse rerun lands.
+#### x86_64 / ཚད་མ་མིན་པའི་དམིགས་འབེན་།
+- ད་ལྟོའི་བཟོ་བསྐྲུན་འདི་གིས་ ད་ལྟོ་ཡང་ x86_64 གུ་ གཏན་འབེབས་ RusCrypto scalar འགྲུལ་ལམ་འདི་རྐྱངམ་ཅིག་ བཏང་ཡོདཔ་ཨིན། `sm` ལྕོགས་ཅན་བཟོ་ཡོདཔ་ཨིན་རུང་ **not** ཕྱིའི་ AVX2/VAES ཀར་ནེལ་ཚུ་ SM-4c.1b ས་གཞི་ཚུ་ཚུན་ཚོད་ བཙུགས་དགོ། རཱན་ཊའིམ་སྲིད་བྱུས་འདི་གིས་ ARM: `Auto` ལུ་སྔོན་སྒྲིག་དང་ གུས་བཏུད་ `crypto.sm_intrinsics` དེ་ལས་ ཊེ་ལི་མི་ཊི་གཱ་རཇི་ཚུ་ གཅིག་མཚུངས་སྦེ་བཟོཝ་ཨིན།
+- ལི་ནགསི་/x86_64 འཛིན་བཟུང་ཚུ་ སྒྲ་བཟུང་འབད་ནི་སྦེ་ལུསཔ་ཨིན། མཐུན་རྐྱེན་དེ་གུ་རོགས་རམ་འབད་མི་འདི་ ལོག་སྟེ་ལག་ལེན་འཐབ་སྟེ་ བར་མཚམས་ཚུ་ `sm_perf_baseline_x86_64_unknown_linux_gnu_{mode}.json` ནང་ལུ་བཀོག་བཞག་སྟེ་ Rosetta གི་གཞི་རྟེན་དང་ བཟོད་བསྲན་གྱི་སབ་ཁྲ་འདི་ཨིན།**སྤྱིར་བཏང་གི་གནད་དོན་**
+1. **Virtualised ARM གནས་སྟངས་:** ཀླད་ཀོར་མང་པོ་ NEON ཕྱིར་འདོན་བྱས་ཀྱང་། `sm4_neon::is_supported()` བརྟག་དཔྱད། མཐའ་འཁོར་དེ་ཚུ་ནང་ scalar tap རེ་བ་བསྐྱེད་དེ་ དེ་དང་འཁྲིལ་ཏེ་ perf གཞི་རྟེན་ཚུ་ བཟུང་དགོ།
+2. ** ཕྱོགས་མཚམས་:** མཉམ་བསྡོམས་འབད་མི་འདི་གིས་ `crypto.sm_intrinsics` གནས་གོང་ཚུ་གི་བར་ན་ རྒྱུན་རིམ་ཚུ་གི་བར་ན་ མཐུན་སྒྲིག་མེད་པའི་ ལྷག་ཐངས་ཚུ་ འགྱོཝ་ཨིན། བརྟག་དཔྱད་ཀྱི་ཤོག་འཛིན་ནང་ དམིགས་ཡུལ་བཀག་ཆ་འབད་མི་འདི་ ཡིག་ཆ་བཟོ་ཞིནམ་ལས་ གཞི་རྟེན་གསརཔ་ཚུ་ མ་བཏོན་པའི་ཧེ་མ་ རིམ་སྒྲིག་འདི་ སླར་སྒྲིག་འབད།
+3. **CI Parity:** NEON ཡོད་པའི་སྐབས་ macOS རྒྱུག་མཁན་ལ་ལུ་ཅིག་གིས་ གྱངས་ཁ་གཞི་བཞག་པའི་དཔེ་ཚད་ཚུ་ འབད་བཅུག་མི་བཏུབ། བསྐྱར་ཞིབ་པ་ཚུ་གིས་ མགྱོགས་ཚད་ཅན་གྱི་འགྲུལ་ལམ་འདི་ རྒྱུག་འགྲན་འབད་མི་གིས་ གྱངས་ཁ་འདི་ཚུ་ སྦ་བཞག་རུང་ ལག་ལེན་འཐབ་ཡོདཔ་སྦེ་ ངེས་གཏན་བཟོ་ཚུགས།
+4. **མ་འོངས་པའི་ཨའི་ཨེསི་ཨེ་འགྱུར་ཅན་ཚུ་ (SVE/SVE2):** ད་ལྟོའི་ཀར་ནེལ་ཚུ་གིས་ NEON ལམ་གྱི་དབྱིབས་ཚུ་བརྩི་འཇོག་འབདཝ་ཨིན། SVE/SVE2 ལུ་ བཀོད་སྒྲིག་མ་འབད་བའི་ཧེ་མ་ `sm_accel::NeonPolicy` འདི་ བརྩོན་ཤུགས་ཅན་གྱི་དབྱེ་བ་དང་གཅིག་ཁར་ རྒྱ་སྐྱེད་འབད་དེ་ ང་བཅས་ཀྱིས་ CI དང་ ཊེ་ལི་མི་ཊི་ དེ་ལས་ བཀོལ་སྤྱོད་པའི་ མཛུབ་མོ་ཚུ་ ཕྲང་སྒྲིག་འབད་ཚུགས།
 
-| Benchmark | Scalar | Auto | Neon-Force | Auto vs Scalar | Neon vs Scalar | Neon vs Auto |
-|-----------|--------|------|------------|----------------|---------------|--------------|
-| sm2_vs_ed25519_sign/ed25519_sign |    57.43 |  57.12 |      55.77 |          -0.53% |         -2.88% |        -2.36% |
-| sm2_vs_ed25519_sign/sm2_sign |   572.76 | 568.71 |     557.83 |          -0.71% |         -2.61% |        -1.91% |
-| sm2_vs_ed25519_verify/verify/ed25519 |    69.03 |  68.42 |      66.28 |          -0.88% |         -3.97% |        -3.12% |
-| sm2_vs_ed25519_verify/verify/sm2 |   521.73 | 514.50 |     502.17 |          -1.38% |         -3.75% |        -2.40% |
-| sm3_vs_sha256_hash/sha256_hash |    16.78 |  16.58 |      16.16 |          -1.19% |         -3.69% |        -2.52% |
-| sm3_vs_sha256_hash/sm3_hash |    15.78 |  15.51 |      15.04 |          -1.71% |         -4.69% |        -3.03% |
-| sm4_vs_chacha20poly1305_decrypt/chacha20poly1305_decrypt |     1.96 |   1.97 |       1.97 |           0.39% |          0.16% |        -0.23% |
-| sm4_vs_chacha20poly1305_decrypt/sm4_gcm_decrypt |    16.26 |  16.38 |      16.26 |           0.72% |         -0.01% |        -0.72% |
-| sm4_vs_chacha20poly1305_encrypt/chacha20poly1305_encrypt |     1.96 |   2.00 |       1.93 |           2.23% |         -1.14% |        -3.30% |
-| sm4_vs_chacha20poly1305_encrypt/sm4_gcm_encrypt |    16.60 |  16.58 |      16.15 |          -0.10% |         -2.66% |        -2.57% |
+འདི་ཡང་ བཟོ་རིག་གསརཔ་ག་ར་གི་དོན་ལུ་ CI གིས་ དཔེ་སྟོན་གྱི་ བདེན་ཁུངས་ཚུ་ བཟུང་ཚུགསཔ་སྦེ་ ངེས་གཏན་བཟོཝ་ཨིནམ་དང་ ལམ་སྟོན་འདི་ Neoverse/x86 གཞི་རྟེན་དང་ NEON-vs-scalar བཟོད་བསྲན་ཚུ་ མཉམ་བསྡོམས་འབད་མ་ཚུགས་ཚུན་ཚོད་ 🈺 ལུ་སྡོད་དོ་ཡོདཔ་ཨིན།
 
-#### x86_64 / other non-aarch64 targets
-- Current builds still ship only the deterministic RustCrypto scalar path on x86_64; keep `sm` enabled but do **not** inject external AVX2/VAES kernels until SM-4c.1b lands. Runtime policy mirrors ARM: default to `Auto`, honour `crypto.sm_intrinsics`, and surface the same telemetry gauges.
-- Linux/x86_64 captures remain to be recorded; reuse the helper on that hardware and drop the medians into `sm_perf_baseline_x86_64_unknown_linux_gnu_{mode}.json` alongside the Rosetta baselines and tolerance map above.
+## བསྟུད་ནི་དང་ རྒྱུན་སྐྱོང་གི་དྲན་ཐོ།
 
-**Common pitfalls**
-1. **Virtualised ARM instances:** Many clouds expose NEON but hide the SM4/AES extensions that `sm4_neon::is_supported()` checks. Expect the scalar path in those environments and capture perf baselines accordingly.
-2. **Partial overrides:** Mixing persisted `crypto.sm_intrinsics` values between runs leads to inconsistent perf readings. Document the intended override in the experiment ticket and reset the config before capturing new baselines.
-3. **CI parity:** Some macOS runners do not allow counter-based perf sampling while NEON is active. Keep `scripts/sm_perf_capture_helper.sh` outputs attached to PRs so reviewers can confirm that the accelerated path was exercised even if the runner hides those counters.
-4. **Future ISA variants (SVE/SVE2):** The current kernels assume NEON lane shapes. Before porting to SVE/SVE2, extend `sm_accel::NeonPolicy` with a dedicated variant so we can keep CI, telemetry, and operator knobs aligned.
+### ཚད་ལྡན་དང་ རྒྱུན་སྐྱོང་གི་གཞི་བསྟུན།
+- - *GM/T 0002-2012** (SM4), **GM/T 0003-2012** + *GB/T 32918 རིམ་སྒྲིག་** (SM2), **GM/T 0004-2012** + **GB/T 32905/32907** (SM3) དང་ **RFC 8998** ང་བཅས་ཀྱི་སྒྲིག་ཆས་ཚུ་གིས་ 【docs/spore/crypto/sm_vectors.md#L79】
+- `docs/source/crypto/sm_compliance_brief.md` ནང་ བསྟུན་གྲོས་ཐུང་ཀུ་འདི་གིས་ གནས་ཚད་འདི་ཚུ་ བཟོ་རིག་དང་ ཨེསི་ཨར་ཨི་ དེ་ལས་ ཁྲིམས་དོན་སྡེ་ཚན་ཚུ་གི་དོན་ལུ་ ཡིག་ཆ་/ཕྱིར་ཚོང་གི་འགན་ཁུར་ཚུ་དང་གཅིག་ཁར་ འབྲེལ་མཐུད་འབདཝ་ཨིན། ཇི་ཨེམ་/ཊི་ཐོ་གཞུང་བསྐྱར་ཞིབ་འབད་བའི་སྐབས་ དུས་མཐུན་བཟོ་ནི་འདི་ ཐུང་ཀུ་སྦེ་བཞག།
 
-Action items tracked under SM-5a/SM-4c.1 ensure that CI captures parity proofs for every new architecture, and the roadmap stays at 🈺 until Neoverse/x86 baselines and NEON-vs-scalar tolerances converge.
+### ཀྲུང་གོའི་ཀྲུང་གོའི་རྒྱུན་ལས་ལས་དོན།
+༡ རྒྱ་ནག་ས་ཆ་གཙོ་བོ་ལས་ SM-enabled གཉིས་ལྡན་གཉིས་སྐྱེལ་འདྲེན་མ་འབད་བའི་ཧེ་མར་ དངོས་པོའི་གསལ་སྟོན་གྱི་ གསལ་སྟོན་དང་ གཏན་འབེབས་བཟོ་ནིའི་ཐབས་ལམ་ཚུ་ དེ་ལས་ མངའ་སྡེའི་གསང་ཡིག་བདག་སྐྱོང་ལུ་ བརྟེན་པའི་ཐོ་ཡིག་ཚུ་ ཕུལ་དགོ། ཊེམ་པེལེཊི་ཚུ་ ཡིག་སྣོད་དང་ བསྟར་སྤྱོད་ཀྱི་ཐོ་ཡིག་ཚུ་ `docs/source/crypto/sm_compliance_brief.md` དང་ མཉམ་སྦྲགས་ཀྱི་སྣོད་ཐོ་ (`sm_product_filing_template.md`, `sm_sales_usage_filing_template.md`, `sm_export_statement_template.md`) ནང་ལུ་སྡོད་ཡོདཔ་ཨིན།
+2. **ཚོང་འབྲེལ་/ལག་ལེན་གྱི་ཡིག་ཆ་ (销售/使用备案):** མཚོ་ཁར་ SM-enabled nodes གཡོག་བཀོལ་མི་ཚུ་གིས་ ཁོང་རའི་བཀྲམ་སྤེལ་གྱི་གོ་སྐབས་དང་ འཛིན་སྐྱོང་གི་དམིགས་ཡུལ་གཙོ་བོ་ དེ་ལས་ བརྒྱུད་འཕྲིན་འཆར་གཞི་ཚུ་ ཐོ་བཀོད་འབད་དགོ། མཉམ་སྦྲགས་མིང་རྟགས་བཀོད་ཡོད་པའི་གསལ་སྟོན་ཚུ་དང་ ཡིག་སྣོད་འབད་བའི་སྐབས་ `iroha_sm_*` མེཊིཀ་པར་ལེན་ཚུ་ཨིན།
+3. **ངོས་ལེན་ཅན་གྱི་བརྟག་དཔྱད་:** གལ་ཆེ་བའི་གཞི་རྟེན་བཀོལ་སྤྱོད་པ་ཚུ་ལུ་ ངོས་ལེན་ཅན་གྱི་བརྟག་དཔྱད་སྙན་ཞུ་ཚུ་དགོཔ་འོང་། བསྐྱར་བཟོ་འབད་བཏུབ་པའི་ ཡིག་ཆ་བཟོ་ནི་དང་ ཨེསི་བི་ཨོ་ཨེམ་ཕྱིར་འདྲེན་ དེ་ལས་ ཝའི་ཅེ་པོ་རོ་ཨོཕ་/བར་མཚམས་ ཅ་རྙིང་ཚུ་ བྱིན་དགོཔ་ལས་ མར་ཕབ་རྩིས་ཞིབ་པ་ཚུ་གིས་ གསང་ཡིག་བསྒྱུར་བཅོས་མ་འབད་བར་ ཝེག་ཊར་ཚུ་ བསྐྱར་བཟོ་འབད་ཚུགས།
+4. **Status བརྟག་ཞིབ་:** ཐོ་བཀོད་འདི་ གསར་བཏོན་འབད་ཡོད་པའི་ ཤོག་འཛིན་ནང་ ཡིག་ཆ་ཚུ་ མཇུག་བསྡུ་ཡོདཔ་དང་ `status.md`; བརླག་སྟོར་ཞུགས་པའི་ཡིག་ཆ་བཀག་ཆ་འདི་བདེན་བཤད་ལས་རྐྱངམ་ཅིག་ མཁའ་འགྲུལ་པ་ཚུ་ལུ་ མཚན་རྟགས་བཀོད་ཡོདཔ།### ཕྱིར་འདྲེན་དང་བཀྲམ་པའི་གནས་ཚུལ།
+- **US EAR Ctechery གི་འོག་ལུ་ ཚད་འཛིན་འབད་ཡོད་པའི་རྣམ་གྲངས་སྦེ་ SM-ableable གཉིས་ལྡན་ཚུ་ བརྩི་འཇོག་འབད། འབྱུང་ཁུངས་ཀྱི་དཔེ་བསྐྲུན་འདི་ ཁ་ཕྱེ་སྟེ་ཡོད་པའི་ འབྱུང་ཁུངས་/ENC-sarve-outs གི་དོན་ལུ་ འཕྲོ་མཐུད་དེ་རང་ ཡོདཔ་ཨིན་རུང་ བཀག་ཆ་འབད་ཡོད་པའི་ ས་སྒོ་ཚུ་ལུ་ ལོག་སྟེ་བཀྲམ་སྤེལ་འབད་ནི་གི་དོན་ལུ་ ད་ལྟོ་ཡང་ ཁྲིམས་མཐུན་གྱི་ བསྐྱར་ཞིབ་འབད་དགོཔ་ཨིན།
+- བཏོན་གཏང་ནི་ཚུ་ ENC/TSU གཞི་བརྟེན་ལུ་གཞི་བསྟུན་འབད་མི་ ཕྱིར་འདྲེན་གསལ་བཤད་ཅིག་བསྡུ་སྒྲིག་འབད་དགོཔ་དང་ ཨེཕ་ཨེཕ་ཨའི་སྔོན་ལྟ་འདི་ཐུམ་སྒྲིལ་འབད་བ་ཅིན་ ཨོ་པཱན་ཨེསི་ཨེསི་ཨེལ་/ཊོང་སུའོ་གིས་ངོས་འཛིན་འབད་མི་ཚུ་ཐོ་བཀོད་འབད་དགོ།
+- ལུང་ཕྱོགས་ཀྱི་ས་གནས་ཀྱི་ཐུམ་སྒྲིལ་ (དཔེར་ན་ ས་ཁའི་མེ་ལོང་) བཀོལ་སྤྱོད་པ་ཚུ་ལུ་ ས་མཚམས་བདའ་སྟེ་ སྤོ་བཤུད་ཀྱི་གནད་དོན་ཚུ་ བཀག་ཐབས་ལུ་ བཀོལ་སྤྱོད་པ་ཚུ་ལུ་ མཚོའི་མཐའ་མ་ལུ་ བཀྲམ་སྤེལ་འབད་དགོཔ་ཨིན།
 
-## Compliance & Regulatory Notes
+### བཀོལ་སྤྱོད་ཡིག་ཆ་དང་སྒྲུབ་བྱེད།
+- བཟོ་རིག་འདི་ `docs/source/crypto/sm_operator_rollout.md` ནང་ བསྐོར་ཐེངས་ཐོ་ཡིག་དང་ `docs/source/crypto/sm_compliance_brief.md` ནང་ བསྟར་སྤྱོད་འབད་ནིའི་ ཡིག་ཆ་ལམ་སྟོན་འདི་ མཉམ་བསྡོམ་འབད།
+- རིགས་མཚན་/བཀོལ་སྤྱོད་པ་མགྱོགས་དྲགས་འགོ་བཙུགས་འདི་ `docs/genesis.md`, `docs/genesis.he.md`, དང་ `docs/genesis.ja.md` ནང་ལུ་ མཉམ་མཐུན་སྦེ་བཞག། འདི་ SM2/SM3 CLI ལཱ་གི་རྒྱུན་རིམ་འདི་ `crypto` གསལ་སྟོན་ཚུ་ བཀོལ་སྤྱོད་འབད་ནིའི་དོན་ལུ་ བཀོལ་སྤྱོད་འབད་མི་ བདེན་པ་གི་འབྱུང་ཁུངས་འདི་ཡོདཔ་ཨིན།
+- གཏན་མཛོད་ Open Open Open Open Open Open Open Open Open Open Open Open OpenSSL/Tongsuo དང་ `scripts/sm_openssl_smoke.sh` ཐོན་འབྲས་ དེ་ལས་ `scripts/sm_interop_matrix.sh` ཆ་ཤས་དྲན་ཐོ་ཚུ་ གསར་བཏོན་འབད་མི་ བཱན་ཌལ་ག་ར་དང་གཅིག་ཁར་ བསྟར་སྤྱོད་འབད་མི་དང་ རྩིས་ཞིབ་མཉམ་འབྲེལ་པ་ཚུ་ལུ་ ཅ་རྙིང་ཚུ་ མ་འདྲཝ་སྦེ་ཡོདཔ་ཨིན།
+- བསྟར་སྤྱོད་ཀྱི་གོ་སྐབས་བསྒྱུར་བཅོས་ཚུ་ (དབང་ཚད་གསརཔ་དང་ ཡིག་ཆ་ཕུལ་བའི་མཇུག་བསྡུ་ ཡང་ན་ ཕྱིར་ཚོང་གྲོས་ཐག་ཚུ་) ལས་རིམ་གྱི་གནས་སྟངས་འདི་ གསར་འཚོལ་འབད་བཏུབ་སྦེ་བཞག་ནིའི་དོན་ལུ་ `status.md` དུས་མཐུན་བཟོ།
+- གོ་རིམ་ཅན་གྱི་གྲ་སྒྲིག་བསྐྱར་ཞིབ་ (`SM-RR1`–`SM-RR3`) ནང་ པར་ལེན་འབད་མི་ `docs/source/release_dual_track_runbook.md` ལུ་རྗེས་སུ་འཇུག་དགོ། བདེན་དཔྱད་དང་ མཁའ་འགྲུལ་ དེ་ལས་ GA མཚན་རྟགས་བཀོད་ནི་གི་གནས་རིམ་ཚུ་གི་བར་ན་ ཁྱབ་སྤེལ་འབད་ནི་གི་དོན་ལུ་ རྩིས་རྐྱབ་ཡོད་པའི་ ཅ་ཆས་ཚུ་དགོཔ་ཨིན།
 
-### Standards & Normative References
-- **GM/T 0002-2012** (SM4), **GM/T 0003-2012** + **GB/T 32918 series** (SM2), **GM/T 0004-2012** + **GB/T 32905/32907** (SM3), and **RFC 8998** govern the algorithm definitions, test vectors, and KDF bindings that our fixtures consume.【docs/source/crypto/sm_vectors.md#L79】
-- The compliance brief in `docs/source/crypto/sm_compliance_brief.md` cross-links these standards alongside the filing/export responsibilities for engineering, SRE, and legal teams; keep that brief updated whenever the GM/T catalog revises.
+## སློབ་མའི་ནང་ཁུངས།
 
-### Mainland China Regulatory Workflow
-1. **Product filing (开发备案):** Prior to shipping SM-enabled binaries from mainland China, submit the artifact manifest, deterministic build steps, and dependency list to the provincial cryptography administration. Filing templates and the compliance checklist live in `docs/source/crypto/sm_compliance_brief.md` and the attachments directory (`sm_product_filing_template.md`, `sm_sales_usage_filing_template.md`, `sm_export_statement_template.md`).
-2. **Sales/Usage filing (销售/使用备案):** Operators running SM-enabled nodes onshore must register their deployment scope, key management posture, and telemetry plan. Attach signed manifests plus `iroha_sm_*` metric snapshots when filing.
-3. **Accredited testing:** Critical infrastructure operators may require certified lab reports. Provide reproducible build scripts, SBOM exports, and the Wycheproof/interop artefacts (see below) so downstream auditors can reproduce the vectors without altering the code.
-4. **Status tracking:** Record completed filings in the release ticket and `status.md`; missing filings block promotion from verify-only to signing pilots.
+### རསཊ་ཀིརིཔ་ཊོ་ ↔ ཨོ་པན་ཨེསི་ཨེསི་ཨེལ་/ཊོང་སུའོ་མེ་ཊིགསི་
+1. OpenSSL/Tongsoo CLIs འཐོབ་ཚུགསཔ་ངེས་གཏན་བཟོ། (`IROHA_SM_CLI="openssl /opt/tongsuo/bin/openssl"` གིས་ གསལ་རི་རི་ ལག་ཆས་སེལ་འཐུ་འབད་བཅུགཔ་ཨིན།)
+2. `scripts/sm_interop_matrix.sh` རྒྱུག; འདི་གིས་ `cargo test -p iroha_crypto --test sm_cli_matrix --features sm` དང་ SM2 རྟགས་/བདེན་བཤད་ ཨེསི་ཨེམ་༣ བཞུ་ནི་ དེ་ལས་ ཨེསི་ཨེམ་༤ ཨི་སི་བི་/ཇི་སི་ཨེམ་ཚུ་གིས་ བྱིན་མི་རེ་རེ་ལུ་ འཕྱེལ་འགྱོཝ་ཨིན།
+༣ གྲུབ་འབྲས་ `target/debug/deps/sm_cli_matrix*.log` ཡིག་སྣོད་ཚུ་ གསར་བཏོན་འབད་ཡོད་པའི་ཅ་ཆས་ཚུ་དང་གཅིག་ཁར་ གཏན་མཛོད་འབད།
 
-### Export & Distribution Posture
-- Treat SM-capable binaries as controlled items under **US EAR Category 5 Part 2** and **EU Regulation 2021/821 Annex 1 (5D002)**. Publication of source continues to qualify for the open-source/ENC carve-outs, but redistribution to embargoed destinations still requires legal review.
-- Release manifests must bundle an export statement referencing the ENC/TSU basis and list the OpenSSL/Tongsuo build identifiers if the FFI preview is packaged.
-- Prefer region-local packaging (e.g., mainland mirrors) when operators need onshore distribution to avoid cross-border transfer issues.
+### ཨོཔ་ཨེསི་ཨེསི་ཨེལ་སྔོན་ལྟ་ཐ་མག་ (ཐུམ་སྒྲིལ་སྒོ་སྒྲིག)།
+༡ OpenSSL ≥3.0 གོང་འཕེལ་གྱི་མགོ་ཡིག་ཚུ་གཞི་བཙུགས་འབད་དེ་ `pkg-config` ཚུ་ འཚོལ་ཚུགསཔ་སྦེ་ ངེས་གཏན་བཟོ།
+2. `scripts/sm_openssl_smoke.sh` བཀོལ་སྤྱོད་འབད། གྲོགས་རམ་པ་དེ་གིས་ `cargo check`/`cargo test --test sm_openssl_smoke`, གིས་ SM3 hashing དང་ SM2 བདེན་དཔྱད་ དེ་ལས་ FFI རྒྱབ་ཐག་བརྒྱུད་དེ་ འགྲུལ་བསྐྱོད་ཚུ་ གཡོག་བཀོལ་དོ་ཡོདཔ་ཨིན།
+༣ བཏོན་གཏང་ནི་བཀག་ཆ་སྦེ་ མ་བརྒལ་བའི་ འཐུས་ཤོར་གང་རུང་ཅིག་ བརྩི་འཇོག་འབད། རྩིས་ཞིབ་སྒྲུབ་བྱེད་ཀྱི་དོན་ལུ་ ཀོན་སོལ་ཐོན་འབྲས་འདི་ བཟུང་དགོ།
 
-### Operator Documentation & Evidence
-- Pair this architecture brief with the rollout checklist in `docs/source/crypto/sm_operator_rollout.md` and the compliance filing guide in `docs/source/crypto/sm_compliance_brief.md`.
-- Keep the genesis/operator quickstart in sync across `docs/genesis.md`, `docs/genesis.he.md`, and `docs/genesis.ja.md`; the SM2/SM3 CLI workflow there is the operator-facing source of truth for seeding `crypto` manifests.
-- Archive OpenSSL/Tongsuo provenance, `scripts/sm_openssl_smoke.sh` output, and `scripts/sm_interop_matrix.sh` parity logs with every release bundle so compliance and audit partners have deterministic artefacts.
-- Update `status.md` whenever compliance scope changes (new jurisdictions, filing completions, or export decisions) to keep programme state discoverable.
-- Follow the staged readiness reviews (`SM-RR1`–`SM-RR3`) captured in `docs/source/release_dual_track_runbook.md`; promotion between verify-only, pilot, and GA signing phases requires the artefacts enumerated there.
+###
+- SM གི་སྒྲིག་ཆས་ (`sm_vectors.md`, `fixtures/sm/…`) རེ་རེ་བཞིན་ བཀོད་སྒྲིག་རེ་རེ་ལུ་ ཡིག་ཆ་མ་བཙུགས་པའི་ཧེ་མ་ དེ་ལས་ འདྲ་མཉམ་གྱི་མེ་ཊིགསི་དང་ ཐ་མག་འཐེན་མི་ཚུ་ ལོག་བཏང་དགོཔ་ལས་ རྩིས་ཞིབ་པ་ཚུ་གིས་ ཡིག་ཆ་ཚུ་དང་གཅིག་ཁར་ ཡིག་ཆ་གསརཔ་ཚུ་ ཐོབ་ཨིན།## ཕྱིའི་རྩིས་ཞིབ་གྲ་སྒྲིག་ནི།
+- `docs/source/crypto/sm_audit_brief.md` གིས་ ཕྱིའི་བསྐྱར་ཞིབ་ཀྱི་དོན་ལུ་ སྐབས་དོན་དང་ ཁྱབ་ཚད་ལས་རིམ་ དེ་ལས་ འབྲེལ་བ་འཐབ་མི་ཚུ་ ཐུམ་སྒྲིལ་འབདཝ་ཨིན།
+- རྩིས་ཞིབ་ཀྱི་ཅ་ཆས་ཚུ་ `docs/source/crypto/attachments/` གི་འོག་ལུ་ཡོདཔ་ཨིན། (OpenSSL གི་ དུ་ཁའི་དྲན་ཐོ་དང་ སྐྱེལ་འདྲེན་ཤིང་གི་པར་ཆས་ མེ་ཊ་ཌེ་ཊ་ ཕྱིར་ཚོང་ ལག་ཆས་འཕྲུལ་ཆས་ཀྱི་ འབྱུང་ཁུངས་) དང་ `fuzz/sm_corpus_manifest.json` (ད་ལྟོ་ཡོད་པའི་ འགྱུར་ལྡོག་ཝེཀ་ཊར་ཚུ་ལས་ འབྱུང་ཁུངས་བཟོ་ཡོད་པའི་ deterministic SM fuzz གི་སོན་ཚུ་) macOS ནང་ལུ་ ད་ལྟོ་ ལཱ་གི་ས་སྒོ་ལུ་བརྟེན་པའི་འཁོར་རིམ་འདི་གིས་ `cargo check` འདི་བཀག་ཆ་འབདཝ་ལས་ དུ་པའི་དྲན་ཐོ་འདི་ ཐོ་བཀོད་འབདཝ་ཨིན། ལི་ནགསི་གིས་ འཁོར་རིམ་མེད་པར་བཟོ་བསྐྲུན་འབད་མི་འདི་གིས་ སྔོན་ལྟ་རྒྱབ་ཕྱོགས་འདི་ ཆ་ཚང་སྦེ་ལག་ལེན་འཐབ་འོང་།
+- Crypto WG, Platform Ops, ཉེན་སྲུང་དང་ Docs/DevRel
 
-## Interop Recipes
+### རྩིས་ཞིབ་འབྲེལ་གཏུགས།
 
-### RustCrypto ↔ OpenSSL/Tongsuo Matrix
-1. Ensure OpenSSL/Tongsuo CLIs are available (`IROHA_SM_CLI="openssl /opt/tongsuo/bin/openssl"` allows explicit tool selection).
-2. Run `scripts/sm_interop_matrix.sh`; it invokes `cargo test -p iroha_crypto --test sm_cli_matrix --features sm` and exercises SM2 sign/verify, SM3 digests, and SM4 ECB/GCM flows against each provider, skipping any CLI that is absent.【scripts/sm_interop_matrix.sh#L1】
-3. Archive the resulting `target/debug/deps/sm_cli_matrix*.log` files with the release artefacts.
+- **བིཊསི་གི་བརྒྱུད་འཕྲིན་ (སི་ཨེན་ ཀིརིཔ་ཊོ་གཱ་ར་ཕི་སྦྱོང་བརྡར་)** — ལཱ་གི་གསལ་བསྒྲགས། ལཱ་གི་གསལ་བསྒྲགས། **2026-02-21**, ཀིརིཀ་ཨོཕ་-ཨོཕ་- **2026-02-24**, རྩེད་ཐང་སྒོ་སྒྲིག་ **2026-02-24-2026-03-22**, མཐའ་མའི་སྙན་ཞུ། མཐའ་མའི་སྙན་ཞུ་ **2026-04-15**, བདུན་ཕྲག་གཅིག་གི་གནས་རིམ་བརྟག་དཔྱད་འདི་ གཟའ་ལྷགཔ་གི་ཚེས་ ༠༩:༠༠UTC འདི་ Crypto WG གི་འགོ་ཁྲིད་དང་ བདེ་འཇགས་བཟོ་རིག་གི་འབྲེལ་བ་འཐབ་ཨིན། འབྲེལ་བ་འཐབ་ས་དང་ བཀྲམ་སྤེལ་འབད་ཚུགས་མི་ དེ་ལས་ སྒྲུབ་བྱེད་མཉམ་སྦྲགས་ཚུ་གི་དོན་ལུ་ [`sm_audit_brief.md`](sm_audit_brief.md#engagement-status) ལུ་བལྟ།
+- **NCC Group APAC (གློ་བུར་གྱི་ས་སྟོང་)** — ༢༠༢༦ ཟླ་ ༥ ཚེས་ ༢༠༢༦ གི་སྒོ་སྒྲིག་འདི་ ཁ་སྐོང་ཤེས་རྟོགས་དང་ ཡང་ན་ ལྟ་རྟོག་འབད་དགོ་པའི་ ཞུ་བ་ཚུ་ བསམ་འཆར་གཉིས་པ་ དགོཔ་ཨིན། འབྲེལ་གཏོགས་ཀྱི་ཁ་གསལ་དང་ ཡར་འཕར་གྱི་ ཧུཀ་ཚུ་ `sm_audit_brief.md` ནང་ Bits ཐོ་བཀོད་ཀྱི་ ལམ་ཁར་ ཐོ་བཀོད་འབདཝ་ཨིན།
 
-### OpenSSL Preview Smoke (Packaging Gate)
-1. Install OpenSSL ≥ 3.0 development headers and ensure `pkg-config` can locate them.
-2. Execute `scripts/sm_openssl_smoke.sh`; the helper runs `cargo check`/`cargo test --test sm_openssl_smoke`, exercising SM3 hashing, SM2 verification, and SM4-GCM round-trips via the FFI backend (the test harness enables the preview explicitly).【scripts/sm_openssl_smoke.sh#L1】
-3. Treat any non-skip failure as a release blocker; capture the console output for audit evidence.
+## ཉེན་དང་ ཉུང་འཕྲིན།
 
-### Deterministic Fixture Refresh
-- Regenerate SM fixtures (`sm_vectors.md`, `fixtures/sm/…`) before each compliance filing, then re-run the parity matrix and smoke harness so auditors receive fresh deterministic transcripts alongside the filings.
+ཐོ་བཀོད་ཆ་ཚང་: ཁ་གསལ་གྱི་དོན་ལུ་ [`sm_risk_register.md`](sm_risk_register.md) བལྟ།
+འབྱུང་འགྱུར་/ཤུགས་རྐྱེན་ཅན་གྱི་སྐུགས་དང་ ལྟ་རྟོག་འབད་ཐངས་ དེ་ལས་ མཚན་རྟགས་བཀོད་ནི། ཚིག༌ཕྲད
+བཅུད་བསྡུས་འདི་གིས་ བཟོ་རིག་གསར་བཏོན་འབད་ནི་ལུ་ ཕྱིར་བཏོན་འབད་མི་ མགོ་ཡིག་གི་རྣམ་གྲངས་ཚུ་ བརྟག་ཞིབ་འབདཝ་ཨིན།
+| ཉེན་ཁ། ཚབས་ཆེན། | ཇོ་བདག་ | མར་ཕབ་ |
+|-------------------------------------------------- |
+| རསཊ་ཀིརིཔ་ཊོ་ཨེསི་ཨེམ་ཀེརེཊ་གི་དོན་ལུ་ ཕྱིའི་རྩིས་ཞིབ་མེདཔ། | མཐོ་ཚད་ | ཀིརིཔ་ཊོ་ WG | བིཊི་/ཨེན་སི་སི་སྡེ་ཚན་གྱི་ གན་རྒྱ་གི་ལམ་རིམ་ རྩིས་ཞིབ་སྙན་ཞུ་འདི་ ངོས་ལེན་མ་འབད་ཚུན་ཚོད་ བདེན་དཔྱད་འབད་བཞག། |
+| SDKs ནང་ གཏན་འབེབས་ nonce འགྱུར་ལྡོག་ཚུ་ | མཐོ་ཚད་ | ཨེསི་ཌི་ཀེ་ལས་རིམ་འགོ་ཁྲིད་ཚུ་ | SDK CI བརྒྱུད་དེ་ བགོ་བཤའ་རྐྱབ་ནི།; བསྟར་སྤྱོད་ ཀེ་ནོ་ནིག་ r∥s ཨིན་ཀོ་ཌིང་; ཕར་ཚུར་ཨེསི་ཌི་ཀེ་ མཉམ་བསྡོམས་བརྟག་དཔྱད་ཚུ་ ཁ་སྐོང་རྐྱབས་ (ཨེསི་ཨེམ་-༣སི་ ནང་རྗེས་སོར་འབད་ཡོདཔ་ཨིན།). |
+| ISA- དམིགས་བསལ་གྱི་འབུཔ་ ནང་རིག་ནང་ | བར་མ། | ལས་དོན་ WG | ཁྱད་རྣམ་གྱི་སྒོ་རའི་ནང་དོན་རིག་པ་ ARM གུ་ CI ཁྱབ་ཁོངས་དགོཔ་ཨིན། མཐུན་རྐྱེན་བདེན་དཔྱད་ཚད་གཞི་འདི་ `sm_perf.md` ནང་ལུ་བདག་འཛིན་འཐབ་ཡོདཔ་ཨིན། |
+| བསྟར་སྤྱོད་མ་འབད་བའི་ གསལ་ཏོག་ཏོ་ ཆ་འཇོག་འབད་ནི། | བར་མ། | Docs & ཁྲིམས་མཐུན་འབྲེལ་འཐུད། | ཇི་ཨེ་གི་ཧེ་མ་ བསྟར་སྤྱོད་འབད། ཁྲིམས་མཐུན་གྱི་ འབྲེལ་འཐུད་བསྡུ་ལེན་འབད་ནི། `sm_compliance_brief.md` ནང་ ཡིག་ཆའི་ཞིབ་དཔྱད་ཐོ་ཡིག་ནང་ བཏང་ཡོདཔ། |
+| བྱིན་མི་དུས་མཐུན་ཚུ་དང་གཅིག་ཁར་ FFI རྒྱབ་རྟེན་ཌིཕཊ་ | བར་མ། | སྟེགས་རིས་ Ops | པིན་བྱིན་མི་ཐོན་རིམ་ཚུ་ ཆ་སྙོམས་བརྟག་དཔྱད་ཁ་སྐོང་འབད་ཞིནམ་ལས་ ཐུམ་སྒྲིལ་བརྟན་ཏོག་ཏོ་མ་བཟོ་ཚུན་ཚོད་ (ཨེསི་ཨེམ་-པི་༣) མ་འབད་ཚུན་ཚོད་ ཨེཕ་ཨེཕ་ཨའི་རྒྱབ་ཐག་ཚུ་ གཞི་སྒྲིག་འབད། |## དྲི་བ་ / འཚམས་འཕྲིན།
+༡ རསཊ་ནང་ ཨེསི་ཨེམ་ཨཱལ་གོ་རི་དམ་དང་གཅིག་ཁར་ ཉམས་མྱོང་ཐོབ་མི་ རང་དབང་ཅན་གྱི་རྩིས་ཞིབ་མཉམ་འབྲེལ་པ་ཚུ་ སེལ་འཐུ་འབད།
+   - **ལན་ (༢༠༢༦-༠༢-༢༤):** བིཊི་གི་སི་ཨེན་ གསང་ཡིག་རིག་པའི་སྦྱོང་བརྡར་གྱི་ལམ་ལུགས་ཀྱི་ མཚན་རྟགས་གཙོ་བོ་ SOW (kick-off 2026-02-24, reduction 2026-04-15) དང་ NCC Group APAC གིས་ May གློ་བུར་གྱི་གནས་སྟངས་ཡོདཔ་ལས་ ཁྲིམས་ལུགས་ཚུ་གིས་ བསྐྱར་དུ་ བསྐྱར་དུ་ཁ་ཕྱེ་མ་དགོ་པར་ བསྐྱར་ཞིབ་གཉིས་པ་ཞུ་ཚུགས། འབྲེལ་གཏོགས་ཁྱབ་ཁོངས་དང་འབྲེལ་བ་དང་ བརྟག་ཞིབ་ཐོ་ཡིག་ཚུ་ [`sm_audit_brief.md`](sm_audit_brief.md#engagement-status) ནང་ལུ་སྡོད་ཞིནམ་ལས་ `sm_audit_vendor_landscape.md` ནང་ལུ་ མེ་ལོང་ཡོདཔ་ཨིན།
+༢ གཞུང་འབྲེལ་གྱི་ Wycheproouf SM2 གནད་སྡུད་ཆ་ཚན་གྱི་དོན་ལུ་ ཡར་འཚོལ་འཕྲོ་མཐུད། ད་ལྟོ་ལཱ་གི་ས་སྒོ་འདི་གིས་ ༥༢ ཅན་གྱི་སྡེ་ཚན་ (གཏན་འབེབས་སྒྲིག་ཆས་ + མཉམ་སྦྱོར་འབད་ཡོད་པའི་ གནད་དོན་ཚུ་) དང་ `sm2_wycheproof.rs`/`sm2_fuzz.rs` ནང་ལུ་ ལྟོ་བྱིནམ་ཨིན། ཡར་འཕེལ་གྱི་JSON ས་གཞི་ཚུ་ ཚར་གཅིག་ `cargo xtask sm-wycheproof-sync` བརྒྱུད་དེ་ ཀོར་པ་ཚུ་ དུས་མཐུན་བཟོ་དགོ།
+   - ཊེག་བཱའུན་སི་བཙན་རྫོང་དང་ ཇི་ཨེམ་ཨེསི་ཨེལ་ ནེ་གེ་ཊིབ་ཝེག་ཊར་ཆ་ཚང་། ནང་འདྲེན་ `sm2_fuzz.rs` ད་ལྟོ་ཡོད་པའི་ ཀོར་པ་ཚུ་ ལྷན་ཐབས་འབད་ནིའི་དོན་ལུ་ ཆོག་ཐམ་འདི་ བསལ་ཚར་ཡོདཔ་ཨིན།
+༣ ཨེསི་ཨེམ་ཆ་འཇོག་ལྟ་རྟོག་འབད་ནིའི་དོན་ལུ་ གཞི་རྟེན་ཊེ་ལི་མི་ཊི་རི་ (མེ་ཊིག་ དྲན་ཐོ་) ངེས་འཛིན་འབད།
+4. SM4 AEAD སྔོན་སྒྲིག་འདི་ Kotodama/VM གི་འོད་འཕྲོ་གི་དོན་ལུ་ GCM ཡང་ན་ CCM ཡང་ན་ CCM ཨིན་ན་མེན་ན་ ཐག་བཅད།
+༥. རསཊ་ཀིརིཔ་ཊོ་/ཨོཔ་ཨེསི་ཨེསི་ཨེལ་ པཱར་ཊི་ ཊེག་ཊི་ཨེན་ནེགསི་དཔེ་ ༡ (ID `ALICE123@YAHOO.COM`): དཔར་བསྐྲུན་འབད་ཡོད་པའི་མི་མང་ལྡེ་མིག་གི་དོན་ལུ་ དཔེ་མཛོད་རྒྱབ་སྐྱོར་ ངེས་གཏན་དང་ `force-disable` དེ་ རིམ་སྒྲིག་བརྟག་དཔྱད་ཚུ་ ཡར་དྲག་གཏང་ཚུགས།
 
-## External Audit Preparation
-- `docs/source/crypto/sm_audit_brief.md` packages the context, scope, schedule, and contacts for the external review.
-- Audit artefacts live under `docs/source/crypto/attachments/` (OpenSSL smoke log, cargo tree snapshot, cargo metadata export, toolkit provenance) and `fuzz/sm_corpus_manifest.json` (deterministic SM fuzz seeds sourced from existing regression vectors). On macOS the smoke log currently records a skipped run because the workspace dependency cycle prevents `cargo check`; Linux builds without the cycle will exercise the preview backend fully.
-- Circulated to Crypto WG, Platform Ops, Security, and Docs/DevRel leads on 2026-01-30 for alignment ahead of RFQ dispatch.
+## བྱ་བ་རྣམ་གྲངས།
+- [x] བརྟེན་པའི་རྩིས་ཞིབ་དང་ཉེན་སྲུང་རྗེས་འདེད་ནང་འཛིན་བཟུང་འདི་མཇུག་བསྡུ།
+- [x] རསཊི་ཀིརིཔ་ཊོ་ཨེསི་ཨེམ་ཀེརེཊི་གི་དོན་ལུ་ རྩིས་ཞིབ་མཉམ་འབྲེལ་པ་ཚུ་ ངེས་དཔྱད་འབད་ (ཨེསི་ཨེམ་-པི་༠ རྗེས་འཇུག་) བིཊི་གི་ལམ་ (CN གསང་ཡིག་རིག་པའི་ལག་ལེན་) གིས་ `sm_audit_brief.md` ནང་ཐོ་བཀོད་འབད་ཡོད་པའི་ ཀིཀ་ཨོཕ་/བཀྲམ་སྤེལ་ཚེས་གྲངས་ཚུ་ བསྐྱར་ཞིབ་གཙོ་བོ་དང་ ཨེན་སི་སི་ཨེ་ཨེ་ཨེ་སི་གིས་ སྤྱི་ལོ་༢༠༢༦ སྤྱི་ཟླ་༥ པའི་ནང་ ཆ་རྐྱེན་ཡང་ན་ གཞུང་སྐྱོང་རྗེས་འཇུག་ཚུ་ ཚིམ་སྟེ་བཞག་ནུག།
+- [x] SM4 CCM བརྡ་རྟགས་ཀྱི་གནད་དོན་ (SM-4a) གི་དོན་ལུ་ Wycheproouf ཁྱབ་ཁོངས།
+- [x] ས་ཆའི་ཁྲིམས་ལུགས་ SM2 མཚན་རྟགས་བཀོད་པའི་སྒྲིག་ཆས་ SDKs བརྒྱུད་དེ་ CI (SM-3c/SM-1b.1); `scripts/check_sm2_sdk_fixtures.py` གིས་སྲུང་སྐྱོབ་འབད་ཡོདཔ་ཨིན། (`ci/check_sm2_sdk_fixtures.sh` ལུ་བལྟ།)
 
-### Audit Engagement Status
+## བསྟུན་པའི་ཟུར་ཤོག་ (མངའ་སྡེ་གི་ཚོང་ལས་པར་རིས།)
 
-- **Trail of Bits (CN cryptography practice)** — Statement of Work executed on **2026-02-21**, kick-off **2026-02-24**, fieldwork window **2026-02-24 – 2026-03-22**, final report due **2026-04-15**. Weekly status checkpoint every Wednesday 09:00 UTC with the Crypto WG lead and Security Engineering liaison. See [`sm_audit_brief.md`](sm_audit_brief.md#engagement-status) for contacts, deliverables, and evidence attachments.
-- **NCC Group APAC (contingency slot)** — Reserved the May 2026 window as a follow-up/parallel review should additional findings or regulator requests require a second opinion. Engagement details and escalation hooks are recorded alongside the Trail of Bits entry in `sm_audit_brief.md`.
+- **དབྱེ་ཁག་བཟོ་ནི།:** SM2/SM3/SM4 གྲུ་གཟིངས་རྒྱ་ནག་གི་ *state control tcrypography* ལམ་ལུགས་ (PRC Crypography Law, Art.3) འོག་ལུ་ཡོདཔ་ཨིན། འ་ནི་ཨཱལ་གོ་རི་དམ་ཚུ་ Iroha མཉེན་ཆས་ནང་ལུ་ **not** ལྟེ་བ་/སྤྱིར་བཏང་ (state-secret) རིམ་པ་ནང་ལུ་བཙུགས་ དེ་འབདཝ་ད་ PRC བཀྲམ་སྤེལ་ནང་ལུ་ལག་ལེན་འཐབ་མི་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ ཚོང་འབྲེལ་གྱི་ཡིག་སྣོད་དང་ MLPS འགན་ཁུར་ཚུ་ ལག་ལེན་འཐབ་དགོཔ་ཨིན།
+- **Standards lineage:** ཇི་ཨེམ་/ཊི་ ཁྱད་ཚད་ཀྱི་ གཞུང་འབྲེལ་ཇི་བི་/ཊི་ བསྒྱུར་བཅོས་ཚུ་དང་གཅིག་ཁར་ མི་མང་ཡིག་ཆ་ཚུ་ ཕྲང་སྒྲིག་འབད།
 
-## Risks & Mitigations
-
-Full register: see [`sm_risk_register.md`](sm_risk_register.md) for detailed
-probability/impact scoring, monitoring triggers, and sign-off history. The
-summary below tracks the headline items surfaced to release engineering.
-| Risk | Severity | Owner | Mitigation |
-|------|----------|-------|------------|
-| Lack of external audit for RustCrypto SM crates | High | Crypto WG | Contract Trail of Bits/NCC Group, keep verify-only until audit report accepted. |
-| Deterministic nonce regressions across SDKs | High | SDK Program Leads | Share fixtures across SDK CI; enforce canonical r∥s encoding; add cross-SDK integration tests (tracked in SM-3c). |
-| ISA-specific bugs in intrinsics | Medium | Performance WG | Feature-gate intrinsics, require CI coverage on ARM, maintain software fallback. Hardware validation matrix maintained in `sm_perf.md`. |
-| Compliance ambiguity delaying adoption | Medium | Docs & Legal Liaison | Publish compliance brief & operator checklist (SM-6a/SM-6b) before GA; gather legal input. Filing checklist shipped in `sm_compliance_brief.md`. |
-| FFI backend drift with provider updates | Medium | Platform Ops | Pin provider versions, add parity tests, keep FFI backend opt-in until packaging stabilises (SM-P3). |
-
-## Open Questions / Follow-ups
-1. Select independent audit partners experienced with SM algorithms in Rust.
-   - **Answer (2026-02-24):** Trail of Bits’ CN cryptography practice signed the primary audit SOW (kick-off 2026-02-24, delivery 2026-04-15) and NCC Group APAC holds a May contingency slot so regulators can request a second review without reopening procurement. Engagement scope, contacts, and checklists live in [`sm_audit_brief.md`](sm_audit_brief.md#engagement-status) and are mirrored in `sm_audit_vendor_landscape.md`.
-2. Continue tracking upstream for an official Wycheproof SM2 dataset; the workspace currently ships a curated 52-case suite (deterministic fixtures + synthesized tamper cases) and feeds it into `sm2_wycheproof.rs`/`sm2_fuzz.rs`. Update the corpus via `cargo xtask sm-wycheproof-sync` once the upstream JSON lands.
-   - Track Bouncy Castle and GmSSL negative vector suites; import into `sm2_fuzz.rs` once licensing cleared to supplement the existing corpus.
-3. Define baseline telemetry (metrics, logging) for SM adoption monitoring.
-4. Decide whether SM4 AEAD default is GCM or CCM for Kotodama/VM exposure.
-5. Track RustCrypto/OpenSSL parity for Annex Example 1 (ID `ALICE123@YAHOO.COM`): confirm library support for the published public key and `(r, s)` so fixtures can be promoted to regression tests.
-
-## Action Items
-- [x] Finalise dependency audit and capture in the security tracker.
-- [x] Confirm audit partner engagement for the RustCrypto SM crates (SM-P0 follow-up). Trail of Bits (CN cryptography practice) owns the primary review with kickoff/delivery dates recorded in `sm_audit_brief.md`, and NCC Group APAC retained a May 2026 contingency slot to satisfy regulator or governance follow-ups.
-- [x] Extend Wycheproof coverage for SM4 CCM tamper cases (SM-4a).
-- [x] Land canonical SM2 signing fixtures across SDKs and wire into CI (SM-3c/SM-1b.1); guarded by `scripts/check_sm2_sdk_fixtures.py` (see `ci/check_sm2_sdk_fixtures.sh`).
-
-## Compliance Appendix (State Commercial Cryptography)
-
-- **Classification:** SM2/SM3/SM4 ship under China’s *state commercial cryptography* regime (PRC Cryptography Law, Art. 3). Shipping these algorithms in Iroha software does **not** place the project in the core/common (state-secret) tiers, but operators using them in PRC deployments must follow commercial-crypto filing and MLPS obligations.【docs/source/crypto/sm_chinese_crypto_law_brief.md:14】
-- **Standards lineage:** Align public documentation with the official GB/T conversions of the GM/T specs:
-
-| Algorithm | GB/T reference | GM/T origin | Notes |
+| ཨཱལ་གོ་རི་དམ་ | GB/T གཞི་བསྟུན་ | GM/T འབྱུང་ཁུངས་ | དྲན་ཐོ། |
 |-----------|----------------|-------------|-------|
-| SM2 | GB/T 32918 (all parts) | GM/T 0003 | ECC digital signature + key exchange; Iroha exposes verification in core nodes and deterministic signing to SDKs. |
-| SM3 | GB/T 32905 | GM/T 0004 | 256-bit hash; deterministic hashing across scalar and ARMv8 accelerated paths. |
-| SM4 | GB/T 32907 | GM/T 0002 | 128-bit block cipher; Iroha provides GCM/CCM helpers and ensures big-endian parity across implementations. |
-
-- **Capability manifest:** The Torii `/v1/node/capabilities` endpoint advertises the following JSON shape so operators and tooling can consume the SM manifest programmatically:
+| SM2 | GB/T32918 (ཆ་ཤས་ཆ་མཉམ་) | GM/T0003 | ECC ཌི་ཇི་ཊཱལ་མིང་རྟགས་ + ལྡེ་མིག་བརྗེ་རེས། Iroha གིས་ མཐུད་མཚམས་ལྟེ་བ་ནང་ བདེན་དཔྱད་འབད་ནི་དང་ ཨེསི་ཌི་ཀེ་ཨེསི་ལུ་ མིང་རྟགས་བཀོད་ནི་ཚུ་ ཕྱིར་བཏོན་འབདཝ་ཨིན། |
+| SM3 | GB/T32905 | GM/T0004 | 256-bit hash; བཤལ་ནད་དང་ ARMv8 མགྱོགས་ཚད་ཅན་གྱི་འགྲུལ་ལམ་ཚུ་ནང་ལུ་ གཏན་འབེབས་བཟོ་ནི། |
+| SM4 | GB/T32907 | GM/T0002 | ༡༢༨-བིཊི་བཀག་ཆ་སི་ཕ།; Iroha གིས་ GCM/CCM གྲོགས་རམ་པ་ཚུ་བྱིན་དོ་ཡོདཔ་མ་ཚད་ ལག་ལེན་འཐབ་ཐངས་ཚུ་ནང་ མཐའ་བཅད་སྦོམ་གྱི་ འདྲ་མཉམ་ངེས་གཏན་བཟོཝ་ཨིན། |- **ལྕོགས་གྲུབ་ལྡན་པའི་ མངོན་གསལ་:** Torii `/v1/node/capabilities` མཐའ་མཚམས་འདི་ འོག་གི་ JSON དབྱིབས་འདི་ བཀོལ་སྤྱོད་པ་དང་ ལག་ཆས་ཚུ་གིས་ ཨེསི་ཨེམ་ གསལ་རྟགས་ལས་རིམ་གྱི་ཐོག་ལས་ བཀོལ་སྤྱོད་འབད་ཚུགས།
 
 ```json
 {
@@ -376,13 +344,13 @@ summary below tracks the headline items surfaced to release engineering.
 }
 ```
 
-The CLI subcommand `iroha runtime capabilities` surfaces the same payload locally, printing a one-line summary alongside the JSON advert for compliance evidence collection.
+CLI subcommand `iroha runtime capabilities` གིས་ ས་གནས་ནང་ པེ་ལོཌ་ཅོག་འཐདཔ་ཅིག་ ཐོན་ཡོདཔ་ད་ དེ་ཡང་ སྒྲུབ་བྱེད་བསྡུ་ལེན་གྱི་དོན་ལུ་ JSON ཁྱབ་བསྒྲགས་ཀྱི་ མཉམ་དུ་ གྱལ་གཅིག་འབད་མི་ བཅུད་བསྡུས་ཅིག་ པར་སྐྲུན་འབདཝ་ཨིན།
 
-- **Documentation deliverables:** publish release notes and SBOMs that identify the algorithms/standards above, and keep the full compliance brief (`sm_chinese_crypto_law_brief.md`) bundled with release artefacts so operators can attach it to provincial filings.【docs/source/crypto/sm_chinese_crypto_law_brief.md:59】
-- **Operator hand-off:** remind deployers that MLPS 2.0/GB/T 39786-2021 require crypto application assessments, SM key-management SOPs, and ≥ 6 year evidence retention; point them to the operator checklist in the compliance brief.【docs/source/crypto/sm_chinese_crypto_law_brief.md:43】【docs/source/crypto/sm_chinese_crypto_law_brief.md:74】
+- **ཡིག་ཆ་སྤྲོད་ཚུགས་མི་ཚུ་:** གོང་འཁོད་ཀྱི་ཨཱལ་གོ་རི་དམ་/ཚད་ལྡན་ཚུ་ངོས་འཛིན་འབད་མི་ གསར་བཏོན་དྲན་ཐོ་དང་ ཨེསི་བི་ཨོ་ཨེམ་ཚུ་ དཔར་བསྐྲུན་འབདཝ་ཨིནམ་དང་ བསྟར་སྤྱོད་ཀྱི་ཅ་ཆས་ཚུ་དང་གཅིག་ཁར་ ཐུང་ཀུ་སྦེ་བཞག་མི་ (`sm_chinese_crypto_law_brief.md`) འདི་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ མངའ་སྡེ་ལུ་མཉམ་སྦྲགས་འབད་ཚུགས། ཡིག་ཆ་ཚུ་.【ཌོཀ/ ཐོན་ཁུངས་/ ཀིརིཔ་ཊོ/sm_རྒྱ་ནག་_ ཀིརིཔ་ཊོ་_ཁྲིམས་ལུགས་_བིརིཕ.ཨེམ་ཌི་:༥༩】
+- ** Operator ལག་ཐོག་བཀག་ཆ་:** བཀྲམ་སྤེལ་པ་ཚུ་ལུ་ དྲན་བསྐུལ་འབདཝ་ཨིན་ ཨེམ་ཨེལ་པི་ཨེསི་༢.༠/ཇི་བི་/ཊི་༣༩༧༨༦-༢༠༢༡ ཀིརིཔ་ཊོ་གློག་རིམ་བརྟག་ཞིབ་དང་ ཨེསི་ཨེམ་ལྡེ་མིག་འཛིན་སྐྱོང་ཨེསི་ཨོ་པི་ དེ་ལས་ ལོ་༦ གི་སྒྲུབ་བྱེད་བཞག་ཐངས་ཚུ་དགོཔ་ཨིན། བཀོལ་བཀོལ་ཐོ་ཡིག་ནང་ བཀོལ་སྤྱོད་ཞིབ་དཔྱད་ཐོ་ཡིག་ནང་ བཀོལ་བཀོད། 【docs/spee/sprionto/crypto/crypto_law_brief.md:43】】ཀིརིཔ་ཊོ་/ཀིརིཔ་ཊོ་_ཁྲིམས་ལུགས་_ཁྲིམས་ལུགས་_ཁྲིམས་_བིརིཕ་.md:74】།
 
-## Communication Plan
-- **Audience:** Crypto WG core members, Release Engineering, Security Review board, SDK program leads.
-- **Artifacts:** `sm_program.md`, `sm_lock_refresh_plan.md`, `sm_vectors.md`, `sm_wg_sync_template.md`, roadmap excerpt (SM-0 .. SM-7a).
-- **Channel:** Weekly Crypto WG sync agenda + follow-up email summarising action items and requesting approval for lock refresh and dependency intake (draft circulated 2025-01-19).
-- **Owner:** Crypto WG lead (delegate acceptable).
+## བརྒྱུད་འབྲེལ་འཆར་གཞི།
+- **Audience:** ཀིརིཔ་ཊོ་ཌབ་ལུ་ཇི་འཐུས་མི་གཙོ་བོ་ གསར་བཏོན་བཟོ་རིག་ བདེ་འཇགས་བསྐྱར་ཞིབ་ཚོགས་ཆུང་ ཨེསི་ཌི་ཀེ་ལས་རིམ་འགོ་འཁྲིད་འབདཝ་ཨིན།
+- **སྒྱུ་རྩལ་ཚུ་:** `sm_program.md`, `sm_lock_refresh_plan.md`, `sm_vectors.md`, `sm_wg_sync_template.md`, ལམ་གྱི་ས་ཁྲ་ (SM-0 .. SM-7a).
+- **རྒྱུ་ལམ་:** བདུན་ཕྲག་ཀིརིཔ་ཊོ་ཌབ་ལུ་ཇི་ མཉམ་འབྱུང་གྲོས་གཞི་ + བྱ་སྤྱོད་རྣམ་གྲངས་ཚུ་བསྡོམས་རྩིས་རྐྱབ་སྟེ་ ལྡེ་མིག་གསརཔ་བཟོ་ནི་དང་ བརྟེན་སྡོད་ནི་གི་ ཆ་འཇོག་འབད་དགོ་པའི་ཞུ་བ་འབད་ནི།
+- **ཇོ་བདག་:** ཀིརིཔ་ཊོ་ ཌབ་ལུ་ཇི་ ལིཌ་ (འགན་འཁྲིའི་ངོས་ལེན་འབད་བཏུབ་མི)།

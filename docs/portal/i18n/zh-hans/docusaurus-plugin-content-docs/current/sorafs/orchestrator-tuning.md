@@ -8,97 +8,99 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Orchestrator Rollout & Tuning
 sidebar_label: Orchestrator Tuning
 description: Practical defaults, tuning guidance, and audit checkpoints for taking the multi-source orchestrator to GA.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::注意规范来源
 :::
 
-# Orchestrator Rollout & Tuning Guide
+# Orchestrator 推出和调整指南
 
-This guide builds on the [configuration reference](orchestrator-config.md) and the
-[multi-source rollout runbook](multi-source-rollout.md). It explains
-how to tune the orchestrator for each rollout phase, how to interpret the
-scoreboard artefacts, and which telemetry signals must be in place before
-expanding traffic. Apply the recommendations consistently across CLI, SDKs, and
-automation so every node follows the same deterministic fetch policy.
+本指南以[配置参考](orchestrator-config.md) 和
+[多源部署操作手册](multi-source-rollout.md)。它解释了
+如何为每个推出阶段调整协调器，如何解释
+记分板文物，以及哪些遥测信号必须在之前就位
+扩大交通。跨 CLI、SDK 和应用一致地应用建议
+自动化，因此每个节点都遵循相同的确定性获取策略。
 
-## 1. Baseline Parameter Sets
+## 1. 基线参数集
 
-Start from a shared configuration template and adjust a small set of knobs as
-the rollout progresses. The table below captures the recommended values for the
-most common phases; values not listed fall back to the defaults in
-`OrchestratorConfig::default()` and `FetchOptions::default()`.
+从共享配置模板开始并调整一小组旋钮：
+推广工作正在进行中。下表列出了推荐值
+最常见的阶段；未列出的值将回退到默认值
+`OrchestratorConfig::default()` 和 `FetchOptions::default()`。
 
-| Phase | `max_providers` | `fetch.per_chunk_retry_limit` | `fetch.provider_failure_threshold` | `scoreboard.latency_cap_ms` | `scoreboard.telemetry_grace_secs` | Notes |
-|-------|-----------------|-------------------------------|------------------------------------|-----------------------------|------------------------------------|-------|
-| **Lab / CI** | `3` | `2` | `2` | `2500` | `300` | Tight latency cap and grace window surface noisy telemetry quickly. Keep retries low to expose invalid manifests sooner. |
-| **Staging** | `4` | `3` | `3` | `4000` | `600` | Mirrors production defaults while leaving headroom for exploratory peers. |
-| **Canary** | `6` | `3` | `3` | `5000` | `900` | Matches defaults; set `telemetry_region` so dashboards can pivot on canary traffic. |
-| **General Availability** | `None` (use all eligible) | `4` | `4` | `5000` | `900` | Increase retry and failure thresholds to absorb transient faults while audits continue to enforce determinism. |
+|相| `max_providers` | `fetch.per_chunk_retry_limit` | `fetch.provider_failure_threshold` | `scoreboard.latency_cap_ms` | `scoreboard.telemetry_grace_secs` |笔记|
+|--------------------|-----------------|--------------------------------------------|------------------------------------|--------------------------------------------|------------------------------------|------|
+| **实验室/CI** | `3` | `2` | `2` | `2500` | `300` |严格的延迟上限和宽限窗口快速表面嘈杂的遥测。保持较低的重试次数以更快地暴露无效清单。 |
+| **分期** | `4` | `3` | `3` | `4000` | `600` |反映生产默认情况，同时为探索性同行留出空间。 |
+| **金丝雀** | `6` | `3` | `3` | `5000` | `900` |匹配默认值；设置 `telemetry_region` 以便仪表板可以基于金丝雀流量。 |
+| **全面上市** | `None`（使用所有符合条件的）| `4` | `4` | `5000` | `900` |增加重试和失败阈值以吸收瞬态故障，同时审计继续加强确定性。 |
 
-- `scoreboard.weight_scale` remains at the default `10_000` unless a downstream
-  system requires a different integer resolution. Increasing the scale does not
-  change provider ordering; it only emits a denser credit distribution.
-- When migrating between phases, persist the JSON bundle and use
-  `--scoreboard-out` so the audit trail records the exact parameter set.
+- `scoreboard.weight_scale` 保持默认 `10_000`，除非下游
+  系统需要不同的整数分辨率。扩大规模并不
+  更改提供商订购；它只会发出更密集的信用分布。
+- 在阶段之间迁移时，保留 JSON 包并使用
+  `--scoreboard-out` 因此审计跟踪记录了确切的参数集。
 
-## 2. Scoreboard Hygiene
+## 2.记分牌卫生
 
-The scoreboard combines manifest requirements, provider adverts, and telemetry.
-Before rolling forward:
+记分板结合了清单要求、提供商广告和遥测。
+前滚之前：
 
-1. **Validate telemetry freshness.** Ensure the snapshots referenced by
-   `--telemetry-json` were captured within the configured grace window. Entries
-   older than the configured `telemetry_grace_secs` fail with
-   `TelemetryStale { last_updated }`. Treat this as a hard stop and refresh the
-   telemetry export before continuing.
-2. **Inspect eligibility reasons.** Persist artefacts via
-   `--scoreboard-out=/var/lib/sorafs/scoreboards/preflight.json`. Each entry
-   carries an `eligibility` block with the exact failure cause. Do not override
-   capability mismatches or expired adverts; fix the upstream payload.
-3. **Review weight deltas.** Compare the `normalised_weight` field against the
-   previous release. Weight shifts >10 % should correlate with deliberate advert
-   or telemetry changes and must be acknowledged in the rollout log.
-4. **Archive artefacts.** Configure `scoreboard.persist_path` so every run emits
-   the final scoreboard snapshot. Attach the artefact to the release record
-   alongside the manifest and telemetry bundle.
-5. **Record provider mix evidence.** `scoreboard.json` metadata _and_ the
-   matching `summary.json` must expose `provider_count`,
-   `gateway_provider_count`, and the derived `provider_mix` label so reviewers
-   can prove whether the run was `direct-only`, `gateway-only`, or `mixed`.
-   Gateway captures therefore report `provider_count=0` plus
-   `provider_mix="gateway-only"`, while mixed runs require non-zero counts for
-   both sources. `cargo xtask sorafs-adoption-check` enforces these fields (and
-   fails when the counts/labels disagree), so always run it alongside
-   `ci/check_sorafs_orchestrator_adoption.sh` or your bespoke capture script to
-   produce the `adoption_report.json` evidence bundle. When Torii gateways are
-   involved, keep `gateway_manifest_id`/`gateway_manifest_cid` in the scoreboard
-   metadata so the adoption gate can correlate the manifest envelope with the
-   captured provider mix.
+1. **验证遥测新鲜度。** 确保引用的快照
+   `--telemetry-json` 是在配置的宽限窗口内捕获的。参赛作品
+   早于配置的 `telemetry_grace_secs` 失败并显示
+   `TelemetryStale { last_updated }`。将其视为硬停止并刷新
+   在继续之前导出遥测数据。
+2. **检查资格原因。** 通过以下方式保留文物
+   `--scoreboard-out=/var/lib/sorafs/scoreboards/preflight.json`。每个条目
+   带有包含确切故障原因的 `eligibility` 块。不要覆盖
+   能力不匹配或广告过期；修复上游有效负载。
+3. **查看权重增量。** 将 `normalised_weight` 字段与
+   以前的版本。体重变化 >10% 应与故意广告相关
+   或遥测更改，必须在推出日志中确认。
+4. **存档工件。** 配置 `scoreboard.persist_path`，以便每次运行都会发出
+   最终记分牌快照。将工件附加到发布记录
+   与清单和遥测包一起。
+5. **记录提供者混合证据。** `scoreboard.json` 元数据_和_
+   匹配 `summary.json` 必须公开 `provider_count`，
+   `gateway_provider_count`，以及派生的 `provider_mix` 标签，因此审阅者
+   可以证明运行是否为 `direct-only`、`gateway-only` 或 `mixed`。
+   网关因此捕获报告 `provider_count=0` plus
+   `provider_mix="gateway-only"`，而混合运行需要非零计数
+   两个来源。 `cargo xtask sorafs-adoption-check` 强制执行这些字段（并且
+   当计数/标签不一致时会失败），所以总是一起运行
+   `ci/check_sorafs_orchestrator_adoption.sh` 或您定制的捕获脚本
+   生成 `adoption_report.json` 证据包。当 Torii 网关为
+   参与，将 `gateway_manifest_id`/`gateway_manifest_cid` 保留在记分牌中
+   元数据，以便采用门可以将清单信封与
+   捕获的提供商组合。
 
-For detailed field definitions see
-`crates/sorafs_car/src/scoreboard.rs` and the CLI summary structure exposed by
-`sorafs_cli fetch --json-out`.
+详细字段定义参见
+`crates/sorafs_car/src/scoreboard.rs` 和 CLI 摘要结构公开
+`sorafs_cli fetch --json-out`。
 
-## CLI & SDK Flag Reference
+## CLI 和 SDK 标志参考
 
-`sorafs_cli fetch` (see `crates/sorafs_car/src/bin/sorafs_cli.rs`) and the
-`iroha_cli app sorafs fetch` wrapper (`crates/iroha_cli/src/commands/sorafs.rs`)
-share the same orchestrator configuration surface. Use the following flags when
-capturing rollout evidence or replaying the canonical fixtures:
+`sorafs_cli fetch`（参见 `crates/sorafs_car/src/bin/sorafs_cli.rs`）和
+`iroha_cli app sorafs fetch` 包装器 (`crates/iroha_cli/src/commands/sorafs.rs`)
+共享相同的协调器配置表面。使用以下标志时
+捕获推出证据或重播规范赛程：
 
-Shared multi-source flag reference (keep CLI help and docs in sync by editing this file only):
+共享多源标志参考（仅通过编辑此文件来保持 CLI 帮助和文档同步）：
 
-- `--max-peers=<count>` limits how many eligible providers survive the scoreboard filter. Leave unset to stream from every eligible provider, set to `1` only when intentionally exercising the single-source fallback. Mirrors the `maxPeers` knob in SDKs (`SorafsGatewayFetchOptions.maxPeers`, `SorafsGatewayFetchOptions.max_peers`).
-- `--retry-budget=<count>` forwards to the per-chunk retry limit enforced by `FetchOptions`. Use the rollout table in the tuning guide for recommended values; CLI runs that collect evidence must match SDK defaults to keep parity.
-- `--telemetry-region=<label>` tags `sorafs_orchestrator_*` Prometheus series (and OTLP relays) with a region/env label so dashboards can separate lab, staging, canary, and GA traffic.
-- `--telemetry-json=<path>` injects the snapshot referenced by the scoreboard. Persist the JSON next to the scoreboard so auditors can replay the run (and so `cargo xtask sorafs-adoption-check --require-telemetry` can prove which OTLP stream fed the capture).
-- `--local-proxy-*` (`--local-proxy-mode`, `--local-proxy-norito-spool`, `--local-proxy-kaigi-spool`, `--local-proxy-kaigi-policy`) enable the bridge observer hooks. When set, the orchestrator streams chunks through the local Norito/Kaigi proxy so browser clients, guard caches, and Kaigi rooms receive the same receipts emitted by Rust.
-- `--scoreboard-out=<path>` (optionally paired with `--scoreboard-now=<unix_secs>`) persists the eligibility snapshot for auditors. Always pair the persisted JSON with the telemetry and manifest artefacts referenced in the release ticket.
-- `--deny-provider name=ALIAS` / `--boost-provider name=ALIAS:delta` apply deterministic adjustments on top of the advert metadata. Use these flags only for rehearsals; production downgrades must flow through governance artefacts so every node applies the same policy bundle.
-- `--provider-metrics-out` / `--chunk-receipts-out` retain the per-provider health metrics and chunk receipts referenced by the rollout checklist; attach both artefacts when filing adoption evidence.
+- `--max-peers=<count>` 限制了有多少合格的提供商能够通过记分板过滤器。保留未设置以从每个符合条件的提供商进行流式传输，仅在有意执行单源回退时设置为 `1`。镜像 SDK 中的 `maxPeers` 旋钮（`SorafsGatewayFetchOptions.maxPeers`、`SorafsGatewayFetchOptions.max_peers`）。
+- `--retry-budget=<count>` 转发至 `FetchOptions` 强制执行的每块重试限制。使用调整指南中的卷展表来获取推荐值；收集证据的 CLI 运行必须与 SDK 默认值匹配才能保持奇偶性。
+- `--telemetry-region=<label>` 使用区域/环境标签标记 `sorafs_orchestrator_*` Prometheus 系列（和 OTLP 继电器），以便仪表板可以分离实验室、登台、金丝雀和 GA 流量。
+- `--telemetry-json=<path>` 注入记分板引用的快照。将 JSON 保留在记分板旁边，以便审核员可以重播运行（因此 `cargo xtask sorafs-adoption-check --require-telemetry` 可以证明哪个 OTLP 流提供了捕获）。
+- `--local-proxy-*`（`--local-proxy-mode`、`--local-proxy-norito-spool`、`--local-proxy-kaigi-spool`、`--local-proxy-kaigi-policy`）启用桥观察器挂钩。设置后，编排器通过本地 Norito/Kaigi 代理流式传输块，以便浏览器客户端、防护缓存和 Kaigi 房间收到 Rust 发出的相同收据。
+- `--scoreboard-out=<path>`（可选与 `--scoreboard-now=<unix_secs>` 配对）为审核员保留资格快照。始终将持久化的 JSON 与发布票证中引用的遥测和清单工件配对。
+- `--deny-provider name=ALIAS` / `--boost-provider name=ALIAS:delta` 在广告元数据之上应用确定性调整。仅在排练时使用这些标志；生产降级必须通过治理工件进行，以便每个节点都应用相同的策略包。
+- `--provider-metrics-out` / `--chunk-receipts-out` 保留推出清单引用的每个提供商的运行状况指标和块收据；提交收养证据时附上这两件物品。
 
-Example (using the published fixture):
+示例（使用已发布的夹具）：
 
 ```bash
 sorafs_cli fetch \
@@ -115,110 +117,108 @@ cargo xtask sorafs-adoption-check \
   --summary artifacts/sorafs_orchestrator/latest/summary.json
 ```
 
-SDKs consume the same configuration via `SorafsGatewayFetchOptions` in the Rust
-client (`crates/iroha/src/client.rs`), the JS bindings
-(`javascript/iroha_js/src/sorafs.js`), and the Swift SDK
-(`IrohaSwift/Sources/IrohaSwift/SorafsOptions.swift`). Keep those helpers in
-lock-step with the CLI defaults so operators can copy policies across automation
-without bespoke translation layers.
+SDK 通过 Rust 中的 `SorafsGatewayFetchOptions` 使用相同的配置
+客户端（`crates/iroha/src/client.rs`），JS 绑定
+(`javascript/iroha_js/src/sorafs.js`) 和 Swift SDK
+（`IrohaSwift/Sources/IrohaSwift/SorafsOptions.swift`）。让那些帮手留在里面
+与 CLI 默认值同步，以便操作员可以跨自动化复制策略
+没有定制的翻译层。
 
-## 3. Fetch Policy Tuning
+## 3. 获取策略调整
 
-`FetchOptions` controls retry behaviour, concurrency, and verification. When
-tuning:
+`FetchOptions` 控制重试行为、并发性和验证。当
+调整：
 
-- **Retries:** Raising `per_chunk_retry_limit` beyond `4` increases recovery
-  time but risks masking provider faults. Prefer keeping `4` as the ceiling and
-  relying on the provider rotation to surface poor performers.
-- **Failure threshold:** The `provider_failure_threshold` governs when a
-  provider is disabled for the remainder of the session. Align this value with
-  retry policy: a threshold lower than the retry budget forces the orchestrator
-  to eject a peer before all retries are exhausted.
-- **Concurrency:** Leave `global_parallel_limit` unset (`None`) unless a
-  specific environment cannot saturate the advertised ranges. When set, ensure
-  the value is ≤ the sum of provider stream budgets to avoid starvation.
-- **Verification toggles:** `verify_lengths` and `verify_digests` must remain
-  enabled in production. They guarantee determinism when mixed provider fleets
-  are in play; only disable them in isolated fuzzing environments.
+- **重试：** 将 `per_chunk_retry_limit` 提高到超过 `4` 可增加恢复
+  时间，但有掩盖提供商错误的风险。更喜欢保留 `4` 作为上限
+  依靠供应商轮换来发现表现不佳的人员。
+- **故障阈值：** `provider_failure_threshold` 控制何时
+  提供者在会话的剩余时间内被禁用。将此值与
+  重试策略：低于重试预算的阈值强制协调器
+  在所有重试用尽之前弹出对等点。
+- **并发：** 保留 `global_parallel_limit` 未设置 (`None`)，除非
+  特定环境无法满足所公布的范围。设置后，确保
+  该值≤提供商流预算的总和，以避免饥饿。
+- **验证切换：** `verify_lengths` 和 `verify_digests` 必须保留
+  在生产中启用。当混合供应商车队时，它们保证确定性
+  正在比赛中；仅在隔离的模糊测试环境中禁用它们。
 
-## 4. Transport & Anonymity Staging
+## 4. 传输和匿名分期
 
-Use the `rollout_phase`, `anonymity_policy`, and `transport_policy` fields to
-represent the privacy posture:
+使用 `rollout_phase`、`anonymity_policy` 和 `transport_policy` 字段
+代表隐私姿态：- 首选 `rollout_phase="snnet-5"` 并允许默认匿名策略
+  跟踪 SNNet-5 里程碑。仅通过 `anonymity_policy_override` 覆盖
+  当治理发布签署的指令时。
+- 保持 `transport_policy="soranet-first"` 作为基线，而 SNNet-4/5/5a/5b/6a/7/8/12/13 是🈺
+  （参见 `roadmap.md`）。仅将 `transport_policy="direct-only"` 用于记录
+  降级/合规演习，并等待 PQ 覆盖率审查
+  升级到 `transport_policy="soranet-strict"` — 如果出现以下情况，该层将快速失败
+  只剩下经典的继电器。
+- `write_mode="pq-only"` 仅应在每个写入路径（SDK、
+  协调器、治理工具）可以满足 PQ 要求。期间
+  推出保留 `write_mode="allow-downgrade"`，以便紧急响应可以依靠
+  在直接路线上，而遥测标记降级。
+- 防护选择和电路分级依赖于 SoraNet 目录。供应
+  签署 `relay_directory` 快照并保留 `guard_set` 缓存以保护
+  流失率保持在商定的保留窗口内。记录的缓存指纹
+  `sorafs_cli fetch` 构成了推出证据的一部分。
 
-- Prefer `rollout_phase="snnet-5"` and allow the default anonymity policy to
-  track the SNNet-5 milestones. Override via `anonymity_policy_override` only
-  when governance issues a signed directive.
-- Keep `transport_policy="soranet-first"` as the baseline while SNNet-4/5/5a/5b/6a/7/8/12/13 are 🈺
-  (see `roadmap.md`). Use `transport_policy="direct-only"` only for documented
-  downgrades/compliance drills, and wait for the PQ coverage review before
-  promoting to `transport_policy="soranet-strict"`—that tier will fail fast if
-  only classical relays remain.
-- `write_mode="pq-only"` should only be enforced when every write path (SDK,
-  orchestrator, governance tooling) can satisfy PQ requirements. During
-  rollouts keep `write_mode="allow-downgrade"` so emergency responses can rely
-  on direct routes while telemetry flags the downgrade.
-- Guard selection and circuit staging rely on the SoraNet directory. Supply the
-  signed `relay_directory` snapshot and persist the `guard_set` cache so guard
-  churn stays within the agreed retention window. The cache fingerprint logged
-  by `sorafs_cli fetch` forms part of the rollout evidence.
+## 5. 降级和合规挂钩
 
-## 5. Downgrade & Compliance Hooks
+两个协调器子系统有助于在无需人工干预的情况下执行策略：
 
-Two orchestrator subsystems help enforce policy without manual intervention:
+- **降级修复** (`downgrade_remediation`)：监视器
+  `handshake_downgrade_total` 事件，配置后的 `threshold` 为
+  超出 `window_secs` 内，强制本地代理进入 `target_mode`
+  （默认情况下仅元数据）。保留默认值（`threshold=3`、`window=300`、
+  `cooldown=900`）除非事件审查显示不同的模式。记录任何
+  覆盖推出日志并确保仪表板跟踪
+  `sorafs_proxy_downgrade_state`。
+- **合规政策** (`compliance`)：管辖权和清单豁免
+  流经治理管理的选择退出列表。切勿内联临时覆盖
+  在配置包中；相反，请求签名更新
+  `governance/compliance/soranet_opt_outs.json` 并重新部署生成的 JSON。
 
-- **Downgrade remediation** (`downgrade_remediation`): monitors
-  `handshake_downgrade_total` events and, after the configured `threshold` is
-  exceeded within `window_secs`, forces the local proxy into the `target_mode`
-  (metadata-only by default). Keep the defaults (`threshold=3`, `window=300`,
-  `cooldown=900`) unless incident reviews show a different pattern. Document any
-  override in the rollout log and ensure dashboards track
-  `sorafs_proxy_downgrade_state`.
-- **Compliance policy** (`compliance`): jurisdiction and manifest carve-outs
-  flow through governance-managed opt-out lists. Never inline ad-hoc overrides
-  in the configuration bundle; instead, request a signed update to
-  `governance/compliance/soranet_opt_outs.json` and redeploy the generated JSON.
+对于这两个系统，保留生成的配置包并将其包含在
+发布证据，以便审计人员可以追踪降档是如何触发的。
 
-For both systems, persist the resulting configuration bundle and include it in
-release evidences so auditors can trace how downshifts were triggered.
+## 6. 遥测和仪表板
 
-## 6. Telemetry & Dashboards
-
-Before widening the rollout, confirm that the following signals are live in the
-target environment:
+在扩大推出之前，请确认以下信号已在
+目标环境：
 
 - `sorafs_orchestrator_fetch_failures_total{reason="no_healthy_providers"}` —
-  should be zero after the canary completes.
-- `sorafs_orchestrator_retries_total` and
-  `sorafs_orchestrator_retry_ratio` — should stabilise below 10 % during the
-  canary and stay below 5 % after GA.
-- `sorafs_orchestrator_policy_events_total` — validates that the expected
-  rollout stage is active (`stage` label) and records brownouts via `outcome`.
+  金丝雀完成后应为零。
+- `sorafs_orchestrator_retries_total` 和
+  `sorafs_orchestrator_retry_ratio` — 期间应稳定在 10% 以下
+  金丝雀并在 GA 后保持在 5% 以下。
+- `sorafs_orchestrator_policy_events_total` — 验证预期的
+  推出阶段处于活动状态（`stage` 标签）并通过 `outcome` 记录限电。
 - `sorafs_orchestrator_pq_candidate_ratio` /
-  `sorafs_orchestrator_pq_deficit_ratio` — track PQ relay supply against
-  policy expectations.
-- `telemetry::sorafs.fetch.*` log targets — must be streamed to the shared log
-  aggregator with saved searches for `status=failed`.
+  `sorafs_orchestrator_pq_deficit_ratio` — 跟踪 PQ 继电器电源
+  政策预期。
+- `telemetry::sorafs.fetch.*` 日志目标 — 必须流式传输到共享日志
+  已保存 `status=failed` 搜索的聚合器。
 
-Load the canonical Grafana dashboard from
-`dashboards/grafana/sorafs_fetch_observability.json` (exported in the portal
-under **SoraFS → Fetch Observability**) so the region/manifest selectors,
-provider retry heatmap, chunk latency histograms, and stall counters match
-what SRE reviews during burn-ins. Wire the Alertmanager rules in
-`dashboards/alerts/sorafs_fetch_rules.yml` and validate the Prometheus syntax
-with `scripts/telemetry/test_sorafs_fetch_alerts.sh` (the helper automatically
-runs `promtool test rules` locally or in Docker). Alert hand-offs require the
-same routing block that the script prints so operators can pin the evidence to
-the rollout ticket.
+从以下位置加载规范的 Grafana 仪表板
+`dashboards/grafana/sorafs_fetch_observability.json`（在门户中导出
+在 **SoraFS → Fetch Observability** 下），因此区域/清单选择器，
+提供者重试热图、块延迟直方图和停顿计数器匹配
+SRE 在老化期间会审查什么。将 Alertmanager 规则连接到
+`dashboards/alerts/sorafs_fetch_rules.yml` 并验证 Prometheus 语法
+与 `scripts/telemetry/test_sorafs_fetch_alerts.sh` （助手自动
+在本地或 Docker 中运行 `promtool test rules`）。警报切换需要
+与脚本打印相同的路由块，以便操作员可以将证据固定到
+推出票。
 
-### Telemetry burn-in workflow
+### 遥测预烧工作流程
 
-Roadmap item **SF-6e** requires a 30-day telemetry burn-in before flipping the
-multi-source orchestrator to its GA defaults. Use the repository scripts to
-capture a reproducible artefact bundle for every day in the window:
+路线图项目 **SF-6e** 在翻转之前需要进行 30 天的遥测老化
+多源编排器恢复其 GA 默认值。使用存储库脚本
+在窗口中每天捕获可复制的工件包：
 
-1. Run `ci/check_sorafs_orchestrator_adoption.sh` with the burn-in environment
-   knobs set. Example:
+1.用烧机环境运行`ci/check_sorafs_orchestrator_adoption.sh`
+   旋钮设置。示例：
 
    ```bash
    SORAFS_BURN_IN_LABEL=canary-week-1 \
@@ -229,40 +229,40 @@ capture a reproducible artefact bundle for every day in the window:
    ci/check_sorafs_orchestrator_adoption.sh
    ```
 
-   The helper replays `fixtures/sorafs_orchestrator/multi_peer_parity_v1`,
-   writes `scoreboard.json`, `summary.json`, `provider_metrics.json`,
-   `chunk_receipts.json`, and `adoption_report.json` under
-   `artifacts/sorafs_orchestrator/<timestamp>/`, and enforces a minimum number
-   of eligible providers via `cargo xtask sorafs-adoption-check`.
-2. When the burn-in variables are present the script also emits
-   `burn_in_note.json`, capturing the label, day index, manifest id, telemetry
-   source, and artefact digests. Attach this JSON to the rollout log so it is
-   obvious which capture satisfied each day in the 30-day window.
-3. Import the updated Grafana board (`dashboards/grafana/sorafs_fetch_observability.json`)
-   into the staging/production workspace, tag it with the burn-in label, and
-   confirm that every panel shows samples for the manifest/region under test.
-4. Run `scripts/telemetry/test_sorafs_fetch_alerts.sh` (or `promtool test rules …`)
-   whenever `dashboards/alerts/sorafs_fetch_rules.yml` changes to document that
-   alert routing matches the metrics exported during the burn-in.
-5. Archive the resulting dashboard snapshot, alert test output, and log tail
-   from the `telemetry::sorafs.fetch.*` searches alongside the orchestrator
-   artefacts so governance can replay the evidence without pulling metrics from
-   live systems.
+   助手重播 `fixtures/sorafs_orchestrator/multi_peer_parity_v1`，
+   写入 `scoreboard.json`、`summary.json`、`provider_metrics.json`、
+   `chunk_receipts.json` 和 `adoption_report.json` 下
+   `artifacts/sorafs_orchestrator/<timestamp>/`，并强制执行最小数量
+   通过 `cargo xtask sorafs-adoption-check` 列出符合资格的提供商。
+2. 当存在预烧变量时，脚本也会发出
+   `burn_in_note.json`，捕获标签、日期索引、清单 ID、遥测
+   来源和人工制品摘要。将此 JSON 附加到推出日志中，以便它是
+   很明显，在 30 天的窗口内，每天的捕获都令人满意。
+3.导入更新的Grafana板（`dashboards/grafana/sorafs_fetch_observability.json`）
+   进入暂存/生产工作区，用老化标签对其进行标记，然后
+   确认每个面板都显示正在测试的清单/区域的样本。
+4.运行`scripts/telemetry/test_sorafs_fetch_alerts.sh`（或`promtool test rules …`）
+   每当 `dashboards/alerts/sorafs_fetch_rules.yml` 更改以记录该信息时
+   警报路由与预烧期间导出的指标相匹配。
+5. 归档生成的仪表板快照、警报测试输出和日志尾部
+   从 `telemetry::sorafs.fetch.*` 与协调器一起搜索
+   人工制品，以便治理可以重播证据，而无需从中提取指标
+   实时系统。
 
-## 7. Rollout Checklist
+## 7. 推出清单
 
-1. Regenerate scoreboards in CI using the candidate configuration and capture
-   artefacts under version control.
-2. Run the deterministic fixture fetch in each environment (lab, staging,
-   canary, production) and attach the `--scoreboard-out` and `--json-out`
-   artefacts to the rollout record.
-3. Review telemetry dashboards with the on-call engineer, ensuring all metrics
-   above have live samples.
-4. Record the final configuration path (usually via `iroha_config`) and the
-   git commit of the governance registry used for adverts and compliance.
-5. Update the rollout tracker and notify SDK teams of new defaults so client
-   integrations stay aligned.
+1. 使用候选配置并捕获在 CI 中重新生成记分板
+   版本控制下的工件。
+2. 在每个环境（实验室、暂存、
+   金丝雀，生产）并附上 `--scoreboard-out` 和 `--json-out`
+   发布记录中的工件。
+3. 与值班工程师一起审查遥测仪表板，确保所有指标
+   上面有活体样本。
+4. 记录最终的配置路径（通常通过`iroha_config`）和
+   用于广告和合规性的治理注册表的 git commit。
+5. 更新推出跟踪器并通知 SDK 团队新的默认值，以便客户端
+   集成保持一致。
 
-Following this guide keeps orchestrator deployments deterministic and auditable
-while providing clear feedback loops for tuning retry budgets, provider
-capacity, and privacy posture.
+遵循本指南可以保持协调器部署的确定性和可审计性
+在提供清晰的反馈循环来调整重试预算的同时，提供商
+容量和隐私状况。

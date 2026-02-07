@@ -7,16 +7,17 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 7c19e80d060b1ecd57524e7398420990bd9159e7c4ac431ee5b85cfbf3b3df07
 source_last_modified: "2026-01-22T16:26:46.562559+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# JavaScript SDK Quickstart
+# JavaScript SDK tezkor ishga tushirish
 
-`@iroha2/torii-client` provides a browser and Node.js friendly wrapper around Torii.
-This quickstart mirrors the core flows from the SDK recipes so you can get a
-client running in a few minutes. For fuller examples, see
-`javascript/iroha_js/recipes/` in the repository.
+`@iroha2/torii-client` brauzer va Torii atrofida Node.js qulay oʻramini taqdim etadi.
+Ushbu tezkor ishga tushirish SDK retseptlaridagi asosiy oqimlarni aks ettiradi, shuning uchun siz quyidagilarni olishingiz mumkin
+mijoz bir necha daqiqada ishlaydi. To'liqroq misollar uchun qarang
+Omborda `javascript/iroha_js/recipes/`.
 
-## 1. Install
+## 1. O'rnatish
 
 ```sh
 npm install @iroha2/torii-client
@@ -24,13 +25,13 @@ npm install @iroha2/torii-client
 yarn add @iroha2/torii-client
 ```
 
-If you plan to sign transactions locally, also install the crypto helpers:
+Agar siz mahalliy tranzaktsiyalarni imzolashni rejalashtirmoqchi bo'lsangiz, kripto yordamchilarini ham o'rnating:
 
 ```sh
 npm install @iroha2/crypto-target-node  # Node18+/Bun/Deno
 ```
 
-## 2. Create a Torii client
+## 2. Torii mijozini yarating
 
 ```ts title="client.ts"
 import {ToriiClient} from '@iroha2/torii-client';
@@ -41,22 +42,22 @@ const client = ToriiClient.create({
 });
 ```
 
-The configuration mirrors the constructor used in the recipes. If your node
-uses basic auth, pass `{username, password}` via the `basicAuth` option.
+Konfiguratsiya retseptlarda ishlatiladigan konstruktorni aks ettiradi. Agar sizning tuguningiz
+asosiy avtorizatsiyadan foydalanadi, `{username, password}` ni `basicAuth` opsiyasi orqali o'tkazing.
 
-## 3. Fetch node status
+## 3. Tugun holatini olish
 
 ```ts
 const status = await client.getStatus();
 console.log(status.irohaVersion, status.latestBlock.height);
 ```
 
-All read operations return Norito-backed JSON objects. See the generated types in
-`index.d.ts` for field details.
+Barcha o'qish operatsiyalari Norito tomonidan qo'llab-quvvatlanadigan JSON obyektlarini qaytaradi. Yaratilgan turlarga qarang
+Maydon tafsilotlari uchun `index.d.ts`.
 
-## 4. Submit a transaction
+## 4. Tranzaksiyani yuboring
 
-Signers can build transactions with the helper API:
+Imzolovchilar yordamchi API yordamida tranzaktsiyalar tuzishlari mumkin:
 
 ```ts
 import {createKeyPairFromHex} from '@iroha2/crypto-target-node';
@@ -77,28 +78,28 @@ const hash = await client.submitTransaction(tx);
 console.log('Submitted tx', hash);
 ```
 
-The helper automatically wraps the transaction in the Norito envelope expected
-by Torii. For a richer example (including waits for finality), see
+Yordamchi tranzaktsiyani kutilgan Norito konvertiga avtomatik tarzda o'rab oladi
+Torii tomonidan. Boyroq misol (shu jumladan, yakuniy kutish) uchun qarang
 `javascript/iroha_js/recipes/registration.mjs`.
 
-## 5. Use high-level helpers
+## 5. Yuqori darajadagi yordamchilardan foydalaning
 
-The SDK bundles specialised flows that mirror the CLI:
+SDK CLI-ni aks ettiruvchi maxsus oqimlarni to'playdi:
 
-- **Governance helpers** – `recipes/governance.mjs` demonstrates staging
-  proposals and ballots with the `governance` instruction builders.
-- **ISO bridge** – `recipes/iso_bridge.mjs` shows how to submit `pacs.008` and
-  poll transfer status using the `/v1/iso20022` endpoints.
-- **SoraFS & triggers** – Pagination helpers under `src/toriiClient.js` expose
-  typed iterators for contracts, assets, triggers, and SoraFS providers.
+- **Boshqaruv yordamchilari** – `recipes/governance.mjs` sahnalashtirishni namoyish etadi
+  `governance` ko'rsatma quruvchilar bilan takliflar va byulletenlar.
+- **ISO ko'prigi** - `recipes/iso_bridge.mjs` `pacs.008` va qanday qilib topshirishni ko'rsatadi.
+  `/v1/iso20022` so'nggi nuqtalari yordamida so'rov o'tkazish holati.
+- **SoraFS va triggerlar** – `src/toriiClient.js` ostida sahifalash yordamchilari ochiladi
+  shartnomalar, aktivlar, triggerlar va SoraFS provayderlari uchun yozilgan iteratorlar.
 
-Import the relevant builder functions from `@iroha2/torii-client` to reuse those flows.
+Ushbu oqimlarni qayta ishlatish uchun tegishli quruvchi funksiyalarini `@iroha2/torii-client` dan import qiling.
 
-## 6. Error handling
+## 6. Xatolarni qayta ishlash
 
-All SDK calls throw rich `ToriiClientError` instances with transport metadata
-and the Norito error payload. Wrap calls in `try/catch` or use `.catch()` to
-surface context to users:
+Barcha SDK qo'ng'iroqlari transport metama'lumotlari bilan boy `ToriiClientError` nusxalarini chiqaradi
+va Norito xato yuki. Qo'ng'iroqlarni `try/catch` ga o'rang yoki `.catch()` dan foydalaning.
+foydalanuvchilar uchun sirt konteksti:
 
 ```ts
 try {
@@ -108,10 +109,10 @@ try {
 }
 ```
 
-## Next steps
+## Keyingi qadamlar
 
-- Explore the recipes in `javascript/iroha_js/recipes/` for end-to-end flows.
-- Read the generated types in `javascript/iroha_js/index.d.ts` for detailed
-  method signatures.
-- Pair this SDK with the Norito quickstart to inspect and debug the payloads
-  you send to Torii.
+- `javascript/iroha_js/recipes/` dagi retseptlarni oxirigacha o'rganish uchun o'rganing.
+- Batafsil ma'lumot uchun `javascript/iroha_js/index.d.ts` da yaratilgan turlarni o'qing
+  usul imzolari.
+- Foydali yuklarni tekshirish va disk raskadrovka qilish uchun ushbu SDKni Norito tezkor ishga tushirish bilan bog'lang
+  Torii ga yuborasiz.

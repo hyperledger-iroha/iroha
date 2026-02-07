@@ -7,99 +7,98 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 0f39199767280be0fdd582301cdc3e8929497cf372a96f9f300e718f827000a7
 source_last_modified: "2025-12-29T18:16:35.941305+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM Audit Vendor Landscape
-% Iroha Crypto Working Group
-% 2026-02-12
+% SM စာရင်းစစ်ရောင်းချသူ အခင်းအကျင်း
+% Iroha Crypto အလုပ်အဖွဲ့
+ရာခိုင်နှုန်း 2026-02-12
 
-# Overview
+# ခြုံငုံသုံးသပ်ချက်
 
-The Crypto Working Group needs a standing bench of independent reviewers who
-understand both Rust cryptography and the Chinese GM/T (SM2/SM3/SM4) standards.
-This note catalogues firms with relevant references and summarises the audit
-scope we typically request so request-for-proposal (RFP) cycles stay fast and
-consistent.
+Crypto Working Group သည် အမှီအခိုကင်းသော ဝေဖန်သုံးသပ်သူများ၏ ခုံတန်းရှည်တစ်ခု လိုအပ်ပါသည်။
+Rust cryptography နှင့် Chinese GM/T (SM2/SM3/SM4) စံနှုန်းများကို နားလည်ပါ။
+ဤမှတ်စုသည် သက်ဆိုင်ရာအကိုးအကားများဖြင့် ကုမ္ပဏီများကို စာရင်းရှင်းထားပြီး စာရင်းစစ်ကို အကျဉ်းချုံးထားသည်။
+ပုံမှန်အားဖြင့် ကျွန်ုပ်တို့ တောင်းဆိုသည့် နယ်ပယ်သည် တောင်းဆိုမှု-အဆိုပြုချက် (RFP) သံသရာများ မြန်ဆန်နေမည်ဖြစ်သည်။
+တသမတ်တည်း။
 
-# Candidate Firms
+# ကိုယ်စားလှယ်လောင်းလုပ်ငန်းများ
 
 ## Trail of Bits (CN Cryptography Practice)
 
-- Documented engagements: 2023 security review of Ant Group’s Tongsuo
-  (SM-enabled OpenSSL distribution) and repeated audits of Rust-based
-  blockchains such as Diem/Libra, Sui, and Aptos.
-- Strengths: dedicated Rust cryptography team, automated constant-time
-  analysis tooling, experience validating deterministic execution and hardware
-  dispatch policies.
-- Fit for Iroha: can extend the current SM audit SOW or perform independent
-  re-tests; comfortable operating with Norito fixtures and IVM syscall
-  surfaces.
+- မှတ်တမ်းတင်ထားသော ပါဝင်ဆောင်ရွက်မှုများ- Ant Group ၏ Tongsuo ၏ 2023 လုံခြုံရေးပြန်လည်သုံးသပ်ခြင်း။
+  (SM-enabled OpenSSL ဖြန့်ဖြူးမှု) နှင့် Rust-based ၏ ထပ်ခါတလဲလဲစစ်ဆေးမှုများ
+  Diem/Libra၊ Sui နှင့် Aptos ကဲ့သို့သော blockchains။
+- အားသာချက်များ- သီးသန့် Rust cryptography အဖွဲ့၊ အလိုအလျောက် အဆက်မပြတ်-အချိန်
+  ခွဲခြမ်းစိတ်ဖြာခြင်းကိရိယာတန်ဆာပလာ၊ အဆုံးအဖြတ်ပေးသည့် လုပ်ဆောင်ချက်နှင့် ဟာ့ဒ်ဝဲကို တရားဝင်ကြောင်း အတွေ့အကြုံ
+  ပို့ဆောင်ရေးမူဝါဒများ။
+- Iroha အတွက် Fit- လက်ရှိ SM စာရင်းစစ် SOW ကို တိုးချဲ့နိုင်သည် သို့မဟုတ် သီးခြားလုပ်ဆောင်နိုင်သည်
+  ပြန်လည်စစ်ဆေးမှုများ; Norito နှင့် IVM syscall တို့ဖြင့် အဆင်ပြေစွာ လည်ပတ်နိုင်သည်
+  မျက်နှာပြင်များ။
 
-## NCC Group (APAC Cryptography Services)
+## NCC အဖွဲ့ (APAC ကုဒ်ရေးနည်းဝန်ဆောင်မှုများ)
 
-- Documented engagements: gm/T (SM) code examinations for regional payment
-  networks and HSM vendors; prior Rust reviews for Parity Substrate, Polkadot,
-  and Libra components.
-- Strengths: large APAC bench with bilingual reporting, ability to combine
-  compliance-style process checks with deep code review.
-- Fit for Iroha: ideal for second-opinion assessments or governance-driven
-  validation alongside Trail of Bits findings.
+- မှတ်တမ်းတင်ထားသော ပါဝင်ဆောင်ရွက်မှုများ- ဒေသဆိုင်ရာ ငွေပေးချေမှုအတွက် gm/T (SM) ကုဒ်စာမေးပွဲများ
+  ကွန်ရက်များနှင့် HSM ရောင်းချသူများ၊ Parity Substrate၊ Polkadot အတွက် ကြိုတင် ချေးသုံးသပ်ချက်၊
+  နှင့် Libra အစိတ်အပိုင်းများ။
+- အားသာချက်များ- ဘာသာစကားနှစ်မျိုးအစီရင်ခံမှု၊ ပေါင်းစပ်နိုင်မှုနှင့်အတူ ကြီးမားသော APAC ခုံတန်းလျား
+  လိုက်နာမှုပုံစံ လုပ်ငန်းစဉ်ကို နက်နဲသော ကုဒ်သုံးသပ်ချက်ဖြင့် စစ်ဆေးသည်။
+- Iroha အတွက် သင့်လျော်သည်- ဒုတိယအမြင် အကဲဖြတ်ခြင်း သို့မဟုတ် အုပ်ချုပ်မှုစနစ်ဖြင့် လုပ်ဆောင်ခြင်းအတွက် အကောင်းဆုံး
+  Trail of Bits တွေ့ရှိချက်များနှင့်အတူ တရားဝင်အတည်ပြုခြင်း။
 
-## SECBIT Labs (Beijing)
+## SECBIT Labs (ဘေဂျင်း)
 
-- Documented engagements: maintainers of the open-source `libsm` Rust crate
-  used by Nervos CKB and CITA; audited Guomi enablement for Nervos, Muta, and
-  FISCO BCOS Rust components with bilingual deliverables.
-- Strengths: engineers who actively ship SM primitives in Rust, strong
-  property-testing capabilities, deep familiarity with domestic compliance
-  requirements.
-- Fit for Iroha: valuable when we need reviewers who can supply comparative
-  test vectors and implementation guidance alongside findings.
+- မှတ်တမ်းတင်ထားသော ပါဝင်ဆောင်ရွက်မှုများ- open-source `libsm` Rust သေတ္တာကို ထိန်းသိမ်းသူများ
+  Nervos CKB နှင့် CITA မှအသုံးပြုသည်။ Nervos၊ Muta နှင့် Guomi enablement ကို စစ်ဆေးခဲ့သည်။
+  ဘာသာစကားနှစ်မျိုးဖြင့် ပေးပို့နိုင်သော FISCO BCOS သံချေးအစိတ်အပိုင်းများ။
+- အားသာချက်များ- Rust တွင် SM primitives များကို တက်ကြွစွာ ပို့ဆောင်ပေးသော အင်ဂျင်နီယာများ
+  ပိုင်ဆိုင်မှုစမ်းသပ်ခြင်းစွမ်းရည်၊ အိမ်တွင်းလိုက်နာမှုနှင့် နက်ရှိုင်းစွာရင်းနှီးမှု
+  လိုအပ်ချက်တွေ
+- Iroha အတွက် သင့်လျော်သည်- ကျွန်ုပ်တို့သည် နှိုင်းစာပေးစွမ်းနိုင်သော ဝေဖန်သုံးသပ်သူများ လိုအပ်သောအခါ အဖိုးတန်ပါသည်။
+  စမ်းသပ်မှု အားနည်းချက်များနှင့် တွေ့ရှိချက်များနှင့်အတူ အကောင်အထည်ဖော်မှုလမ်းညွှန်။
 
-## SlowMist Security (Chengdu)
+## SlowMist လုံခြုံရေး (Chengdu)
 
-- Documented engagements: Substrate/Polkadot Rust security reviews including
-  Guomi forks for Chinese operators; routine assessments of SM2/SM3/SM4 wallet
-  and bridge code used by exchanges.
-- Strengths: blockchain-focused audit practice, integrated incident response,
-  guidance that spans core protocol code and operator tooling.
-- Fit for Iroha: helpful for validating SDK parity and operational touchpoints
-  in addition to core crates.
+- မှတ်တမ်းတင်ထားသော ပါဝင်ဆောင်ရွက်မှုများ- အလွှာ/ Polkadot Rust လုံခြုံရေး သုံးသပ်ချက်များ အပါအဝင်
+  Guomi သည် တရုတ်အော်ပရေတာများအတွက် ခက်ရင်းများ၊ SM2/SM3/SM4 ပိုက်ဆံအိတ်၏ ပုံမှန်အကဲဖြတ်မှုများ
+  နှင့် ဖလှယ်မှုများမှ အသုံးပြုသော တံတားကုဒ်။
+- အားသာချက်များ- blockchain-အာရုံစူးစိုက်သောစာရင်းစစ်အလေ့အကျင့်၊ ပေါင်းစပ်ဖြစ်ရပ်တုံ့ပြန်မှု၊
+  ပင်မပရိုတိုကောကုဒ်နှင့် အော်ပရေတာ ကိရိယာတန်ဆာပလာများကို ချဲ့ထွင်သည့် လမ်းညွှန်ချက်။
+- Iroha အတွက် Fit- SDK parity နှင့် operational touchpoints များကို တရားဝင်ကြောင်းအတည်ပြုရန်အတွက် အထောက်အကူဖြစ်စေသည်
+  core သေတ္တာများအပြင်။
 
-## Chaitin Tech (QAX 404 Security Lab)
+## Chaitin Tech (QAX 404 လုံခြုံရေးဓာတ်ခွဲခန်း)- မှတ်တမ်းတင်ထားသော ပါဝင်ဆောင်ရွက်မှုများ- GmSSL/Tongsuo hardening နှင့် SM2/SM3/ အတွက် ပံ့ပိုးသူများ
+  ပြည်တွင်းဘဏ္ဍာရေးအဖွဲ့အစည်းများအတွက် SM4 အကောင်အထည်ဖော်ရေး လမ်းညွှန်ချက်၊ တည်ထောင်ခဲ့သည်။
+  TLS stacks နှင့် cryptographic libraries များကို ဖုံးအုပ်ထားသော Rust audit လေ့ကျင့်မှု။
+- အားသာချက်များ- နက်နဲသော cryptanalysis နောက်ခံ၊ တရားဝင်အတည်ပြုချက်ကို တွဲချိတ်နိုင်မှု
+  လက်ဖြင့်ပြန်လည်သုံးသပ်ခြင်း၊ ကာလကြာရှည်စွာ ထိန်းညှိပေးသည့် ဆက်ဆံရေးများနှင့်အတူ လက်ရာများ။
+- Iroha အတွက် အံဝင်ခွင်ကျ - စည်းမျဉ်းများ ဆိုင်းဘုတ်ပိတ်ခြင်း သို့မဟုတ် တရားဝင် အထောက်အထား ပစ္စည်းများ ပြုလုပ်သည့်အခါ သင့်လျော်သည်
+  စံကုဒ်သုံးသပ်ချက် အစီရင်ခံစာကို လိုက်ပါရန် လိုအပ်သည်။
 
-- Documented engagements: contributors to GmSSL/Tongsuo hardening and SM2/SM3/
-  SM4 implementation guidance for domestic financial institutions; established
-  Rust audit practice covering TLS stacks and cryptographic libraries.
-- Strengths: deep cryptanalysis background, ability to pair formal verification
-  artefacts with manual review, long-standing regulator relationships.
-- Fit for Iroha: suitable when regulatory sign-off or formal proof artefacts
-  need to accompany the standard code review report.
+# ပုံမှန်စာရင်းစစ် နယ်ပယ်နှင့် ပေးအပ်နိုင်မှုများ
 
-# Typical Audit Scope & Deliverables
+- ** သတ်မှတ်ချက် ကိုက်ညီမှု-** SM2 ZA တွက်ချက်မှု၊ လက်မှတ်ကို အတည်ပြုသည်။
+  canonicalisation၊ SM3 padding/compression နှင့် SM4 သော့အချိန်ဇယားနှင့် IV ကိုင်တွယ်ခြင်း။
+  GM/T 0003-2012၊ GM/T 0004-2012 နှင့် GM/T 0002-2012 တို့ကို ဆန့်ကျင်သည်။
+- ** အဆုံးအဖြတ် နှင့် စဉ်ဆက်မပြတ် အပြုအမူ- ** အကိုင်းအခက် ခွဲထုတ်ခြင်း ကို ဆန်းစစ်ပါ။
+  သေချာစေရန် ဇယားများနှင့် ဟာ့ဒ်ဝဲအင်္ဂါရပ်ဂိတ်များ (ဥပမာ၊ NEON၊ SM4 ညွှန်ကြားချက်များ)
+  Rust နှင့် FFI ပေးပို့မှုသည် ပံ့ပိုးထားသော ဟာ့ဒ်ဝဲတစ်လျှောက်တွင် အဆုံးအဖြတ်အတိုင်း ဆက်လက်ရှိနေပါသည်။
+- **FFI နှင့် ဝန်ဆောင်မှုပေးသူပေါင်းစည်းခြင်း-** OpenSSL/Tongsuo bindings များကို ပြန်လည်သုံးသပ်ခြင်း၊
+  PKCS#11/HSM အဒက်တာများ နှင့် အများဆန္ဒ လုံခြုံမှုအတွက် အမှားအယွင်း ဖြန့်ကျက်ခြင်း လမ်းကြောင်းများ။
+- ** စမ်းသပ်မှုနှင့် တပ်ဆင်မှု အကျုံးဝင်မှု-** fuzz ကြိုးများကို အကဲဖြတ်ခြင်း၊ Norito အသွားအပြန်၊
+  အဆုံးအဖြတ်ပေးသော မီးခိုးစမ်းသပ်မှုများ၊ ကွာဟသည့်နေရာတွင် ကွဲပြားမှုစမ်းသပ်ခြင်းကို အကြံပြုပါသည်။
+  ပေါ်လာသည်။
+- **မှီခိုမှုနှင့် ထောက်ပံ့ရေးကွင်းဆက်ပြန်လည်သုံးသပ်ခြင်း-** တည်ဆောက်မှုသက်သေ၊ ရောင်းချသူကို အတည်ပြုပါ။
+  patch မူဝါဒများ၊ SBOM တိကျမှုနှင့် ပြန်လည်ထုတ်လုပ်နိုင်သော တည်ဆောက်မှုလမ်းညွှန်ချက်များ။
+- **စာရွက်စာတမ်းနှင့် လုပ်ငန်းဆောင်ရွက်မှု-** အော်ပရေတာ runbooks များကို တရားဝင်အောင်၊ လိုက်နာမှု
+  အတိုချုံးများ၊ ဖွဲ့စည်းမှုပုံသေများ နှင့် ပြန်လှည့်ခြင်းဆိုင်ရာ လုပ်ထုံးလုပ်နည်းများ။
+- **မျှော်လင့်ချက်များကို အစီရင်ခံခြင်း-** စွန့်စားရမှုအဆင့်သတ်မှတ်ချက်နှင့်အတူ အမှုဆောင်အကျဉ်းချုပ်၊ အသေးစိတ်
+  ကုဒ်ကိုးကားချက်များနှင့် ပြန်လည်ပြင်ဆင်ခြင်းလမ်းညွှန်ချက်၊ ပြန်လည်စမ်းသပ်မှုအစီအစဉ်နှင့် တွေ့ရှိချက်များ
+  အဆုံးအဖြတ်ပေးသော အာမခံချက်များနှင့် အကျုံးဝင်သော အထောက်အထားများ။
 
-- **Specification conformance:** validate SM2 ZA calculation, signature
-  canonicalisation, SM3 padding/compression, and SM4 key schedule & IV handling
-  against GM/T 0003-2012, GM/T 0004-2012, and GM/T 0002-2012.
-- **Determinism and constant-time behaviour:** examine branching, lookup
-  tables, and hardware feature gates (e.g., NEON, SM4 instructions) to ensure
-  Rust and FFI dispatch remain deterministic across supported hardware.
-- **FFI and provider integration:** review OpenSSL/Tongsuo bindings,
-  PKCS#11/HSM adapters, and error propagation paths for consensus safety.
-- **Test and fixture coverage:** assess fuzz harnesses, Norito round-trips,
-  deterministic smoke tests, and recommend differential testing where gaps
-  appear.
-- **Dependency and supply-chain review:** confirm build provenance, vendor
-  patch policies, SBOM accuracy, and reproducible build instructions.
-- **Documentation and operations:** validate operator runbooks, compliance
-  briefs, configuration defaults, and rollback procedures.
-- **Reporting expectations:** executive summary with risk rating, detailed
-  findings with code references & remediation guidance, retest plan, and
-  attestations covering determinism guarantees.
+# နောက်အဆင့်များ
 
-# Next Steps
-
-- Use this vendor roster during RFQ cycles; adjust the scope checklist above to
-  match the active SM milestone before issuing an RFP.
-- Record engagement outcomes in `docs/source/crypto/sm_audit_brief.md` and
-  surface status updates in `status.md` once contracts are executed.
+- RFQ သံသရာများအတွင်း ဤရောင်းချသူစာရင်းကို အသုံးပြုပါ။ အပေါ်က scope checklist ကို ချိန်ညှိပေးလိုက်ပါ။
+  RFP မထုတ်ပြန်မီ လက်ရှိအသုံးပြုနေသော SM မှတ်တိုင်နှင့် ကိုက်ညီပါ။
+- `docs/source/crypto/sm_audit_brief.md` နှင့် ထိတွေ့ဆက်ဆံမှုရလဒ်များကို မှတ်တမ်းတင်ပါ။
+  စာချုပ်များကို အကောင်အထည်ဖော်ပြီးသည်နှင့် `status.md` တွင် မျက်နှာပြင်အခြေအနေ အပ်ဒိတ်များ။

@@ -7,99 +7,98 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 0f39199767280be0fdd582301cdc3e8929497cf372a96f9f300e718f827000a7
 source_last_modified: "2025-12-29T18:16:35.941305+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM Audit Vendor Landscape
-% Iroha Crypto Working Group
-% 2026-02-12
+% SM རྩིས་ཞིབ་ཚོང་པ་ས་ཆའི་ལས་རིམ།
+% Iroha ཀིརིཔ་ཊོ་ལས་བྱེད་སྡེ་ཚན།
+% ༢༠༢༦-༠༢-༡༢
 
-# Overview
+# ལྟ་ཚུལ།
 
-The Crypto Working Group needs a standing bench of independent reviewers who
-understand both Rust cryptography and the Chinese GM/T (SM2/SM3/SM4) standards.
-This note catalogues firms with relevant references and summarises the audit
-scope we typically request so request-for-proposal (RFP) cycles stay fast and
-consistent.
+ཀིརིཔ་ཊོ་ལས་བྱེད་ཚོགས་ཆུང་ལུ་ རང་དབང་ཅན་གྱི་བསྐྱར་ཞིབ་པ་ ལངས་ཡོད་པའི་ བང་ཁྲི་དགོཔ་ཨིན།
+རསཊ་ཀིརིཔ་ཊོ་གཱ་ར་ཕི་དང་ རྒྱ་ནག་ཇི་ཨེམ་/ཊི་ (SM2/SM3/SM4) གཉིས་ཆ་ར་ཧ་གོ་དགོ།
+དྲན་ཐོ་འདི་གིས་ འབྲེལ་ཡོད་གཞི་བསྟུན་དང་ བཅུད་བསྡུས་ཡོད་པའི་ ཐོ་གཞུང་ཚུ་ རྩིས་ཞིབ་འདི་ བཅུད་བསྡུས་འབདཝ་ཨིན།
+ང་བཅས་ཀྱིས་ སྤྱིར་བཏང་ལུ་ ཞུ་བ་འབདཝ་ལས་ གྲོས་འཆར་གྱི་དོན་ལུ་ ཞུ་བ་འབད་མི་ (RFP) འཁོར་རིམ་ཚུ་ མགྱོགས་དྲགས་སྦེ་སྡོད་དོ་ཡོདཔ་ཨིན།
+རིམ་མཐུན།
 
-# Candidate Firms
+# འདེམས་ངོ་ལས་ཁུངས།
 
-## Trail of Bits (CN Cryptography Practice)
+## བིཊི་གི་ལམ་ལུགས། (CN Crypography ལག་ལེན་)
 
-- Documented engagements: 2023 security review of Ant Group’s Tongsuo
-  (SM-enabled OpenSSL distribution) and repeated audits of Rust-based
-  blockchains such as Diem/Libra, Sui, and Aptos.
-- Strengths: dedicated Rust cryptography team, automated constant-time
-  analysis tooling, experience validating deterministic execution and hardware
-  dispatch policies.
-- Fit for Iroha: can extend the current SM audit SOW or perform independent
-  re-tests; comfortable operating with Norito fixtures and IVM syscall
-  surfaces.
+- ཡིག་ཆ་བཟོ་ཡོད་པའི་འབྲེལ་བ།: ༢༠༢༣ ལོའི་ Ant Group’s Tongsoo གི་ཉེན་སྲུང་བསྐྱར་ཞིབ།
+  (SM-enabled OpenSSL བཀྲམ་སྤེལ་) དང་ རཱསི་ཊི་གཞི་བཞག་པའི་ བསྐྱར་ལོག་རྩིས་ཞིབ་ཚུ།
+  བཀག་ཆ་ དཔེར་ན་ ཌི་ཡམ་/ལིབ་ར་ སུའི་ དང་ ཨེཔ་ཊོས་ ཚུ་ཨིན།
+- ནུས་ཤུགས།: བད་ཀན་གྱི་རསཊ་གསང་ཡིག་རིག་པ་སྡེ་ཚན། རང་འགུལ་དུས་རྒྱུན་དུས་ཚོད།
+  དབྱེ་དཔྱད་ལག་ཆ། ཉམས་མྱོང་དང་མཐུན་པའི་ལག་ལེན་དང་སྲ་ཆས་བདེན་དཔང་འབད་ནི།
+  བཀོལ་སྤྱོད་ཀྱི་སྲིད་བྱུས།
+- Iroha: ད་ལྟོའི་ཨེསི་ཨེམ་རྩིས་ཞིབ་ ཨེསི་ཨོ་ཝ་འདི་ རྒྱ་བསྐྱེད་འབད་ཚུགས་ ཡང་ན་ རང་དབང་ཅན་སྦེ་འབད་ཚུགས།
+  re-tests; བདེ་སྐྱིད་ཀྱི་བཀོལ་སྤྱོད་ Norito དང་ IVM syscall
+  ཁ་ཐོག་།
 
-## NCC Group (APAC Cryptography Services)
+## NCC སྡེ་ཚན་ (APAC Crypography ཞབས་ཏོག)
 
-- Documented engagements: gm/T (SM) code examinations for regional payment
-  networks and HSM vendors; prior Rust reviews for Parity Substrate, Polkadot,
-  and Libra components.
-- Strengths: large APAC bench with bilingual reporting, ability to combine
-  compliance-style process checks with deep code review.
-- Fit for Iroha: ideal for second-opinion assessments or governance-driven
-  validation alongside Trail of Bits findings.
+- ཡིག་ཆ་བཟོ་ཡོད་པའི་འབྲེལ་བ།: gm/T (SM) ལུང་ཕྱོགས་ཀྱི་དངུལ་ཕོགས་ཀྱི་དོན་ལུ་ གསང་ཡིག་བརྟག་དཔྱད།
+  ཡོངས་འབྲེལ་དང་ HSM ཚོང་པ་ཚུ། སྔོན་ཆད་ཀྱི་ རསཊ་བསྐྱར་ཞིབ་ པེ་རིཊི་ སབ་སི་ཊེཊ་ པོལ་ཀ་ཌོཊ་, དང་།
+  དང་ ལི་བྲ་ཆ་ཤས།
+- ནུས་ཤུགས་: སྐད་ཡིག་གཉིས་ལྡན་སྙན་ཞུ་དང་བཅས་པའི་ཨེ་པི་ཨེ་སི་བེན་ཇི་སྦོམ།
+  གཏིང་ཟབ་པའི་གསང་ཡིག་བསྐྱར་ཞིབ་དང་གཅིག་ཁར་ བསྟར་སྤྱོད་འབད་ནིའི་སྲོལ་རིམ་བྱ་རིམ་ཞིབ་དཔྱད་ཚུ།
+- Iroha: བསམ་ཚུལ་གཉིས་པའི་བརྟག་ཞིབ་ཡང་ན་ གཞུང་སྐྱོང་གིས་འདྲུད་བ
+  བིཊ་གི་ཤེས་རྟོགས་ཀྱི་ལམ་དང་གཅིག་ཁར་ བདེན་དཔྱད་འབད་ནི།
 
-## SECBIT Labs (Beijing)
+## SECBIT Labs (པེ་ཅིན།)
 
-- Documented engagements: maintainers of the open-source `libsm` Rust crate
-  used by Nervos CKB and CITA; audited Guomi enablement for Nervos, Muta, and
-  FISCO BCOS Rust components with bilingual deliverables.
-- Strengths: engineers who actively ship SM primitives in Rust, strong
-  property-testing capabilities, deep familiarity with domestic compliance
-  requirements.
-- Fit for Iroha: valuable when we need reviewers who can supply comparative
-  test vectors and implementation guidance alongside findings.
+- ཡིག་ཆ་བཟོ་ཡོད་པའི་འབྲེལ་བ།
+  Nervos CKB དང་ CITA གིས་ལག་ལེན་འཐབ་ཡོདཔ། རྩིས་ཞིབ་འབད་ཡོདཔ།
+  FISCO BCOS སྐད་ཡིག་གཉིས་ལྡན་གྱི་བཀྲམ་སྤེལ་ཡོད་པའི་ཆ་ཤས།
+- ནུས་ཤུགས་: བཟོ་རིག་པ་ཚུ་ རསཊ་ནང་ ཨེསི་ཨེམ་གྱི་ དང་ཕུའི་ གནའ་དུས་ཚུ་ ཤུགས་ཅན་སྦེ་ བཏང་ཡོདཔ་ཨིན།
+  རྒྱུ་དངོས་བརྟག་དཔྱད་ཀྱི་ནུས་པ།
+  དགོས་མཁོ་
+- Iroha: རིན་ཐང་ཅན་འདི་ བསྐྱར་ཞིབ་པ་ཚུ་ ག་བསྡུར་ཅན་སྦེ་ བཀྲམ་སྤེལ་འབད་དགོཔ་ད་ བརྩི་མཐོང་ཡོདཔ་ཨིན།
+  བརྟག་དཔྱད་ཀྱི་བེག་ཊར་དང་ ལག་ལེན་འཐབ་ཐངས་ཀྱི་ལམ་སྟོན་ཚུ་ གྲུབ་འབྲས་ཚུ་དང་གཅིག་ཁར་ཨིན།
 
-## SlowMist Security (Chengdu)
+## མགྱོགས་སྲུང(ཅེང་དུ)།
 
-- Documented engagements: Substrate/Polkadot Rust security reviews including
-  Guomi forks for Chinese operators; routine assessments of SM2/SM3/SM4 wallet
-  and bridge code used by exchanges.
-- Strengths: blockchain-focused audit practice, integrated incident response,
-  guidance that spans core protocol code and operator tooling.
-- Fit for Iroha: helpful for validating SDK parity and operational touchpoints
-  in addition to core crates.
+- ཡིག་ཆ་བཟོ་ཡོད་པའི་འབྲེལ་བ།
+  རྒྱ་ནག་བཀོལ་སྤྱོད་པ་ཚུ་གི་དོན་ལུ་ གུ་མི་ ཕོརཀ་ཚུ། SM2/SM3/SM4 དངུལ་ཁང་གི་རྒྱུན་ལས་བརྟག་དཔྱད།
+  དང་ བརྗེ་སོར་ཚུ་གིས་ལག་ལེན་འཐབ་མི་ ཟམ་ཨང་།
+- ནུས་ཤུགས་: བཀག་ཆ་-གཙོ་བོར་བསྟེན་པའི་རྩིས་ཞིབ་ལག་ལེན་ གཅིག་སྒྲིལ་བྱུང་བའི་ལན་འདེབས་།
+  མཐུན་སྒྲིག་ཨང་རྟགས་དང་ བཀོལ་སྤྱོད་པའི་ལག་ཆས་ཚུ་ ཁྱབ་སྟེ་ཡོད་པའི་ལམ་སྟོན།
+- Iroha: ཨེསི་ཌི་ཀེ་ ཆ་སྙོམས་དང་ བཀོལ་སྤྱོད་ཀྱི་ རེཀ་སི་པོ་ཡིནཊི་ཚུ་ བདེན་དཔྱད་འབད་ནི་ལུ་ ཕན་ཐོགས་ཡོདཔ་ཨིན།
+  ཀོར་ཀེརེཊ་གི་ཁ་སྐོང་ལུ་།
 
-## Chaitin Tech (QAX 404 Security Lab)
+## ཆ་ཡིཊ་ཊེག་ (QAX 404 ཉེན་སྲུང་བརྟག་དཔྱད་)- ཡིག་ཆ་བཟོ་ཡོད་པའི་འབྲེལ་བ།: GmSSL/Tongsoo whriding དང་ SM2/SM3/
+  ནང་འཁོད་དངུལ་འབྲེལ་ལས་སྡེ་ཚུ་གི་དོན་ལུ་ SM4 ལག་ལེན་འཐབ་ལམ་སྟོན། གཞི་ཚུད་ཡོདཔ་
+  ཊི་ཨེལ་ཨེསི་བང་རིམ་དང་ ཀིརིཔ་ཊོ་གཱ་ར་ཕིག་དཔེ་མཛོད་ཚུ་ཁྱབ་པའི་ རསཊ་རྩིས་ཞིབ་སྦྱོང་བརྡར།
+- ནུས་ཤུགས།: གཏིང་ཟབ་པའི་ཀིརིཔ་ན་ལི་སི་རྒྱབ་ལྗོངས་ ལུགས་མཐུན་བདེན་དཔྱད་ཆ་སྒྲིག་འབད་ནིའི་ལྕོགས་གྲུབ།
+  ལག་ཐོག་བསྐྱར་ཞིབ་དང་ ཡུན་རིངམོ་སྦེ་ ཁྲིམས་ལུགས་ཀྱི་འབྲེལ་བ།
+- Iroha: ཁྲིམས་ལུགས་ཀྱི་མིང་རྟགས་བཀོད་ནི་ཡང་ན་ ལུགས་མཐུན་གྱི་བདེན་དཔང་འབད་བའི་སྐབས་ འོས་འབབ་ཅན་ཚུ་གི་དོན་ལུ་ བདེ་སྒྲིག་འབད།
+  ཚད་ལྡན་ཨང་རྟགས་བསྐྱར་ཞིབ་སྙན་ཞུ་དང་གཅིག་ཁར་ མཉམ་སྦྲགས་འབད་དགོཔ་ཨིན།
 
-- Documented engagements: contributors to GmSSL/Tongsuo hardening and SM2/SM3/
-  SM4 implementation guidance for domestic financial institutions; established
-  Rust audit practice covering TLS stacks and cryptographic libraries.
-- Strengths: deep cryptanalysis background, ability to pair formal verification
-  artefacts with manual review, long-standing regulator relationships.
-- Fit for Iroha: suitable when regulatory sign-off or formal proof artefacts
-  need to accompany the standard code review report.
+# སྤྱིར་བཏང་གི་རྩིས་ཞིབ་ཁྱབ་ཁོངས།
 
-# Typical Audit Scope & Deliverables
+- **གསལ་བཤད།:** བདེན་དཔྱད་ཨེསི་ཨེམ་༢ ཟ་ཨེ་རྩིས་སྟོན་, མཚན་རྟགས།
+  ཀེ་ནོ་ནིལ་སི་ལེ་ཤཱ་ ཨེསི་ཨེམ་༣ པེ་ཌིང་/བསྡམ་བཞག་དང་ ཨེསི་ཨེམ་༤ ལྡེ་མིག་ལས་རིམ་དང་ ཨའི་ཝི་འཛིན་སྐྱོང་།
+  GM/T 0003-2012, GM/T 0004-2012, དང་ GM/T 0002-2012.
+- ** Determinism དང་ དུས་རྒྱུན་གྱི་སྤྱོད་ལམ་:** ཡན་ལག་བལྟ་ཞིབ་བརྟག་དཔྱད་འབད།
+  ཐིག་ཁྲམ་ཚུ་དང་ སྲ་ཆས་ཁྱད་རྣམ་གྱི་སྒོ་ཚུ་ (དཔེར་ན་ NEON, SM4 བཀོད་རྒྱ་) ངེས་གཏན་བཟོ་ནི་ལུ་ ངེས་གཏན་བཟོཝ་ཨིན།
+  རྒྱབ་སྐྱོར་འབད་ཡོད་པའི་ མཐུན་རྐྱེན་ཚུ་ནང་ Rust དང་ FFI བཏང་མི་ཚུ་ ཐག་བཅད་དེ་རང་ཡོདཔ་ཨིན།
+- **FFI དང་ བྱིན་མི་ མཉམ་བསྡོམས་:** བསྐྱར་ཞིབ་ OpenSSL/Tongsoo ཌིཀསི་ཚུ་
+  PKCS#11/HSM མཐུན་སྒྲིག་དང་ མོས་མཐུན་ཉེན་སྲུང་གི་དོན་ལུ་ འཛོལ་བ་ཁྱབ་སྤེལ་གྱི་འགྲུལ་ལམ་ཚུ།
+- **བརྟག་དཔྱད་དང་སྒྲིག་ཆས་ཁྱབ་ཁོངས།:* བརྟག་ཞིབ་ཕཱཛ་ཧར་ནེསི་ Norito སྒོར་རིམ་གྱི་འགྲུལ་བཞུད།
+  ཐག་གཅོད་ཀྱི་བརྟག་དཔྱད་དང་ བར་སྟོང་ག་སྟེ་ལུ་ཡོདཔ་ཨིན་ན་ ཁྱད་པར་ཕྱེ་དགོ་པའི་ གྲོས་འཆར་བཀོད།
+  འཐོན་ནི།
+- **བརྟེན་དགོཔ་དང་ བཀྲམ་སྤེལ་གྱི་རིམ་སྒྲིག་བསྐྱར་ཞིབ་:** བདེན་དཔྱད་བཟོ་བསྐྲུན་གྱི་ ཁུངས་གཏུག་འབད་མི་ ཚོང་པ།
+  ཐིག་ལེ་སྲིད་བྱུས་དང་ SBOM གཏན་གཏན་ དེ་ལས་ བསྐྱར་བཟོ་འབད་བཏུབ་པའི་ བསྐྱར་བཟོ་འབད་ནིའི་བཀོད་རྒྱ་ཚུ་ཨིན།
+- **ཡིག་ཆ་དང་བཀོལ་སྤྱོད:** བདེན་དཔྱད་བཀོལ་སྤྱོད་པ་རྔོན་དེབ་ཚུ་ བསྟར་སྤྱོད་འབད་ནི།
+  མདོར་བསྡུས་དང་ རིམ་སྒྲིག་སྔོན་སྒྲིག་ དེ་ལས་ བསྐོར་རྒྱབ་ཀྱི་བྱ་རིམ་ཚུ།
+- **རེ་བ་སྙན་ཞུ་འབད་ནི།:** ཉེན་ཁའི་གནས་ཚད་དང་གཅིག་ཁར་ བཀོད་ཁྱབ་བཅུད་དོན།
+  བརྟག་ཞིབ་ཤེས་རྟོགས་དང་ བཅོས་སྒྲིག་ལམ་སྟོན་ བསྐྱར་བཟོའི་འཆར་གཞི་ དེ་ལས་ དང་།
+  བཙོག་པ་ཅན་གྱི་བདེན་དཔང་ཚུ་ གཏན་འབེབས་བཟོ་ནིའི་ ངེས་གཏན་ཚུ་ ཁྱབ་ཚུགསཔ་ཨིན།
 
-- **Specification conformance:** validate SM2 ZA calculation, signature
-  canonicalisation, SM3 padding/compression, and SM4 key schedule & IV handling
-  against GM/T 0003-2012, GM/T 0004-2012, and GM/T 0002-2012.
-- **Determinism and constant-time behaviour:** examine branching, lookup
-  tables, and hardware feature gates (e.g., NEON, SM4 instructions) to ensure
-  Rust and FFI dispatch remain deterministic across supported hardware.
-- **FFI and provider integration:** review OpenSSL/Tongsuo bindings,
-  PKCS#11/HSM adapters, and error propagation paths for consensus safety.
-- **Test and fixture coverage:** assess fuzz harnesses, Norito round-trips,
-  deterministic smoke tests, and recommend differential testing where gaps
-  appear.
-- **Dependency and supply-chain review:** confirm build provenance, vendor
-  patch policies, SBOM accuracy, and reproducible build instructions.
-- **Documentation and operations:** validate operator runbooks, compliance
-  briefs, configuration defaults, and rollback procedures.
-- **Reporting expectations:** executive summary with risk rating, detailed
-  findings with code references & remediation guidance, retest plan, and
-  attestations covering determinism guarantees.
+# ཤུལ་མམ་གྱི་གོ་རིམ་ཚུ།
 
-# Next Steps
-
-- Use this vendor roster during RFQ cycles; adjust the scope checklist above to
-  match the active SM milestone before issuing an RFP.
-- Record engagement outcomes in `docs/source/crypto/sm_audit_brief.md` and
-  surface status updates in `status.md` once contracts are executed.
+- RFQ འཁོར་རིམ་གྱི་སྐབས་ལུ་ ཚོང་པ་འདི་གི་ཐོ་ཡིག་འདི་ལག་ལེན་འཐབ། གོང་ལུ་ཁྱབ་ཁོངས་ཞིབ་དཔྱད་ཐོ་ཡིག་འདི་བདེ་སྒྲིག་འབད།
+  RFP མ་བཏང་པའི་ཧེ་མ་ SM གི་ མཐོ་ཚད་ལུ་ མཐུན་སྒྲིག་འབད་དགོ།
+- `docs/source/crypto/sm_audit_brief.md` ནང་འབྲེལ་གཏོགས་གྲུབ་འབྲས་ཐོ་བཀོད་འབད།
+  གན་རྒྱ་ཚུ་ ལག་ལེན་འཐབ་པའི་སྐབས་ ཁ་ཐོག་གནས་རིམ་དུས་མཐུན་ཚུ།

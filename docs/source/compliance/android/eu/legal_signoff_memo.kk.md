@@ -7,54 +7,55 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 8bb3e19ca5eb661d202b5e3b9cd118207ded277e8ff717e16a342b71e7a67857
 source_last_modified: "2025-12-29T18:16:35.926037+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# AND6 EU Legal Sign-off Memo Template
+# ЖӘНЕ6 ЕО заңды қол қою туралы жадынама үлгісі
 
-This memo records the legal review required by roadmap item **AND6** before the
-EU (ETSI/GDPR) artefact packet is submitted to regulators. Counsel should clone
-this template per release, populate the fields below, and store the signed copy
-alongside the immutable artefacts referenced in the memo.
+Бұл жадынама жол картасының **ЖӘНЕ6** тармағында талап етілетін заңды шолуды жазады
+ЕО (ETSI/GDPR) артефакт пакеті реттеушілерге жіберіледі. Кеңесші клондау керек
+әр шығарылым үшін осы үлгіні, төмендегі өрістерді толтырыңыз және қол қойылған көшірмені сақтаңыз
+жаднамада көрсетілген өзгермейтін артефактілермен қатар.
 
-## Summary
+## Түйіндеме
 
-- **Release / Train:** `<e.g., 2026.1 GA>`
-- **Review date:** `<YYYY-MM-DD>`
-- **Counsel / Reviewer:** `<name + organisation>`
-- **Scope:** `ETSI EN 319 401 security target, GDPR DPIA summary, SBOM attestation`
-- **Associated tickets:** `<governance or legal issue IDs>`
+- **Шығарылым / Пойыз:** `<e.g., 2026.1 GA>`
+- **Шолу күні:** `<YYYY-MM-DD>`
+- **Кеңесші/Рецензент:** `<name + organisation>`
+- **Қолдану аясы:** `ETSI EN 319 401 security target, GDPR DPIA summary, SBOM attestation`
+- **Байланысты билеттер:** `<governance or legal issue IDs>`
 
-## Artefact Checklist
+## Артефакттарды тексеру тізімі
 
-| Artefact | SHA-256 | Location / Link | Notes |
+| Артефакт | SHA-256 | Орналасқан жері / Сілтеме | Ескертпелер |
 |----------|---------|-----------------|-------|
-| `security_target.md` | `<hash>` | `docs/source/compliance/android/eu/security_target.md` + governance archive | Confirm release identifiers & threat model adjustments. |
-| `gdpr_dpia_summary.md` | `<hash>` | Same directory / localization mirrors | Ensure redaction policy references match `sdk/android/telemetry_redaction.md`. |
-| `sbom_attestation.md` | `<hash>` | Same directory + cosign bundle in evidence bucket | Verify CycloneDX + provenance signatures. |
-| Evidence log row | `<hash>` | `docs/source/compliance/android/evidence_log.csv` | Row number `<n>` |
-| Device-lab contingency bundle | `<hash>` | `artifacts/android/device_lab_contingency/<YYYYMMDD>/*.tgz` | Confirms failover rehearsal tied to this release. |
+| `security_target.md` | `<hash>` | `docs/source/compliance/android/eu/security_target.md` + басқару мұрағаты | Шығарылым идентификаторлары мен қауіп үлгісінің түзетулерін растаңыз. |
+| `gdpr_dpia_summary.md` | `<hash>` | Бірдей каталог/локализация айналары | Өңдеу саясаты сілтемелерінің `sdk/android/telemetry_redaction.md` сәйкестігіне көз жеткізіңіз. |
+| `sbom_attestation.md` | `<hash>` | Дәлелдер шелегіндегі бірдей каталог + косиг жинағы | CycloneDX + шығу қолтаңбаларын тексеріңіз. |
+| Дәлелдер журналы жолы | `<hash>` | `docs/source/compliance/android/evidence_log.csv` | Жол нөмірі `<n>` |
+| Құрылғы-зертхананың төтенше жағдайлар жинағы | `<hash>` | `artifacts/android/device_lab_contingency/<YYYYMMDD>/*.tgz` | Осы шығарылымға байланысты орындалмау репетициясын растайды. |
 
-> Attach additional rows if the packet contains more files (for example, privacy
-> appendices or DPIA translations). Every artefact must reference its immutable
-> upload target and the Buildkite job that produced it.
+> Пакетте көбірек файлдар болса, қосымша жолдарды тіркеңіз (мысалы, құпиялылық
+> қосымшалар немесе DPIA аудармалары). Әрбір артефакт өзінің өзгермейтініне сілтеме жасауы керек
+> жүктеп салу мақсаты және оны жасаған Buildkite тапсырмасы.
 
-## Findings & Exceptions
+## Қорытындылар және ерекшеліктер
 
-- `None.` *(Replace with bullet list covering residual risks, compensating
-  controls, or required follow-up actions.)*
+- `None.` *(Қалдық тәуекелдерді қамтитын, орнын толтыратын таңбалар тізімімен ауыстырыңыз
+  басқару элементтері немесе қажетті кейінгі әрекеттер.)*
 
-## Approval
+## Бекіту
 
-- **Decision:** `<Approved / Approved with conditions / Blocked>`
-- **Signature / Timestamp:** `<digital signature or email reference>`
-- **Follow-up owners:** `<team + due date for any conditions>`
+- **Шешім:** `<Approved / Approved with conditions / Blocked>`
+- **Қол / Уақыт белгісі:** `<digital signature or email reference>`
+- **Кейінгі иелері:** `<team + due date for any conditions>`
 
-Upload the final memo to the governance evidence bucket, copy the SHA-256 into
-`docs/source/compliance/android/evidence_log.csv`, and link the upload path in
-`status.md`. If the decision is “Blocked,” escalate to the AND6 steering
-committee and document remediation steps in both the roadmap hot-list and the
-device-lab contingency log.
+Қорытынды жазбаны басқару дәлелдемелеріне жүктеп салыңыз, SHA-256 көшірмесін жасаңыз
+`docs/source/compliance/android/evidence_log.csv` және жүктеп салу жолын байланыстырыңыз
+`status.md`. Шешім "Блокталған" болса, AND6 рульіне көшіңіз
+жол картасының ыстық тізімінде де, комиссияда да және құжаттаманы түзету қадамдары
+құрылғы-зертхана күтпеген жағдайлар журналы.

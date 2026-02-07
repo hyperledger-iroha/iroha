@@ -6,51 +6,51 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 6742d2b87b8fbbc1493c5ae2704147b0f8d5d23af78004c2c9a112fe881efb11
 source_last_modified: "2026-01-03T18:07:57.071790+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Export-Control Statement Template
-% Hyperledger Iroha Compliance Working Group
-% 2026-05-06
+% SM2/SM3/SM4 Шаблон заявления об экспортном контроле
+% Hyperledger Iroha Рабочая группа по обеспечению соответствия
+% 06.05.2026
 
-# Usage
+# Использование
 
-Embed this statement in release notes, manifests, or legal correspondence when
-distributing SM-enabled artefacts. Update the placeholders to match the release,
-jurisdiction, and applicable license exceptions. Retain a signed copy with the
-release checklist.
+Встраивайте это заявление в примечания к выпуску, манифесты или юридическую переписку, когда
+распространение артефактов с поддержкой SM. Обновите заполнители в соответствии с версией,
+юрисдикция и применимые лицензионные исключения. Сохраните подписанную копию вместе с
+контрольный список выпуска.
 
-# Statement
+# Заявление
 
-> **Product:** Hyperledger Iroha {{ RELEASE_VERSION }} (`{{ ARTEFACT_ID }}`)
+> **Продукт:** Hyperledger Iroha {{ RELEASE_VERSION }} (`{{ ARTEFACT_ID }}`)
 >
-> **Algorithms Included:** SM2 digital signature, SM3 hashing, SM4 symmetric
-> encryption (GCM/CCM)
+> **Включенные алгоритмы:** цифровая подпись SM2, хеширование SM3, симметричный SM4
+> шифрование (GCM/CCM)
 >
-> **Export Classification:** United States EAR Category 5, Part 2 (5D002.c.1);
-> European Union Regulation 2021/821 Annex 1, 5D002.
+> **Экспортная классификация:** США, категория EAR 5, часть 2 (5D002.c.1);
+> Регламент Европейского Союза 2021/821, Приложение 1, 5D002.
 >
-> **License Exception(s):** {{ LICENSE_EXCEPTION }} (e.g., ENC §740.17(b)(2),
-> TSU §740.13 for source distribution).
+> **Исключения из лицензии:** {{ LICENSE_EXCEPTION }} (например, ENC §740.17(b)(2),
+> TSU §740.13 для распространения исходного кода).
 >
-> **Distribution Scope:** {{ DISTRIBUTION_SCOPE }} (e.g., “Global, excluding
-> embargoed territories listed in 15 CFR 746”).
+> **Область распространения:** {{ DISTRIBUTION_SCOPE }} (например, «Глобальный, исключая
+> территории, на которые наложено эмбарго, перечисленные в 15 CFR 746»).
 >
-> **Operator Obligations:** Recipients must comply with applicable export,
-> import, and usage regulations. Deployments within the People’s Republic of
-> China require product and usage filings with the State Cryptography
-> Administration and adherence to mainland data residency requirements.
+> **Обязанности оператора:** Получатели должны соблюдать применимые правила экспорта,
+> Правила импорта и использования. Развертывание в пределах Народной Республики
+> Китай требует предоставления документации о продуктах и их использовании в Государственную службу криптографии.
+> Администрирование и соблюдение требований к резидентности данных на материке.
 >
-> **Contact:** {{ LEGAL_CONTACT_NAME }} — {{ LEGAL_CONTACT_EMAIL }} /
+> **Контакт:** {{ LEGAL_CONTACT_NAME }} — {{ LEGAL_CONTACT_EMAIL }} /
 > {{ LEGAL_CONTACT_PHONE }}
 >
-> This statement accompanies the cryptography compliance checklist and filing
-> templates provided in `docs/source/crypto/sm_compliance_brief.md`. Retain this
-> document and associated filings for a minimum of three years.
+> Это заявление сопровождает контрольный список соответствия требованиям криптографии и подачу
+> шаблоны предоставлены в `docs/source/crypto/sm_compliance_brief.md`. Сохраните это
+> документ и связанные с ним документы в течение как минимум трех лет.
 
-# Signature
+# Подпись
 
-- Authorised representative: ________________________
-- Title: ________________________
-- Date: ________________________
-
+- Уполномоченный представитель: ________________________
+- Должность: ________________________
+- Дата: ________________________

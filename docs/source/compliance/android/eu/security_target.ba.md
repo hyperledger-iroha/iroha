@@ -7,84 +7,81 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 385d17a55579d2b0b365e21090ee081ded79e44655690b2abfbf54068c9b55b0
 source_last_modified: "2025-12-29T18:16:35.927510+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Android SDK Security Target — ETSI EN 319 401 Alignment
+# Android SDK Хәүефһеҙлек маҡсатлы — ETSI EN 319 401 тура килтереп
 
-| Field | Value |
-|-------|-------|
-| Document Version | 0.1 (2026-02-12) |
-| Scope | Android SDK (client libraries under `java/iroha_android/` plus supporting scripts/docs) |
-| Owner | Compliance & Legal (Sofia Martins) |
-| Reviewers | Android Program Lead, Release Engineering, SRE Governance |
+| Ялан | Ҡиммәте |
+|------|-------|
+| Документ версияһы | 0,1 (2026-02-12) |
+| Скоп | Android SDK (клиент китапханалары буйынса `java/iroha_android/` плюс скрипттар/документтарҙы ярҙамсы) |
+| Хужа | Ҡағиҙәле & Юридик (София Мартинс) |
+| Рецензенттар | Android Программа етәксеһе, сығарыу инженерияһы, SRE идара итеү |
 
-## 1. TOE Description
+## 1.
 
-The Target of Evaluation (TOE) comprises the Android SDK library code (`java/iroha_android/src/main/java`), its configuration surface (`ClientConfig` + Norito ingestion), and the operational tooling referenced in `roadmap.md` for milestones AND2/AND6/AND7.
+Баһалау маҡсатлы (ТОЭ) составында Android SDK китапхана коды (`java/iroha_android/src/main/java`), уның конфигурация өҫтө (`ClientConfig` + Norito ингестия), һәм оператив инструменталь һылтанма `roadmap.md` өсөн мильтондар. AND2/AND6/AND7.
 
-Primary components:
+Беренсел компоненттар:
 
-1. **Configuration ingestion** — `ClientConfig` threads Torii endpoints, TLS policies, retries, and telemetry hooks from the generated `iroha_config` manifest and enforces immutability post-initialisation (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java`).
-2. **Key management / StrongBox** — Hardware-backed signing is implemented via `SystemAndroidKeystoreBackend` and `AttestationVerifier`, with policies documented in `docs/source/sdk/android/key_management.md`. Attestation capture/validation uses `scripts/android_keystore_attestation.sh` and the CI helper `scripts/android_strongbox_attestation_ci.sh`.
-3. **Telemetry & redaction** — Instrumentation funnels through the shared schema described in `docs/source/sdk/android/telemetry_redaction.md`, exporting hashed authorities, bucketed device profiles, and override auditing hooks enforced by the Support Playbook.
-4. **Operations runbooks** — `docs/source/android_runbook.md` (operator response) and `docs/source/android_support_playbook.md` (SLA + escalation) harden the TOE’s operational footprint with deterministic overrides, chaos drills, and evidence capture.
-5. **Release provenance** — Gradle-based builds use the CycloneDX plugin plus reproducible build flags as captured in `docs/source/sdk/android/developer_experience_plan.md` and the AND6 compliance checklist. Release artefacts are signed and cross-referenced in `docs/source/release/provenance/android/`.
+**Конфигурация ингестияһы** — `ClientConfig` ептәре Torii ос нөктәләре, TLS сәйәсәте, ретрийҙар, һәм телеметрия ҡармаҡтары генерацияланған `iroha_config` манифест һәм бойондороҡһоҙлоҡтан һуңғы initialization (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java`).
+2. **Асҡыс идара итеү / Көслө Box** — Аппарат-ярҙам ҡул ҡуйыу аша тормошҡа ашырыла `SystemAndroidKeystoreBackend` һәм `AttestationVerifier`, сәйәсәт документлаштырылған `docs/source/sdk/android/key_management.md`. Аттестация тотоу/валидация ҡулланыла Norito һәм CI ярҙамсыһы `scripts/android_strongbox_attestation_ci.sh`.
+3. **Телеметрия & редакция** — `docs/source/sdk/android/telemetry_redaction.md`-та һүрәтләнгән дөйөм схема аша инструментация воронкалары, хешированный властарҙы экспортлау, биҙрә ҡоролма профилдәре, һәм өҫтөнлөклө аудит ҡармаҡтарын үтәү өсөн ярҙам плейбук.
+4. **Операциялар runbooks** — `docs/source/android_runbook.md` (оператор яуап) һәм `docs/source/android_support_playbook.md` (SLA + эскалация) ҡатыу TOE’s оператив эҙ менән детерминистик өҫтөнлөктәр, хаос күнекмәләр, һәм дәлилдәр тотоу.
+5. **Профинанс сығарыу** — градус нигеҙендә төҙөү ҡулланыу CycloneDX плагин плюс ҡабатланған төҙөү флагтары, нисек тотолған `docs/source/sdk/android/developer_experience_plan.md` һәм AND6 үтәү тикшерелгән исемлеге. Релиз артефакттары `docs/source/release/provenance/android/`-та ҡул ҡуйыла һәм һылтанма менән ҡаплана.
 
-## 2. Assets & Assumptions
+## 2. Активтар & Уйлауҙар
 
-| Asset | Description | Security Objective |
-|-------|-------------|--------------------|
-| Configuration manifests | Norito-derived `ClientConfig` snapshots distributed with apps. | Authenticity, integrity, and confidentiality at rest. |
-| Signing keys | Keys generated or imported through StrongBox/TEE providers. | StrongBox preference, attestation logging, no key export. |
-| Telemetry streams | OTLP traces/logs/metrics exported from SDK instrumentation. | Pseudonymisation (hashed authorities), minimised PII, override auditing. |
-| Ledger interactions | Norito payloads, admission metadata, Torii network traffic. | Mutual authentication, replay-resistant requests, deterministic retries. |
+| Актив | Тасуирлама | Хәүефһеҙлек маҡсаты |
+|------|-------------|-------------------|
+| Конфигурация | Norito-алынған `ClientConfig` Xnapshots ҡушымталар менән таратыла. | Ысынбарлыҡ, бөтөнлөк, һәм ял ваҡытында конфиденциальлыҡ. |
+| Асҡыстарға ҡул ҡуйыу | Асҡыс генерацияланған йәки импорт аша StrongBox/TEE провайдерҙары. | Көслөбокс өҫтөнлөк, аттестация логин, төп экспорт юҡ. |
+| Телеметрия ағымдары | OTLP эҙҙәре/логтар/метрика экспорт SDK приборҙар. | Псевдонимизация (хеша властары), PII минималь кимәлгә еткерҙе, аудит өҫтөндә. |
+| Беткә үҙ-ара тәьҫир итешеүҙәре | Norito файҙалы йөктәр, ҡабул итеү метамағлүмәттәре, Torii селтәр трафикы. | Үҙ-ара аутентификация, реплейға сыҙамлы үтенестәр, детерминистик ретиялар. |
 
-Assumptions:
+Фараздар:
 
-- Mobile OS provides standard sandboxing + SELinux; StrongBox devices implement Google’s keymaster interface.
-- Operators provision Torii endpoints with TLS certificates signed by council-trusted CAs.
-- Build infrastructure honours reproducible-build requirements before publishing to Maven.
+- Мобиль OS стандарт ҡом йәшниктәре + SELinux тәьмин итә; StrongBox ҡоролмалары Google’s keymaster интерфейсын тормошҡа ашыра.
+- Операторҙар положениеһы Torii ос нөктәләре менән TLS сертификаттары ҡул ҡуйған совет-ышаныслы CAs.
+- Инфраструктураны төҙөү өсөн репетициялы төҙөү талаптары Maven баҫтырып сығарыр алдынан.
 
-## 3. Threats & Controls
+## 3. Ҡунаҡ һәм идара итеү| Ҡурҡыныс | Контроль | Дәлилдәр |
+|-------|---------|-----------|
+| Ҡабул ителгән конфигурация | `ClientConfig` раҫлай манифесттары (хэш + схемаһы) ҡулланыу алдынан һәм журналдар аша перезагрузка инҡар итеү аша `android.telemetry.config.reload`. | Norito; `docs/source/android_runbook.md` §1–2. |
+| Асҡыстарға ҡул ҡуйыуҙы компромисс | КөслөБокс талап ителгән сәйәсәт, аттестация йүгәндәре, һәм ҡоролма-матрица аудиттары дрейф билдәләй; өҫтөнлөклө документлаштырылған бер ваҡиға. | `docs/source/sdk/android/key_management.md`; `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md`; `scripts/android_strongbox_attestation_ci.sh`. |
+| PII телеметрияла ағыу | Blak2b-хаслы властар, биҙрә ҡоролма профилдәре, ташыусы өҙөклөк, өҫтөнән ағас ҡырҡыу. | `docs/source/sdk/android/telemetry_redaction.md`; Ярҙам плейбук §8. |
+| Torii RPC-ла ҡабатлау йәки түбән баһа | `/v1/pipeline` запрос төҙөүсе TLS пиннинг, шау-шыу каналы сәйәсәтен һәм вәкәләтле контекст менән ҡабаттан тырышып бюджеттарҙы үтәй. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java` X; `docs/source/sdk/android/networking.md` (планлаштырылған). |
+| Ҡултамғаһыҙ йәки ҡабатланмаған релиздар | CycloneDX SBOM + Sigstore аттестацияһы AND6 тикшерелгән исемлеккә ҡапҡасы; RFC-ларҙы сығарыу `docs/source/release/provenance/android/`-та дәлилдәр талап итә. | `docs/source/sdk/android/developer_experience_plan.md`; `docs/source/compliance/android/eu/sbom_attestation.md`. |
+| Тулы булмаған ваҡиға менән эш итеү | Runbook + playbook билдәләү өҫтөнлөктәре, хаос күнекмәләр, һәм эскалация ағасы; телеметрия өҫтөнлөктәре талап ителә ҡул ҡуйылған Norito запростар. | `docs/source/android_runbook.md`; `docs/source/android_support_playbook.md`. |
 
-| Threat | Control | Evidence |
-|--------|---------|----------|
-| Tampered configuration manifests | `ClientConfig` validates manifests (hash + schema) before applying and logs denied reloads via `android.telemetry.config.reload`. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java`; `docs/source/android_runbook.md` §1–2. |
-| Compromise of signing keys | StrongBox-required policies, attestation harnesses, and device-matrix audits identify drift; overrides documented per incident. | `docs/source/sdk/android/key_management.md`; `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md`; `scripts/android_strongbox_attestation_ci.sh`. |
-| PII leakage in telemetry | Blake2b-hashed authorities, bucketed device profiles, carrier omission, override logging. | `docs/source/sdk/android/telemetry_redaction.md`; Support Playbook §8. |
-| Replay or downgrade on Torii RPC | `/v1/pipeline` request builder enforces TLS pinning, noise channel policy, and retry budgets with hashed authority context. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java`; `docs/source/sdk/android/networking.md` (planned). |
-| Unsigned or non-reproducible releases | CycloneDX SBOM + Sigstore attestations gated by AND6 checklist; release RFCs require evidence in `docs/source/release/provenance/android/`. | `docs/source/sdk/android/developer_experience_plan.md`; `docs/source/compliance/android/eu/sbom_attestation.md`. |
-| Incomplete incident handling | Runbook + playbook define overrides, chaos drills, and escalation tree; telemetry overrides require signed Norito requests. | `docs/source/android_runbook.md`; `docs/source/android_support_playbook.md`. |
+## 4. Баһалау эшмәкәрлеге
 
-## 4. Evaluation Activities
+1. **Дизайн тикшерергә** — Ҡағиҙәле + SRE раҫлау, тип конфигурация, асҡыс идара итеү, телеметрия, һәм идара итеү контроль картаһы ETSI хәүефһеҙлек маҡсаттары.
+2. **Бер тормошҡа ашырыу тикшерелгән** — Автоматлаштырылған һынауҙар:
+   - `scripts/android_strongbox_attestation_ci.sh` матрицала күрһәтелгән һәр StrongBox ҡоролмаһы өсөн тотолған өйөмдәрҙе раҫлай.
+   - `scripts/check_android_samples.sh` һәм идара итеү ҡоролмаһы CI тәьмин итеү өлгө ҡушымталар хөрмәт `ClientConfig`/телеметрия контракттары.
+3. **Операцион раҫлау** — `docs/source/sdk/android/telemetry_chaos_checklist.md` X (ҡабатлау + өҫтөнлөклө күнекмәләр) бер квартал хаос күнекмәләре).
+4. **Дәлилдәр һаҡлау** — `docs/source/compliance/android/` (был папка) буйынса һаҡланған һәм `status.md`-тан һылтанма яһалған артефакттар.
 
-1. **Design review** — Compliance + SRE verify that configuration, key management, telemetry, and release controls map to ETSI security objectives.
-2. **Implementation checks** — Automated tests:
-   - `scripts/android_strongbox_attestation_ci.sh` verifies captured bundles for every StrongBox device listed in the matrix.
-   - `scripts/check_android_samples.sh` and Managed Device CI ensure sample apps honour `ClientConfig`/telemetry contracts.
-3. **Operational validation** — Quarterly chaos drills per `docs/source/sdk/android/telemetry_chaos_checklist.md` (redaction + override exercises).
-4. **Evidence retention** — Artefacts stored under `docs/source/compliance/android/` (this folder) and referenced from `status.md`.
+## 5. ETSI EN 319 401 Карта төшөрөү| EN 319 401 пункт | SDK контроль |
+|------------------|------------- |
+| 7.1 Именлек сәйәсәте | Документацияланған был хәүефһеҙлек маҡсатлы + Ярҙам плейбук. |
+| 7.2 Ойоштороу хәүефһеҙлеге | RACI +-та ярҙам күрһәтеү плейбукта §2. |
+| 7.3 Активтар менән идара итеү | Конфигурация, асҡыс, һәм телеметрия активтары маҡсаттары билдәләнгән §2 өҫтә. |
+| 7.4 инеү менән идара итеү | Көслө Box сәйәсәте + өҫтөнлөклө эш ағымы талап ителә ҡул ҡуйылған Norito артефакттары. |
+| 7.5 Криптографик контроль | Төп быуын, һаҡлау, һәм аттестация талаптары AND2 (төп идара итеү етәксеһе). |
+| 7.6 Операциялар хәүефһеҙлеге | Телеметрия хеширование, хаос репетициялары, инциденттар яуап, һәм дәлилдәр сығарыу ҡапҡаһы. |
+| 7.7 Элемтә хәүефһеҙлеге | `/v1/pipeline` TLS сәйәсәте + хешировать властар (телеметрия редакция doc). |
+| 7.8 Система алыу / үҫеш | Ҡабатланған град төҙөү, SBOMs, һәм провенанс ҡапҡалары AND5/AND6 пландарында. |
+| 7.9 Тәьмин итеүсе мөнәсәбәттәр | Өсөнсө яҡҡа бәйлелек SBOMs менән бер рәттән теркәлгән Aublykite + Sigstore аттестациялары. |
+| 7.10 Инциденттар менән идара итеү | Runbook/Playbook эскалацияһы, логин өҫтөндәге логин, телеметрия етешһеҙлектәре буйынса иҫәп-хисап. |
 
-## 5. ETSI EN 319 401 Mapping
+## 6. Хеҙмәтләндереүҙе
 
-| EN 319 401 Clause | SDK Control |
-|-------------------|-------------|
-| 7.1 Security policy | Documented in this security target + Support Playbook. |
-| 7.2 Organisational security | RACI + on-call ownership in Support Playbook §2. |
-| 7.3 Asset management | Configuration, key, and telemetry asset objectives defined in §2 above. |
-| 7.4 Access control | StrongBox policies + override workflow requiring signed Norito artefacts. |
-| 7.5 Cryptographic controls | Key generation, storage, and attestation requirements from AND2 (key management guide). |
-| 7.6 Operations security | Telemetry hashing, chaos rehearsals, incident response, and release evidence gating. |
-| 7.7 Communications security | `/v1/pipeline` TLS policy + hashed authorities (telemetry redaction doc). |
-| 7.8 System acquisition / development | Reproducible Gradle builds, SBOMs, and provenance gates in AND5/AND6 plans. |
-| 7.9 Supplier relationships | Buildkite + Sigstore attestations recorded alongside third-party dependency SBOMs. |
-| 7.10 Incident management | Runbook/Playbook escalation, override logging, telemetry fail counters. |
-
-## 6. Maintenance
-
-- Update this document whenever the SDK introduces new cryptographic algorithms, telemetry categories, or release automation changes.
-- Link signed copies in `docs/source/compliance/android/evidence_log.csv` with SHA-256 digests and reviewer sign-offs.
+- Был документты яңыртығыҙ, ҡасан SDK яңы криптографик алгоритмдар, телеметрия категориялары индерә, йәки автоматлаштырыу үҙгәрештәрен сығарыу.
+- Һылтанма ҡул ҡуйҙы күсермәләр `docs/source/compliance/android/evidence_log.csv` менән SHA-256 дигести һәм рецензент яҙылыу-офф.

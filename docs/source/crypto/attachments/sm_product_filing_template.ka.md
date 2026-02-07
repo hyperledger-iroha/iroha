@@ -7,94 +7,92 @@ generator: scripts/sync_docs_i18n.py
 source_hash: e7116d28e32d8bd77434edd6767427cc3d2ae0624f4de132b1d0cec3c7d44b86
 source_last_modified: "2025-12-29T18:16:35.938246+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Product Filing (开发备案) Template
-% Hyperledger Iroha Compliance Working Group
+% SM2/SM3/SM4 პროდუქტის შეტანის (开发备案) შაბლონი
+% Hyperledger Iroha შესაბამისობის სამუშაო ჯგუფი
 % 2026-05-06
 
-# Instructions
+#ინსტრუქცია
 
-Use this template when submitting a *product development filing* to a provincial
-or municipal State Cryptography Administration (SCA) office before distributing
-SM-enabled binaries or source artefacts from within mainland China. Replace the
-placeholders with project-specific details, export the completed form as PDF if
-required, and attach the artefacts referenced in the checklist.
+გამოიყენეთ ეს შაბლონი *პროდუქტის განვითარების შეტანის* პროვინციაში გაგზავნისას
+ან მუნიციპალური სახელმწიფო კრიპტოგრაფიის ადმინისტრაციის (SCA) ოფისი გავრცელებამდე
+SM-ზე ჩართული ბინარები ან წყაროს არტეფაქტები კონტინენტური ჩინეთიდან. შეცვალეთ
+ჩანაცვლების ველები პროექტის სპეციფიკური დეტალებით, შევსებული ფორმის ექსპორტი PDF if
+საჭიროა და დაურთოს არტეფაქტები, რომლებიც მითითებულია საკონტროლო სიაში.
 
-# 1. Applicant & Product Summary
+# 1. განმცხადებელი და პროდუქტის რეზიუმე
 
-| Field | Value |
+| ველი | ღირებულება |
 |-------|-------|
-| Organisation name | {{ ORGANISATION }} |
-| Registered address | {{ ADDRESS }} |
-| Legal representative | {{ LEGAL_REP }} |
-| Primary contact (name / title / email / phone) | {{ CONTACT }} |
-| Product name | Hyperledger Iroha {{ RELEASE_NAME }} |
-| Product version / build ID | {{ VERSION }} |
-| Filing type | Product development (开发备案) |
-| Filing date | {{ YYYY-MM-DD }} |
+| ორგანიზაციის სახელი | {{ ორგანიზაცია }} |
+| რეგისტრირებული მისამართი | {{ მისამართი }} |
+| კანონიერი წარმომადგენელი | {{ LEGAL_REP }} |
+| პირველადი კონტაქტი (სახელი / სათაური / ელექტრონული ფოსტა / ტელეფონი) | {{ კონტაქტი }} |
+| პროდუქტის დასახელება | Hyperledger Iroha {{ RELEASE_NAME }} |
+| პროდუქტის ვერსია / build ID | {{ ვერსია }} |
+| ფაილის ტიპი | პროდუქტის განვითარება (开发备案) |
+| შეტანის თარიღი | {{ წწწ-თთ-დდ }} |
 
-# 2. Cryptography Usage Overview
+# 2. კრიპტოგრაფიის გამოყენების მიმოხილვა
 
-- Supported algorithms: `SM2`, `SM3`, `SM4` (provide usage matrix below).
-- Usage context:
-  | Algorithm | Component | Purpose | Deterministic safeguards |
-  |-----------|-----------|---------|--------------------------|
-  | SM2 | {{ COMPONENT }} | {{ PURPOSE }} | RFC6979 + canonical r∥s enforcement |
-  | SM3 | {{ COMPONENT }} | {{ PURPOSE }} | Deterministic hashing via `Sm3Digest` |
-  | SM4 | {{ COMPONENT }} | {{ PURPOSE }} | AEAD (GCM/CCM) with enforced nonce policy |
-- Non-SM algorithms in build: {{ OTHER_ALGORITHMS }} (for completeness).
+- მხარდაჭერილი ალგორითმები: `SM2`, `SM3`, `SM4` (მოაწოდეთ გამოყენების მატრიცა ქვემოთ).
+- გამოყენების კონტექსტი:
+  | ალგორითმი | კომპონენტი | დანიშნულება | დეტერმინისტული გარანტიები |
+  |-----------|-----------|--------|-------------------------|
+  | SM2 | {{ კომპონენტი }} | {{ მიზანი }} | RFC6979 + კანონიკური r∥s აღსრულება |
+  | SM3 | {{ კომპონენტი }} | {{ მიზანი }} | დეტერმინისტული ჰეშინგი `Sm3Digest` |
+  | SM4 | {{ კომპონენტი }} | {{ მიზანი }} | AEAD (GCM/CCM) იძულებითი nonce პოლიტიკით |
+- არა-SM ალგორითმები build-ში: {{ OTHER_ALGORITHMS }} (სისრულისთვის).
 
-# 3. Development & Supply Chain Controls
+# 3. განვითარებისა და მიწოდების ჯაჭვის კონტროლი
 
-- Source code repository: {{ REPOSITORY_URL }}
-- Deterministic build instructions:
+- წყარო კოდის საცავი: {{ REPOSITORY_URL }}
+- განმსაზღვრელი აგების ინსტრუქციები:
   1. `git clone {{ REPOSITORY_URL }} && git checkout {{ COMMIT_SHA }}`
-  2. `cargo build --workspace --locked --release --features "sm sm-ffi-openssl"` (adjust as needed).
-  3. SBOM generated via `cargo auditable` / CycloneDX (`{{ SBOM_PATH }}`).
-- Continuous integration environment summary:
-  | Item | Value |
+  2. `cargo build --workspace --locked --release --features "sm sm-ffi-openssl"` (მორგება საჭიროებისამებრ).
+  3. SBOM გენერირებული `cargo auditable` / CycloneDX (`{{ SBOM_PATH }}`) მეშვეობით.
+- უწყვეტი ინტეგრაციის გარემოს შეჯამება:
+  | ნივთი | ღირებულება |
   |------|-------|
-  | Build OS / version | {{ BUILD_OS }} |
-  | Compiler toolchain | {{ TOOLCHAIN }} |
-  | OpenSSL / Tongsuo source | {{ OPENSSL_SOURCE }} |
-  | Reproducibility checksum | {{ CHECKSUM }} |
+  | OS / ვერსია | {{ BUILD_OS }} |
+  | შემდგენელი ხელსაწყოების ჯაჭვი | {{ ხელსაწყოების ქსელი }} |
+  | OpenSSL / Tongsuo წყარო | {{ OPENSSL_SOURCE }} |
+  | განმეორებადობის საკონტროლო ჯამი | {{ შემოწმება }} |
 
-# 4. Key Management & Security
+# 4. გასაღების მართვა და უსაფრთხოება
 
-- Default enabled SM features: {{ DEFAULTS }} (e.g., verify-only).
-- Configuration flags required for signing: {{ CONFIG_FLAGS }}.
-- Key custody approach:
-  | Item | Details |
+- ნაგულისხმევად ჩართული SM ფუნქციები: {{ ნაგულისხმევი }} (მაგ., მხოლოდ დადასტურება).
+- ხელმოწერისთვის საჭიროა კონფიგურაციის დროშები: {{ CONFIG_FLAGS }}.
+- ძირითადი მეურვეობის მიდგომა:
+  | ნივთი | დეტალები |
   |------|---------|
-  | Key generation tool | {{ KEY_TOOL }} |
-  | Storage medium | {{ STORAGE_MEDIUM }} |
-  | Backup policy | {{ BACKUP_POLICY }} |
-  | Access controls | {{ ACCESS_CONTROLS }} |
-- Incident response contacts (24/7):
-  | Role | Name | Phone | Email |
+  | გასაღების გენერირების ინსტრუმენტი | {{ KEY_TOOL }} |
+  | შენახვის საშუალება | {{ STORAGE_MEDIUM }} |
+  | სარეზერვო პოლიტიკა | {{ სარეზერვო_პოლიტიკა }} |
+  | წვდომის კონტროლი | {{ ACCESS_CONTROLS }} |
+- ინციდენტის რეაგირების კონტაქტები (24/7):
+  | როლი | სახელი | ტელეფონი | ელფოსტა |
   |------|------|-------|-------|
-  | Crypto lead | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
-  | Platform ops | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
-  | Legal liaison | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
+  | კრიპტო ტყვია | {{ სახელი }} | {{ ტელეფონი }} | {{ EMAIL }} |
+  | პლატფორმის ოპერაციები | {{ სახელი }} | {{ ტელეფონი }} | {{ EMAIL }} |
+  | იურიდიული კავშირი | {{ სახელი }} | {{ ტელეფონი }} | {{ EMAIL }} |
 
-# 5. Attachments Checklist
+# 5. დანართების ჩამონათვალი- [ ] წყარო კოდის სნეპშოტი (`{{ SOURCE_ARCHIVE }}`) და ჰეში.
+- [ ] დეტერმინისტული build სკრიპტის / რეპროდუცირებადობის შენიშვნები.
+- [ ] SBOM (`{{ SBOM_PATH }}`) და დამოკიდებულების მანიფესტი (`Cargo.lock` თითის ანაბეჭდი).
+- [ ] დეტერმინისტული ტესტის ჩანაწერები (`scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`).
+- [ ] ტელემეტრიის დაფის ექსპორტი, რომელიც აჩვენებს SM დაკვირვებადობას.
+- [ ] ექსპორტის კონტროლის განცხადება (იხ. ცალკე შაბლონი).
+- [ ] აუდიტის ანგარიშები ან მესამე მხარის შეფასებები (თუ უკვე დასრულებულია).
 
-- [ ] Source code snapshot (`{{ SOURCE_ARCHIVE }}`) and hash.
-- [ ] Deterministic build script / reproducibility notes.
-- [ ] SBOM (`{{ SBOM_PATH }}`) and dependency manifest (`Cargo.lock` fingerprint).
-- [ ] Deterministic test transcripts (`scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`).
-- [ ] Telemetry dashboard export demonstrating SM observability.
-- [ ] Export-control statement (see separate template).
-- [ ] Audit reports or third-party assessments (if already completed).
+# 6. განმცხადებლის დეკლარაცია
 
-# 6. Applicant Declaration
+> ვადასტურებ, რომ ზემოაღნიშნული ინფორმაცია არის ზუსტი, რომ გამჟღავნებულია
+> კრიპტოგრაფიული ფუნქციონირება შეესაბამება PRC-ის მოქმედ კანონებსა და რეგულაციებს,
+> და რომ ორგანიზაცია მინიმუმამდე შეინახავს წარდგენილ არტეფაქტებს
+> სამი წელი.
 
-> I confirm that the above information is accurate, that the disclosed
-> cryptographic functionality complies with applicable PRC laws and regulations,
-> and that the organisation will maintain the submitted artefacts for at least
-> three years.
-
-- Signature (legal representative): ________________________
-- Date: ________________________
-
+- ხელმოწერა (კანონიერი წარმომადგენელი): ______________________
+- თარიღი: _______________________

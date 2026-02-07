@@ -4,56 +4,58 @@ direction: rtl
 source: docs/portal/docs/sorafs/reports/sf2c-capacity-soak.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Informe de soak de acumulación de capacidad SF-2c
+# SF-2C صلاحیت جمع کرنے کی رپورٹ
 
-Fecha: 2026-03-21
+تاریخ: 2026-03-21
 
-## Alcance
+## دائرہ کار
 
-Este informe registra las pruebas determinísticas de soak de acumulación de capacidad SoraFS y pagos
-solicitadas bajo la hoja de ruta SF-2c.
+اس رپورٹ میں ڈٹرمینسٹک SoraFS صلاحیت جمع کرنے کی جانچ اور ادائیگیوں کو بھگوا دیا گیا ہے
+روٹ شیٹ SF-2C کے تحت درخواست کی۔
 
-- **Soak multi-provider de 30 días:** Ejecutado por
-  `capacity_fee_ledger_30_day_soak_deterministic` en
-  `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`.
-  El harness instancia cinco providers, abarca 30 ventanas de settlement y
-  valida que los totales del ledger coincidan con una proyección de referencia
-  calculada de forma independiente. La prueba emite un digest Blake3
-  (`capacity_soak_digest=...`) para que CI pueda capturar y comparar el snapshot
-  canónico.
-- **Penalizaciones por subentrega:** Impuestas por
+-** 30 دن کے ملٹی فراہم کرنے والے بھگوا: ** چل رہا ہے
+  `capacity_fee_ledger_30_day_soak_deterministic` آن
+  `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`۔
+  ہارنس نے پانچ فراہم کنندگان کو انسٹینیٹ کیا ، 30 تصفیہ ونڈوز پر پھیلا ہوا ہے ، اور
+  توثیق کرتا ہے کہ لیجر کل ایک حوالہ پروجیکشن سے میل کھاتا ہے
+  آزادانہ طور پر حساب کیا. ٹیسٹ ایک ڈائجسٹ بلیک 3 جاری کرتا ہے
+  (`capacity_soak_digest=...`) تاکہ CI اسنیپ شاٹ کو پکڑ کر موازنہ کرسکے
+  کینونیکل
+- ** انڈر ڈیلیوری کے لئے جرمانے: ** نافذ کیا گیا
   `record_capacity_telemetry_penalises_persistent_under_delivery`
-  (mismo archivo). La prueba confirma que los umbrales de strikes, cooldowns,
-  slashes de collateral y contadores del ledger permanecen determinísticos.
+  (ایک ہی فائل) ٹیسٹ اس بات کی تصدیق کرتا ہے کہ ہڑتالوں ، کولڈاونس ، کے لئے دہلیز ،
+  کولیٹرل سلیش اور لیجر کاؤنٹر عین مطابق رہتے ہیں۔
 
-## Ejecución
+## عمل درآمد
 
-Ejecuta las validaciones de soak localmente con:
+مقامی طور پر بھگنے کی توثیق کو چلائیں:
 
 ```bash
 cargo test -p iroha_core -- record_capacity_telemetry_penalises_persistent_under_delivery
 cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 ```
 
-Las pruebas completan en menos de un segundo en un portátil estándar y no requieren
-fixtures externas.
+معیاری لیپ ٹاپ پر ایک سیکنڈ سے بھی کم وقت میں ٹیسٹ مکمل کرتے ہیں اور اس کی ضرورت نہیں ہوتی ہے
+بیرونی فکسچر۔
 
-## Observabilidad
+## مشاہدہ
 
-Torii ahora expone snapshots de crédito de providers junto a fee ledgers para que los dashboards
-puedan gatear sobre saldos bajos y penalty strikes:
+Torii اب فیس لیجرز کے ساتھ فراہم کنندہ کریڈٹ اسنیپ شاٹس کو بے نقاب کرتا ہے تاکہ ڈیش بورڈز
+کم بیلنس اور جرمانے کے حملوں پر رینگ سکتے ہیں:
 
-- REST: `GET /v1/sorafs/capacity/state` devuelve entradas `credit_ledger[*]` que
-  reflejan los campos del ledger verificados en la prueba de soak. Ver
-  `crates/iroha_torii/src/sorafs/registry.rs`.
-- Importación de Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` grafica los
-  contadores de strikes exportados, totales de penalizaciones y collateral en garantía para que el
-  equipo on-call pueda comparar los baselines de soak con entornos en vivo.
+- باقی: `GET /v1/sorafs/capacity/state` اندراجات `credit_ledger[*]` واپس کرتا ہے
+  SAAK ٹیسٹ میں تصدیق شدہ لیجر فیلڈز کی عکاسی کریں۔ دیکھو
+  `crates/iroha_torii/src/sorafs/registry.rs`۔
+- Grafana کی درآمد: `dashboards/grafana/sorafs_capacity_penalties.json` گراف
+  برآمد شدہ ہڑتال کے کاؤنٹرز ، جرمانے کے مجموعی اور کولیٹرل گارنٹی میں تاکہ
+  آن کال ٹیم براہ راست ماحول کے ساتھ بھگنے والی بیس لائنوں کا موازنہ کرسکتی ہے۔
 
-## Seguimiento
+## ٹریکنگ
 
-- Programar ejecuciones de gate semanales en CI para reejecutar la prueba de soak (smoke-tier).
-- Extender el tablero de Grafana con objetivos de scrape de Torii cuando las exportaciones de
-  telemetry de producción estén disponibles.
+- سی آئی اے (دھواں دار درجے) کے ٹیسٹ کو دوبارہ سے نکالنے کے لئے سی آئی میں ہفتہ وار گیٹ پھانسی کا شیڈول بنائیں۔
+- جب برآمد ہوتا ہے تو Torii کے کھرچنے والے اہداف کے ساتھ Grafana کے ڈیش بورڈ کو بڑھاؤ
+  پروڈکشن ٹیلی میٹری دستیاب ہے۔

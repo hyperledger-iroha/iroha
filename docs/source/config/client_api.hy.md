@@ -7,25 +7,26 @@ generator: scripts/sync_docs_i18n.py
 source_hash: fa548ec31fe928decc5c23719472618ff97f4eb45b084f9f9084df82b96cfac6
 source_last_modified: "2025-12-29T18:16:35.933651+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Client API Configuration Reference
+## Հաճախորդի API-ի կազմաձևման տեղեկանք
 
-This document tracks the Torii client-facing configuration knobs that are
-surfaces through `iroha_config::parameters::user::Torii`. The section below
-focuses on the Norito-RPC transport controls introduced for NRPC-1; future
-client API settings should extend this file.
+Այս փաստաթուղթը հետևում է Torii հաճախորդին ուղղված կոնֆիգուրացիայի կոճակներին, որոնք
+մակերեսները `iroha_config::parameters::user::Torii`-ի միջոցով: Ստորև բերված հատվածը
+կենտրոնանում է NRPC-1-ի համար ներդրված Norito-RPC տրանսպորտային հսկիչների վրա. ապագան
+հաճախորդի API-ի կարգավորումները պետք է ընդլայնեն այս ֆայլը:
 
 ### `torii.transport.norito_rpc`
 
-| Key | Type | Default | Description |
+| Բանալի | Տեսակ | Կանխադրված | Նկարագրություն |
 |-----|------|---------|-------------|
-| `enabled` | `bool` | `true` | Master switch that enables binary Norito decoding. When `false`, Torii rejects every Norito-RPC request with `403 norito_rpc_disabled`. |
-| `stage` | `string` | `"disabled"` | Rollout tier: `disabled`, `canary`, or `ga`. Stages drive admission decisions and `/rpc/capabilities` output. |
-| `require_mtls` | `bool` | `false` | Enforces mTLS for Norito-RPC transport: when `true`, Torii rejects Norito-RPC requests that do not carry an mTLS marker header (e.g. `X-Forwarded-Client-Cert`). The flag is surfaced via `/rpc/capabilities` so SDKs can warn on misconfigured environments. |
-| `allowed_clients` | `array<string>` | `[]` | Canary allowlist. When `stage = "canary"`, only requests carrying an `X-API-Token` header present in this list are accepted. |
+| `enabled` | `bool` | `true` | Հիմնական անջատիչ, որը հնարավորություն է տալիս երկուական Norito ապակոդավորումը: Երբ `false`, Torii-ը մերժում է յուրաքանչյուր Norito-RPC հարցումը `403 norito_rpc_disabled`-ով: |
+| `stage` | `string` | `"disabled"` | Տարածման մակարդակ՝ `disabled`, `canary` կամ `ga`: Փուլերը խթանում են ընդունելության որոշումները և `/rpc/capabilities` ելքը: |
+| `require_mtls` | `bool` | `false` | Կիրառում է mTLS Norito-RPC փոխադրման համար. երբ `true`, Torii-ը մերժում է Norito-RPC հարցումները, որոնք չունեն mTLS նշիչի վերնագիր (օրինակ՝ I1800300): Դրոշը հայտնվում է `/rpc/capabilities`-ի միջոցով, որպեսզի SDK-ները կարողանան զգուշացնել սխալ կազմաձևված միջավայրերի մասին: |
+| `allowed_clients` | `array<string>` | `[]` | Canary թույլտվության ցուցակ. Երբ `stage = "canary"`, ընդունվում են միայն այս ցանկում առկա `X-API-Token` վերնագիր կրող հարցումները: |
 
-Example configuration:
+Օրինակ կազմաձևում.
 
 ```toml
 [torii.transport.norito_rpc]
@@ -35,16 +36,16 @@ stage = "canary"
 allowed_clients = ["alpha-canary-token", "beta-canary-token"]
 ```
 
-Stage semantics:
+Բեմական իմաստաբանություն.
 
-- **disabled** — Norito-RPC is unavailable even if `enabled = true`. Clients
-  receive `403 norito_rpc_disabled`.
-- **canary** — Requests must include an `X-API-Token` header that matches one
-  of the `allowed_clients`. All other requests receive `403
-  norito_rpc_canary_denied`.
-- **ga** — Norito-RPC is available to every authenticated caller (subject to the
-  usual rate and pre-auth limits).
+- **անջատված** — Norito-RPC-ն անհասանելի է, նույնիսկ եթե `enabled = true`: Հաճախորդներ
+  ստանալ `403 norito_rpc_disabled`:
+- **canary** — Հարցումները պետք է ներառեն մեկին համապատասխանող `X-API-Token` վերնագիր
+  `allowed_clients`-ից: Մնացած բոլոր հարցումները ստանում են `403
+  norito_rpc_canary_denied`:
+- **ga** — Norito-RPC հասանելի է յուրաքանչյուր վավերացված զանգահարողի համար (ենթակա է
+  սովորական տոկոսադրույքը և նախնական վավերացման սահմանները):
 
-Operators can update these values dynamically through `/v1/config`. Each change
-is reflected immediately in `/rpc/capabilities`, allowing SDKs and observability
-dashboards to show the live transport posture.
+Օպերատորները կարող են դինամիկ կերպով թարմացնել այս արժեքները `/v1/config`-ի միջոցով: Յուրաքանչյուր փոփոխություն
+անմիջապես արտացոլվում է `/rpc/capabilities`-ում՝ թույլ տալով SDK-ներ և դիտելիություն
+վահանակներ՝ կենդանի տրանսպորտի կեցվածքը ցույց տալու համար:

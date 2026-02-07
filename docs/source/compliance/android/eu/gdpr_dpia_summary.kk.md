@@ -7,57 +7,56 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 8ef338a20104dc5d15094e28a1332a604b68bdcfef1ff82fea784d43fdbd10b5
 source_last_modified: "2025-12-29T18:16:35.925474+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# GDPR DPIA Summary — Android SDK Telemetry (AND7)
+# GDPR DPIA қысқаша мазмұны — Android SDK телеметриясы (AND7)
 
-| Field | Value |
+| Өріс | Мән |
 |-------|-------|
-| Assessment Date | 2026-02-12 |
-| Processing Activity | Android SDK telemetry export to shared OTLP backends |
-| Controllers / Processors | SORA Nexus Ops (controller), partner operators (joint controllers), Hyperledger Iroha Contributors (processor) |
-| Reference Docs | `docs/source/sdk/android/telemetry_redaction.md`, `docs/source/android_support_playbook.md`, `docs/source/android_runbook.md` |
+| Бағалау күні | 12.02.2026 |
+| Өңдеу әрекеті | Android SDK телеметриясын ортақ OTLP серверлеріне экспорттау |
+| Контроллерлер / Процессорлар | SORA Nexus Ops (контроллер), серіктес операторлар (бірлескен контроллерлер), Hyperledger Iroha Қатысушылар (процессор) |
+| Анықтамалық құжаттар | `docs/source/sdk/android/telemetry_redaction.md`, `docs/source/android_support_playbook.md`, `docs/source/android_runbook.md` |
 
-## 1. Processing Description
+## 1. Өңдеу сипаттамасы
 
-- **Purpose:** Provide operational telemetry needed to support AND7 observability (latency, retries, attestation health) while mirroring the Rust node schema (§2 of `telemetry_redaction.md`).
-- **Systems:** Android SDK instrumentation -> OTLP exporter -> shared telemetry collector managed by SRE (see Support Playbook §8).
-- **Data subjects:** Operator staff using Android SDK-based apps; downstream Torii endpoints (authority strings are hashed per telemetry policy).
+- **Мақсаты:** Rust түйінінің схемасын көшіру кезінде AND7 бақылау мүмкіндігін (кідіріс, қайталау, аттестаттау денсаулығы) қолдау үшін қажет операциялық телеметрияны қамтамасыз ету (`telemetry_redaction.md` §2).
+- **Жүйелер:** Android SDK аспаптары -> OTLP экспорттаушысы -> SRE басқаратын ортақ телеметриялық коллектор (Қолдау жөніндегі оқулық §8 бөлімін қараңыз).
+- **Деректердің субъектілері:** Android SDK негізіндегі қолданбаларды пайдаланатын оператор қызметкерлері; төменгі Torii соңғы нүктелері (өкілет жолдары телеметрия саясатына сәйкес хэштелген).
 
-## 2. Data Inventory & Mitigations
+## 2. Деректерді түгендеу және азайту
 
-| Channel | Fields | PII Risk | Mitigation | Retention |
+| Арна | Өрістер | PII тәуекелі | Жеңілдету | Сақтау |
 |---------|--------|----------|------------|-----------|
-| Traces (`android.torii.http.request`, `android.torii.http.retry`) | Route, status, latency | Low (no PII) | Authority hashed with Blake2b + rotating salt; no payload bodies exported. | 7–30 days (per telemetry doc). |
-| Events (`android.keystore.attestation.result`) | Alias label, security level, attestation digest | Medium (operational data) | Alias hashed (`alias_label`), `actor_role_masked` recorded for overrides with Norito audit tokens. | 90 days for success, 365 days for overrides/failures. |
-| Metrics (`android.pending_queue.depth`, `android.telemetry.export.status`) | Queue counts, exporter status | Low | Aggregated counts only. | 90 days. |
-| Device profile gauges (`android.telemetry.device_profile`) | SDK major, hardware tier | Medium | Bucketing (emulator/consumer/enterprise), no OEM or serial numbers. | 30 days. |
-| Network context events (`android.telemetry.network_context`) | Network type, roaming flag | Medium | Carrier name dropped entirely; supports compliance requirement to avoid subscriber data. | 7 days. |
+| Іздер (`android.torii.http.request`, `android.torii.http.retry`) | Бағыт, күй, кідіріс | Төмен (PII жоқ) | Билік Blake2b + айналмалы тұзбен хэштелген; экспортталмаған пайдалы жүк денелері. | 7–30 күн (әр телеметрия құжатына). |
+| Оқиғалар (`android.keystore.attestation.result`) | Бүркеншік ат белгісі, қауіпсіздік деңгейі, аттестаттау дайджесті | Орта (жедел деректер) | Бүркеншік ат (`alias_label`), `actor_role_masked` Norito аудит таңбалауыштары бар қайта анықтау үшін жазылған. | Табысқа жету үшін 90 күн, қайта анықтау/сәтсіздіктер үшін 365 күн. |
+| Көрсеткіштер (`android.pending_queue.depth`, `android.telemetry.export.status`) | Кезек саны, экспорттаушы мәртебесі | Төмен | Тек жинақталған сандар. | 90 күн. |
+| Құрылғы профилінің өлшеуіштері (`android.telemetry.device_profile`) | SDK негізгі, аппараттық деңгей | Орташа | Шелектеу (эмулятор/тұтынушы/кәсіпорын), OEM немесе сериялық нөмірлер жоқ. | 30 күн. |
+| Желі контекстік оқиғалары (`android.telemetry.network_context`) | Желі түрі, роуминг жалауы | Орташа | Тасымалдаушы атауы толығымен жойылды; жазылушы деректерін болдырмау үшін сәйкестік талабын қолдайды. | 7 күн. |
 
-## 3. Lawful Basis & Rights
+## 3. Заңды негіздер және құқықтар
 
-- **Lawful basis:** Legitimate interest (Art. 6(1)(f)) — ensuring reliable operation of regulated ledger clients.
-- **Necessity test:** Metrics limited to operational health (no user content); hashed authority ensures parity with Rust nodes through reversible mapping available only to authorised support personnel (via override workflow).
-- **Balancing test:** Telemetry is scoped to operator-controlled devices, not end-user data. Overrides require signed Norito artefacts reviewed by Support + Compliance (Support Playbook §3 + §9).
-- **Data subject rights:** Operators contact Support Engineering (playbook §2) to request telemetry export/delete. Redaction overrides and logs (telemetry doc §Signal Inventory) enable fulfilment within 30 days.
+- **Заңды негіз:** Заңды мүдде (6(1)(f)-бап) — реттелетін бухгалтерлік клиенттердің сенімді жұмысын қамтамасыз ету.
+- **Қажеттілік сынағы:** Жұмыс денсаулығымен шектелген көрсеткіштер (пайдаланушы мазмұны жоқ); хэштелген өкілеттік тек уәкілетті қолдау көрсету персоналына ғана қолжетімді қайтымды салыстыру арқылы Rust түйіндерімен тепе-теңдікті қамтамасыз етеді (жұмысты қайта анықтау арқылы).
+- **Баланстау сынағы:** Телеметрия соңғы пайдаланушы деректеріне емес, оператор басқаратын құрылғыларға арналған. Қайта анықтау үшін Қолдау + Сәйкестік (Қолдау көрсету кітабы §3 + §9) тексерген қол қойылған Norito артефактілері қажет.
+- **Дерек субъектісінің құқықтары:** Операторлар телеметрияны экспорттау/жоюды сұрау үшін Қолдау Инженерлік қызметіне (ойын кітабы §2) хабарласады. Түзетуді қайта анықтау және журналдар (телеметриялық құжат §Сигнал тізімі) 30 күн ішінде орындауға мүмкіндік береді.
 
-## 4. Risk Assessment
-
-| Risk | Likelihood | Impact | Residual Mitigation |
+## 4. Тәуекелді бағалау| Тәуекел | Ықтималдық | Әсері | Қалдық жұмсарту |
 |------|------------|--------|---------------------|
-| Re-identification via hashed authorities | Low | Medium | Salt rotation recorded through `android.telemetry.redaction.salt_version`; salts stored in secure vault; overrides audited quarterly. |
-| Device fingerprinting via profile buckets | Low | Medium | Only tier + SDK major exported; Support Playbook prohibits escalation requests for OEM/serial data. |
-| Override misuse leaking PII | Very Low | High | Norito override requests logged, expire within 24h, require SRE approval (`docs/source/android_runbook.md` §3). |
-| Telemetry storage outside EU | Medium | Medium | Collectors deployed in EU + JP regions; retention policy enforced via OTLP backend configuration (documented in Support Playbook §8). |
+| Хештелген органдар арқылы қайта сәйкестендіру | Төмен | Орташа | `android.telemetry.redaction.salt_version` арқылы жазылған тұздың айналуы; қауіпсіз қоймада сақталған тұздар; тоқсан сайын тексерілетін қайта есептейді. |
+| Профиль шелектері арқылы құрылғының саусақ ізі | Төмен | Орташа | Тек деңгей + SDK негізгі экспортталады; Қолдау Playbook OEM/сериялық деректер үшін ұлғайту сұрауларына тыйым салады. |
+| PII ағып жатқан теріс пайдалануды қайта анықтау | Өте төмен | Жоғары | Norito қайта анықтау сұраулары тіркелді, мерзімі 24 сағат ішінде аяқталады, SRE мақұлдауын қажет етеді (`docs/source/android_runbook.md` §3). |
+| ЕО-дан тыс телеметрия сақтау | Орташа | Орташа | ЕО + JP аймақтарында орналастырылған коллекторлар; OTLP сервер конфигурациясы арқылы орындалатын сақтау саясаты (Қолдау туралы оқулық §8 ішінде құжатталған). |
 
-Residual risk is deemed acceptable given the controls above and ongoing monitoring.
+Қалдық тәуекел жоғарыдағы бақылауларды және ағымдағы мониторингті ескере отырып қолайлы болып саналады.
 
-## 5. Actions & Follow-ups
+## 5. Әрекеттер және бақылаулар
 
-1. **Quarterly review:** Validate telemetry schemas, salt rotations, and override logs; document in `docs/source/sdk/android/telemetry_redaction_minutes_YYYYMMDD.md`.
-2. **Cross-SDK alignment:** Coordinate with Swift/JS maintainers to maintain consistent hashing/bucketing rules (tracked in roadmap AND7).
-3. **Partner comms:** Include DPIA summary in partner onboarding kits (Support Playbook §9) and link to this document from `status.md`.
+1. **Тоқсан сайынғы шолу:** Телеметриялық схемаларды, тұзды айналдыруды және қайта анықтау журналдарын тексеру; құжат `docs/source/sdk/android/telemetry_redaction_minutes_YYYYMMDD.md`.
+2. **Cross-SDK туралау:** дәйекті хэштеу/шелектеу ережелерін сақтау үшін Swift/JS қолдаушыларымен үйлестіріңіз (AND7 жол картасында бақыланады).
+3. **Серіктестік хабарламалары:** DPIA қорытындысын серіктестік қосу жинақтарына қосыңыз (Қолдау бағдарламасы §9) және осы құжатқа `status.md` сілтемесін жіберіңіз.

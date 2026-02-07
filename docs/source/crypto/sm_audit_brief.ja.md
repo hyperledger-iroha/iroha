@@ -6,138 +6,133 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 9cda4648f0af7f89022e9d9f4ea243bc22685d9356927bbf1417c77b2057d872
 source_last_modified: "2026-01-03T18:07:57.113286+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 External Audit Brief
-% Iroha Crypto Working Group
+% SM2/SM3/SM4 外部監査概要
+% Iroha 暗号ワーキング グループ
 % 2026-01-30
 
-# Overview
+# 概要
 
-This brief packages the engineering and compliance context required for an
-independent review of Iroha’s SM2/SM3/SM4 enablement. It targets audit teams
-with Rust cryptography experience and familiarity with Chinese National
-Cryptography standards. The expected outcome is a written report covering
-implementation risks, conformance gaps, and prioritised remediation guidance
-ahead of the SM rollout moving from preview to production.
+この概要には、
+Iroha の SM2/SM3/SM4 の有効化に関する独立したレビュー。監査チームを対象としています
+Rust暗号化の経験と中国国家に精通している
+暗号化標準。期待される結果は、次の内容を含む書面によるレポートです。
+実装リスク、適合ギャップ、優先順位の高い改善ガイダンス
+SM のロールアウトがプレビューから本番環境に移行する前に。
 
-# Program Snapshot
+# プログラムのスナップショット
 
-- **Release scope:** Iroha 2/3 shared codebase, deterministic verification
-  paths across nodes and SDKs, signing available behind configuration guard.
-- **Current phase:** SM-P3.2 (OpenSSL/Tongsuo backend integration) with Rust
-  implementations already shipping for verification and symmetric use-cases.
-- **Target decision date:** 2026-04-30 (audit findings inform go/no-go for
-  enabling SM signing in validator builds).
-- **Key risks tracked:** third-party dependency pedigree, deterministic
-  behaviour under mixed hardware, operator compliance readiness.
+- **リリース範囲:** Iroha 2/3 共有コードベース、確定的検証
+  ノードと SDK 間のパス、構成ガードの背後で利用可能な署名。
+- **現在のフェーズ:** SM-P3.2 (OpenSSL/Tongsuo バックエンド統合) Rust と
+  検証および対称的なユースケース向けに実装がすでに出荷されています。
+- **目標決定日:** 2026-04-30 (監査結果により、
+  バリデータービルドで SM サインインを有効にする)。
+- **追跡された主なリスク:** サードパーティの依存関係の系統図、決定論的
+  混合ハードウェア下での動作、オペレータのコンプライアンスの準備。
 
-# Code & Fixture References
+# コードとフィクスチャのリファレンス
 
-- `crates/iroha_crypto/src/sm.rs` — Rust implementations and optional OpenSSL
-  bindings (`sm-ffi-openssl` feature).
-- `crates/ivm/tests/sm_syscalls.rs` — IVM syscall coverage for hashing,
-  verification, and symmetric modes.
-- `crates/iroha_data_model/tests/sm_norito_roundtrip.rs` — Norito payload
-  round-trips for SM artefacts.
-- `docs/source/crypto/sm_program.md` — programme history, dependency audit, and
-  rollout guardrails.
-- `docs/source/crypto/sm_operator_rollout.md` — operator-facing enablement and
-  rollback procedures.
-- `docs/source/crypto/sm_compliance_brief.md` — regulatory summary and export
-  considerations.
+- `crates/iroha_crypto/src/sm.rs` — Rust 実装とオプションの OpenSSL
+  バインディング (`sm-ffi-openssl` 機能)。
+- `crates/ivm/tests/sm_syscalls.rs` — IVM ハッシュの syscall カバレッジ、
+  検証および対称モード。
+- `crates/iroha_data_model/tests/sm_norito_roundtrip.rs` — Norito ペイロード
+  SM アーティファクトの往復。
+- `docs/source/crypto/sm_program.md` — プログラム履歴、依存関係の監査、および
+  ロールアウトガードレール。
+- `docs/source/crypto/sm_operator_rollout.md` — オペレーター向けの有効化と
+  ロールバック手順。
+- `docs/source/crypto/sm_compliance_brief.md` — 規制の概要と輸出
+  考慮事項。
 - `scripts/sm_openssl_smoke.sh` / `crates/iroha_crypto/tests/sm_openssl_smoke.rs`
-  — deterministic smoke harness for OpenSSL-backed flows.
-- `fuzz/sm_*` corpora — RustCrypto-based fuzz seeds covering SM3/SM4 primitives.
+  — OpenSSL を利用したフロー用の決定論的なスモーク ハーネス。
+- `fuzz/sm_*` corpora — SM3/SM4 プリミティブをカバーする RustCrypto ベースのファズ シード。
 
-# Requested Audit Scope
+# 要求された監査範囲1. **仕様適合**
+   - SM2 署名検証、ZA 計算、および正規化を検証します。
+     エンコード動作。
+   - SM3/SM4 プリミティブが GM/T 0002-2012 および GM/T 0007-2012 に従っていることを確認します。
+     カウンタモードの不変式と IV 処理を含みます。
+2. **決定性と一定時間の保証**
+   - 分岐、テーブル ルックアップ、ハードウェア ディスパッチを確認してノードを実行する
+     どの CPU ファミリでも決定的なままです。
+   - 秘密キー操作の定数要求を評価し、
+     OpenSSL/Tongsuo パスは、一定時間のセマンティクスを保持します。
+3. **サイドチャネルと障害の分析**
+   - Rustと両方のタイミング、キャッシュ、および電源サイドチャネルのリスクを検査します。
+     FFI ベースのコード パス。
+   - 署名検証のための障害処理とエラー伝播を評価し、
+     認証暗号化の失敗。
+4. **構築、依存関係、サプライチェーンのレビュー**
+   - 再現可能なビルドと OpenSSL/Tongsuo アーティファクトの出所を確認します。
+   - 依存関係ツリーのライセンスを確認し、対象範囲を監査します。
+5. **テストと検証のハーネス批判**
+   - 決定論的煙テスト、ファズハーネス、および Norito 治具を評価します。
+   - 追加のカバレッジを推奨します (例: 差分テスト、プロパティベース)
+     証明）ギャップが残っている場合。
+6. **コンプライアンスとオペレーターガイダンスの検証**
+   - 出荷された書類を法的要件および予想される内容と照合してクロスチェックします。
+     オペレーターコントロール。
 
-1. **Specification conformance**
-   - Validate SM2 signature verification, ZA calculation, and canonical
-     encoding behaviour.
-   - Confirm SM3/SM4 primitives follow GM/T 0002-2012 and GM/T 0007-2012,
-     including counter mode invariants and IV handling.
-2. **Determinism & constant-time guarantees**
-   - Review branching, table lookups, and hardware dispatch so node execution
-     remains deterministic across CPU families.
-   - Evaluate constant-time claims for private-key operations and confirm the
-     OpenSSL/Tongsuo paths retain constant-time semantics.
-3. **Side-channel and fault analysis**
-   - Inspect for timing, cache, and power side-channel risks in both Rust and
-     FFI-backed code paths.
-   - Assess fault-handling and error propagation for signature verification and
-     authenticated encryption failures.
-4. **Build, dependency, and supply-chain review**
-   - Confirm reproducible builds and provenance of OpenSSL/Tongsuo artefacts.
-   - Review dependency tree licensing and audit coverage.
-5. **Testing & verification harness critique**
-   - Evaluate deterministic smoke tests, fuzz harnesses, and Norito fixtures.
-   - Recommend additional coverage (e.g., differential testing, property-based
-     proofs) if gaps remain.
-6. **Compliance & operator guidance validation**
-   - Cross-check shipped documentation against legal requirements and expected
-     operator controls.
+# 成果物と物流
 
-# Deliverables & Logistics
+- **キックオフ:** 2026 年 2 月 24 日 (バーチャル、90 分)。
+- **インタビュー:** 暗号 WG、IVM メンテナー、プラットフォーム運用担当者 (必要に応じて)。
+- **アーティファクト アクセス:** 読み取り専用リポジトリ ミラー、CI パイプライン ログ、フィクスチャ
+  出力、および依存関係の SBOM (CycloneDX)。
+- **中間更新:** 毎週の書面によるステータスとリスクのコールアウト。
+- **最終成果物 (2026 年 4 月 15 日予定):**
+  - リスク評価を含むエグゼクティブサマリー。
+  - 詳細な調査結果 (問題ごと: 影響、可能性、コード参照、
+    是正指導）。
+  - 再テスト/検証計画。
+  - 決定論、定時態勢、コンプライアンスの調整に関する声明。
 
-- **Kick-off:** 2026-02-24 (virtual, 90 minutes).
-- **Interviews:** Crypto WG, IVM maintainers, platform ops (as needed).
-- **Artefact access:** read-only repository mirror, CI pipeline logs, fixture
-  outputs, and dependency SBOMs (CycloneDX).
-- **Interim updates:** weekly written status + risk callouts.
-- **Final deliverables (due 2026-04-15):**
-  - Executive summary with risk rating.
-  - Detailed findings (per issue: impact, likelihood, code references,
-    remediation guidance).
-  - Re-test/verification plan.
-  - Statement on determinism, constant-time posture, and compliance alignment.
+## エンゲージメントステータス
 
-## Engagement Status
+|ベンダー |ステータス |キックオフ |フィールドウィンドウ |メモ |
+|----------|----------|----------|--------------|----------|
+|ビットの軌跡 (CN の練習) |作業報告書は 2026 年 2 月 21 日に実行されました。 2026-02-24 | 2026-02-24–2026-03-22 |配達予定日は 2026 年 4 月 15 日です。 Hui Zhang は、エンジニアリングのカウンターパートとして Alexey M. との取り組みを主導しました。毎週のステータスコールは水曜日の 09:00UTC。 |
+| NCCグループ（アジア太平洋） |緊急スロットは予約済み |該当なし (保留中) |暫定 2026-05-06–2026-05-31 |高リスクの所見で 2 回目のパスが必要な場合にのみアクティブ化します。 2026 年 2 月 22 日に、Priya N. (セキュリティ) および NCC グループのエンゲージメント デスクによって準備が整っていることが確認されました。 |
 
-| Vendor | Status | Kick-off | Field Window | Notes |
-|--------|--------|----------|--------------|-------|
-| Trail of Bits (CN practice) | Statement of work executed 2026-02-21 | 2026-02-24 | 2026-02-24 – 2026-03-22 | Delivery due 2026-04-15; Hui Zhang leading engagement with Alexey M. as engineering counterpart. Weekly status call Wednesdays 09:00 UTC. |
-| NCC Group (APAC) | Contingency slot reserved | N/A (on hold) | Provisional 2026-05-06 – 2026-05-31 | Activation only if high-risk findings require second pass; readiness confirmed by Priya N. (Security) and NCC Group engagement desk 2026-02-22. |
-
-# Attachments Included in Outreach Package
-
-- `docs/source/crypto/sm_program.md`
+# アウトリーチ パッケージに含まれる添付ファイル- `docs/source/crypto/sm_program.md`
 - `docs/source/crypto/sm_operator_rollout.md`
 - `docs/source/crypto/sm_compliance_brief.md`
 - `docs/source/crypto/sm_lock_refresh_plan.md`
 - `docs/source/crypto/sm_rust_vector_check.md`
-- `docs/source/crypto/attachments/sm_iroha_crypto_tree.txt` — `cargo tree -p iroha_crypto --no-default-features --features "sm sm-ffi-openssl"` snapshot.
-- `docs/source/crypto/attachments/sm_iroha_crypto_metadata.json` — `cargo metadata` export for the `iroha_crypto` crate (locked dependency graph).
-- `docs/source/crypto/attachments/sm_openssl_smoke.log` — latest `scripts/sm_openssl_smoke.sh` run (skips SM2/SM4 paths when provider support is missing).
-- `docs/source/crypto/attachments/sm_openssl_provenance.md` — local toolkit provenance (pkg-config/OpenSSL version notes).
-- Fuzz corpus manifest (`fuzz/sm_corpus_manifest.json`).
+- `docs/source/crypto/attachments/sm_iroha_crypto_tree.txt` — `cargo tree -p iroha_crypto --no-default-features --features "sm sm-ffi-openssl"` スナップショット。
+- `docs/source/crypto/attachments/sm_iroha_crypto_metadata.json` — `iroha_crypto` クレートの `cargo metadata` エクスポート (ロックされた依存関係グラフ)。
+- `docs/source/crypto/attachments/sm_openssl_smoke.log` — 最新の `scripts/sm_openssl_smoke.sh` 実行 (プロバイダーのサポートがない場合は SM2/SM4 パスをスキップします)。
+- `docs/source/crypto/attachments/sm_openssl_provenance.md` — ローカル ツールキットの来歴 (pkg-config/OpenSSL バージョンのメモ)。
+- ファズ コーパス マニフェスト (`fuzz/sm_corpus_manifest.json`)。
 
-> **Environment caveat:** The current development snapshot uses the vendored OpenSSL 3.x toolchain (`openssl` crate `vendored` feature) but macOS lacks SM3/SM4 CPU intrinsics and the default provider does not expose SM4-GCM, so the OpenSSL smoke harness still skips SM4 coverage and Annex Example SM2 parsing. A workspace dependency cycle (`sorafs_manifest ↔ sorafs_car`) also forces the helper script to skip the run after emitting the `cargo check` failure. Re-run the bundle inside the Linux release build environment (OpenSSL/Tongsuo with SM4 enabled and without the cycle) to capture full parity before the external audit.
+> **環境に関する警告:** 現在の開発スナップショットは、ベンダー提供の OpenSSL 3.x ツールチェーン (`openssl` クレート `vendored` 機能) を使用していますが、macOS には SM3/SM4 CPU 組み込み機能がなく、デフォルトのプロバイダーは SM4-GCM を公開していないため、OpenSSL スモーク ハーネスは依然として SM4 カバレッジと付録サンプル SM2 解析をスキップします。ワークスペースの依存関係サイクル (`sorafs_manifest ↔ sorafs_car`) により、`cargo check` エラーが発生した後、ヘルパー スクリプトの実行が強制的にスキップされます。 Linux リリースのビルド環境 (SM4 が有効でサイクルなしの OpenSSL/Tongsuo) 内でバンドルを再実行し、外部監査の前に完全なパリティを取得します。
 
-# Candidate audit partners & scope
+# 監査パートナー候補と範囲
 
-| Firm | Relevant experience | Typical scope & deliverables | Notes |
-|------|---------------------|------------------------------|-------|
-| Trail of Bits (CN cryptography practice) | Rust code reviews (`ring`, zkVMs), prior GM/T assessments for mobile payment stacks. | Spec conformance diff (GM/T 0002/3/4), constant-time review of Rust + OpenSSL paths, differential fuzzing, supply-chain review, remediation roadmap. | Already engaged; table retained for completeness when planning future refresh cycles. |
-| NCC Group APAC | Hardware/SOC + Rust cryptography red teams, published reviews of RustCrypto primitives and payment HSM bridges. | Holistic assessment of Rust + JNI/FFI bindings, deterministic policy validation, perf/telemetry gate review, operator playbook walkthrough. | Reserved as contingency; can also provide bilingual reporting for Chinese regulators. |
-| Kudelski Security (Blockchain & crypto team) | Audits of Halo2, Mina, zkSync, custom signature schemes implemented in Rust. | Focus on elliptic-curve correctness, transcript integrity, threat modelling for hardware acceleration, and CI/rollout evidence. | Useful for second opinions on hardware acceleration (SM-5a) and FASTPQ-to-SM interactions. |
-| Least Authority | Cryptographic protocol audits for Rust-based blockchains (Filecoin, Polkadot), reproducible builds consulting. | Deterministic build verification, Norito codec verification, compliance evidence cross-check, operator communication review. | Well-suited for transparency/audit-report deliverables when regulators request independent verification beyond code review. |
+|しっかり |関連する経験 |一般的な範囲と成果物 |メモ |
+|------|---------------------|----------------------------|------|
+|ビットの軌跡 (CN 暗号化の実践) | Rust コード レビュー (`ring`、zkVM)、モバイル決済スタックの以前の GM/T 評価。 |仕様適合差分 (GM/T 0002/3/4)、Rust + OpenSSL パスの常時レビュー、差分ファジング、サプライチェーンのレビュー、修復ロードマップ。 |すでに婚約中。このテーブルは、将来の更新サイクルを計画する際に完全を期すために保持されます。 |
+| NCC グループ アジア太平洋 |ハードウェア/SOC + Rust暗号化レッドチーム、RustCryptoプリミティブと支払いHSMブリッジのレビューを公開。 | Rust + JNI/FFI バインディングの総合的な評価、決定論的なポリシーの検証、パフォーマンス/テレメトリ ゲートのレビュー、オペレーター プレイブックのウォークスルー。 |緊急事態として予約されています。中国の規制当局に二か国語のレポートを提供することもできます。 |
+| Kudelski Security (ブロックチェーンおよび暗号化チーム) | Halo2、Mina、zkSync、Rust に実装されたカスタム署名スキームの監査。 |楕円曲線の正確性、トランスクリプトの整合性、ハードウェア アクセラレーションのための脅威モデリング、CI/ロールアウトの証拠に焦点を当てます。 |ハードウェア アクセラレーション (SM-5a) および FASTPQ から SM への相互作用に関するセカンドオピニオンに役立ちます。 |
+|最小権限 | Rust ベースのブロックチェーン (Filecoin、Polkadot) の暗号プロトコル監査、再現可能なビルドのコンサルティング。 |確定的ビルド検証、Norito コーデック検証、コンプライアンス証拠のクロスチェック、オペレーター通信レビュー。 |規制当局がコードレビューを超えた独立した検証を要求する場合の透明性/監査報告書の成果物に最適です。 |
 
-All engagements request the same artefact bundle enumerated above plus the following optional add-ons depending on the firm:
+すべてのエンゲージメントでは、上記に列挙したものと同じアーティファクト バンドルに加えて、企業に応じて次のオプションのアドオンを要求します。- **仕様準拠と確定的な動作:** SM2 ZA 導出、SM3 パディング、SM4 ラウンド関数、および `sm_accel` ランタイム ディスパッチ ゲートを行ごとに検証し、アクセラレーションによってセマンティクスが変更されないことを確認します。
+- **サイドチャネルおよび FFI レビュー:** Rust パスに対する差分テストを含む、定数時間クレーム、安全でないコード ブロック、および OpenSSL/Tongsuo ブリッジ層の検査。
+- **CI / サプライチェーン検証:** `sm_interop_matrix`、`sm_openssl_smoke`、および `sm_perf` ハーネスを SBOM/SLSA 証明書とともに複製することで、監査結果をリリース証拠に直接結び付けることができます。
+- **オペレータ向けの資料:** `sm_operator_rollout.md`、コンプライアンス提出テンプレート、およびテレメトリ ダッシュボードをクロスチェックして、文書で約束された軽減策が技術的に強制可能であることを確認します。
 
-- **Spec conformance & deterministic behaviour:** Line-by-line verification of SM2 ZA derivation, SM3 padding, SM4 round functions, and the `sm_accel` runtime dispatch gate to ensure acceleration never alters semantics.
-- **Side-channel and FFI review:** Inspection of constant-time claims, unsafe code blocks, and OpenSSL/Tongsuo bridging layers, including diff testing against the Rust path.
-- **CI / supply-chain validation:** Reproduction of the `sm_interop_matrix`, `sm_openssl_smoke`, and `sm_perf` harnesses together with SBOM/SLSA attestations so audit findings can be tied directly to release evidence.
-- **Operator-facing collateral:** Cross-check of `sm_operator_rollout.md`, compliance filing templates, and telemetry dashboards to confirm that mitigations promised in documentation are technically enforceable.
+将来の監査の範囲を決めるときは、この表を再利用して、ベンダーの強みを特定のロードマップ マイルストーンに合わせます (たとえば、ハードウェア/パフォーマンスの重いリリースには Kudelski を、言語/ランタイムの正確さには Trail of Bits を、再現可能なビルド保証には最小権限を優先します)。
 
-When scoping future audits, reuse this table to align vendor strengths with the specific roadmap milestone (e.g., favour Kudelski for hardware/perf heavy releases, Trail of Bits for language/runtime correctness, and Least Authority for reproducible build assurances).
+# 連絡先
 
-# Points of Contact
-
-- **Technical owner:** Crypto WG lead (Alexey M., `alexey@iroha.tech`)
-- **Program manager:** Platform Operations coordinator (Sarah K.,
+- **技術所有者:** 暗号化 WG リード (Alexey M.、`alexey@iroha.tech`)
+- **プログラム マネージャー:** プラットフォーム オペレーション コーディネーター (Sarah K.,
   `sarah@iroha.tech`)
-- **Security liaison:** Security Engineering (Priya N., `security@iroha.tech`)
-- **Documentation liaison:** Docs/DevRel lead (Jamila R.,
+- **セキュリティ担当者:** セキュリティ エンジニアリング (Priya N.、`security@iroha.tech`)
+- **ドキュメント担当者:** ドキュメント/DevRel リード (Jamila R.、
   `docs@iroha.tech`)

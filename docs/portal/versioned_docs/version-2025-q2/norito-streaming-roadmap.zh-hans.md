@@ -8,12 +8,13 @@ source_hash: f69d3794b9b508ce447d5599bf7f2f7b862bae44fe2f0ad2f6a16837eb313ee8
 source_last_modified: "2025-12-29T18:16:35.905313+00:00"
 translation_last_reviewed: 2026-02-07
 title: Norito Streaming Roadmap
+translator: machine-google-reviewed
 ---
 
-The following backlog captures the near-term work items the Streaming Working
-Group tracks for Norito audio/video delivery. Values are updated alongside
-`status.md` and shared here for portal consumers who prefer a machine-friendly
-view.
+以下待办事项记录了流式处理中的近期工作项目
+Norito 音频/视频传输的组轨道。值同时更新
+`status.md` 并在此分享给喜欢机器友好的门户消费者
+视图。
 
 ```json
 [

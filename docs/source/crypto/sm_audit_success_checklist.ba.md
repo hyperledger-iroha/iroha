@@ -7,66 +7,67 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 624ef9305dc14d477a616923c80445094c692bc6a38d69465f679b54ccd52e92
 source_last_modified: "2025-12-29T18:16:35.940844+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Audit Success Criteria
-% Iroha Crypto Working Group
+% SM2/SM3/SM4 Аудит уңыш критерийҙары
+% Iroha Крипто эш төркөмө
 % 2026-01-30
 
-# Purpose
+# Ниәт
 
-This checklist captures the concrete criteria required for a successful
-completion of the SM2/SM3/SM4 external audit. It should be reviewed during
-kick-off, revisited at each status checkpoint, and used to confirm exit
-conditions before enabling SM signing for production validators.
+Был тикшерелгән исемлектә уңышлы өсөн кәрәкле конкрет критерийҙар тота
+SM2/SM3/SM4 тышҡы аудит тамамланыу. Уны 2018 йыл ваҡытында ҡарап сығырға кәрәк.
+старт, һәр статус пунктында ҡабаттан ҡарап, һәм раҫлау өсөн ҡулланылған сығыу
+шарттар мөмкинлек биргәнсе SM ҡул ҡуйыу өсөн производство валидаторҙары.
 
-# Pre-Engagement Readiness
+# Ҡабул итеүгә тиклемге әҙерлек
 
-- [ ] Contract signed, including scope, deliverables, confidentiality, and
-      remediation support language.
-- [ ] Audit team receives repository mirror access, CI artefact bucket, and
-      documentation bundle listed in `docs/source/crypto/sm_audit_brief.md`.
-- [ ] Points of contact confirmed with backups for each role
-      (crypto, IVM, platform ops, security, docs).
-- [ ] Internal stakeholders align on target release date and freeze windows.
-- [ ] SBOM export (`cargo auditable` + CycloneDX) generated and shared.
-- [ ] OpenSSL/Tongsuo build provenance package prepared
-      (source tarball hash, build script, reproducibility notes).
-- [ ] Latest deterministic test outputs captured:
-      `scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`, and
-      Norito round-trip fixtures.
-- [ ] Torii `/v1/node/capabilities` advert (via `iroha runtime capabilities`) recorded, verifying the `crypto.sm` manifest fields and acceleration policy snapshot.
+- [ ] Килешәү ҡул ҡуйылған, шул иҫәптән даирәһе, тапшырыу, конфиденциальлыҡ, һәм
+      remediaption ярҙам тел.
+- [ ] Аудит командаһы репозиторий көҙгө инеү ала, CI артефакт биҙрә, һәм
+      документация йыйылмаһы `docs/source/crypto/sm_audit_brief.md`-та күрһәтелгән.
+- [ ] Һәр роль өсөн резерв көйҙәре менән раҫланған бәйләнеш нөктәләре
+      (крипто, IVM, платформа опс, хәүефһеҙлек, docs).
+- [ ] Эске ҡатнашыусылар маҡсатлы сығарыу көнөндә тура килә һәм windows туңдырыу.
+- [ ] SBOM экспорты (`cargo auditable` + CycloneDX) генерацияланған һәм уртаҡ.
+- [ ] OpenSSL/Тонссуо әҙерләгән провенанс пакеты әҙер
+      (сығанаҡ тальбол хеш, төҙөү сценарий, ҡабатлаусы иҫкәрмәләр).
+- [ ] Һуңғы детерминистик һынау сығыштары төшөрөлгән:
+      `scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`, һәм
+      Norito түңәрәк-сюжет ҡорамалдары.
+- [ ] Torii `/v1/node/capabilities` реклама (Norito аша) теркәлгән, `crypto.sm` манифест яландарын һәм тиҙләтеү сәйәсәтен тикшергән.
 
-# Engagement Execution
+# Ҡатнашыу башҡарыу
 
-- [ ] Kick-off workshop completed with shared understanding of goals,
-      timelines, and communication cadence.
-- [ ] Weekly status reports received and triaged; risk register updated.
-- [ ] Findings communicated within one business day of discovery when severity
-      is High or Critical.
-- [ ] Audit team validates determinism paths on ≥2 CPU architectures (x86_64,
-      aarch64) with matching outputs.
-- [ ] Side-channel review includes constant-time proofs or empirical testing
-      evidence for both Rust and FFI paths.
-- [ ] Compliance and documentation review confirms operator guidance matches
-      regulatory obligations.
-- [ ] Differential testing against reference implementations (RustCrypto,
-      OpenSSL/Tongsuo) executed with auditor oversight.
-- [ ] Fuzz harnesses evaluated; new seed corpora provided where gaps exist.
+- [ ] Кик-офф оҫтаханаһы маҡсаттарҙы уртаҡ аңлау менән тамамланды,
+      ваҡыт һыҙыҡтары, һәм аралашыу каденцияһы.
+- [ ] Аҙналыҡ статусы тураһында отчеттар алынған һәм триаж; хәүеф реестр яңыртылған.
+- [ ] Асыштың бер эш көнө эсендәге асыҡлауҙар ауырлағанда аралашыу .
+      юғары йәки тәнҡитле.
+- [ ] Аудит командаһы ≥2 процессор архитектураларында детерминизм юлдарын раҫлай (x86_64,
+      aarch64) тап килгән сығыштар менән.
+- [ ] Ян-канал тикшерелгән даими-ваҡыт иҫбатлау йәки эмпирика һынау инә
+      дәлилдәр ҙә Раст һәм ФФИ юлдарына ла.
+- [ ] үтәү һәм документация тикшерелгән оператор йүнәлеше матчтарын раҫлай
+      норматив бурыстар.
+- [ ] Һылтанмаларҙы тормошҡа ашырыуҙарға ҡаршы дифференциаль һынау (РастКрипто,
+      OpenSSL/Тонссуо) аудитор күҙәтеүе менән башҡарылған.
+- [ ] Fuzz йүгәндәре баһаланған; яңы орлоҡ корпоралары ҡайҙа бушлыҡ бар.
 
-# Remediation & Exit
+# Ремедиация һәм сығыу
 
-- [ ] All findings categorised with severity, impact, exploitability, and
-      recommended remediation steps.
-- [ ] High/Critical issues receive patches or mitigations with auditor-approved
-      verification; residual risks documented.
-- [ ] Auditor supplies re-test validation evidencing fixed issues (diff, test
-      runs, or signed attestation).
-- [ ] Final report delivered: executive summary, detailed findings, methodology,
-      determinism verdict, compliance verdict.
-- [ ] Internal sign-off meeting concludes next steps, release adjustments,
-      and documentation updates.
-- [ ] `status.md` updated with audit outcome and outstanding remediation
-      follow-ups.
-- [ ] Post-mortem captured in `docs/source/crypto/sm_program.md` (lessons
-      learned, future hardening tasks).
+- [ ] Бөтә табыштар ҙа ауырлыҡ, йоғонто, эксплуатацияланыусанлыҡ һәм
+      тәҡдим ителгән төҙәтеү аҙымдары.
+- [ ] Юғары/тәнҡитле мәсьәләләр аудитор менән раҫланған патчтар йәки йомшартыуҙар ала
+      тикшерергә; ҡалдыҡ хәүефтәре документлаштырылған.
+- [ ] Аудитор тәьмин итеү ҡабаттан һынау раҫлау дәлилдәре фиксированный мәсьәләләр (айырыу, һынау
+      йүгерә, йәки ҡул ҡуйылған аттестация).
+- [ ] Һуңғы отчет тапшырылған: башҡарма резюме, ентекле табыштар, методика,
+      детерминизм хөкөм, үтәү тураһында хөкөм.
+- [ ] Эске ҡул ҡуйыу-офф осрашыуы киләһе аҙымдарҙы тамамлай, төҙәтмәләр сығарыу,
+      һәм документация яңыртыуҙары.
+- [ ] `status.md` аудит һөҙөмтәһе һәм күренекле төҙәтеүҙәр менән яңыртылған
+      эҙмә-эҙлекле.
+- [ ] `docs/source/crypto/sm_program.md`-ла төшөрөлгән (дәрестәр
+      өйрәнгән, киләсәктәге ҡаты эш бурыстары).

@@ -7,90 +7,88 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 14f32b40ff71fa4eef698eac80d8d7dd27104b46b84523d735d054dedea1c47a
 source_last_modified: "2025-12-29T18:16:35.938696+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Sales & Usage Filing (销售/使用备案) Template
-% Hyperledger Iroha Compliance Working Group
+% SM2/SM3/SM4 Sales & Usage Filing (销售/使用备案) Կաղապար
+% Hyperledger Iroha Համապատասխանության աշխատանքային խումբ
 % 2026-05-06
 
-# Instructions
+# Հրահանգներ
 
-Use this template when filing deployment usage with an SCA office for onshore
-operators. Provide one submission per deployment cluster or data space. Update
-the placeholders with operator-specific details and attach the evidence listed
-in the checklist.
+Օգտագործեք այս ձևանմուշը ցամաքային SCA գրասենյակում տեղակայման օգտագործումը ներկայացնելիս
+օպերատորներ. Տրամադրեք մեկ ներկայացում յուրաքանչյուր տեղակայման կլաստերի կամ տվյալների տարածության համար: Թարմացնել
+տեղապահները՝ օպերատորին հատուկ մանրամասներով և կցել թվարկված ապացույցները
+ստուգաթերթում։
 
-# 1. Operator & Deployment Summary
+# 1. Օպերատորի և տեղակայման ամփոփում
 
-| Field | Value |
+| Դաշտային | Արժեք |
 |-------|-------|
-| Operator name | {{ OPERATOR_NAME }} |
-| Business registration ID | {{ REG_ID }} |
-| Registered address | {{ ADDRESS }} |
-| Primary contact (name / title / email / phone) | {{ CONTACT }} |
-| Deployment identifier | {{ DEPLOYMENT_ID }} |
-| Deployment location(s) | {{ LOCATIONS }} |
-| Filing type | Sales / Usage (销售/使用备案) |
-| Filing date | {{ YYYY-MM-DD }} |
+| Օպերատորի անվանումը | {{ OPERATOR_NAME }} |
+| Բիզնեսի գրանցման ID | {{ REG_ID }} |
+| Գրանցված հասցե | {{ ՀԱՍՑԵ }} |
+| Հիմնական կոնտակտ (անուն / անվանում / էլփոստ / հեռախոս) | {{ ԿԱՊ }} |
+| Տեղակայման նույնացուցիչ | {{ DEPLOYMENT_ID }} |
+| Տեղակայման վայր(ներ) | {{ ՎԱՅՐԵՐ }} |
+| Ներկայացման տեսակը | Վաճառք / Օգտագործում (销售/使用备案) |
+| Ներկայացման ամսաթիվը | {{ YYYY-MM-DD }} |
 
-# 2. Deployment Details
+# 2. Տեղակայման մանրամասներ
 
-- Software build ID / hash: `{{ BUILD_HASH }}`
-- Build source: {{ BUILD_SOURCE }} (e.g., operator-built from source, vendor-provided binary).
-- Activation date: {{ ACTIVATION_DATE }}
-- Planned maintenance windows: {{ MAINTENANCE_CADENCE }}
-- Node roles participating in SM signing:
-  | Node | Role | SM features enabled | Key vault location |
-  |------|------|---------------------|--------------------|
-  | {{ NODE_ID }} | {{ ROLE }} | {{ FEATURES }} | {{ VAULT }} |
+- Ծրագրաշարի կառուցման ID/հեշ՝ `{{ BUILD_HASH }}`
+- Կառուցման աղբյուրը՝ {{ BUILD_SOURCE }} (օրինակ՝ օպերատորի կողմից կառուցված աղբյուրից, վաճառողի կողմից տրամադրված երկուական):
+- Ակտիվացման ամսաթիվ՝ {{ ACTIVATION_DATE }}
+- Պլանավորված սպասարկման պատուհաններ՝ {{ MAINTENANCE_CADENCE }}
+- SM ստորագրմանը մասնակցող հանգույցների դերերը.
+  | Հանգույց | Դերը | SM գործառույթները միացված են | Հիմնական պահոցի գտնվելու վայրը |
+  |------|------|--------------------------------------------|
+  | {{ NODE_ID }} | {{ ԴԵՐ }} | {{ ԱՌԱՆՁՆԱՀԱՏԿՈՒԹՅՈՒՆՆԵՐ }} | {{ VAULT }} |
 
-# 3. Cryptographic Controls
+# 3. Կրիպտոգրաֆիկ վերահսկում
 
-- Allowed algorithms: {{ ALGORITHMS }} (ensure SM set matches configuration).
-- Key lifecycle summary:
-  | Stage | Description |
+- Թույլատրված ալգորիթմներ՝ {{ ALGORITHMS }} (համոզվեք, որ SM հավաքածուն համապատասխանում է կոնֆիգուրացիան):
+- Հիմնական կյանքի ցիկլի ամփոփում.
+  | Բեմական | Նկարագրություն |
   |-------|-------------|
-  | Generation | {{ KEY_GENERATION }} |
-  | Storage | {{ KEY_STORAGE }} |
-  | Rotation | {{ KEY_ROTATION }} |
-  | Revocation | {{ KEY_REVOCATION }} |
-- Distinct identity (`distid`) policy: {{ DISTID_POLICY }}
-- Configuration excerpt (`crypto` section): provide Norito/JSON snapshot with hashes.
+  | Սերունդ | {{ KEY_GENERATION }} |
+  | Պահպանման | {{ KEY_STORAGE }} |
+  | Պտտման | {{ KEY_ROTATION }} |
+  | Չեղյալ հայտարարում | {{ ԲԱՆԱԼԻ_ՉԵՂԱՐԿՈՒՄ }} |
+- Հստակ ինքնության (`distid`) քաղաքականություն՝ {{ DISTID_POLICY }}
+- Կազմաձևման քաղվածք (`crypto` բաժին). տրամադրեք Norito/JSON պատկերը հեշերով:
 
-# 4. Telemetry & Audit Trails
+# 4. Հեռաչափություն և աուդիտի ուղիներ
 
-- Monitoring endpoints: {{ METRICS_ENDPOINTS }} (`/metrics`, dashboards).
-- Logged metrics: `crypto.sm.verification_total`, `crypto.sm.sign_total`,
-  latency histograms, error counters.
-- Log retention policy: {{ LOG_RETENTION }} (≥ three years recommended).
-- Audit log storage location: {{ AUDIT_STORAGE }}
+- Մոնիտորինգի վերջնակետերը՝ {{ METRICS_ENDPOINTS }} (`/metrics`, վահանակներ):
+- Մուտքագրված չափումներ՝ `crypto.sm.verification_total`, `crypto.sm.sign_total`,
+  ուշացման հիստոգրամներ, սխալների հաշվիչներ:
+- Մատյանների պահպանման քաղաքականություն՝ {{ LOG_RETENTION }} (≥ երեք տարի խորհուրդ է տրվում):
+- Աուդիտի գրանցամատյանի պահպանման վայրը՝ {{ AUDIT_STORAGE }}
 
-# 5. Incident Response & Contacts
+# 5. Միջադեպի արձագանք և կոնտակտներ
 
-| Role | Name | Phone | Email | SLA |
+| Դերը | Անունը | Հեռախոս | փոստ | SLA |
 |------|------|-------|-------|-----|
-| Security operations lead | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
-| Crypto on-call | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
-| Legal / compliance | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
-| Vendor support (if applicable) | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
+| Անվտանգության գործառնությունների առաջատար | {{ ԱՆՈՒՆ }} | {{ ՀԵՌԱԽՈՍ }} | {{ EMAIL }} | {{ SLA }} |
+| Կրիպտո կանչով | {{ ԱՆՈՒՆ }} | {{ ՀԵՌԱԽՈՍ }} | {{ EMAIL }} | {{ SLA }} |
+| Իրավական / համապատասխանության | {{ ԱՆՈՒՆ }} | {{ ՀԵՌԱԽՈՍ }} | {{ EMAIL }} | {{ SLA }} |
+| Վաճառողի աջակցություն (եթե կիրառելի է) | {{ ԱՆՈՒՆ }} | {{ ՀԵՌԱԽՈՍ }} | {{ EMAIL }} | {{ SLA }} |
 
-# 6. Attachments Checklist
+# 6. Հավելվածների ստուգաթերթ- [ ] Կազմաձևման պատկեր (Norito + JSON) հեշերով:
+- [ ] Դետերմինիստական ​​կառուցվածքի ապացույց (հեշ, SBOM, վերարտադրելիության նշումներ):
+- [ ] Հեռուստաչափության վահանակի արտահանում և ազդանշանային սահմանումներ:
+- [ ] Միջադեպերի արձագանքման պլան և հերթապահության ռոտացիայի փաստաթուղթ:
+- [ ] Օպերատորի վերապատրաստման հաստատում կամ տեղեկագիր:
+- [ ] Արտահանման վերահսկման քաղվածքի արտացոլում առաքված արտեֆակտները:
+- [ ] Համապատասխան պայմանագրային համաձայնագրերի կամ քաղաքականությունից հրաժարվելու պատճենները:
 
-- [ ] Configuration snapshot (Norito + JSON) with hashes.
-- [ ] Proof of deterministic build (hashes, SBOM, reproducibility notes).
-- [ ] Telemetry dashboard exports and alert definitions.
-- [ ] Incident response plan and on-call rotation document.
-- [ ] Operator training acknowledgement or runbook receipt.
-- [ ] Export-control statement mirroring delivered artefacts.
-- [ ] Copies of relevant contractual agreements or policy waivers.
+# 7. Օպերատորի հայտարարություն
 
-# 7. Operator Declaration
+> Մենք հաստատում ենք, որ վերը թվարկված տեղակայումը համապատասխանում է ՉԺՀ-ի գովազդին
+> կրիպտոգրաֆիայի կանոնակարգերը, որ SM-ով միացված ծառայությունները հետևում են փաստաթղթերին
+> միջադեպերի արձագանքման և հեռաչափության քաղաքականությունը, և այդ աուդիտի արտեֆակտները կլինեն
+> պահվում է առնվազն երեք տարի:
 
-> We confirm that the deployment listed above complies with PRC commercial
-> cryptography regulations, that SM-enabled services follow the documented
-> incident response and telemetry policies, and that audit artefacts will be
-> retained for at least three years.
-
-- Authorised signer: ________________________
-- Date: ________________________
-
+- Լիազորված ստորագրող՝ ________________________
+- Ամսաթիվ՝ ________________________

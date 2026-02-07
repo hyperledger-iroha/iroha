@@ -4,44 +4,46 @@ direction: ltr
 source: docs/portal/docs/sorafs/quickstart.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# SoraFS Quickstart
+# SoraFS 快速入门
 
-This hands-on guide walks through the deterministic SF-1 chunker profile,
-manifest signing, and multi-provider fetch flow that underpin the SoraFS
-storage pipeline. Pair it with the [manifest pipeline deep dive](manifest-pipeline.md)
-for design notes and CLI flag reference material.
+本实践指南介绍了确定性 SF-1 分块器配置文件，
+支持 SoraFS 的清单签名和多提供商获取流程
+存储管道。将其与[清单管道深入研究](manifest-pipeline.md)配对
+获取设计说明和 CLI 标志参考材料。
 
-## Prerequisites
+## 先决条件
 
-- Rust toolchain (`rustup update`), workspace cloned locally.
-- Optional: [OpenSSL-generated Ed25519 keypair](https://github.com/hyperledger-iroha/iroha/tree/master/defaults/dev-keys#readme)
-  for signing manifests.
-- Optional: Node.js ≥ 18 if you plan to preview the Docusaurus portal.
+- Rust 工具链 (`rustup update`)，本地克隆的工作区。
+- 可选：[OpenSSL 生成的 Ed25519 密钥对](https://github.com/hyperledger-iroha/iroha/tree/master/defaults/dev-keys#readme)
+  用于签署清单。
+- 可选：如果您计划预览 Docusaurus 门户，则 Node.js ≥ 18。
 
-Set `export RUST_LOG=info` while experimenting to surface helpful CLI messages.
+设置 `export RUST_LOG=info`，同时尝试显示有用的 CLI 消息。
 
-## 1. Refresh the deterministic fixtures
+## 1. 刷新确定性装置
 
-Regenerate the canonical SF-1 chunking vectors. The command also emits signed
-manifest envelopes when `--signing-key` is supplied; use `--allow-unsigned`
-during local development only.
+重新生成规范的 SF-1 分块向量。该命令还发出有符号的
+提供 `--signing-key` 时的舱单信封；使用 `--allow-unsigned`
+仅在本地开发期间。
 
 ```bash
 cargo run -p sorafs_chunker --bin export_vectors -- --allow-unsigned
 ```
 
-Outputs:
+输出：
 
 - `fixtures/sorafs_chunker/sf1_profile_v1.{json,rs,ts,go}`
 - `fixtures/sorafs_chunker/manifest_blake3.json`
-- `fixtures/sorafs_chunker/manifest_signatures.json` (if signed)
+- `fixtures/sorafs_chunker/manifest_signatures.json`（如果签名）
 - `fuzz/sorafs_chunker/sf1_profile_v1_{input,backpressure}.json`
 
-## 2. Chunk a payload and inspect the plan
+## 2. 对有效负载进行分块并检查计划
 
-Use `sorafs_chunker` to chunk an arbitrary file or archive:
+使用 `sorafs_chunker` 对任意文件或存档进行分块：
 
 ```bash
 echo "SoraFS deterministic chunking" > /tmp/docs.txt
@@ -49,23 +51,23 @@ cargo run -p sorafs_chunker --bin sorafs-chunk-dump -- /tmp/docs.txt \
   > /tmp/docs.chunk-plan.json
 ```
 
-Key fields:
+关键领域：
 
-- `profile` / `break_mask` – confirms the `sorafs.sf1@1.0.0` parameters.
-- `chunks[]` – ordered offsets, lengths, and chunk BLAKE3 digests.
+- `profile` / `break_mask` – 确认 `sorafs.sf1@1.0.0` 参数。
+- `chunks[]` – 有序偏移、长度和块 BLAKE3 摘要。
 
-For larger fixtures, run the proptest-backed regression to ensure streaming and
-batch chunking stay in sync:
+对于较大的装置，运行 proptest 支持的回归以确保流式传输和
+批量分块保持同步：
 
 ```bash
 cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ```
 
-## 3. Build and sign a manifest
+## 3. 构建并签署清单
 
-Wrap the chunk plan, aliases, and governance signatures into a manifest using
-`sorafs-manifest-stub`. The command below showcases a single-file payload; pass
-a directory path to package a tree (the CLI walks it lexicographically).
+使用以下命令将块计划、别名和治理签名包装到清单中
+`sorafs-manifest-stub`。下面的命令展示了一个单文件有效负载；通过
+打包树的目录路径（CLI 按字典顺序遍历）。
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
@@ -77,21 +79,21 @@ cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
   --allow-unsigned
 ```
 
-Review `/tmp/docs.report.json` for:
+查看 `/tmp/docs.report.json`：
 
-- `chunking.chunk_digest_sha3_256` – SHA3 digest of offsets/lengths, matches the
-  chunker fixtures.
-- `manifest.manifest_blake3` – BLAKE3 digest signed in the manifest envelope.
-- `chunk_fetch_specs[]` – ordered fetch instructions for orchestrators.
+- `chunking.chunk_digest_sha3_256` – 偏移量/长度的 SHA3 摘要，与
+  分块装置。
+- `manifest.manifest_blake3` – 在清单信封中签名的 BLAKE3 摘要。
+- `chunk_fetch_specs[]` – 协调器的有序获取指令。
 
-When ready to supply real signatures, add `--signing-key` and `--signer`
-arguments. The command verifies every Ed25519 signature before writing the
-envelope.
+准备好提供真实签名时，添加 `--signing-key` 和 `--signer`
+论据。该命令在写入之前验证每个 Ed25519 签名
+信封。
 
-## 4. Simulate multi-provider retrieval
+## 4. 模拟多提供商检索
 
-Use the developer fetch CLI to replay the chunk plan against one or more
-providers. This is ideal for CI smoke tests and orchestrator prototyping.
+使用开发人员获取 CLI 针对一个或多个重放块计划
+提供商。这非常适合 CI 冒烟测试和协调器原型设计。
 
 ```bash
 cargo run -p sorafs_car --bin sorafs_fetch -- \
@@ -101,27 +103,27 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
   --json-out=/tmp/docs.fetch-report.json
 ```
 
-Assertions:
+断言：
 
-- `payload_digest_hex` must match the manifest report.
-- `provider_reports[]` surfaces success/failure counts per provider.
-- Non-zero `chunk_retry_total` highlights back-pressure adjustments.
-- Pass `--max-peers=<n>` to limit the number of providers scheduled for a run
-  and keep CI simulations focused on the primary candidates.
-- `--retry-budget=<n>` overrides the default per-chunk retry count (3) so you
-  can surface orchestrator regressions faster when injecting failures.
+- `payload_digest_hex` 必须与舱单报告匹配。
+- `provider_reports[]` 显示每个提供商的成功/失败计数。
+- 非零 `chunk_retry_total` 突出显示背压调整。
+- 通过 `--max-peers=<n>` 来限制计划运行的提供者数量
+  并使 CI 模拟集中于主要候选人。
+- `--retry-budget=<n>` 覆盖默认的每块重试计数 (3)，因此您
+  在注入故障时可以更快地显示协调器回归。
 
-Add `--expect-payload-digest=<hex>` and `--expect-payload-len=<bytes>` to fail
-fast when the reconstructed payload deviates from the manifest.
+添加 `--expect-payload-digest=<hex>` 和 `--expect-payload-len=<bytes>` 失败
+当重建的有效负载偏离清单时速度很快。
 
-## 5. Next steps
+## 5. 后续步骤
 
-- **Governance integration** – pipe the manifest digest and
-  `manifest_signatures.json` into the council workflow so the Pin Registry can
-  advertise availability.
-- **Registry negotiation** – consult [`sorafs/chunker_registry.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/chunker_registry.md)
-  before registering new profiles. Automation should prefer canonical handles
-  (`namespace.name@semver`) over numeric IDs.
-- **CI automation** – add the commands above to release pipelines so docs,
-  fixtures, and artifacts publish deterministic manifests alongside signed
-  metadata.
+- **治理集成** – 通过管道传输清单摘要和
+  `manifest_signatures.json` 进入理事会工作流程，以便 Pin 注册表可以
+  广告可用性。
+- **注册协商** – 咨询 [`sorafs/chunker_registry.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/chunker_registry.md)
+  在注册新的配置文件之前。自动化应该更喜欢规范句柄
+  (`namespace.name@semver`) 通过数字 ID。
+- **CI 自动化** – 添加上面的命令来发布管道，所以文档，
+  固定装置和工件在签名的同时发布确定性清单
+  元数据。

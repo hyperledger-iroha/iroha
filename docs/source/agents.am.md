@@ -7,111 +7,110 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 7f35a28d00188a3e1f3db76b56e6b29c708dbb75afa3dd009d416b7cd4314754
 source_last_modified: "2025-12-29T18:16:35.916241+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Automation Agent Execution Guide
+# አውቶሜሽን ወኪል ማስፈጸሚያ መመሪያ
 
-This page summarizes the operational guardrails for any automation agent
-working inside the Hyperledger Iroha workspace. It mirrors the canonical
-`AGENTS.md` guidance and the roadmap references so build, documentation, and
-telemetry changes all look the same whether they were produced by a human or
-an automated contributor.
+ይህ ገጽ ለማንኛውም አውቶሜሽን ወኪል የክዋኔ ጥበቃ መንገዶችን ያጠቃልላል
+በ Hyperledger Iroha የስራ ቦታ ውስጥ በመስራት ላይ። ቀኖናዊውን ያንጸባርቃል
+`AGENTS.md` መመሪያ እና የመንገድ ካርታ ማጣቀሻዎች ስለዚህ ይገንቡ ፣ ሰነዶችን እና
+የቴሌሜትሪ ለውጦች በሰው የተፈጠሩም ይሁኑ ሁሉም ተመሳሳይ ናቸው።
+ራስ-ሰር አስተዋጽዖ አበርካች.
 
-Each task is expected to land deterministic code plus matching docs, tests,
-and operational evidence. Treat the sections below as a ready reference before
-touching `roadmap.md` items or replying to behaviour questions.
+እያንዳንዱ ተግባር የመወሰኛ ኮድ እና ተዛማጅ ሰነዶችን፣ ሙከራዎችን፣
+እና ተግባራዊ ማስረጃዎች. ከዚህ በታች ያሉትን ክፍሎች እንደ ዝግጁ ማመሳከሪያ ከዚህ በፊት ይያዙ
+`roadmap.md` ንጥሎችን መንካት ወይም ለባህሪ ጥያቄዎች ምላሽ መስጠት።
 
-## Quickstart Commands
+## ፈጣን ጅምር ትዕዛዞች
 
-| Action | Command |
-|--------|---------|
-| Build the workspace | `cargo build --workspace` |
-| Run the full test suite | `cargo test --workspace` *(typically takes several hours)* |
-| Run clippy with deny-by-default warnings | `cargo clippy --workspace --all-targets -- -D warnings` |
-| Format Rust code | `cargo fmt --all` *(edition 2024)* |
-| Test a single crate | `cargo test -p <crate>` |
-| Run one test | `cargo test -p <crate> <test_name> -- --nocapture` |
-| Swift SDK tests | From `IrohaSwift/`, run `swift test` |
+| ድርጊት | ትዕዛዝ |
+|-------|--------|
+| የስራ ቦታን ይገንቡ | `cargo build --workspace` |
+| ሙሉ የሙከራ ስብስብ አሂድ | `cargo test --workspace` *(በተለምዶ ብዙ ሰአታት ይወስዳል)* |
+| በመካድ-ነባሪ ማስጠንቀቂያዎች ክሊፕን ያሂዱ | `cargo clippy --workspace --all-targets -- -D warnings` |
+| ዝገት ኮድ ይቅረጹ | `cargo fmt --all` * (እ.ኤ.አ. 2024 እትም)* |
+| ነጠላ ሣጥን ሞክር | `cargo test -p <crate>` |
+| አንድ ፈተና አሂድ | `cargo test -p <crate> <test_name> -- --nocapture` |
+| Swift SDK ሙከራዎች | ከ `IrohaSwift/`፣ `swift test` አሂድ |
 
-## Workflow Fundamentals
+## የስራ ፍሰት መሰረታዊ ነገሮች
 
-- Read the relevant code paths before answering questions or changing logic.
-- Break large roadmap items into tractable commits; never reject work outright.
-- Stay inside the existing workspace membership, reuse internal crates, and do
-  **not** alter `Cargo.lock` unless explicitly instructed.
-- Use feature flags and capability toggles only where mandated by hardware
-  accelerators; keep deterministic fallbacks available on every platform.
-- Update documentation and Markdown references alongside any functional change
-  so docs always describe current behaviour.
-- Add at least one unit test for every new or modified function. Prefer inline
-  `#[cfg(test)]` modules or the crate’s `tests/` folder depending on scope.
-- After finishing work, update `status.md` with a short summary and reference
-  relevant files; keep `roadmap.md` focused on items that still need work.
+- ጥያቄዎችን ከመመለስዎ ወይም አመክንዮ ከመቀየርዎ በፊት ተገቢውን የኮድ መንገዶችን ያንብቡ።
+- ትላልቅ የመንገድ ካርታ ዕቃዎችን ወደ ትራክት ቁርጠኝነት መስበር; ሥራን ፈጽሞ አትቀበል።
+- አሁን ባለው የስራ ቦታ አባልነት ውስጥ ይቆዩ፣ የውስጥ ሳጥኖችን እንደገና ይጠቀሙ እና ያድርጉ
+  **አይደለም** `Cargo.lock` ን በግልፅ ካልታዘዙ በስተቀር።
+- የባህሪ ባንዲራዎችን እና የችሎታ መቀያየሪያዎችን በሃርድዌር በተደነገገው ጊዜ ብቻ ይጠቀሙ
+  ማፍጠኛዎች; በእያንዳንዱ መድረክ ላይ ቆራጥ የሆኑ ውድቀቶችን ያስቀምጡ።
+- ከማንኛውም የተግባር ለውጥ ጋር ሰነዶችን እና የማርክ ዳውን ማጣቀሻዎችን ያዘምኑ
+  ስለዚህ ሰነዶች ሁልጊዜ የአሁኑን ባህሪ ይገልጻሉ.
+- ለእያንዳንዱ አዲስ ወይም የተሻሻለ ተግባር ቢያንስ አንድ አሃድ ሙከራ ይጨምሩ። መስመር ላይ ይመርጣሉ
+  `#[cfg(test)]` ሞጁሎች ወይም የሣጥኑ `tests/` አቃፊ እንደ ወሰን።
+- ስራውን ከጨረሱ በኋላ `status.md`ን ከአጭር ማጠቃለያ እና ማጣቀሻ ጋር ያዘምኑ
+  ተዛማጅ ፋይሎች; `roadmap.md` አሁንም ሥራ በሚፈልጉ ዕቃዎች ላይ ያተኩሩ።
 
-## Implementation Guardrails
+## አተገባበር Guardrails
 
-### Serialization & Data Models
-- Use the Norito codec everywhere (binary via `norito::{Encode, Decode}`,
-  JSON via `norito::json::*`). Do not add direct serde/`serde_json` usage.
-- Norito payloads must advertise their layout (version byte or header flags),
-  and new formats require corresponding documentation updates (e.g.,
-  `norito.md`, `docs/source/da/*.md`).
-- Genesis data, manifests, and networking payloads should remain deterministic
-  so two peers with the same inputs produce identical hashes.
+### ተከታታይነት እና የውሂብ ሞዴሎች
+- በየትኛውም ቦታ የ Norito ኮዴክን ይጠቀሙ (ሁለትዮሽ በ `norito::{Encode, Decode}` ፣
+  JSON በ `norito::json::*`)። ቀጥተኛ serde/`serde_json` አጠቃቀምን አትጨምር።
+- Norito የሚጫኑ ጭነቶች አቀማመጣቸውን (ስሪት ባይት ወይም አርዕስት ባንዲራ) ማስተዋወቅ አለባቸው።
+  እና አዲስ ቅርጸቶች ተጓዳኝ የሰነድ ዝማኔዎችን ይፈልጋሉ (ለምሳሌ፡-
+  `norito.md`፣ `docs/source/da/*.md`)።
+- የዘፍጥረት መረጃ፣ መግለጫዎች እና የአውታረ መረብ ጭነቶች ቆራጥ መሆን አለባቸው
+  ስለዚህ ሁለት ተመሳሳይ ግብዓቶች ያላቸው እኩዮች ተመሳሳይ hashes ያመርታሉ።
 
-### Configuration & Runtime Behaviour
-- Prefer knobs living in `crates/iroha_config` over new environment variables.
-  Thread values explicitly through constructors or dependency injection.
-- Never gate IVM syscalls or opcode behaviour—ABI v1 ships everywhere.
-- When new config options are added, update defaults, docs, and any related
-  templates (`peer.template.toml`, `docs/source/configuration*.md`, etc.).
+### ውቅር እና የአሂድ ጊዜ ባህሪ
+- ከአዳዲስ የአካባቢ ተለዋዋጮች ይልቅ በ`crates/iroha_config` ውስጥ የሚኖሩ ቁልፎችን ይምረጡ።
+  በግንባታ ወይም በጥገኝነት መርፌ በኩል እሴቶችን በግልፅ ያኑሩ።
+- የ IVM syscals ወይም የኦፕኮድ ባህሪን በፍፁም አትክፈቱ—ABI v1 በሁሉም ቦታ ይላካል።
+- አዲስ የማዋቀር አማራጮች ሲጨመሩ ነባሪዎችን፣ ሰነዶችን እና ማንኛውንም ተዛማጅ ያዘምኑ
+  አብነቶች (`peer.template.toml`፣ `docs/source/configuration*.md`፣ ወዘተ)።### ኤቢአይ፣ ሲስካልስ እና የጠቋሚ አይነቶች
+- የ ABI ፖሊሲን እንደ ቅድመ ሁኔታ ይያዙ። syscalls ወይም የጠቋሚ ዓይነቶችን መጨመር/ማስወገድ
+  ማዘመን ያስፈልገዋል፡-
+  - `ivm::syscalls::abi_syscall_list` እና `crates/ivm/tests/abi_syscall_list_golden.rs`
+  - `ivm::pointer_abi::PointerType` ሲደመር ወርቃማው ፈተናዎች
+  - ABI ሃሽ በተለወጠ ቁጥር `crates/ivm/tests/abi_hash_versions.rs`
+- ያልታወቁ ሲሳይሎች ወደ `VMError::UnknownSyscall` ካርታ መሆን አለባቸው እና መግለጫዎች መሆን አለባቸው
+  በመግቢያ ፈተናዎች ውስጥ የተፈረመ `abi_hash` የእኩልነት ማረጋገጫዎችን ያቆዩ።
 
-### ABI, Syscalls, and Pointer Types
-- Treat ABI policy as unconditional. Adding/removing syscalls or pointer types
-  requires updating:
-  - `ivm::syscalls::abi_syscall_list` and `crates/ivm/tests/abi_syscall_list_golden.rs`
-  - `ivm::pointer_abi::PointerType` plus the golden tests
-  - `crates/ivm/tests/abi_hash_versions.rs` whenever the ABI hash changes
-- Unknown syscalls must map to `VMError::UnknownSyscall`, and manifests must
-  retain signed `abi_hash` equality checks in admission tests.
+### የሃርድዌር ማጣደፍ እና ቁርጠኝነት
+- አዲስ ክሪፕቶግራፊክ ፕሪሚቲቭ ወይም ከባድ ሂሳብ በሃርድዌር የተጣደፈ መላክ አለበት።
+  ዱካዎች (METAL/NEON/SIMD/CUDA) የሚወስኑ ውድቀቶችን በማቆየት ላይ።
+- የማይወስኑ ትይዩ ቅነሳዎችን ያስወግዱ; ቅድሚያ የሚሰጠው በ ላይ ተመሳሳይ ውጤቶች ነው።
+  ሃርድዌር ቢለያይም እያንዳንዱ እኩያ።
+- SRE የበረራ መርከቦችን ኦዲት ማድረግ እንዲችል የ Norito እና FASTPQ ዕቃዎች እንደገና እንዲባዙ ያቆዩ።
+  ቴሌሜትሪ.
 
-### Hardware Acceleration & Determinism
-- New cryptographic primitives or heavy math must ship hardware-accelerated
-  paths (METAL/NEON/SIMD/CUDA) while maintaining deterministic fallbacks.
-- Avoid non-deterministic parallel reductions; priority is identical outputs on
-  every peer even when hardware differs.
-- Keep the Norito and FASTPQ fixtures reproducible so SRE can audit fleet-wide
-  telemetry.
+### ሰነዶች እና ማስረጃዎች
+- በፖርታሉ (`docs/portal/...`) ላይ ማንኛውንም የህዝብ ፊት ያለው የሰነድ ለውጥ ያንጸባርቁ
+  ተፈፃሚ ይሆናል ስለዚህ የሰነዶቹ ጣቢያው ከማርከዳው ምንጮች ጋር ወቅታዊ ሆኖ ይቆያል።
+- አዲስ የስራ ፍሰቶች ሲገቡ, runbooks, የአስተዳደር ማስታወሻዎች, ወይም
+  እንዴት እንደሚለማመዱ፣ ወደ ኋላ መመለስ እና ማስረጃን ማንሳት እንደሚቻል የሚያብራሩ የማረጋገጫ ዝርዝሮች።
+- ይዘትን ወደ አካዲያን ሲተረጉሙ፣ የተፃፉ የትርጉም ትርጉሞችን ያቅርቡ
+  ከፎነቲክ ትርጉሞች ይልቅ በኪዩኒፎርም።
 
-### Documentation & Evidence
-- Mirror any public-facing doc change in the portal (`docs/portal/...`) when
-  applicable so the docs site stays current with the Markdown sources.
-- When new workflows are introduced, add runbooks, governance notes, or
-  checklists explaining how to rehearse, rollback, and capture evidence.
-- When translating content into Akkadian, provide semantic renderings written
-  in cuneiform rather than phonetic transliterations.
+### የሙከራ እና የመሳሪያዎች ተስፋዎች
+- ተዛማጅነት ያላቸውን የሙከራ ስብስቦችን በአገር ውስጥ ያሂዱ (`cargo test` ፣ `swift test` ፣
+  የመዋሃድ ማሰሪያዎች) እና በ PR ሙከራ ክፍል ውስጥ ትእዛዞቹን ይመዝግቡ።
+- የCI Guard ስክሪፕቶችን (`ci/*.sh`) እና ዳሽቦርዶችን ከአዲስ ቴሌሜትሪ ጋር በማመሳሰል ያቆዩ።
+- ለፕሮክ-ማክሮዎች፣ ምርመራዎችን ለመቆለፍ የዩኒት ሙከራዎችን ከ`trybuild` UI ሙከራዎች ጋር ያጣምሩ።
 
-### Testing & Tooling Expectations
-- Run the relevant test suites locally (`cargo test`, `swift test`,
-  integration harnesses) and document the commands in the PR testing section.
-- Keep CI guard scripts (`ci/*.sh`) and dashboards in sync with new telemetry.
-- For proc-macros, pair unit tests with `trybuild` UI tests to lock diagnostics.
+## ለመርከብ ዝግጁ የሆነ ማረጋገጫ ዝርዝር
 
-## Ready-to-Ship Checklist
+1. ኮድ ያጠቃለለ እና `cargo fmt` ምንም ልዩነት አላመጣም.
+2. የተዘመኑ ሰነዶች (የመስሪያ ቦታ ማርክዳውን እና ፖርታል መስተዋቶች) አዲሱን ይገልፃሉ።
+   ባህሪ፣ አዲስ የCLI ባንዲራዎች ወይም የማዋቀር ቁልፎች።
+3. ፈተናዎች እያንዳንዱን አዲስ ኮድ ዱካ ይሸፍናሉ እና regressions ጊዜ deterministically ይወድቃሉ
+   ብቅ ይላሉ።
+4. ቴሌሜትሪ፣ ዳሽቦርድ እና የማንቂያ ፍቺዎች ማንኛውንም አዲስ መለኪያዎች ይጠቅሳሉ ወይም
+   የስህተት ኮዶች.
+5. `status.md` አግባብነት ያላቸውን ፋይሎች በመጥቀስ አጭር ማጠቃለያ ያካትታል እና
+   የመንገድ ካርታ ክፍል.
 
-1. Code compiles and `cargo fmt` produced no diffs.
-2. Updated docs (workspace Markdown plus portal mirrors) describe the new
-   behaviour, new CLI flags, or config knobs.
-3. Tests cover every new code path and fail deterministically when regressions
-   appear.
-4. Telemetry, dashboards, and alert definitions reference any new metrics or
-   error codes.
-5. `status.md` includes a short summary referencing the relevant files and
-   roadmap section.
-
-Following this checklist keeps roadmap execution auditable and ensures every
-agent contributes evidence that other teams can trust.
+ይህንን የፍተሻ ዝርዝር መከተል የፍኖተ ካርታ አፈፃፀም ኦዲት እንዲደረግ እና ሁሉንም ያረጋግጣል
+ወኪሉ ሌሎች ቡድኖች እምነት ሊጥሉ የሚችሉበትን ማስረጃ አበርክቷል።

@@ -6,19 +6,20 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 4016b82d86dc61a9de5e345950d02aeadf26db4cc26777c60db336c57479ba15
 source_last_modified: "2026-01-03T18:07:59.250950+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Device Lab Contingency Log
+# سجل طوارئ معمل الجهاز
 
-Record every activation of the Android device-lab contingency plan here.
-Include enough detail for compliance reviews and future readiness audits.
+سجل كل تفعيل لخطة الطوارئ الخاصة بجهاز Android-lab هنا.
+قم بتضمين تفاصيل كافية لمراجعات الامتثال وعمليات تدقيق الاستعداد المستقبلية.
 
-| Date | Trigger | Actions Taken | Follow-ups | Owner |
-|------|---------|---------------|------------|-------|
-| 2026-02-11 | Capacity fell to 78% after Pixel 8 Pro lane outage and delayed Pixel 8a delivery (see `android_strongbox_device_matrix.md`). | Promoted Pixel 7 lane to primary CI target, borrowed shared Pixel 6 fleet, scheduled Firebase Test Lab smoke tests for retail-wallet sample, and engaged external StrongBox lab per AND6 plan. | Replace faulty USB-C hub for Pixel 8 Pro (due 2026-02-15); confirm Pixel 8a arrival and rebaseline capacity report. | Hardware Lab Lead |
-| 2026-02-13 | Pixel 8 Pro hub replaced and Galaxy S24 approved, restoring capacity to 85%. | Returned Pixel 7 lane to secondary, re-enabled `android-strongbox-attestation` Buildkite job with tags `pixel8pro-strongbox-a` and `s24-strongbox-a`, updated readiness matrix + evidence log. | Monitor Pixel 8a delivery ETA (still pending); keep spare hub inventory documented. | Hardware Lab Lead |
+| التاريخ | الزناد | الإجراءات المتخذة | متابعات | المالك |
+|------|---------|--------------------|-------|------|------|---------|---|
+| 2026-02-11 | انخفضت السعة إلى 78% بعد انقطاع ممر Pixel8 Pro وتأخير تسليم Pixel8a (انظر `android_strongbox_device_matrix.md`). | تمت ترقية حارة Pixel7 إلى هدف CI الأساسي، واستعارة أسطول Pixel6 المشترك، واختبارات الدخان المجدولة في Firebase Test Lab لعينة محفظة البيع بالتجزئة، وإشراك مختبر StrongBox الخارجي لكل خطة AND6. | استبدل محور USB-C المعيب لجهاز Pixel8 Pro (مستحق في 15/02/2026)؛ تأكيد وصول Pixel8a وتقرير سعة خط الأساس. | قائد مختبر الأجهزة |
+| 2026-02-13 | تم استبدال محور Pixel8 Pro واعتماد GalaxyS24، مما أدى إلى استعادة السعة إلى 85%. | تمت إرجاع حارة Pixel7 إلى المرحلة الثانوية، وتم إعادة تمكين مهمة `android-strongbox-attestation` Buildkite مع العلامات `pixel8pro-strongbox-a` و`s24-strongbox-a`، ومصفوفة الاستعداد المحدثة + سجل الأدلة. | مراقبة الوقت المتوقع لتسليم Pixel8a (لا يزال معلقًا)؛ احتفظ بتوثيق مخزون المركز الاحتياطي. | قائد مختبر الأجهزة |

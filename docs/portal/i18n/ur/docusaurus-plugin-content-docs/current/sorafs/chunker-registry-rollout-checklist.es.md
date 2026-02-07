@@ -4,103 +4,103 @@ direction: rtl
 source: docs/portal/docs/sorafs/chunker-registry-rollout-checklist.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: chunker-registry-rollout-checklist
-title: Checklist de rollout del registro de chunker de SoraFS
-sidebar_label: Checklist de rollout de chunker
-description: Plan de rollout paso a paso para actualizaciones del registro de chunker.
+ID: چنکر رجسٹری-رول آؤٹ-چیک لسٹ
+عنوان: SoraFS چنکر لاگ رول آؤٹ چیک لسٹ
+سائڈبار_لیبل: چنکر رول آؤٹ چیک لسٹ
+تفصیل: چنکر رجسٹری کی تازہ کاریوں کے لئے مرحلہ وار رول آؤٹ پلان۔
 ---
 
-:::note Fuente canónica
-Refleja `docs/source/sorafs/chunker_registry_rollout_checklist.md`. Mantén ambas copias sincronizadas hasta que se retire el conjunto de documentación Sphinx heredado.
+::: نوٹ کینونیکل ماخذ
+`docs/source/sorafs/chunker_registry_rollout_checklist.md` کی عکاسی کرتا ہے۔ جب تک میراثی اسفنکس دستاویزات کا سیٹ ریٹائر نہیں ہوتا ہے تب تک دونوں کاپیاں مطابقت پذیری میں رکھیں۔
 :::
 
-# Checklist de rollout del registro de SoraFS
+# SoraFS رجسٹری رول آؤٹ چیک لسٹ
 
-Este checklist captura los pasos necesarios para promover un nuevo perfil de chunker
-o un bundle de admisión de proveedores desde revisión a producción después de que la
-carta de gobernanza haya sido ratificada.
+اس چیک لسٹ نے ایک نئے چنکر پروفائل کو فروغ دینے کے لئے ضروری اقدامات کو اپنی گرفت میں لیا ہے
+یا ایک سپلائر انٹیک بنڈل جائزہ سے لے کر پروڈکشن تک کے بعد
+گورننس چارٹر کی توثیق کی گئی ہے۔
 
-> **Alcance:** Aplica a todas las releases que modifican
-> `sorafs_manifest::chunker_registry`, los sobres de admisión de proveedores o los
-> bundles de fixtures canónicos (`fixtures/sorafs_chunker/*`).
+> ** دائرہ کار: ** ان تمام ریلیز پر لاگو ہوتا ہے جو ترمیم کرتے ہیں
+> `sorafs_manifest::chunker_registry` ، سپلائر داخلہ لفافے یا
+> کیننیکل فکسچر بنڈل (`fixtures/sorafs_chunker/*`)۔
 
-## 1. Validación previa
+## 1. پہلے توثیق
 
-1. Regenera fixtures y verifica el determinismo:
+1. فکسچر کو دوبارہ تخلیق کریں اور عزم کی تصدیق کریں:
    ```bash
    cargo run --locked -p sorafs_chunker --bin export_vectors
    cargo test -p sorafs_chunker --offline vectors
    ci/check_sorafs_fixtures.sh
    ```
-2. Confirma que los hashes de determinismo en
-   `docs/source/sorafs/reports/sf1_determinism.md` (o el reporte de perfil relevante)
-   coinciden con los artefactos regenerados.
-3. Asegura que `sorafs_manifest::chunker_registry` compila con
-   `ensure_charter_compliance()` ejecutando:
+2. تصدیق کریں کہ عزم پسندی ہیش میں ہے
+   `docs/source/sorafs/reports/sf1_determinism.md` (یا متعلقہ پروفائل رپورٹ)
+   تخلیق نو نمونے سے ملیں۔
+3. یقینی بنائیں `sorafs_manifest::chunker_registry` کے ساتھ مرتب کریں
+   `ensure_charter_compliance()` چل رہا ہے:
    ```bash
    cargo test -p sorafs_manifest --lib chunker_registry::tests::ensure_charter_compliance
    ```
-4. Actualiza el dossier de la propuesta:
+4. پروپوزل ڈوزیئر کو اپ ڈیٹ کریں:
    - `docs/source/sorafs/proposals/<profile>.json`
-   - Entrada de actas del consejo en `docs/source/sorafs/council_minutes_*.md`
-   - Reporte de determinismo
+   - `docs/source/sorafs/council_minutes_*.md` میں کونسل منٹ میں اندراج
+   - تعی .ن کی رپورٹ
 
-## 2. Aprobación de gobernanza
+## 2۔ گورننس کی منظوری
 
-1. Presenta el informe del Tooling Working Group y el digest de la propuesta al
-   Sora Parliament Infrastructure Panel.
-2. Registra los detalles de aprobación en
-   `docs/source/sorafs/council_minutes_YYYY-MM-DD.md`.
-3. Publica el sobre firmado por el Parlamento junto a los fixtures:
-   `fixtures/sorafs_chunker/manifest_signatures.json`.
-4. Verifica que el sobre sea accesible vía el helper de fetch de gobernanza:
+1. ٹولنگ ورکنگ گروپ کی رپورٹ پیش کریں اور اس تجویز کو ہضم کریں
+   سورہ پارلیمنٹ انفراسٹرکچر پینل۔
+2. ریکارڈ کی منظوری کی تفصیلات میں
+   `docs/source/sorafs/council_minutes_YYYY-MM-DD.md`۔
+3. پارلیمنٹ کے ذریعہ فکسچر کے ساتھ دستخط شدہ لفافے کو شائع کریں:
+   `fixtures/sorafs_chunker/manifest_signatures.json`۔
+4. تصدیق کریں کہ لفافہ گورننس کے ذریعہ قابل رسائی ہے۔
    ```bash
    cargo xtask sorafs-fetch-fixture \
      --signatures <url-or-path-to-manifest_signatures.json> \
      --out fixtures/sorafs_chunker
    ```
 
-## 3. Rollout en staging
+## 3. اسٹیجنگ میں رول آؤٹ
 
-Consulta el [playbook de manifest en staging](./staging-manifest-playbook) para un
-recorrido detallado de estos pasos.
+ایک کے لئے [منشور اسٹیجنگ پلے بوک] (./staging-manifest-playbook) دیکھیں
+ان اقدامات کا تفصیلی واک تھرو۔
 
-1. Despliega Torii con discovery `torii.sorafs` habilitado y la aplicación de
-   admisión activada (`enforce_admission = true`).
-2. Sube los sobres de admisión de proveedores aprobados al directorio de registro
-   de staging referenciado por `torii.sorafs.discovery.admission.envelopes_dir`.
-3. Verifica que los provider adverts se propaguen vía la API de discovery:
+1. Torii کو دریافت `torii.sorafs` کے ساتھ فعال کریں اور قابل بنائیں
+   داخلہ چالو (`enforce_admission = true`)۔
+2. منظوری فراہم کرنے والوں سے رجسٹریشن ڈائرکٹری میں داخلہ لفافے اپ لوڈ کریں
+   `torii.sorafs.discovery.admission.envelopes_dir` کے ذریعہ حوالہ دیا گیا ہے۔
+3. تصدیق کریں کہ فراہم کنندہ اشتہارات کو دریافت API کے ذریعے پھیلایا جاتا ہے:
    ```bash
    curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
-4. Ejecuta los endpoints de manifest/plan con headers de gobernanza:
+4. گورننس ہیڈر کے ساتھ مینی فیسٹ/پلان اینڈ پوائنٹس چلائیں:
    ```bash
    sorafs-fetch --plan fixtures/chunk_fetch_specs.json \
      --gateway-provider "...staging config..." \
      --gateway-manifest-id <manifest-hex> \
      --gateway-chunker-handle sorafs.sf1@1.0.0
    ```
-5. Confirma que los dashboards de telemetría (`torii_sorafs_*`) y las reglas de
-   alerta reporten el nuevo perfil sin errores.
+5. تصدیق کریں کہ ٹیلی میٹری ڈیش بورڈز (`torii_sorafs_*`) اور کنٹرول کے قواعد
+   انتباہ غلطیوں کے بغیر نئے پروفائل کی اطلاع دیں۔
 
-## 4. Rollout en producción
+## 4. پیداوار میں رول آؤٹ
 
-1. Repite los pasos de staging contra los nodos Torii de producción.
-2. Anuncia la ventana de activación (fecha/hora, periodo de gracia, plan de rollback)
-   a los canales de operadores y SDK.
-3. Fusiona el PR de release que contiene:
-   - Fixtures y sobre actualizados
-   - Cambios de documentación (referencias a la carta, reporte de determinismo)
-   - Refresh de roadmap/status
-4. Etiqueta la release y archiva los artefactos firmados para la procedencia.
+1. پیداوار Torii نوڈس کے خلاف اسٹیجنگ اقدامات کو دہرائیں۔
+2. ایکٹیویشن ونڈو کا اعلان (تاریخ/وقت ، فضل کی مدت ، رول بیک پلان)
+   کیریئر چینلز اور ایس ڈی کے کو۔
+3. ریلیز PR کو ضم کریں جس میں موجود ہے:
+   - تازہ ترین فکسچر اور لفافے
+   - دستاویزات میں تبدیلی (خط کا حوالہ ، تعی .ن کی رپورٹ)
+   - روڈ میپ/اسٹیٹس ریفریش
+4. ریلیز کو ٹیگ کریں اور پروویژن کے لئے دستخط شدہ نمونے کو محفوظ کریں۔
 
-## 5. Auditoría post-rollout
-
-1. Captura métricas finales (conteos de discovery, tasa de éxito de fetch,
-   histogramas de error) 24 h después del rollout.
-2. Actualiza `status.md` con un resumen corto y un enlace al reporte de determinismo.
-3. Registra cualquier tarea de seguimiento (p. ej., más guía de autoría de perfiles)
-   en `roadmap.md`.
+## 5. پوسٹ رول آؤٹ آڈٹ1. فائنل میٹرکس پر قبضہ کریں (دریافت کی گنتی ، کامیابی کی شرح بازیافت ،
+   غلطی ہسٹگرامس) رول آؤٹ کے بعد 24 گھنٹہ۔
+2. ایک مختصر خلاصہ اور تعی .ن کی رپورٹ کے لنک کے ساتھ `status.md` کو اپ ڈیٹ کریں۔
+3. کسی بھی فالو اپ کاموں کو ریکارڈ کریں (جیسے مزید پروفائل تصنیف کی رہنمائی)
+   `roadmap.md` پر۔

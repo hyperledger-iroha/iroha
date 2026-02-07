@@ -4,131 +4,131 @@ direction: rtl
 source: docs/portal/docs/sorafs/operations-playbook.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: operations-playbook
-title: Playbook d’exploitation SoraFS
-sidebar_label: Playbook d’exploitation
-description: Guides de réponse aux incidents et procédures de drills de chaos pour les opérateurs SoraFS.
+ID: آپریشنز پلے بوک
+عنوان: آپریٹنگ پلے بوک SoraFS
+سائڈبار_لیبل: آپریٹنگ پلے بک
+تفصیل: آپریٹرز SoraFS کے لئے واقعہ کے جوابی ہدایت نامہ اور افراتفری ڈرل کے طریقہ کار۔
 ---
 
-:::note Source canonique
-Cette page reflète le runbook maintenu dans `docs/source/sorafs_ops_playbook.md`. Gardez les deux copies synchronisées jusqu’à ce que la documentation Sphinx soit totalement migrée.
+::: نوٹ کینونیکل ماخذ
+یہ صفحہ `docs/source/sorafs_ops_playbook.md` میں برقرار رکھی گئی رن بک کی عکاسی کرتا ہے۔ دونوں کاپیاں مطابقت پذیری میں رکھیں جب تک کہ اسفینکس دستاویزات مکمل طور پر ہجرت نہ ہوجائیں۔
 :::
 
-## Références clés
+## کلیدی حوالہ جات
 
-- Actifs d’observabilité : consultez les dashboards Grafana sous `dashboards/grafana/` et les règles d’alerte Prometheus dans `dashboards/alerts/`.
-- Catalogue de métriques : `docs/source/sorafs_observability_plan.md`.
-- Surfaces de télémétrie de l’orchestrateur : `docs/source/sorafs_orchestrator_plan.md`.
+- مشاہدہ کرنے والے اثاثوں: `dashboards/grafana/` کے تحت DASHBARDS Grafana سے مشورہ کریں اور `dashboards/alerts/` میں الرٹ رولز Prometheus۔
+- میٹرکس کیٹلاگ: `docs/source/sorafs_observability_plan.md`۔
+- آرکیسٹریٹر ٹیلی میٹری سطحیں: `docs/source/sorafs_orchestrator_plan.md`۔
 
-## Matrice d’escalade
+## میٹرکس پر چڑھنے
 
-| Priorité | Exemples de déclenchement | On-call principal | Backup | Notes |
-|----------|---------------------------|------------------|--------|-------|
-| P1 | Panne globale gateway, taux d’échec PoR > 5% (15 min), backlog de réplication doublant toutes les 10 min | Storage SRE | Observability TL | Engager le conseil de gouvernance si l’impact dépasse 30 min. |
-| P2 | Violation du SLO de latence gateway régionale, pic de retries orchestrateur sans impact SLA | Observability TL | Storage SRE | Continuer le rollout mais bloquer les nouveaux manifests. |
-| P3 | Alertes non critiques (staleness de manifests, capacité 80–90%) | Intake triage | Ops guild | À traiter dans le prochain jour ouvré. |
+| ترجیح | ٹرگر مثالوں | مین آن کال | بیک اپ | نوٹ |
+| --------- | ------------------------------ | -------------------- | -------- | ------- |
+| P1 | گلوبل گیٹ وے کی ناکامی ، پور کی ناکامی کی شرح> 5 ٪ (15 منٹ) ، ہر 10 منٹ میں نقل کی بیک لاگ کو دوگنا کرنا | اسٹوریج SRE | مشاہدہ tl | اگر اثر 30 منٹ سے زیادہ ہے تو گورننس کونسل کو مشغول کریں۔ |
+| P2 | علاقائی گیٹ وے لیٹینسی ایس ایل او کی خلاف ورزی ، آرکسٹریٹر ایس ایل اے اثر کے بغیر چوٹی کی دوبارہ کوشش کرتا ہے مشاہدہ tl | اسٹوریج SRE | رول آؤٹ کو جاری رکھیں لیکن نئے منشور کو مسدود کریں۔ |
+| P3 | غیر تنقیدی انتباہات (مینی فیسٹ اسٹیلینس ، گنجائش 80-90 ٪) | انٹیک ٹریج | گلڈ اوپس | اگلے کاروباری دن کے اندر عملدرآمد کیا جائے۔ |
 
-## Panne gateway / disponibilité dégradée
+## گیٹ وے کی ناکامی / ہراس کی دستیابی
 
-**Détection**
+** پتہ لگانا **
 
-- Alertes : `SoraFSGatewayAvailabilityDrop`, `SoraFSGatewayLatencySlo`.
-- Dashboard : `dashboards/grafana/sorafs_gateway_overview.json`.
+- انتباہات: `SoraFSGatewayAvailabilityDrop` ، `SoraFSGatewayLatencySlo`۔
+- ڈیش بورڈ: `dashboards/grafana/sorafs_gateway_overview.json`۔
 
-**Actions immédiates**
+** فوری اقدامات **
 
-1. Confirmer la portée (fournisseur unique vs flotte) via le panneau de taux de requêtes.
-2. Basculez le routage Torii vers des fournisseurs sains (si multi-fournisseur) en basculant `sorafs_gateway_route_weights` dans la config ops (`docs/source/sorafs_gateway_self_cert.md`).
-3. Si tous les fournisseurs sont impactés, activez le fallback “direct fetch” pour les clients CLI/SDK (`docs/source/sorafs_node_client_protocol.md`).
+1. درخواست کی شرح کے پینل کے ذریعہ پہنچ (سنگل وینڈر بمقابلہ بیڑے) کی تصدیق کریں۔
+2. سوئچ روٹنگ Torii صحت مند فراہم کرنے والوں (اگر ملٹی وینڈر) کو `sorafs_gateway_route_weights` کو OPS تشکیل (`docs/source/sorafs_gateway_self_cert.md`) میں ٹوگل کرکے۔
+3. اگر تمام فراہم کنندگان پر اثر انداز ہوتا ہے تو ، CLI/SDK کلائنٹس (`docs/source/sorafs_node_client_protocol.md`) کے لئے "براہ راست بازیافت" فال بیک کو قابل بنائیں۔
 
-**Triage**
+** ٹریج **
 
-- Vérifiez l’utilisation des stream tokens par rapport à `sorafs_gateway_stream_token_limit`.
-- Inspectez les logs gateway pour des erreurs TLS ou d’admission.
-- Exécutez `scripts/telemetry/run_schema_diff.sh` pour vérifier que le schéma exporté par le gateway correspond à la version attendue.
+- `sorafs_gateway_stream_token_limit` کے خلاف اسٹریم ٹوکن کے استعمال کو چیک کریں۔
+- TLS یا داخلے کی غلطیوں کے لئے گیٹ وے لاگز کا معائنہ کریں۔
+- `scripts/telemetry/run_schema_diff.sh` چلائیں اس بات کی تصدیق کے لئے کہ گیٹ وے کے ذریعہ برآمد ہونے والا اسکیما متوقع ورژن سے مساوی ہے۔
 
-**Options de remédiation**
+** تدارک کے اختیارات **
 
-- Redémarrez uniquement le processus gateway affecté ; évitez de recycler tout le cluster sauf si plusieurs fournisseurs échouent.
-- Augmentez temporairement la limite de stream tokens de 10–15% si une saturation est confirmée.
-- Relancez le self-cert (`scripts/sorafs_gateway_self_cert.sh`) après stabilisation.
+- صرف متاثرہ گیٹ وے کے عمل کو دوبارہ شروع کریں۔ پورے کلسٹر کی ری سائیکلنگ سے گریز کریں جب تک کہ متعدد فراہم کنندگان ناکام نہ ہوں۔
+- اگر سنترپتی کی تصدیق ہوجائے تو عارضی طور پر اسٹریم ٹوکن کی حد کو 10-15 ٪ تک بڑھائیں۔
+- استحکام کے بعد سیلف سرٹ (`scripts/sorafs_gateway_self_cert.sh`) کو دوبارہ لانچ کریں۔
 
-**Post-incident**
+** بعد کے بعد **
 
-- Rédigez un postmortem P1 avec `docs/source/sorafs/postmortem_template.md`.
-- Planifiez un drill de chaos de suivi si la remédiation a nécessité des interventions manuelles.
+- `docs/source/sorafs/postmortem_template.md` کے ساتھ P1 پوسٹمارٹم لکھیں۔
+- اگر تدارک کے لئے دستی مداخلت کی ضرورت ہو تو فالو اپ افراتفری کی مشق کا شیڈول بنائیں۔
 
-## Pic d’échecs de preuve (PoR / PoTR)
+## چوٹی کے ثبوت کی ناکامی (پور / پوٹر)
 
-**Détection**
+** پتہ لگانا **
 
-- Alertes : `SoraFSProofFailureSpike`, `SoraFSPoTRDeadlineMiss`.
-- Dashboard : `dashboards/grafana/sorafs_proof_integrity.json`.
-- Télémétrie : `torii_sorafs_proof_stream_events_total` et événements `sorafs.fetch.error` avec `provider_reason=corrupt_proof`.
+- انتباہات: `SoraFSProofFailureSpike` ، `SoraFSPoTRDeadlineMiss`۔
+- ڈیش بورڈ: `dashboards/grafana/sorafs_proof_integrity.json`۔
+- ٹیلی میٹری: `torii_sorafs_proof_stream_events_total` اور واقعات `sorafs.fetch.error` `provider_reason=corrupt_proof` کے ساتھ۔
 
-**Actions immédiates**
+** فوری اقدامات **1. مینی فیسٹ رجسٹر (`docs/source/sorafs/manifest_pipeline.md`) کو نشان زد کرکے نئے منشور داخلوں کو منجمد کریں۔
+2. متاثرہ سپلائرز کے لئے مراعات کو معطل کرنے کے لئے گورننس کو مطلع کریں۔
 
-1. Figer les nouvelles admissions de manifests en marquant le registre de manifests (`docs/source/sorafs/manifest_pipeline.md`).
-2. Notifier la gouvernance pour suspendre les incitations des fournisseurs impactés.
+** ٹریج **
 
-**Triage**
+- `sorafs_node_replication_backlog_total` کے خلاف پور چیلنج قطار کی گہرائی کو چیک کریں۔
+- حالیہ تعیناتیوں کے لئے پروف تصدیقی پائپ لائن (`crates/sorafs_node/src/potr.rs`) کی توثیق کریں۔
+- آپریٹر رجسٹری کے ساتھ وینڈر فرم ویئر ورژن کا موازنہ کریں۔
 
-- Vérifiez la profondeur de la file des challenges PoR face à `sorafs_node_replication_backlog_total`.
-- Validez le pipeline de vérification des preuves (`crates/sorafs_node/src/potr.rs`) pour les déploiements récents.
-- Comparez les versions de firmware des fournisseurs avec le registre des opérateurs.
+** تدارک کے اختیارات **
 
-**Options de remédiation**
+- جدید ترین مینی فیسٹ کے ساتھ `sorafs_cli proof stream` کے ذریعے ٹرگر پور ری پلے۔
+اگر ثبوت مستقل طور پر ناکام ہوجاتے ہیں تو ، گورننس رجسٹری کو اپ ڈیٹ کرکے اور آرکسٹریٹر اسکور بورڈز کی تازہ کاری پر مجبور کرکے فعال سیٹ سے فراہم کنندہ کو ہٹا دیں۔
 
-- Déclenchez des replays PoR via `sorafs_cli proof stream` avec le dernier manifest.
-- Si les preuves échouent de manière cohérente, retirez le fournisseur de l’ensemble actif en mettant à jour le registre de gouvernance et en forçant un refresh des scoreboards de l’orchestrateur.
+** بعد کے بعد **
 
-**Post-incident**
+- اگلی پروڈکشن کی تعیناتی سے پہلے پور افراتفری کے ڈرل منظر کو چلائیں۔
+- پوسٹ مارٹم ٹیمپلیٹ میں سیکھے گئے اسباق کو ریکارڈ کریں اور سپلائر قابلیت چیک لسٹ کو اپ ڈیٹ کریں۔
 
-- Lancez le scénario de drill de chaos PoR avant le prochain déploiement en production.
-- Consignez les enseignements dans le template de postmortem et mettez à jour la checklist de qualification des fournisseurs.
+## نقل / بیکلاگ نمو
 
-## Retard de réplication / croissance du backlog
+** پتہ لگانا **
 
-**Détection**
-
-- Alertes : `SoraFSReplicationBacklogGrowing`, `SoraFSCapacityPressure`. Importez
-  `dashboards/alerts/sorafs_capacity_rules.yml` et exécutez
+- انتباہات: `SoraFSReplicationBacklogGrowing` ، `SoraFSCapacityPressure`۔ درآمد
+  `dashboards/alerts/sorafs_capacity_rules.yml` اور چلائیں
   `promtool test rules dashboards/alerts/tests/sorafs_capacity_rules.test.yml`
-  avant promotion pour qu’Alertmanager reflète les seuils documentés.
-- Dashboard : `dashboards/grafana/sorafs_capacity_health.json`.
-- Métriques : `sorafs_node_replication_backlog_total`, `sorafs_node_manifest_refresh_age_seconds`.
+  پروموشن سے پہلے تاکہ الرٹ مینجر دستاویزی دہلیز کی عکاسی کرے۔
+- ڈیش بورڈ: `dashboards/grafana/sorafs_capacity_health.json`۔
+- میٹرکس: `sorafs_node_replication_backlog_total` ، `sorafs_node_manifest_refresh_age_seconds`۔
 
-**Actions immédiates**
+** فوری اقدامات **
 
-1. Vérifiez la portée du backlog (fournisseur unique ou flotte) et mettez en pause les tâches de réplication non essentielles.
-2. Si le backlog est isolé, réaffectez temporairement les nouvelles commandes à des fournisseurs alternatifs via le scheduler de réplication.
+1. بیک بلاگ اسکوپ (سنگل فروش یا بیڑے) کو چیک کریں اور غیر ضروری نقل کے کاموں کو روکیں۔
+2. اگر بیک بلاگ الگ تھلگ ہے تو ، نقل کے نظام الاوقات کے ذریعہ متبادل سپلائرز کے لئے عارضی طور پر نئے احکامات کو دوبارہ تفویض کریں۔
 
-**Triage**
+** ٹریج **
 
-- Inspectez la télémétrie orchestrateur pour des rafales de retries qui pourraient faire exploser le backlog.
-- Confirmez que les cibles de stockage ont suffisamment de headroom (`sorafs_node_capacity_utilisation_percent`).
-- Passez en revue les changements récents de configuration (mises à jour de chunk profile, cadence des proofs).
+- آرکیسٹریٹر ٹیلی میٹری کا معائنہ کریں جو دوبارہ کوششوں کے پھٹ پڑیں جو بیک بلاگ کو اڑا سکتے ہیں۔
+- تصدیق کریں کہ اسٹوریج کے اہداف میں کافی ہیڈ روم (`sorafs_node_capacity_utilisation_percent`) ہے۔
+- حالیہ کنفیگریشن تبدیلیوں کا جائزہ لیں (پروفائل کی تازہ کاریوں ، پروف کیڈینس)۔
 
-**Options de remédiation**
+** تدارک کے اختیارات **
 
-- Exécutez `sorafs_cli` avec l’option `--rebalance` pour redistribuer le contenu.
-- Scalez horizontalement les workers de réplication pour le fournisseur impacté.
-- Déclenchez un refresh des manifests pour réaligner les fenêtres TTL.
+- مواد کو دوبارہ تقسیم کرنے کے لئے `sorafs_cli` آپشن `--rebalance` کے ساتھ چلائیں۔
+- متاثرہ فراہم کنندہ کے لئے افقی طور پر اسکیل نقل تیار کرنے والے کارکن۔
+- ٹی ٹی ایل ونڈوز کو ریگائن کرنے کے لئے ایک مینی فیسٹ ریفریش کو متحرک کریں۔
 
-**Post-incident**
+** بعد کے بعد **
 
-- Planifiez un drill de capacité ciblant les échecs de saturation fournisseur.
-- Mettez à jour la documentation SLA de réplication dans `docs/source/sorafs_node_client_protocol.md`.
+- سپلائر سنترپتی کی ناکامیوں کو نشانہ بنانے والی صلاحیت کی مشق کا منصوبہ بنائیں۔
+- `docs/source/sorafs_node_client_protocol.md` میں نقل کی SLA دستاویزات کو اپ ڈیٹ کریں۔
 
-## Cadence des drills de chaos
+## افراتفری ڈرل کیڈینس
 
-- **Trimestriel** : simulation combinée de panne gateway + tempête de retries orchestrateur.
-- **Semestriel** : injection d’échecs PoR/PoTR sur deux fournisseurs avec recovery.
-- **Spot-check mensuel** : scénario de retard de réplication avec manifests de staging.
-- Suivez les drills dans le runbook log partagé (`ops/drill-log.md`) via :
+- ** سہ ماہی **: گیٹ وے کی ناکامی + آرکیسٹریٹر کی مشترکہ نقالی طوفان کی دوبارہ کوشش کرتا ہے۔
+- ** نیم سالانہ **: بحالی کے ساتھ دو فراہم کنندگان پر پور/پوٹ آر کی ناکامیوں کا انجیکشن۔
+- ** ماہانہ اسپاٹ چیک **: اسٹیجنگ کے ساتھ نقل میں تاخیر کا منظر۔
+- مشترکہ رن بک لاگ (`ops/drill-log.md`) میں مشقوں کی پیروی کریں:
 
   ```bash
   scripts/telemetry/log_sorafs_drill.sh \
@@ -141,15 +141,13 @@ Cette page reflète le runbook maintenu dans `docs/source/sorafs_ops_playbook.md
     --link "docs/source/sorafs/postmortem_template.md"
   ```
 
-- Validez le log avant les commits avec :
+- اس سے پہلے کہ لاگ ان کے ساتھ معاہدہ کریں:
 
   ```bash
   scripts/telemetry/validate_drill_log.sh
-  ```
+  ```- آئندہ مشقوں کے لئے `--status scheduled` استعمال کریں ، مکمل رنز کے لئے `pass`/`fail` ، اور جب اقدامات کھلے رہیں تو `follow-up` استعمال کریں۔
+- خشک رنز یا خودکار توثیق کے ل I `--log` کے ساتھ منزل کو تبدیل کریں۔ اس کے بغیر ، اسکرپٹ `ops/drill-log.md` کو اپ ڈیٹ کرتا ہے۔
 
-- Utilisez `--status scheduled` pour les drills à venir, `pass`/`fail` pour les runs terminés, et `follow-up` quand des actions restent ouvertes.
-- Remplacez la destination avec `--log` pour les dry-runs ou la vérification automatisée ; sans cela, le script continue de mettre à jour `ops/drill-log.md`.
+## پوسٹ مارٹم ٹیمپلیٹ
 
-## Template de postmortem
-
-Utilisez `docs/source/sorafs/postmortem_template.md` pour chaque incident P1/P2 et pour les rétrospectives de drills de chaos. Le template couvre la chronologie, la quantification d’impact, les facteurs contributifs, les actions correctives et les tâches de vérification de suivi.
+ہر P1/P2 واقعے کے لئے `docs/source/sorafs/postmortem_template.md` اور افراتفری ڈرل ماخذوں کے لئے استعمال کریں۔ ٹیمپلیٹ میں ٹائم لائن ، اثر کی مقدار ، تعاون کرنے والے عوامل ، اصلاحی اقدامات اور پیروی کی توثیق کے کاموں کا احاطہ کیا گیا ہے۔

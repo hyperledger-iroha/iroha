@@ -6,64 +6,66 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: AI Moderation Runner Specification
 summary: Deterministic moderation committee design for the Ministry of Information (MINFO-1) deliverable.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# AI Moderation Runner Specification
+# AI 审核跑步者规范
 
-This specification fulfils the documentation portion of **MINFO-1 — Establish AI
-moderation baseline**. It defines the deterministic execution contract for the
-Ministry of Information moderation service so every gateway can run identical
-pipelines before appeals and transparency flows (SFM-4/SFM-4b). All behaviour
-described here is normative unless explicitly marked as informational.
+本规范满足 **MINFO-1 — 建立 AI 的文档部分
+适度基线**。它定义了确定性执行合约
+信息部审核服务，以便每个网关都可以相同地运行
+上诉和透明度流程之前的管道（SFM-4/SFM-4b）。所有行为
+除非明确标记为信息性的，否则此处描述的是规范性的。
 
-## 1. Goals & Scope
-- Provide a reproducible moderation committee that evaluates gateway content
-  (objects, manifests, metadata, audio) using heterogeneous models.
-- Guarantee deterministic execution across operators: fixed opset, seeded
-  tokenisation, bounded precision, and versioned artefacts.
-- Produce audit-ready artefacts: manifests, scorecards, calibration evidence,
-  and transparency digests suitable for publication in the governance DAG.
-- Surface telemetry so SREs can detect drift, false positives, and downtime
-  without collecting raw user data.
+## 1. 目标和范围
+- 提供可重复的审核委员会来评估网关内容
+  （对象、清单、元数据、音频）使用异构模型。
+- 保证跨运算符的确定性执行：固定 opset、种子
+  标记化、有限精度和版本化工件。
+- 生成可供审核的工件：清单、记分卡、校准证据、
+  以及适合在治理 DAG 中发布的透明度摘要。
+- 表面遥测，以便 SRE 可以检测漂移、误报和停机时间
+  无需收集原始用户数据。
 
-## 2. Deterministic Execution Contract
-- **Runtime:** ONNX Runtime 1.19.x (CPU backend) compiled with AVX2 disabled and
-  `--enable-extended-minimal-build` to keep the opcode set fixed. CUDA/Metal
-  runtimes are explicitly disallowed in production.
-- **Opset:** `opset=17`. Models targeting newer opsets must be down-converted
-  and validated before admission.
-- **Seed derivation:** Every evaluation derives an RNG seed from
-  `BLAKE3(content_digest || manifest_id || run_nonce)` where `run_nonce` comes
-  from the governance-approved manifest. Seeds feed all stochastic components
-  (beam search, dropout toggles) so results are bit-for-bit reproducible.
-- **Threading:** One worker per model. Concurrency is coordinated by the runner
-  orchestrator to avoid shared-state race conditions. BLAS libraries operate in
-  single-threaded mode.
-- **Numerics:** FP16 accumulation is forbidden. Use FP32 intermediates and clamp
-  outputs to four decimal places before aggregation.
+## 2. 确定性执行合约
+- **运行时：** ONNX 运行时 1.19.x（CPU 后端）在禁用 AVX2 的情况下编译并
+  `--enable-extended-minimal-build` 以保持操作码集固定。 CUDA/金属
+  生产环境中明确禁止运行时。
+- **Opset：** `opset=17`。针对较新反对集的模型必须进行下转换
+  并在入学前进行验证。
+- **种子推导：** 每个评估都会从以下位置推导出一个 RNG 种子
+  `run_nonce` 来的 `BLAKE3(content_digest || manifest_id || run_nonce)`
+  来自治理批准的清单。种子提供所有随机成分
+  （集束搜索、退出切换），因此结果可以逐位重现。
+- **线程：** 每个模型一名工人。并发由运行者协调
+  协调器以避免共享状态竞争条件。 BLAS 库运行于
+  单线程模式。
+- **数字：** 禁止 FP16 累积。使用FP32中间体和夹具
+  聚合之前输出到小数点后四位。
 
-## 3. Committee Composition
-The baseline committee contains three model families. Governance may add
-models, but the minimum quorum must remain satisfied.
+## 3. 委员会组成
+基线委员会包含三个模范家庭。治理可以添加
+模型，但必须保持满足最低法定人数。
 
-| Family | Baseline Model | Purpose |
-|--------|----------------|---------|
-| Vision | OpenCLIP ViT-H/14 (safety fine-tuned) | Detects visual contraband, violence, CSAM indicators. |
-| Multimodal | LLaVA-1.6 34B Safety | Captures text + image interactions, contextual cues, harassment. |
-| Perceptual | pHash + aHash + NeuralHash-lite ensemble | Fast near-duplicate detection and recall of known bad material. |
+|家庭|基线模型|目的|
+|--------------------|----------------|---------|
+|愿景 | OpenCLIP ViT-H/14（安全微调）|检测视觉违禁品、暴力、CSAM 指标。 |
+|多式联运 | LLaVA-1.6 34B 安全 |捕获文本+图像交互、上下文线索、骚扰。 |
+|感性 | pHash + aHash + NeuralHash-lite 集成 |快速接近重复检测并召回已知不良材料。 |
 
-Each model entry specifies:
-- `model_id` (UUID)
-- `artifact_digest` (BLAKE3-256 of OCI image)
-- `weights_digest` (BLAKE3-256 of ONNX or merged safetensors blob)
-- `opset` (must equal `17`)
-- `weight` (committee weight, default `1.0`)
-- `critical_labels` (set of labels that immediately trigger `Escalate`)
-- `max_eval_ms` (guardrail for deterministic watchdogs)
+每个模型条目指定：
+- `model_id`（UUID）
+- `artifact_digest`（OCI 图像的 BLAKE3-256）
+- `weights_digest`（ONNX 的 BLAKE3-256 或合并的安全张量 blob）
+- `opset`（必须等于 `17`）
+- `weight`（委员会权重，默认`1.0`）
+- `critical_labels`（立即触发 `Escalate` 的标签集）
+- `max_eval_ms`（确定性看门狗的护栏）
 
-## 4. Norito Manifests & Results
+## 4. Norito 清单和结果
 
-### 4.1 Committee Manifest
+### 4.1 委员会清单
 ```norito
 struct AiModerationManifestV1 {
     manifest_id: Uuid,
@@ -90,7 +92,7 @@ struct AiModerationModelV1 {
 }
 ```
 
-### 4.2 Evaluation Result
+### 4.2 评估结果
 ```norito
 struct AiModerationResultV1 {
     manifest_id: Uuid,
@@ -116,14 +118,14 @@ struct AiModerationModelScoreV1 {
 }
 ```
 
-The runner MUST emit a deterministic `AiModerationDigestV1` (BLAKE3 over the
-serialized result) for transparency logs and append results to the moderation
-ledger when the verdict is not `pass`.
+跑步者必须发出确定性的 `AiModerationDigestV1`（BLAKE3 超过
+序列化结果）用于透明度日志并将结果附加到审核中
+分类帐时的判决不是 `pass`。
 
-### 4.3 Adversarial Corpus Manifest
+### 4.3 对抗性语料库清单
 
-Gateway operators now ingest a companion manifest that enumerates perceptual
-hash/embedding “families” derived from the calibration runs:
+网关操作员现在摄取一个枚举感知的伴随清单
+从校准运行中得出的散列/嵌入“族”：
 
 ```norito
 struct AdversarialCorpusManifestV1 {
@@ -150,138 +152,136 @@ struct AdversarialPerceptualVariantV1 {
 }
 ```
 
-The schema lives in `crates/iroha_data_model/src/sorafs/moderation.rs` and is
-validated via `AdversarialCorpusManifestV1::validate()`. The manifest allows the
-gateway denylist loader to populate `perceptual_family` entries that block
-entire near-duplicate clusters instead of individual bytes. A runnable fixture
-(`docs/examples/ai_moderation_perceptual_registry_202602.json`) demonstrates
-the expected layout and feeds directly into the sample gateway denylist.
+该模式位于 `crates/iroha_data_model/src/sorafs/moderation.rs` 中，并且是
+通过 `AdversarialCorpusManifestV1::validate()` 验证。清单允许
+网关拒绝列表加载程序，用于填充阻止的 `perceptual_family` 条目
+整个近乎重复的簇而不是单个字节。可运行的装置
+(`docs/examples/ai_moderation_perceptual_registry_202602.json`) 演示
+预期的布局并直接输入到示例网关拒绝列表中。
 
-## 5. Execution Pipeline
-1. Load `AiModerationManifestV1` from the governance DAG. Reject if
-   `runner_hash` or `runtime_version` mismatch the deployed binary.
-2. Fetch model artefacts via OCI digest, verifying digests before loading.
-3. Construct evaluation batches by content type; ordering must sort by
-   `(content_digest, manifest_id)` to ensure deterministic aggregation.
-4. Execute each model with the derived seed. For perceptual hashes, combine
-   the ensemble via majority vote -> score in `[0,1]`.
-5. Aggregate scores into `combined_score` using weighted clipped ratio:
+## 5. 执行管道
+1. 从治理 DAG 加载 `AiModerationManifestV1`。拒绝如果
+   `runner_hash` 或 `runtime_version` 与部署的二进制文件不匹配。
+2. 通过 OCI 摘要获取模型工件，在加载之前验证摘要。
+3. 按内容类型构建评估批次；排序必须按
+   `(content_digest, manifest_id)` 确保确定性聚合。
+4. 使用派生种子执行每个模型。对于感知哈希，结合
+   整体通过多数投票 -> 得分为 `[0,1]`。
+5. 使用加权裁剪比率将分数汇总到 `combined_score` 中：
    ```
    combined = Σ_i weight_i * clamp(score_i / threshold_i, 0, 1) / Σ_i weight_i
    ```
-6. Produce `ModerationVerdictV1`:
-   - `escalate` if any `critical_labels` fire or `combined ≥ thresholds.escalate`.
-   - `quarantine` if above `thresholds.quarantine` but below `escalate`.
-   - `pass` otherwise.
-7. Persist `AiModerationResultV1` and enqueue downstream processes:
-   - Quarantine service (if verdict escalates/quarantines)
-   - Transparency log writer (`ModerationLedgerV1`)
-   - Telemetry exporter
+6. 生成`ModerationVerdictV1`：
+   - `escalate`（如果有 `critical_labels` 火灾或 `combined ≥ thresholds.escalate`）。
+   - `quarantine` 如果高于 `thresholds.quarantine` 但低于 `escalate`。
+   - 否则为 `pass`。
+7. 保留 `AiModerationResultV1` 并将下游进程排入队列：
+   - 检疫服务（如果判决升级/检疫）
+   - 透明日志写入器 (`ModerationLedgerV1`)
+   - 遥测出口商
 
-## 6. Calibration & Evaluation
-- **Datasets:** Baseline calibration uses the mixed corpus curated with policy
-  team approval. Reference recorded in `calibration_dataset`.
-- **Metrics:** Compute Brier score, Expected Calibration Error (ECE), and AUROC
-  per model and combined verdict. Monthly recalibration MUST keep
-  `Brier ≤ 0.18` and `ECE ≤ 0.05`. Results stored in the SoraFS reports tree
-  (e.g., [February 2026 calibration](../sorafs/reports/ai-moderation-calibration-202602.md)).
-- **Schedule:** Monthly recalibration (first Monday). Emergency recalibration
-  allowed if drift alerts fire.
-- **Process:** Run deterministic evaluation pipeline on calibration set,
-  regenerate `thresholds`, update manifest, stage changes for governance vote.
+## 6. 校准与评估
+- **数据集：** 基线校准使用根据策略策划的混合语料库
+  团队批准。参考记录在 `calibration_dataset` 中。
+- **指标：** 计算 Brier 分数、预期校准误差 (ECE) 和 AUROC
+  每个模型和综合判决。每月重新校准必须保持
+  `Brier ≤ 0.18` 和 `ECE ≤ 0.05`。结果存储在 SoraFS 报告树中
+  （例如，[2026 年 2 月校准](../sorafs/reports/ai-moderation-calibration-202602.md)）。
+- **时间表：** 每月重新校准（第一个星期一）。紧急重新校准
+  如果漂移引起火灾，则允许。
+- **过程：** 在校准集上运行确定性评估管道，
+  重新生成 `thresholds`，更新清单，治理投票的阶段更改。
 
-## 7. Packaging & Deployment
-- Build OCI images via `docker buildx bake -f docker/ai_moderation.hcl`.
-- Images include:
-  - Locked Python env (`poetry.lock`) or Rust binary `Cargo.lock`.
-  - `models/` directory with hashed ONNX weights.
-  - Entry point `run_moderation.py` (or Rust equivalent) exposing HTTP/gRPC API.
-- Publish artefacts to `registry.sora.net/ministry/ai-moderation/<model>@sha256:<digest>`.
-- Runner binary ships as part of `sorafs_ai_runner` crate. The build pipeline
-  embeds manifest hash in the binary (exposed via `/v1/info`).
+## 7. 打包和部署
+- 通过 `docker buildx bake -f docker/ai_moderation.hcl` 构建 OCI 映像。
+- 图片包括：
+  - 锁定的 Python env (`poetry.lock`) 或 Rust 二进制文件 `Cargo.lock`。
+  - `models/` 目录，包含哈希 ONNX 权重。
+  - 入口点 `run_moderation.py`（或 Rust 等效项）公开 HTTP/gRPC API。
+- 将工件发布到 `registry.sora.net/ministry/ai-moderation/<model>@sha256:<digest>`。
+- Runner 二进制文件作为 `sorafs_ai_runner` 板条箱的一部分发货。构建管道
+  在二进制文件中嵌入清单哈希（通过 `/v1/info` 公开）。
 
-## 8. Telemetry & Observability
-- Prometheus metrics:
+## 8. 遥测和可观测性
+- Prometheus 指标：
   - `moderation_requests_total{verdict}`
   - `moderation_model_score_bucket{model_id,label}`
   - `moderation_combined_score_bucket`
   - `moderation_inference_latency_seconds_bucket`
   - `moderation_runner_manifest_info{manifest_id, runtime_version}`
-- Logs: JSON lines with `request_id`, `manifest_id`, `verdict`, and the digest
-  of the stored result. Raw scores are redacted to two decimal places in logs.
-- Dashboards stored in `dashboards/grafana/ministry_moderation_overview.json`
-  (published alongside the first calibration report).
-- Alert thresholds:
-  - Missing ingestion (`moderation_requests_total` stalled for 10 minutes).
-  - Drift detection (average model score delta >20% versus rolling 7-day mean).
-  - False-positive backlog (quarantine queue > 50 items for >30 minutes).
+- 日志：包含 `request_id`、`manifest_id`、`verdict` 的 JSON 行和摘要
+  的存储结果。原始分数在日志中被编辑至小数点后两位。
+- 仪表板存储在 `dashboards/grafana/ministry_moderation_overview.json` 中
+  （与第一份校准报告一起发布）。
+- 警报阈值：
+  - 缺少摄取（`moderation_requests_total` 停滞 10 分钟）。
+  - 漂移检测（与滚动 7 天平均值相比，平均模型得分增量 >20%）。
+  - 误报积压（隔离队列 > 50 个项目持续 > 30 分钟）。
 
-## 9. Governance & Change Control
-- Manifests require dual signatures: Ministry council member + moderation SRE
-  lead. Signatures recorded in `AiModerationManifestV1.governance_signature`.
-- Changes follow `ModerationManifestChangeProposalV1` through Torii. Hashes
-  entered into the governance DAG; deployment blocked until the proposal is
-  enacted.
-- Runner binaries embed `runner_hash`; CI refuses deployment if hashes diverge.
-- Transparency: weekly `ModerationScorecardV1` summarising volume, verdict mix,
-  and appeal outcomes. Published to Sora Parliament portal.
+## 9. 治理和变更控制
+- 清单需要双重签名：部委理事会成员 + 审核 SRE
+  领先。签名记录在 `AiModerationManifestV1.governance_signature` 中。
+- 更改遵循 `ModerationManifestChangeProposalV1` 至 Torii。哈希值
+  进入治理DAG；部署被阻止，直到提案通过
+  颁布。
+- 运行程序二进制文件嵌入 `runner_hash`；如果哈希值不同，CI 将拒绝部署。
+- 透明度：每周 `ModerationScorecardV1` 总结交易量、判决组合、
+  以及上诉结果。发布到 SoraParliament 门户网站。
 
-## 10. Security & Privacy
-- Content digests use BLAKE3. Raw payloads never persist outside quarantine.
-- Access to quarantine requires Just-In-Time approvals; all accesses logged.
-- Runner sandboxes untrusted content, enforcing 512 MiB memory limits and 120s
-  wall-clock guards.
-- Differential privacy is NOT applied here; gateways rely on quarantine + audit
-  workflows instead. Redaction policies follow the gateway compliance plan
-  (`docs/source/sorafs_gateway_compliance_plan.md`; portal copy pending).
+## 10. 安全与隐私
+- 内容摘要使用 BLAKE3。原始有效负载永远不会在隔离区之外持续存在。
+- 进入隔离区需要即时批准；记录所有访问。
+- 运行者沙箱不受信任的内容，强制执行 512 MiB 内存限制和 120 秒
+  挂钟守卫。
+- 此处不应用差分隐私；网关依赖隔离+审核
+  相反，工作流程。编辑策略遵循网关合规性计划
+  （`docs/source/sorafs_gateway_compliance_plan.md`；门户副本待定）。
 
-## 11. Calibration Publication (2026-02)
-- **Manifest:** `docs/examples/ai_moderation_calibration_manifest_202602.json`
-  records the governance-signed `AiModerationManifestV1` (ID
-  `c9bdf0b2-63a3-4a90-8d70-908d119c2c7e`), dataset reference
-  `c0956583-355a-43cc-9a60-e3a5d9a0f7d0`, runner hash
-  `ea3c0fd0ff4bd4510e94c7c293b261f601cc0c4f9fbacd99b0401d233a7cdc20`, and the
-  2026-02 calibration thresholds (`quarantine = 0.42`, `escalate = 0.78`).
-- **Scoreboard:** `docs/examples/ai_moderation_calibration_scorecard_202602.json`
-  plus the human-readable report in
+## 11. 校准出版物 (2026-02)
+- **清单：** `docs/examples/ai_moderation_calibration_manifest_202602.json`
+  记录治理签名的 `AiModerationManifestV1`（ID
+  `c9bdf0b2-63a3-4a90-8d70-908d119c2c7e`)，数据集参考
+  `c0956583-355a-43cc-9a60-e3a5d9a0f7d0`，跑步者哈希
+  `ea3c0fd0ff4bd4510e94c7c293b261f601cc0c4f9fbacd99b0401d233a7cdc20`，以及
+  2026 年 2 月校准阈值（`quarantine = 0.42`、`escalate = 0.78`）。
+- **记分板：** `docs/examples/ai_moderation_calibration_scorecard_202602.json`
+  加上人类可读的报告
   `[SoraFS Reports › AI Moderation Calibration 2026-02](../sorafs/reports/ai-moderation-calibration-202602.md)`
-  capture Brier, ECE, AUROC, and verdict mix for every model. Combined metrics
-  met the targets (`Brier = 0.126`, `ECE = 0.034`).
-- **Dashboards & alerts:** `dashboards/grafana/ministry_moderation_overview.json`
-  and `dashboards/alerts/ministry_moderation_rules.yml` (with regression tests in
-  `dashboards/alerts/tests/ministry_moderation_rules.test.yml`) provide the
-  moderation ingest/latency/drift monitoring story required for rollout.
-
-## 12. Reproducibility schema & validator (MINFO-1b)
-- Canonical Norito types now live alongside the rest of the SoraFS schema in
-  `crates/iroha_data_model/src/sorafs/moderation.rs`. The
-  `ModerationReproManifestV1`/`ModerationReproBodyV1` structs capture the
-  manifest UUID, runner hash, model digests, threshold set, and seed material.
-  `ModerationReproManifestV1::validate` enforces schema version
-  (`MODERATION_REPRO_MANIFEST_VERSION_V1`), ensures every manifest carries at
-  least one model and signer, and verifies each `SignatureOf<ModerationReproBodyV1>`
-  before returning a machine-readable summary.
-- Operators can invoke the shared validator via
+  捕获每个模型的 Brier、ECE、AUROC 和判决组合。综合指标
+  达到了目标（`Brier = 0.126`、`ECE = 0.034`）。
+- **仪表板和警报：** `dashboards/grafana/ministry_moderation_overview.json`
+  和 `dashboards/alerts/ministry_moderation_rules.yml`（回归测试
+  `dashboards/alerts/tests/ministry_moderation_rules.test.yml`) 提供
+  推出所需的节制摄取/延迟/漂移监控故事。## 12. 再现性模式和验证器 (MINFO-1b)
+- Canonical Norito 类型现在与 SoraFS 模式的其余部分一起存在
+  `crates/iroha_data_model/src/sorafs/moderation.rs`。的
+  `ModerationReproManifestV1`/`ModerationReproBodyV1` 结构捕获
+  清单 UUID、运行程序哈希、模型摘要、阈值集和种子材料。
+  `ModerationReproManifestV1::validate` 强制模式版本
+  (`MODERATION_REPRO_MANIFEST_VERSION_V1`)，确保每个舱单均载有
+  至少一个模型和签名者，并验证每个 `SignatureOf<ModerationReproBodyV1>`
+  在返回机器可读的摘要之前。
+- 操作员可以通过调用共享验证器
   `sorafs_cli moderation validate-repro --manifest=PATH [--format=json|norito]`
-  (implemented in `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`). The CLI
-  accepts either the JSON artefacts published under
-  `docs/examples/ai_moderation_calibration_manifest_202602.json` or the raw
-  Norito encoding and prints the model/signature counts alongside the manifest
-  timestamp once validation succeeds.
-- Gateways and automation hook into the same helper so reproducibility manifests
-  can be rejected deterministically when schemas drift, digests are missing, or
-  signatures fail verification.
-- Adversarial corpus bundles follow the same pattern:
+  （在 `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs` 中实现）。命令行界面
+  接受以下发布的 JSON 工件
+  `docs/examples/ai_moderation_calibration_manifest_202602.json` 或原始
+  Norito 编码并在清单旁边打印模型/签名计数
+  验证成功后的时间戳。
+- 网关和自动化连接到同一个助手，因此再现性明显
+  当模式漂移、摘要丢失或
+  签名验证失败。
+- 对抗性语料库遵循相同的模式：
   `sorafs_cli moderation validate-corpus --manifest=PATH [--format=json|norito]`
-  parses `AdversarialCorpusManifestV1`, enforces the schema version, and refuses
-  manifests that omit families, variants, or fingerprint metadata. Successful
-  runs emit the issued-at timestamp, cohort label, and the family/variant counts
-  so operators can pin the evidence before updating the gateway denylist entries
-  described in Section 4.3.
+  解析 `AdversarialCorpusManifestV1`，强制执行模式版本，并拒绝
+  清单省略了家族、变体或指纹元数据。成功
+  运行发出发布时间时间戳、队列标签和家族/变体计数
+  因此操作员可以在更新网关拒绝列表条目之前固定证据
+  4.3 节中描述。
 
-## 13. Open Follow-Ups
-- Monthly recalibration windows after 2026-03-02 continue to follow the
-  procedure in Section 6; publish `ai-moderation-calibration-<YYYYMM>.md`
-  alongside updated manifest/scorecard bundles under the SoraFS reports tree.
-- MINFO-1b and MINFO-1c (reproducibility manifest validators plus adversarial
-  corpus registry) remain tracked separately in the roadmap.
+## 13. 公开跟进
+- 2026 年 3 月 2 日之后的每月重新校准窗口继续遵循
+  第 6 条中的程序；发布 `ai-moderation-calibration-<YYYYMM>.md`
+  以及 SoraFS 报告树下更新的清单/记分卡包。
+- MINFO-1b 和 MINFO-1c（可重复性清单验证器加上对抗性
+  语料库注册表）在路线图中保持单独跟踪。

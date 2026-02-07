@@ -7,28 +7,29 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 04e4cf26ed0ce9f9782be8aae9d16425a7a87fdbd1986cbcbca68a27ba0a3afe
 source_last_modified: "2025-12-29T18:16:35.939138+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Crypto Dependency Audits
+# ཀིརིཔ་ཊོ་བརྟེན་པའི་རྩིས་སྟོན།
 
-## Streebog (`streebog` crate)
+## སི་ཊི་རི་བོག་ (`streebog` ཀེརེཊ)
 
-- **Version in tree:** `0.11.0-rc.2` vendored under `vendor/streebog` (used when the `gost` feature is enabled).
-- **Consumer:** `crates/iroha_crypto::signature::gost` (HMAC-Streebog DRBG + message hashing).
-- **Status:** Release-candidate only. No non-RC crate currently offers the required API surface,
-  so we mirror the crate in-tree for auditability while we track upstream for a final release.
-- **Review checkpoints:**
-  - Verified hash output against the Wycheproof suite and TC26 fixtures via
-    `cargo test -p iroha_crypto --features gost` (see `crates/iroha_crypto/tests/gost_wycheproof.rs`).
+- **ཤིང་འབྲས་:** `0.11.0-rc.2` འོག་ལུ་ `vendor/streebog` གི་འོག་ལུ་ བཙོང་མི་ (`gost` གི་ཁྱད་རྣམ་འདི་ལྕོགས་ཅན་བཟོ་བའི་སྐབས་ལག་ལེན་འཐབ་ཡོདཔ་ཨིན།)།
+- **ཉོ་སྤྱོད་པ་:** `crates/iroha_crypto::signature::gost` (HMAC-streebog DRBG + བརྡ་འཕྲིན་ཧ་ཤིང་།
+- **གནས་སྟངས་:** བཏོན་གཏང་-འདེམས་ངོ་རྐྱངམ་ཅིག་ བཏོན་གཏང་། ད་ལྟ་ RC མིན་པའི་ Cret མེད་ན་དགོས་མཁོའི་API ཁ་ཐོག་འདི་ མ་བྱིན་པས།
+  འདོན་སྤེལ།: ༢༠༡༠/༠༣/༠༣ རིག་པ།(༠) འདི་ཡང་ གཟའ་ཉི་མའི་ཉིན།
+- **བསྐྱར་ཞིབ་ཞིབ་དཔྱད་ས་ཚིགས་:**
+  - ཝའི་ཅེ་པོ་རོཕ་ཁང་མིག་དང་ ཊི་སི་༢༦ གི་སྒྲིག་བཀོད་ཚུ་ བརྒྱུད་དེ་ བདེན་དཔྱད་འབད་ཡོད་པའི་ ཧེཤ་ཨའུཊི་པུ།
+    `cargo test -p iroha_crypto --features gost` (`crates/iroha_crypto/tests/gost_wycheproof.rs` ལུ་བལྟ།)
   - `cargo bench -p iroha_crypto --bench gost_sign --features gost`
-    exercises Ed25519/Secp256k1 alongside every TC26 curve with the current dependency.
+    ལུས་སྦྱོང་ Ed25519/Secp256k1 ད་ལྟའི་བརྟེན་པའི་ TC26 གུག་ཀྱོག་རེ་རེ་བཞིན་མཉམ་དུ་ ད་ལྟའི་བརྟེན་པའི་གནས་སྟངས་དང་མཉམ་དུ་ཡོད།
   - `cargo run -p iroha_crypto --bin gost_perf_check --features gost`
-    compares the fresher measurements against the checked-in medians (use `--summary-only` in CI, add
-    `--write-baseline crates/iroha_crypto/benches/gost_perf_baseline.json` when rebaselining).
-  - `scripts/gost_bench.sh` wraps the bench + check flow; pass `--write-baseline` to update the JSON.
-    See `docs/source/crypto/gost_performance.md` for the end-to-end workflow.
-- **Mitigations:** `streebog` is only ever invoked through deterministic wrappers that zeroise keys;
-  the signer hedges nonces with OS entropy to avoid catastrophic RNG failure.
-- **Next actions:** Follow RustCrypto’s streebog `0.11.x` release; once the tag lands, treat the
-  upgrade as a standard dependency bump (verify checksum, review the diff, record provenance, and
-  drop the vendored mirror).
+    བརྟག་དཔྱད་འབད་ཡོད་པའི་བར་མཚམས་ཚུ་དང་ ག་བསྡུར་འབདཝ་ཨིན། (CI ནང་ `--summary-only` ལག་ལེན་འཐབ།
+    བསྐྱར་བཟོ་འབད་བའི་སྐབས་ `--write-baseline crates/iroha_crypto/benches/gost_perf_baseline.json`)།
+  - `scripts/gost_bench.sh` གིས་ བེན་ཇི་ + ཞིབ་དཔྱད་རྒྱུན་འགྲུལ་འདི་ བཀབ་བཞགཔ་ཨིན། JSON དུས་མཐུན་བཟོ་ནི་ལུ་ `--write-baseline` བརྒྱུད་དེ་།
+    མཇུག་ལས་མཇུག་ཚུན་ཚོད་ལཱ་གི་རྒྱུན་རིམ་གྱི་དོན་ལུ་ `docs/source/crypto/gost_performance.md` ལུ་བལྟ།
+- **གནས་སྤོ་འགྱོ་མི་ཚུ་:** `streebog` འདི་ ལྡེ་མིག་ཚུ་ ཀླད་ཀོར་བཟོ་མི་ གཏན་འབེབས་ཀྱི་ བཀབ་ཆ་ཚུ་གི་ཐོག་ལས་རྐྱངམ་ཅིག་ འབོད་བརྡ་འབདཝ་ཨིན།
+  མཚན་རྟགས་བཀོད་མི་འདི་གིས་ OS entropy དང་ཅིག་ཁར་ གནོད་སྐྱོན་ཅན་གྱི་ RNG འཐུས་ཤོར་མ་འབྱུང་ནི་གི་དོན་ལུ་ བཀག་འཛིན་འབདཝ་ཨིན།
+- **ཤུལ་མམ་གྱི་བྱ་བ་:** རསཊ་ཀིརིཔ་ཊོ་གི་ སི་ཊི་བོག་ `0.11.x` གསར་བཏོན་ལུ་བལྟ། ཚར་གཅིག་ ངོ་རྟགས་ས་ཆ་ཚུ་ བརྩི་འཇོག་འབད།
+  ཚད་ལྡན་བརྟེན་པའི་ བམ་པ་སྦེ་ ཡར་བསྐྱེད་འབད་ ( ཅེག་སམ་བདེན་དཔྱད་འབད་དེ་ ཁྱད་པར་བསྐྱར་ཞིབ་ ཐོ་བཀོད་གྲུབ་ཚུལ་ དང་།
+  བཙོང་མི་མེ་ལོང་འདི་བཀོག་བཞག)།

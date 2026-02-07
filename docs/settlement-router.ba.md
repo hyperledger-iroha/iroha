@@ -7,30 +7,31 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 782429c90ac5df034fd7c8ff2c3acf4f9f11348f14f15fcd321f343b22b154b8
 source_last_modified: "2025-12-29T18:16:35.914434+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Deterministic Settlement Router (NX-3)
+# Детерминистик ҡасаба маршрутизаторы (NX-3)
 
-**Status:** Completed (NX-3)  
-**Owners:** Economics WG / Core Ledger WG / Treasury / SRE  
-**Scope:** Canonical XOR settlement path used by all lanes/dataspaces. Shipped router crate, lane-level receipts, buffer guard rails, telemetry, and operator evidence surfaces.
+**Статус:** Төҙөлгән (NX-3)  
+**Хужалар:** Иҡтисад WG / Ядро баш кейеме WG / ҡаҙна / SRE  
+**Кәптәс:** Канонлы XOR ҡасаба юлы ҡулланылған бөтә һыҙаттар/мәғлүмәттәр. Таш ебәрелгән маршрутизатор йәшник, һыҙат кимәлендә квитанциялар, буфер һаҡсы рельстар, телеметрия, һәм оператор дәлилдәре өҫтө.
 
-## Goals
-- Unify XOR conversion and receipt generation across single-lane and Nexus builds.
-- Apply deterministic haircuts + volatility margins with guard-railed buffers so operators can pace settlement safely.
-- Expose receipts, telemetry, and dashboards that auditors can replay without bespoke tooling.
+## Маҡсаттар
+- XOR конверсия һәм квитанция генерацияһы бер һыҙатлы һәм Nexus төҙөй.
+- Ҡулланыу детерминистик стрижка + волатильность сиктәре менән һаҡсы-тимергән буферҙар шулай операторҙар темпта ҡасаба хәүефһеҙ.
+- Квитанциялар, телеметрия һәм приборҙар таҡталары, тип аудиторҙар ҡабаттан уйнай ала, инструменталь инструменталь.
 
-## Architecture
-| Component | Location | Responsibility |
-|-----------|----------|----------------|
-| Router primitives | `crates/settlement_router/` | Shadow-price calculator, haircut tiers, buffer policy helpers, settlement receipt type.【crates/settlement_router/src/price.rs:1】【crates/settlement_router/src/haircut.rs:1】【crates/settlement_router/src/policy.rs:1】 |
-| Runtime façade | `crates/iroha_core/src/settlement/mod.rs:1` | Wraps router config into `SettlementEngine`, exposes `quote` + accumulator used during block execution. |
-| Block integration | `crates/iroha_core/src/block.rs:120` | Drains `PendingSettlement` records, aggregates `LaneSettlementCommitment` per lane/dataspace, parses lane buffer metadata, and emits telemetry. |
-| Telemetry & dashboards | `crates/iroha_telemetry/src/metrics.rs:4847`, `dashboards/grafana/settlement_router_overview.json:1` | Prometheus/OTLP metrics for buffers, variance, haircuts, conversion counts; Grafana board for SRE. |
-| Reference schema | `docs/source/nexus_fee_model.md:1` | Documents settlement receipt fields persisted in `LaneBlockCommitment`. |
+## Архитектура
+| Компонент | Урыны | Яуаплылыҡ |
+|---------|-----------|---------------|
+| Маршрут примитивтары | `crates/settlement_router/` | Күләгә-хаҡ калькулятор, сәс ҡырҡыу ярустары, буфер сәйәсәте ярҙамсылары, ҡасаба квитанцияһы тип.【күрһәтеү_маршрут/срк/срк.р. rs:1】【справка_маршрут/срк/срк/срк.р. р.
+| Йүгерергә фасад | `crates/iroha_core/src/settlement/mod.rs:1` | Rraps маршрутизатор конфиг `SettlementEngine`, `quote` + аккумуляторы блокировкалау ваҡытында ҡулланыла. |
+| Блок интеграцияһы | `crates/iroha_core/src/block.rs:120` | Дренаждар `PendingSettlement` рекордтары, агрегаттар `LaneSettlementCommitment` бер һыҙат/мәғлүмәттәр, парзалар һыҙат буфер метамағлүмәттәре, һәм телеметрия сығара. |
+| Телеметрия & приборҙар таҡталары | `crates/iroha_telemetry/src/metrics.rs:4847`, `dashboards/grafana/settlement_router_overview.json:1` X | Prometheus өсөн буферҙар, дисперсия, сәс ҡырҡыу, конверсия һандары; Grafana өсөн плата СРЭ. |
+| Һылтанма схемаһы | `docs/source/nexus_fee_model.md:1` | Документтар ҡасабаһы квитанцияһы ятҡылыҡтары `LaneBlockCommitment`-та һаҡланған. |
 
-## Configuration
-Router knobs live under `[settlement.router]` (validated by `iroha_config`):
+## Конфигурация
+Маршрут руттары `[settlement.router]` аҫтында йәшәй (Prometheus тарафынан раҫланған):
 
 ```toml
 [settlement.router]
@@ -41,44 +42,40 @@ buffer_throttle_pct = 25      # Remaining-buffer % where throttling begins
 buffer_xor_only_pct = 10      # Remaining-buffer % where XOR-only mode is enforced
 buffer_halt_pct = 2           # Remaining-buffer % where settlement halts
 buffer_horizon_hours = 72     # Horizon (hours) represented by the XOR buffer
-```
+``` X
 
-Lane metadata wires in the per-dataspace buffer account:
-- `settlement.buffer_account` — account that holds the reserve (e.g., `buffer::cbdc_treasury`).
-- `settlement.buffer_asset` — asset definition debited for headroom (typically `xor#sora`).
-- `settlement.buffer_capacity_micro` — configured capacity in micro-XOR (decimal string).
+Һылтанма метамағлүмәт сымдары пер-мәғлүмәттәр буфер иҫәбенә:
+- `settlement.buffer_account` — резервты тотҡан иҫәп (мәҫәлән, `buffer::cbdc_treasury`).
+- `settlement.buffer_asset` — баш бүлмәһе өсөн дебетланған активтар билдәләмәһе (ғәҙәттә `xor#sora`X).
+- `settlement.buffer_capacity_micro` — микро-XOR-ҙа конфигурацияланған ҡәҙерле (ун унарлы еп).
 
-Absent metadata disables buffer snapshotting for that lane (telemetry falls back to zeroed capacity/status).
+Ҡайһы бер осраҡта был һыҙат өсөн буфер өҙөлә (телеметрия нуль ҡөҙрәткә/статусҡа тиклем төшә).## Конверсия торбаһы
+1. **Циталы:** `SettlementEngine::quote` конфигурацияланған эпсилон + волатильность маржаһы һәм стрижка ярус TWAP цитаталары, ҡайтарыу `SettlementReceipt` менән `xor_due` һәм `xor_after_haircut` плюс ваҡыт тамғаһы һәм шылтыратыусы-плюс `source_id`.【крос/съезд_маршрут/срк/хаҡ.rs. 1】【кәзит/съезд_маршрут/src/scrut.rct.rs:1】 .
+2. **Блокада: блок башҡарыу ваҡытында башҡарыусы яҙмалары `PendingSettlement` яҙмалары (урындағы сумма, TWAP, эпсилон, волатильность биҙрә, ликвидлыҡ профиле, оракул ваҡыт тамғаһы). `LaneSettlementBuilder` агрегаттары дөйөм һәм алмаштырыу метамағлүмәттәр Grafana блокты герметизациялау алдынан.【крат/srha_core/src/scr/mod.s:34【крет/ироха_ядро/src/src.sc.:3460】
+**Буфер снимок:** Әгәр ҙә һыҙат метамағлүмәттәре буфер иғлан итһә, төҙөүсе `SettlementBufferSnapshot` ( баш бүлмәһе, ҡәҙерле, статусы) `BufferPolicy` сиктәрен конфиглауҙан тотоп ала.
+4. **Ҡоллоҡ + телеметрия:** Квитанциялар һәм своп дәлилдәре ер эсендә `LaneBlockCommitment` һәм көҙгө статус снимоктары. Телеметрия яҙмалары буфер датчиктар, дисперсия (`iroha_settlement_pnl_xor`), ҡулланылған маржа (`iroha_settlement_haircut_bp`), опциональ алмаштырыу утилизацияһы, һәм бер активтарҙы үҙгәртеп ҡороу/сүп-сар өсөн счетчиктар шулай приборҙар таҡтаһы һәм иҫкәртмәләр синхронла Йөкмәткеһе.【крат/ироха_ядро/срк/блок.р.:298】【крат/ироха_ядро/срк/телеметрия.р.:844】
+5. **Дәлилдәр өҫтө:** `status::set_lane_settlement_commitments` реле/ДА ҡулланыусылар өсөн йөкләмәләрҙе баҫтырып сығара, Grafana приборҙар таҡталары Prometheus метрикаһын уҡый, ә операторҙар `ops/runbooks/settlement-buffers.md``dashboards/grafana/settlement_router_overview.json` менән бергә ҡуллана. тултырыу/дроссель ваҡиғалар.
 
-## Conversion Pipeline
-1. **Quote:** `SettlementEngine::quote` applies the configured epsilon + volatility margin and haircut tier to TWAP quotes, returning a `SettlementReceipt` with `xor_due` and `xor_after_haircut` plus the timestamp and caller-supplied `source_id`.【crates/settlement_router/src/price.rs:1】【crates/settlement_router/src/haircut.rs:1】
-2. **Accumulate:** During block execution the executor records `PendingSettlement` entries (local amount, TWAP, epsilon, volatility bucket, liquidity profile, oracle timestamp). `LaneSettlementBuilder` aggregates totals and swap metadata per `(lane, dataspace)` before sealing the block.【crates/iroha_core/src/settlement/mod.rs:34】【crates/iroha_core/src/block.rs:3460】
-3. **Buffer snapshot:** If lane metadata declares a buffer, the builder captures a `SettlementBufferSnapshot` (remaining headroom, capacity, status) using the `BufferPolicy` thresholds from config.【crates/iroha_core/src/block.rs:203】
-4. **Commit + telemetry:** Receipts and swap evidence land inside `LaneBlockCommitment` and are mirrored into status snapshots. Telemetry records buffer gauges, variance (`iroha_settlement_pnl_xor`), applied margin (`iroha_settlement_haircut_bp`), optional swapline utilisation, and per-asset conversion/haircut counters so dashboards and alerts stay in sync with the block contents.【crates/iroha_core/src/block.rs:298】【crates/iroha_core/src/telemetry.rs:844】
-5. **Evidence surfaces:** `status::set_lane_settlement_commitments` publishes commitments for relays/DA consumers, Grafana dashboards read the Prometheus metrics, and operators use `ops/runbooks/settlement-buffers.md` alongside `dashboards/grafana/settlement_router_overview.json` to track refill/throttle events.
+## Телеметрия һәм дәлилдәр
+- `iroha_settlement_buffer_xor`, `iroha_settlement_buffer_capacity_xor`, `iroha_settlement_buffer_status` — буфер снимок бер һыҙат/мәғлүмәттәр (микро-XOR + кодланған хәл).【крет/ироха_телеметрия/scr/scr/scr.
+- `iroha_settlement_pnl_xor` — аңлашылған дисперсия араһында vs vs пост-суск XOR өсөн блок партияһы.【крат/ироха_телеметрия/src/srcs.rs.rs:6236】
+- `iroha_settlement_haircut_bp` — һөҙөмтәле эпсилон/стрижка базис пункттары партияға ҡулланыла.【крат/ироха_телеметрия/src/src/src.rs.rs:6244】
+- `iroha_settlement_swapline_utilisation` — ликвидацион утилләштереү биҙрә ликвидлыҡ профиле ҡасан своп дәлилдәр бар.【крат/ироха_телеметрия/src/src.rs.rs:6252】
+- `settlement_router_conversion_total` / `settlement_router_haircut_total` — ҡасаба конверсиялары һәм кумулятив стрижкалар өсөн бер һыҙат/мәғлүмәттәр счетчиктары (XOR Берәмектәр).【крат/ироха_телеметрия/срк/метрия.р.р. 6260】【крат/ироха_ядро/срк/блок.rs:304】
+- Grafana платаһы: `dashboards/grafana/settlement_router_overview.json` (буфер баш, дисперсияһы, сәс ҡырҡыу) плюс Alertmanager ҡағиҙәләре Nexus һыҙаттары тураһында иҫкәртмә пакетында индерелгән.
+- Оператор runbook: `ops/runbooks/settlement-buffers.md` (баҫтырыу/иҫкәртмә эш ағымы) һәм FAQ `docs/source/nexus_settlement_faq.md`.## Төҙөүсе & SRE тикшерелгән исемлек
+- `[settlement.router]` ҡиммәттәре `config/config.json5` (йәки TOML) һәм `irohad --version` журналдары аша раҫлау; тәьмин итеү сиктәрен ҡәнәғәтләндерергә `alert > throttle > xor_only > halt`.
+- Буфер иҫәбенә/актив/ҡоролма менән һыҙат метамағлүмәттәре менән бергә шулай буфер датчиктар йәшәү запастарын сағылдыра; буферҙарҙы күҙәтергә тейешле һыҙаттар өсөн баҫыуҙарҙы үткәрмәй.
+- `settlement_router_*` һәм `dashboards/grafana/settlement_router_overview.json` аша `iroha_settlement_*` метрикаһы мониторы; уяу дроссель/XOR-тик/туҡталыш хәлдәр.
+- Run `cargo test -p settlement_router` өсөн хаҡтар/сәйәсәт ҡаплау һәм ғәмәлдәге блок кимәлендәге агрегация һынауҙары `crates/iroha_core/src/block.rs`.
+- `docs/source/nexus_fee_model.md`-та конфиг үҙгәрештәре өсөн идара итеүҙе раҫлау һәм `status.md`X сиктәре йәки телеметрия өҫтө үҙгәргәндә яңыртылғанын һаҡлағыҙ.
 
-## Telemetry & Evidence
-- `iroha_settlement_buffer_xor`, `iroha_settlement_buffer_capacity_xor`, `iroha_settlement_buffer_status` — buffer snapshot per lane/dataspace (micro-XOR + encoded state).【crates/iroha_telemetry/src/metrics.rs:6212】
-- `iroha_settlement_pnl_xor` — realised variance between due vs post-haircut XOR for the block batch.【crates/iroha_telemetry/src/metrics.rs:6236】
-- `iroha_settlement_haircut_bp` — effective epsilon/haircut basis points applied to the batch.【crates/iroha_telemetry/src/metrics.rs:6244】
-- `iroha_settlement_swapline_utilisation` — optional utilisation bucketed by liquidity profile when swap evidence is present.【crates/iroha_telemetry/src/metrics.rs:6252】
-- `settlement_router_conversion_total` / `settlement_router_haircut_total` — per-lane/dataspace counters for settlement conversions and cumulative haircuts (XOR units).【crates/iroha_telemetry/src/metrics.rs:6260】【crates/iroha_core/src/block.rs:304】
-- Grafana board: `dashboards/grafana/settlement_router_overview.json` (buffer headroom, variance, haircuts) plus Alertmanager rules embedded in the Nexus lane alert pack.
-- Operator runbook: `ops/runbooks/settlement-buffers.md` (refill/alert workflow) and the FAQ in `docs/source/nexus_settlement_faq.md`.
+## рулет планы Снэпшот
+- Маршрут + һәр төҙөүҙә телеметрия карапы; ҡапҡалар юҡ. Лейн метамағлүмәттәре буфер снимоктар баҫтырып сығарыумы-юҡмы икәнлеген контролдә тота.
+- Ғәҙәттәгесә конфигурациялау юл картаһы ҡиммәттәренә тап килә (60-сы TWAP, 25-се база эпсилон, 72 сәғәт буфер горизонты); көй аша конфиг һәм перезапуск `irohad` ғариза бирергә.
+- Дәлилдәр өйөмө = һыҙаттар иҫәп-хисап йөкләмәләре + Prometheus скреб өсөн Nexus/`iroha_settlement_*` серияһы + Grafana скриншот/JSON экспорты өсөн зыян күргән тәҙрә.
 
-## Developer & SRE Checklist
-- Set `[settlement.router]` values in `config/config.json5` (or TOML) and validate via `irohad --version` logs; ensure thresholds satisfy `alert > throttle > xor_only > halt`.
-- Populate lane metadata with the buffer account/asset/capacity so buffer gauges reflect live reserves; omit the fields for lanes that should not track buffers.
-- Monitor `settlement_router_*` and `iroha_settlement_*` metrics via `dashboards/grafana/settlement_router_overview.json`; alert on throttle/XOR-only/halt states.
-- Run `cargo test -p settlement_router` for pricing/policy coverage and the existing block-level aggregation tests in `crates/iroha_core/src/block.rs`.
-- Record governance approvals for config changes in `docs/source/nexus_fee_model.md` and keep `status.md` updated when thresholds or telemetry surfaces change.
-
-## Rollout Plan Snapshot
-- Router + telemetry ship in every build; no feature gates. Lane metadata controls whether buffer snapshots publish.
-- Default config matches the roadmap values (60 s TWAP, 25 bp base epsilon, 72 h buffer horizon); tune via config and restart `irohad` to apply.
-- Evidence bundle = lane settlement commitments + Prometheus scrape for the `settlement_router_*`/`iroha_settlement_*` series + Grafana screenshot/JSON export for the affected window.
-
-## Evidence & References
-- NX-3 settlement router acceptance notes: `status.md` (NX-3 section).
-- Operator surfaces: `dashboards/grafana/settlement_router_overview.json`, `ops/runbooks/settlement-buffers.md`.
-- Receipt schema and API surfaces: `docs/source/nexus_fee_model.md`, `/v1/sumeragi/status` -> `lane_settlement_commitments`.
+## Дәлилдәр & Һылтанмалар
+- NX-3 ҡасаба маршрутизаторы ҡабул итеү иҫкәрмәләре: `status.md`X (NX-3 бүлеге).
+- Оператор өҫтө: `dashboards/grafana/settlement_router_overview.json`, `ops/runbooks/settlement-buffers.md`.
+- Квитанция схемаһы һәм API өҫтө: `docs/source/nexus_fee_model.md`, `/v1/sumeragi/status` -> `lane_settlement_commitments`.

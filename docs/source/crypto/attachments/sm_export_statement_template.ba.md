@@ -7,50 +7,50 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 6742d2b87b8fbbc1493c5ae2704147b0f8d5d23af78004c2c9a112fe881efb11
 source_last_modified: "2025-12-29T18:16:35.937402+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Export-Control Statement Template
-% Hyperledger Iroha Compliance Working Group
+% SM2/SM3/SM4 Экспорт-контроль тураһында белдереүҙең ҡалыптары
+% Hyperledger Iroha үтәү эшсе төркөмө
 % 2026-05-06
 
-# Usage
+# Ҡулланыу
 
-Embed this statement in release notes, manifests, or legal correspondence when
-distributing SM-enabled artefacts. Update the placeholders to match the release,
-jurisdiction, and applicable license exceptions. Retain a signed copy with the
-release checklist.
+Был белдереүҙе индереү тураһында иҫкәрмәләр, күренә, йәки хоҡуҡи хатлашыу ҡасан
+таратыусы SM-мөмкинлекле артефакттар. Яңыртыу өсөн урын хужалары тура килә релиз,
+юрисдикция, һәм ғәмәлдәге лицензия айырым осраҡтар. Ҡул ҡуйылған күсермәһен һаҡлап ҡалыу менән
+тикшерелгән исемлек.
 
-# Statement
+# Белдереү
 
-> **Product:** Hyperledger Iroha {{ RELEASE_VERSION }} (`{{ ARTEFACT_ID }}`)
+> **Продукция:** Hyperledger Iroha {{ РЕЛЕЗС_ВЕРСИЯ }} (`{{ ARTEFACT_ID }}`)
 >
-> **Algorithms Included:** SM2 digital signature, SM3 hashing, SM4 symmetric
-> encryption (GCM/CCM)
+> **Алгоритмдар индерелгән:** SM2 цифрлы ҡултамғаһы, SM3 хеширование, SM4 симметрик
+> шифрлау (GCM/CCM)
 >
-> **Export Classification:** United States EAR Category 5, Part 2 (5D002.c.1);
-> European Union Regulation 2021/821 Annex 1, 5D002.
+> **Экспорт Классификация:** АҠШ-тың 5-се категорияһы, 2-се өлөш (5D002.c.1);
+> Европа берлеге тураһында положение 2021/821 1-се ҡушымта, 5D002.
 >
-> **License Exception(s):** {{ LICENSE_EXCEPTION }} (e.g., ENC §740.17(b)(2),
-> TSU §740.13 for source distribution).
+> **Лицензиялау Исключение(ы):** {{ ЯЛҒАН_ЕКСЕПЦИЯ }} (мәҫәлән, ENC §740.17(б)(2)
+> ТСУ §740.13 сығанаҡтарҙы таратыу өсөн).
 >
-> **Distribution Scope:** {{ DISTRIBUTION_SCOPE }} (e.g., “Global, excluding
-> embargoed territories listed in 15 CFR 746”).
+> **Тәбәбәт Скоп:** {{ ДИСТРИБУЦИЯ_СКОП }} (мәҫәлән, “Глобаль, иҫәпкә алмағанда
+> эмбарго территориялары исемлегенә 15 CFR 746”).
 >
-> **Operator Obligations:** Recipients must comply with applicable export,
-> import, and usage regulations. Deployments within the People’s Republic of
-> China require product and usage filings with the State Cryptography
-> Administration and adherence to mainland data residency requirements.
+> **оператор бурыстары:** Ҡабул итеүселәр ғәмәлдәге экспортты үтәргә тейеш,
+> импорт, һәм ҡулланыу нормалары. Халыҡ Республикаһы эсендәге хәлдәр 2018 йыл.
+> Ҡытай өсөн продукция һәм ҡулланыу өсөн подача дәүләт криптографияһы .
+> Идара итеү һәм материк мәғлүмәттәр ординатура талаптарын үтәү.
 >
-> **Contact:** {{ LEGAL_CONTACT_NAME }} — {{ LEGAL_CONTACT_EMAIL }} /
-> {{ LEGAL_CONTACT_PHONE }}
+> **Боны:** {{ ЛЕГАЛ_КОНТАКТ_НАМЕ }} — {{ ЛЕГАЛ_КОНТАКТ_ЕМАЛЬ }} /
+> {{ ЯҠТЫҠ_КОНТАКТ_ПОН }}
 >
-> This statement accompanies the cryptography compliance checklist and filing
-> templates provided in `docs/source/crypto/sm_compliance_brief.md`. Retain this
-> document and associated filings for a minimum of three years.
+> Был белдереүҙе оҙатып криптография үтәү тикшерелгән исемлек һәм тапшырыу
+> шаблондар `docs/source/crypto/sm_compliance_brief.md`-та бирелгән. Был һаҡлап ҡалыу
+> документ һәм улар менән бәйле документтар өсөн минимум өс йыл.
 
-# Signature
+# Ҡултамға
 
-- Authorised representative: ________________________
-- Title: ________________________
-- Date: ________________________
-
+- Рөхсәт ителгән вәкил: _______________________
+- Исем: ________________________
+- Дата: ________________________

@@ -8,61 +8,63 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Signing Ceremony Replacement
 description: How the Sora Parliament approves and distributes SoraFS chunker fixtures (SF-1b).
 sidebar_label: Signing Ceremony
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-> Roadmap: **SF-1b — Sora Parliament fixture approvals.**
+> 路线图：**SF-1b — Sora 议会固定装置批准。**
 
-The manual signing ritual used for SoraFS chunker fixtures is retired. All
-approvals now flow through the **Sora Parliament**, the sortition-based DAO that
-governs Nexus. Parliament members bond XOR to gain citizenship, rotate across
-panels, and cast on-chain votes that approve, reject, or roll back fixture
-releases. This guide explains the process and developer tooling.
+用于 SoraFS chunker 装置的手动签名仪式已停用。全部
+批准现在通过 **Sora 议会**，这是一个基于抽签的 DAO，
+管辖 Nexus。议会成员通过 XOR 债券获得公民身份，轮换
+小组，并进行链上投票以批准、拒绝或回滚固定装置
+发布。本指南解释了流程和开发人员工具。
 
-## Parliament overview
+## 议会概况
 
-- **Citizenship** — Operators bond the required XOR to enrol as citizens and
-  become eligible for sortition.
-- **Panels** — Responsibilities are split across rotating panels (Infrastructure,
-  Moderation, Treasury, …). The Infrastructure Panel owns SoraFS fixture
-  approvals.
-- **Sortition & rotation** — Panel seats are re-drawn at the cadence specified in
-  the Parliament constitution so no single group monopolises approvals.
+- **公民身份** — 运营商绑定所需的 XOR 以注册为公民，并且
+  获得抽签资格。
+- **小组** — 职责划分给轮换小组（基础设施、
+  适度、财政部……）。基础设施面板拥有 SoraFS 夹具
+  批准。
+- **排序和轮换** — 面板座位按照指定的节奏重新绘制
+  议会宪法因此没有任何一个团体垄断批准。
 
-## Fixture approval flow
+## 夹具审批流程
 
-1. **Proposal submission**
-   - The Tooling WG uploads the candidate `manifest_blake3.json` bundle plus
-     fixture diff to the on-chain registry via `sorafs.fixtureProposal`.
-   - The proposal records the BLAKE3 digest, semantic version, and change notes.
-2. **Review & voting**
-   - The Infrastructure Panel receives the assignment through the Parliament task
-     queue.
-   - Panel members inspect CI artefacts, run parity tests, and cast weighted
-     votes on-chain.
-3. **Finalisation**
-   - Once quorum is met, the runtime emits an approval event that includes the
-     canonical manifest digest and Merkle commitment to the fixture payload.
-   - The event is mirrored into the SoraFS registry so clients can fetch the
-     latest Parliament-approved manifest.
-4. **Distribution**
-   - CLI helpers (`cargo xtask sorafs-fetch-fixture`) pull the approved manifest
-     from Nexus RPC. The repository’s JSON/TS/Go constants stay in sync by
-     re-running `export_vectors` and validating the digest against the on-chain
-     record.
+1. **提交提案**
+   - 工具工作组上传候选 `manifest_blake3.json` 捆绑包以及
+     通过 `sorafs.fixtureProposal` 与链上注册表进行固定差异。
+   - 该提案记录了 BLAKE3 摘要、语义版本和变更说明。
+2. **审核与投票**
+   - 基础设施小组通过议会任务接收任务
+     队列。
+   - 小组成员检查 CI 制品、运行奇偶校验测试和铸件加权
+     链上投票。
+3. **最终确定**
+   - 一旦达到法定人数，运行时就会发出一个批准事件，其中包括
+     规范清单摘要和 Merkle 对夹具有效负载的承诺。
+   - 该事件被镜像到 SoraFS 注册表中，以便客户端可以获取
+     最新议会批准的清单。
+4. **分配**
+   - CLI 助手 (`cargo xtask sorafs-fetch-fixture`) 提取已批准的清单
+     来自 Nexus RPC。存储库的 JSON/TS/Go 常量通过以下方式保持同步
+     重新运行 `export_vectors` 并根据链上验证摘要
+     记录。
 
-## Developer workflow
+## 开发人员工作流程
 
-- Regenerate fixtures with:
+- 重新生成装置：
 
 ```bash
 cargo run -p sorafs_chunker --bin export_vectors
 ```
 
-- Use the Parliament fetch helper to download the approved envelope, verify
-  signatures, and refresh local fixtures. Point `--signatures` at the
-  Parliament-published envelope; the helper resolves the accompanying manifest,
-  recomputes the BLAKE3 digest, and enforces the canonical
-  `sorafs.sf1@1.0.0` profile.
+- 使用议会获取助手下载批准的信封，验证
+  签名，并刷新本地赛程。点 `--signatures` 处
+  议会出版的信封；帮助者解析随附的清单，
+  重新计算 BLAKE3 摘要，并强制执行规范
+  `sorafs.sf1@1.0.0` 配置文件。
 
 ```bash
 cargo xtask sorafs-fetch-fixture \
@@ -70,11 +72,11 @@ cargo xtask sorafs-fetch-fixture \
   --out fixtures/sorafs_chunker
 ```
 
-Pass `--manifest` if the manifest lives at a different URL. Unsigned envelopes
-are refused unless `--allow-unsigned` is set for local smoke runs.
+如果清单位于不同的 URL，则传递 `--manifest`。未签名的信封
+除非为本地烟雾运行设置 `--allow-unsigned`，否则将被拒绝。
 
-- When validating a manifest through a staging gateway, target Torii instead of
-  local payloads:
+- 通过暂存网关验证清单时，目标为 Torii 而不是
+  本地有效负载：
 
 ```bash
 sorafs-fetch \
@@ -85,31 +87,31 @@ sorafs-fetch \
   --json-out=reports/staging_gateway.json
 ```
 
-- Local CI no longer requires a `signer.json` roster.
-  `ci/check_sorafs_fixtures.sh` compares the repo state against the latest
-  on-chain commitment and fails when they diverge.
+- 本地 CI 不再需要 `signer.json` 名册。
+  `ci/check_sorafs_fixtures.sh` 将回购状态与最新的进行比较
+  链上承诺，当它们出现分歧时就会失败。
 
-## Governance notes
+## 治理说明
 
-- The Parliament constitution governs quorum, rotation, and escalation—no
-  crate-level configuration is needed.
-- Emergency rollbacks are handled through the Parliament moderation panel. The
-  Infrastructure Panel files a revert proposal referencing the prior manifest
-  digest, which replaces the release once approved.
-- Historical approvals remain available in the SoraFS registry for forensic
-  replay.
+- 议会宪法规定法定人数、轮换和升级——否
+  需要板条箱级别的配置。
+- 紧急回滚通过议会仲裁小组处理。的
+  基础设施小组提交了一份参考先前清单的恢复提案
+  摘要，一旦获得批准就会取代版本。
+- 历史批准仍可在 SoraFS 法医注册表中获取
+  重播。
 
-## FAQ
+## 常见问题解答
 
-- **Where did `signer.json` go?**  
-  It was removed. All signer attribution lives on-chain; `manifest_signatures.json`
-  in the repository is only a developer fixture that must match the latest
-  approval event.
+- **`signer.json`去哪儿了？**  
+  它被删除了。所有签名者归属都存在于链上； `manifest_signatures.json`
+  存储库中只有一个必须与最新版本相匹配的开发人员固定装置
+  批准事件。
 
-- **Do we still require local Ed25519 signatures?**  
-  No. Parliament approvals are stored as on-chain artefacts. Local fixtures exist
-  for reproducibility but are validated against the Parliament digest.
+- **我们还需要本地 Ed25519 签名吗？**  
+  不会。议会的批准作为链上文物存储。存在当地固定装置
+  为了可重复性，但根据议会摘要进行了验证。
 
-- **How do teams monitor approvals?**  
-  Subscribe to the `ParliamentFixtureApproved` event or query the registry via
-  Nexus RPC to retrieve the current manifest digest and panel roll call.
+- **团队如何监控审批？**  
+  订阅 `ParliamentFixtureApproved` 事件或通过以下方式查询注册表
+  Nexus 用于检索当前清单摘要和小组点名的 RPC。

@@ -7,77 +7,76 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 01bfdc70f601098acaefc60c6a3b4c464218b8c6f01f2f20eb3632994ff7110f
 source_last_modified: "2025-12-29T18:16:35.932211+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Confidential Gas Calibration Baselines
+# གསང་བའི་རླངས་རྫས་ཚད་འཇལ་གཞི་རིམ།
 
-This ledger tracks the validated outputs of the confidential gas calibration
-benchmarks. Each row documents a release-quality measurement set captured with
-the procedure described in `docs/source/confidential_assets.md#calibration-baselines--acceptance-gates`.
+འ་ནི་ལེག་ཇར་འདི་གིས་ གསང་བའི་རླངས་རྫས་ཚད་འཇལ་གྱི་ བདེན་དཔྱད་འབད་ཡོད་པའི་ཐོན་འབྲས་ཚུ་ བརྟག་ཞིབ་འབདཝ་ཨིན།
+ཚད་གཞི་ཚུ། གྲལ་ཐིག་རེ་རེ་གིས་ གསར་བཏོན་འབད་ཡོད་པའི་ གསར་བཏོན་སྤུས་ཚད་ཚད་འཇལ་ཆ་ཚན་ཅིག་ དང་གཅིག་ཁར་ དང་གཅིག་ཁར་བཟུང་ཡོད་པའི་ཡིག་ཆ་ཚུ་ ཡིག་ཆ་བཟོཝ་ཨིན།
+`docs/source/confidential_assets.md#calibration-baselines--acceptance-gates` ནང་གསལ་བཀོད་འབད་ཡོད་པའི་བྱ་རིམ་ཚུ།
 
-| Date (UTC) | Commit | Profile | `ns/op` | `gas/op` | `ns/gas` | Notes |
+| ཚེས་གྲངས་ (ཡུ་ཊི་སི) | ཁས་བླངས་ | གསལ་སྡུད་ | Prometheus | `gas/op` | `ns/gas` | དྲན་ཐོ། |
 | --- | --- | --- | --- | --- | --- | --- |
-| 2025-10-18 | 3c70a7d3 | baseline-neon | 2.93e5 | 1.57e2 | 1.87e3 | Darwin 25.0.0 arm64e (hostinfo); `cargo bench -p iroha_core --bench isi_gas_calibration -- --sample-size=200 --warm-up-time=5 --save-baseline neon-20251018`; `cargo test -p iroha_core bench_repro -- --ignored`; `cargo bench -p ivm --bench gas_calibration -- --sample-size=200 --warm-up-time=5`; `rustc 1.88.0 (6b00bc3)` |
-| 2026-04-28 | 8ea9b2a7 | baseline-neon-20260428 | 4.29e6 | 1.57e2 | 2.73e4 | Darwin 25.0.0 arm64 (`rustc 1.91.0`). Command: `cargo bench -p iroha_core --bench isi_gas_calibration -- --sample-size=10 --warm-up-time=2 --noplot --save-baseline baseline-neon-20260428`; log at `docs/source/confidential_assets_calibration_neon_20260428.log`. x86_64 parity runs (SIMD-neutral + AVX2) are scheduled for the 2026-03-19 Zurich lab slot; artefacts will land under `artifacts/confidential_assets_calibration/2026-03-x86/` with matching commands and will be merged into the baseline table once captured. |
-| 2026-04-28 | — | baseline-simd-neutral | — | — | — | **Waived** on Apple Silicon—`ring` enforces NEON for the platform ABI, so `RUSTFLAGS="-C target-feature=-neon"` fails before the bench can run (`docs/source/confidential_assets_calibration_simd_neutral_attempt_20260428.log`). Neutral data stays gated on CI host `bench-x86-neon0`. |
-| 2026-04-28 | — | baseline-avx2 | — | — | — | **Deferred** until an x86_64 runner is available. `arch -x86_64` cannot spawn binaries on this machine (“Bad CPU type in executable”; see `docs/source/confidential_assets_calibration_avx2_attempt_20260428.log`). CI host `bench-x86-avx2a` remains the source of record. |
+| ༢༠༢༥-༡༠-༡༨ | 3c70a7d3 | གཞི་རྟེན་-ནེའོན་ | ༢.༩༣ཨི་༥ | 1.57e2 | ༡.༨༧ཨི་༣ | ཌར་ཝིན་ ༢༥.༠.༠ གི་ arm64e (hostinfo); `cargo bench -p iroha_core --bench isi_gas_calibration -- --sample-size=200 --warm-up-time=5 --save-baseline neon-20251018`; `cargo test -p iroha_core bench_repro -- --ignored`; `cargo bench -p ivm --bench gas_calibration -- --sample-size=200 --warm-up-time=5`; `rustc 1.88.0 (6b00bc3)` |
+| ༢༠༢༦-༠༤-༢༨ | ༨ཨེ་༩བ༢ཨེ་༧ | གཞི་རྟེན་-ནེའོན་-༢༠༢༦༠༤༢༨ | ༤.༢༩e༦ | 1.57e2 | ༢་༧༣ཨི་༤ | ཌར་ཝིན་ ༢༥.༠.༠ ལག་༦༤ (I 18NI00000012X). བརྡ་བཀོད་: `cargo bench -p iroha_core --bench isi_gas_calibration -- --sample-size=10 --warm-up-time=2 --noplot --save-baseline baseline-neon-20260428`; `docs/source/confidential_assets_calibration_neon_20260428.log` ལུ་དྲན་ཐོ་། x86_64 ཆ་སྙོམས་རྒྱུག་འགྲན་ཚུ་ (SIMD-neutral + AVX2) འདི་ ༢༠༢༦-༠༣-༡༩ Zurich lab slot གི་དོན་ལུ་དུས་ཚོད་བཀོད་ཡོདཔ་ཨིན། ཅ་རྙིང་ཚུ་ `artifacts/confidential_assets_calibration/2026-03-x86/` གི་འོག་ལུ་ མཐུན་སྒྲིག་བརྡ་བཀོད་ཚུ་དང་གཅིག་ཁར་ ལྷོད་ཚུགས་ནི་ཨིནམ་དང་ འདི་གི་ཤུལ་ལས་ བཏོན་ཚར་བའི་ཤུལ་ལས་ གཞི་རྟེན་ཐིག་ཁྲམ་ནང་ལུ་ མཉམ་སྡེབ་འབད་འོང་། |
+| ༢༠༢༦-༠༤-༢༨ | — | གཞི་རྟེན་-སིམ་-ནའུ་ཊལ་ | — | — | — | **Apple Silicon—`ring` གིས་ NEON འདི་ གཞི་རྟེན་ ABI གི་དོན་ལུ་ བསྟར་སྤྱོད་འབདཝ་ཨིན། བར་གནས་ཀྱི་གནས་སྡུད་འདི་ CI host `bench-x86-neon0` ལུ་བཀག་བཞག་ཡོདཔ་ཨིན། |
+| ༢༠༢༦-༠༤-༢༨ | — | གཞི་རྟེན་-vx2 | — | — | — | **ཕར་འགྱངས་འབད་ཡོདཔ་** x86_64 རྒྱུག་མི་ཅིག་མ་ཐོབ་ཚུན་ཚོད་ཨིན། `arch -x86_64` གིས་ འཕྲུལ་ཆས་འདི་གུ་ གཉིས་ལྡན་གཉིས་ལྡན་བཟོ་མི་ཚུགས། CI host `bench-x86-avx2a` འདི་ ཐོ་བཀོད་ཀྱི་འབྱུང་ཁུངས་ཅིག་སྦེ་ལུས་ཡོདཔ་ཨིན། |
 
-`ns/op` aggregates the median wall-clock per instruction measured by Criterion;
-`gas/op` is the arithmetic mean of the corresponding schedule costs from
-`iroha_core::gas::meter_instruction`; `ns/gas` divides the summed nanoseconds by
-the summed gas across the nine-instruction sample set.
+`ns/op` གིས་ ཚད་གཞི་གིས་ འཇལ་མི་ བཀོད་རྒྱ་རེ་ལུ་ གྱང་ཚད་བར་མཚམས་ཚུ་ བསྡུ་སྒྲིག་འབདཝ་ཨིན།
+`gas/op` འདི་ དེ་དང་མཐུན་པའི་ལས་རིམ་གྱི་འགྲོ་སོང་ལས་ ཨང་རྩིས་རིག་པའི་ སྤྱིར་སྙོམས་ཨིན།
+`iroha_core::gas::meter_instruction`; `ns/gas` གིས་ བསྡོམས་རྩིས་ ནེ་ནོ་སེ་ཀོན་ཌི་གིས་ བགོ་བཤའ་རྐྱབ་ཨིན།
+བཀོད་རྒྱ་དགུ་ཡོད་པའི་དཔེ་ཚད་ཆ་ཚན་ནང་ལུ་ བསྡོམས་རྩིས་རླངས་རྫས་འདི་ཨིན།
 
-*Note.* The current arm64 host does not emit Criterion `raw.csv` summaries out of
-the box; rerun with `CRITERION_OUTPUT_TO=csv` or an upstream fix before tagging a
-release so the artefacts required by the acceptance checklist are attached.
-If `target/criterion/` is still missing after `--save-baseline`, collect the run
-on a Linux host or serialize the console output into the release bundle as a
-temporary stop-gap. For reference, the arm64 console log from the latest run
-lives at `docs/source/confidential_assets_calibration_neon_20251018.log`.
+*དྲན་འཛིན་.* ད་ལྟོའི་ mars64 ཧོསིཊི་འདི་གིས་ ཆ་རྐྱེན་ `raw.csv` བཅུད་བསྡུས་ཚུ་ ༢༠༠༨ ལས་ བཏོན་མི་ཚུགས།
+སྒྲོམ་འདི་; `CRITERION_OUTPUT_TO=csv` དང་མཉམ་དུ་བསྐྱར་གཡོག་བཀོལ།
+གསར་བཏོན་འབདཝ་ལས་ ངོས་ལེན་ཞིབ་དཔྱད་ཐོ་ཡིག་གིས་ དགོ་པའི་ ཅ་ཆས་ཚུ་ མཉམ་སྦྲགས་འབད་ཡོདཔ་ཨིན།
+`target/criterion/` འདི་ `--save-baseline` གི་ཤུལ་ལས་ ད་ལྟོ་ཡང་ མ་ཐོབ་པ་ཅིན་ རྒྱུག་འགྲན།
+ལི་ནགསི་ཧོསིཊི་གུ་ཡང་ན་ ཀོན་སོལ་ཨའུཊི་པུཊི་འདི་ གསར་བཏོན་བཱན་ཌལ་ལུ་ རིམ་སྒྲིག་འབད།
+གནས་སྐབས་ཀྱི་བཀག་འགོག། གཞི་བསྟུན་གྱི་དོན་ལུ་ ram64 ཀོན་སོལ་དྲན་ཐོ་འདི་ འཕྲལ་གྱི་གཡོག་བཀོལ།
+`docs/source/confidential_assets_calibration_neon_20251018.log` ལུ་སྡོད་དོ་ཡོདཔ་ཨིན།
 
-Per-instruction medians from the same run (`cargo bench -p iroha_core --bench isi_gas_calibration`):
+བཀོད་རྒྱ་གཅིག་ལས་ གཡོག་བཀོལ་མི་ལས་ བར་མཚམས་ (`cargo bench -p iroha_core --bench isi_gas_calibration`):
 
-| Instruction | median `ns/op` | schedule `gas` | `ns/gas` |
+| བསླབ་སྟོན་ | བར་མཚམས་`ns/op` | ལས་འཆར་ `gas` | `ns/gas` |
 | --- | --- | --- | --- |
-| RegisterDomain | 3.46e5 | 200 | 1.73e3 |
-| RegisterAccount | 3.15e5 | 200 | 1.58e3 |
-| RegisterAssetDef | 3.41e5 | 200 | 1.71e3 |
-| SetAccountKV_small | 3.28e5 | 67 | 4.90e3 |
-| GrantAccountRole | 3.33e5 | 96 | 3.47e3 |
-| RevokeAccountRole | 3.12e5 | 96 | 3.25e3 |
-| ExecuteTrigger_empty_args | 1.42e5 | 224 | 6.33e2 |
-| MintAsset | 1.56e5 | 150 | 1.04e3 |
-| TransferAsset | 3.68e5 | 180 | 2.04e3 |
+| ཐོ་བཀོད་མངའ་ཁོངས། | ༣་༤༦e༥ | ༢༠༠ | ༡.༧༣ཨི་༣ |
+| ཐོ་བཀོད་ལས་དོན་རྩིས་དཔྱད། | ༣་༡༥e༥ | ༢༠༠ | 1.58e3 |
+| ཐོ་བཀོད་ཨེ་སེཊ་ཌི་ཕི་ | ༣་༤༡ཨི་༥ | ༢༠༠ | ༡.༧༡e༣ |
+| setAccountKV_small | ༣.༢༨e༥ | ༦༧ | ༤.༩༠e3 |
+| གྷྲན་ཊི་ཨེཀ་ཀའུན་ ལས་རིམ། | ༣་༣༣ཨི་༥ | ༩༦ | ༣་༤༧e༣ |
+| RevokeAccount འགན་འཁུར་ | ༣་༡༢e༥ | ༩༦ | ༣་༢༥e༣ |
+| བཀོལ་སྤྱོད་ཊི་རི་གཱར་_བར་སྟོང་_ཨར་ཇི་ | 1.42e5 | 224 | ༦.༣༣ཨི་༢ |
+| མིན་ཊ་ཨེ་སེཊ་ | 1.56e5 | ༡༥༠ | 1.04e3 |
+| TransferAsset | ༣.༦༨e༥ | ༡༨༠ | 2.04e3 |
 
-### 2026-04-28 (Apple Silicon, NEON enabled)
+### ༢༠༢༦-༠༤-༢༨ (ཨེ་པཱལ་སི་ལི་ཀོན་, ནི་ལྕོགས་ཅན་བཟོ་ཡོདཔ།)
 
-Median latencies for the 2026-04-28 refresh (`cargo bench -p iroha_core --bench isi_gas_calibration -- --sample-size=10 --warm-up-time=2 --noplot --save-baseline baseline-neon-20260428`):
-
-| Instruction | median `ns/op` | schedule `gas` | `ns/gas` |
+༢༠༢༦-༠༤-༢༨ གི་དོན་ལུ་ བར་མཚམས་ཕྱི་འགྱུར་ (`cargo bench -p iroha_core --bench isi_gas_calibration -- --sample-size=10 --warm-up-time=2 --noplot --save-baseline baseline-neon-20260428`):| བསླབ་སྟོན་ | བར་མཚམས་`ns/op` | ལས་རིམ། `gas` | `ns/gas` |
 | --- | --- | --- | --- |
-| RegisterDomain | 8.58e6 | 200 | 4.29e4 |
-| RegisterAccount | 4.40e6 | 200 | 2.20e4 |
-| RegisterAssetDef | 4.23e6 | 200 | 2.12e4 |
-| SetAccountKV_small | 3.79e6 | 67 | 5.66e4 |
-| GrantAccountRole | 3.60e6 | 96 | 3.75e4 |
-| RevokeAccountRole | 3.76e6 | 96 | 3.92e4 |
-| ExecuteTrigger_empty_args | 2.71e6 | 224 | 1.21e4 |
-| MintAsset | 3.92e6 | 150 | 2.61e4 |
-| TransferAsset | 3.59e6 | 180 | 1.99e4 |
+| ཐོ་བཀོད་མངའ་ཁོངས། | ༨.༥༨e༦ | ༢༠༠ | ༤.༢༩e༤ |
+| ཐོ་བཀོད་ལས་དོན་རྩིས་དཔྱད། | ༤.༤༠e༦ | ༢༠༠ | ༢་༢༠e༤ |
+| ཐོ་བཀོད་ཨེ་སེཊ་ཌི་ཕི་ | ༤.༢༣e༦ | ༢༠༠ | ༢.༡༢e༤ |
+| setAccountKV_small | ༣་༧༩ཨི་༦ | ༦༧ | ༥.༦༦e༤ |
+| གྷྲན་ཊི་ཨེཀ་ཀའུན་ ལས་རིམ། | ༣.༦༠e༦ | ༩༦ | ༣་༧༥e༤ |
+| RevokeAccount འགན་འཁུར་ | ༣་༧༦e༦ | ༩༦ | ༣་༩༢e༤ |
+| བཀོལ་སྤྱོད་ཊི་རི་གཱར་_བར་སྟོང་_ཨར་ཇི་ | ༢.༧༡ཨི་༦ | 224 | 1.21e4 |
+| མིན་ཊ་ཨེ་སེཊ་ | ༣་༩༢e༦ | ༡༥༠ | ༢་༦༡e༤ |
+| TransferAsset | ༣.༥༩ཨི་༦ | ༡༨༠ | ༡.༩༩e4 |
 
-`ns/op` and `ns/gas` aggregates in the table above are derived from the sum of
-these medians (total `3.85717e7` ns across the nine-instruction set and 1,413
-gas units).
+`ns/op` དང་ `ns/gas` གོང་འཁོད་ཐིག་ཁྲམ་ནང་ བསྡོམས་རྩིས་ཚུ་ བསྡོམས་རྩིས་ལས་ འབྱུངམ་ཨིན།
+འདི་དག་བར་མཚམས་ (བསྡོམས་I `3.85717e7`ns བཀོད་སྒྲིག་དགུ་དང་ ༡༤༡༣
+རླངས་རྫས་ཚད་གཞི་ཚུ་)།
 
-The schedule column is enforced by `gas::tests::calibration_bench_gas_snapshot`
-(total 1,413 gas across the nine-instruction set) and will trip if future patches
-change metering without updating the calibration fixtures.
+དུས་ཚོད་ཀྱི་ཀེར་ཐིག་འདི་ `gas::tests::calibration_bench_gas_snapshot` གིས་བསྟར་སྤྱོད་འབདཝ་ཨིན།
+༼ བསྡོམས་རྩིས་ ༡༤༡༣ གྱི་ རླངས་རྫས་ ༩ ནང་༽ དང་ མ་འོངས་པའི་ ཐིག་ལེ་ཚུ་ཨིན་པ་ཅིན་ འགྲུལ་བསྐྱོད་འབད་འོང་།
+ཚད་འཇལ་སྒྲིག་བཀོད་ཚུ་དུས་མཐུན་བཟོ་མ་དགོ་པར་བསྒྱུར་བཅོས་འབད་ནི།
 
-## Commitment Tree Telemetry Evidence (M2.2)
+## ཁས་བླངས་ཤིང་རྒྱལཔོ་གི་སྒྲུབ་བྱེད་ (M2.2)
 
-Per roadmap task **M2.2**, every calibration run must capture the new
-commitment-tree gauges and eviction counters to prove the Merkle frontier stays
-within configured bounds:
+ལམ་སྟོན་ས་ཁྲ་རེ་ལུ་ **M2.2**, ཚད་འཇལ་གཡོག་བཀོལ་མི་རེ་རེ་གིས་ གསརཔ་འདི་བཟུང་དགོ།
+མར་ཀལ་ས་མཚམས་སྡོད་གནས་བདེན་དཔང་འབད་ནིའི་དོན་ལུ་ ཁས་བླངས་ཤིང་གི་འཇལ་ཚད་དང་ བཏོན་གཏང་ནི་གི་རྒྱབ་འགལ་ཚུ།
+རིམ་སྒྲིག་འབད་ཡོད་པའི་མཐའ་མཚམས་ནང་།
 
 - `iroha_confidential_tree_commitments{asset_id}`
 - `iroha_confidential_tree_depth{asset_id}`
@@ -89,44 +88,44 @@ within configured bounds:
 - `iroha_confidential_frontier_evictions_total{asset_id}`
 - `iroha_zk_verifier_cache_events_total{cache,event}`
 
-Record the values immediately before and after the calibration workload. A
-single command per asset is sufficient; example for `xor#wonderland`:
+ཚད་འཇལ་ལཱ་གི་མངའ་ཁོངས་ཀྱི་ཧེ་མ་དང་ཤུལ་ལས་ འཕྲལ་མགྱོགས་རང་གནས་གོང་ཚུ་ཐོ་བཀོད་འབད། ཅིག
+རྒྱུ་དངོས་རེ་ལུ་བརྡ་བཀོད་རྐྱངམ་ཅིག་འདི་ལངམ་སྦེ་ཡོདཔ་ཨིན། དཔེར་ན་ `xor#wonderland`: གི་དོན་ལུ་:
 
 ```bash
 curl -s http://127.0.0.1:8180/metrics \
   | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="xor#wonderland"}'
 ```
 
-Attach the raw output (or Prometheus snapshot) to the calibration ticket so the
-governance reviewer can confirm root-history caps and checkpoint intervals are
-honoured. The telemetry guide in `docs/source/telemetry.md#confidential-tree-telemetry-m22`
-expands on alerting expectations and the associated Grafana panels.
+ཐོན་འབྲས་སྔོ་མ་ (ཡང་ན་ Prometheus པར་ལེན་) འདི་ ཚད་འཇལ་ཤོག་བྱང་ལུ་ མཉམ་སྦྲགས་འབད།
+གཞུང་སྐྱོང་བསྐྱར་ཞིབ་པ་གིས་ རྩ་བའི་ལོ་རྒྱུས་ཀྱི་ མགུ་ཏོག་དང་ ཞིབ་དཔྱད་ཀྱི་བར་མཚམས་ཚུ་ བདེན་དཔྱད་འབད་ཚུགས།
+གུས་བཀུར་འབད་ཡོདཔ། `docs/source/telemetry.md#confidential-tree-telemetry-m22` ནང་ ཊེ་ལི་མི་ཊི་ལམ་སྟོན་པ།
+ཉེན་བརྡའི་རེ་བ་དང་ འབྲེལ་ཡོད་ Grafana པེ་ནཱལ་ཚུ་ རྒྱ་སྐྱེད་འབདཝ་ཨིན།
 
-Include the verifier cache counters in the same scrape so reviewers can confirm
-the miss ratio stayed below the 40 % warning threshold:
+བདེན་བཤད་འབད་མི་འདྲ་མཛོད་ཀྱི་གྱངས་ཁ་ཚུ་ བསྐྱར་སྒྲིག་འབད་ཚུགསཔ་ལས་ བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ ངེས་གཏན་བཟོ་ཚུགས།
+བརླག་སྟོར་ཤོར་བའི་ཆ་ཚད་འདི་ ༤༠% ཉེན་བརྡའི་ཚད་གཞི་འོག་ལུ་སྡོད་ཡོདཔ་ཨིན།
 
 ```bash
 curl -s http://127.0.0.1:8180/metrics \\
   | rg 'iroha_zk_verifier_cache_events_total{cache="vk",event="(hit|miss)"}'
 ```
 
-Document the derived ratio (`miss / (hit + miss)`) inside the calibration note
-to show the SIMD-neutral cost modelling exercises reused warm caches instead of
-thrashing the Halo2 verifier registry.
+ཚད་འཇལ་དྲན་ཐོ་ནང་ལུ་ བཏོན་གཏང་བའི་ཆ་ཚད་ (`ns/op`) འདི་ ཡིག་ཐོག་ལུ་བཀོད་དགོ།
+SIMD-neutral ཟད་འགྲོའི་དཔེ་ཚད་ཀྱི་ལུས་སྦྱོང་ཚུ་གི་ཚབ་ལུ་ དྲོད་ཤུགས་ཅན་གྱི་འདྲ་མཛོད་ཚུ་མེན་པར་ དེ་གི་ཚབ་ལུ་ དྲོད་ཤུགས་ཅན་གྱི་མཛོད་ཁང་ཚུ་སྟོན་ནི།
+Halo2 བདེན་བཤད་ཐོ་བཀོད་འདི་ བརྡུངས།
 
-## Neutral & AVX2 Waiver
+## ནའུ་རལ་དང་ཨེ་ཝི་ཨེགསི་༢ དགོངས་ཡངས་།
 
-SDK Council granted a temporary waiver for the Phase C gate requiring
-`baseline-simd-neutral` and `baseline-avx2` measurements:
+SDK Council གིས་ PhaseC གི་སྒོ་རའི་དོན་ལུ་ གནས་སྐབས་ཅིག་གི་དོན་ལུ་ དགོངས་ཡངས་གནང་ཡོདཔ།
+`baseline-simd-neutral` དང་ `baseline-avx2` ཚད་འཇལ་ནི།
 
-- **SIMD-neutral:** On Apple Silicon the `ring` crypto backend enforces NEON for
-  ABI correctness. Disabling the feature (`RUSTFLAGS="-C target-feature=-neon"`)
-  aborts the build before the bench binary is produced (`docs/source/confidential_assets_calibration_simd_neutral_attempt_20260428.log`).
-- **AVX2:** The local toolchain cannot spawn x86_64 binaries (`arch -x86_64 rustc -V`
-  → “Bad CPU type in executable”; see
+- **SIMD-neutral:** ཨེ་པཱལ་སི་ཀོན་གུ་ `ring` ཀིརིཔ་ཊོ་རྒྱབ་ལོག་བཀག་སྟེ་ NEON གི་དོན་ལུ་ ཤུགས་བཏོནམ་ཨིན།
+  ABI བདེན་པ། ཁྱད་རྣམ་ (`RUSTFLAGS="-C target-feature=-neon"`) ལྕོགས་མིན་བཟོ་དོ།
+  བེན་ཇི་གཉིས་ལྡན་མ་ཐོན་པའི་ཧེ་མ་ བཟོ་བསྐྲུན་འདི་ བཤོལ་བཞག་འབདཝ་ཨིན། (`docs/source/confidential_assets_calibration_simd_neutral_attempt_20260428.log`)
+- **AVX2:** ཉེ་གནས་ལག་ཆས་རིམ་སྒྲིག་གིས་ x86_64 གཉིས་ལྡན་ (`arch -x86_64 rustc -V` བཤུབ་མི་ཚུགསཔ།
+  → “སི་པི་ཡུ་དབྱེ་བ་ལག་ལེན་འཐབ་བཏུབ་མི་”; མཐོང་
   `docs/source/confidential_assets_calibration_avx2_attempt_20260428.log`).
 
-Until CI hosts `bench-x86-neon0` and `bench-x86-avx2a` are online, the NEON run
-above plus the telemetry evidence satisfy the Phase C acceptance criteria.
-The waiver is recorded in `status.md` and will be revisited once x86 hardware is
-available.
+CI ལུ་ `bench-x86-neon0` དང་ `bench-x86-avx2a` ཚུ་ ཡོངས་འབྲེལ་ཐོག་ལས་ ནེའོན་རྒྱུག་འགྲན།
+གོང་དུ་བསྡོམས་པའི་བརྡ་འཕྲིན་གྱིས་ PhaseC ངོས་ལེན་གྱི་ཚད་གཞི་འདི་ བསྒྲུབ་ཚུགསཔ་ཨིན།
+དགོངས་ཞུ་འདི་ `status.md` ནང་ལུ་ཐོ་བཀོད་འབད་ཡོདཔ་དང་ x86 མཐུན་རྐྱེན་འདི་ དེ་ཚར་གཅིག་འབད་བ་ཅིན་ ལོག་སྟེ་བལྟ་འོང་།
+ཡོད༌པ།

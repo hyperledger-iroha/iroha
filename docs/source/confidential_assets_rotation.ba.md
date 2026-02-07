@@ -7,91 +7,90 @@ generator: scripts/sync_docs_i18n.py
 source_hash: fd1e43316c492cc96ed107f6318841ad8db160735d4698c4f05562ff6127fda9
 source_last_modified: "2026-01-22T14:35:37.492932+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Confidential asset rotation playbook referenced by `roadmap.md:M3`.
+//! Конфиденциаль активтар әйләнеше плейбук һылтанмалар `roadmap.md:M3`.
 
-# Confidential Asset Rotation Runbook
+# Конфиденциаль актив ротациялы йүнһеҙ
 
-This playbook explains how operators schedule and execute confidential asset
-rotations (parameter sets, verifying keys, and policy transitions) while
-ensuring wallets, Torii clients, and mempool guards remain deterministic.
+Был playbook аңлата, нисек операторҙар графигы һәм башҡарыу конфиденциаль актив .
+әйләнештәр (параметрҙар йыйылмаһы, асҡыстарҙы раҫлау һәм сәйәсәт күсеүҙәре) шул уҡ ваҡытта
+янсыҡтарҙы тәьмин итеү, Torii клиенттары, ә ҡатыҡ һаҡсылары детерминистик булып ҡала.
 
-## Lifecycle & Statuses
+## Йәшәү циклы & Статустары
 
-Confidential parameter sets (`PoseidonParams`, `PedersenParams`, verifying keys)
-lattice and helper used to derive the effective status at a given height live in
-`crates/iroha_core/src/state.rs:7540`–`7561`. Runtime helpers sweep pending
-transitions as soon as the target height is reached and log failures for later
-rebroadcasts (`crates/iroha_core/src/state.rs:6725`–`6765`).
+Конфиденциаль параметр йыйылмалары (`PoseidonParams`, `PedersenParams`, раҫлау асҡыстары)
+решетка һәм ярҙамсы ҡулланылған, һөҙөмтәле статус сығарыу өсөн бирелгән бейеклектә йәшәй.
+`crates/iroha_core/src/state.rs:7540`–`7561`. Ярҙамсы ярҙамсылары көтөп торған
+күсештәр маҡсатлы бейеклеккә етеү менән һәм лог етешһеҙлектәре өсөн һуңыраҡ .
+crobroadcasts (`crates/iroha_core/src/state.rs:6725`–`6765` X).
 
-Asset policies embed
+Активтар сәйәсәте индерелгән
 `pending_transition { transition_id, new_mode, effective_height, conversion_window }`
-so governance can schedule upgrades via
-`ScheduleConfidentialPolicyTransition` and cancel them if required. See
-`crates/iroha_data_model/src/asset/definition.rs:320` and the Torii DTO mirrors
+шулай итеп, идара итеү графигы ала аша яңыртыу .
+`ScheduleConfidentialPolicyTransition` һәм уларҙы юҡҡа сығарыу, әгәр кәрәк. Күрергә
+`crates/iroha_data_model/src/asset/definition.rs:320` һәм Torii ДТО көҙгөләре
 (`crates/iroha_torii/src/routing.rs:1539`–`1580`).
 
-## Rotation Workflow
+## ротация эш ағымы
 
-1. **Publish new parameter bundles.** Operators submit
-   `PublishPedersenParams`/`PublishPoseidonParams` instructions (CLI
-   `iroha app zk params publish ...`) to stage new generator sets with metadata,
-   activation/deprecation windows, and status markers. The executor rejects
-   duplicate IDs, non-increasing versions, or bad status transitions per
-   `crates/iroha_core/src/smartcontracts/isi/world.rs:2499`–`2635`, and the
-   registry tests cover the failure modes (`crates/iroha_core/tests/confidential_params_registry.rs:93`–`226`).
-2. **Register/verifying-key updates.** `RegisterVerifyingKey` enforces backend,
-   commitment, and circuit/version constraints before a key can enter the
-   registry (`crates/iroha_core/src/smartcontracts/isi/world.rs:2067`–`2137`).
-   Updating a key automatically deprecates the old entry and wipes inline bytes,
-   as exercised by `crates/iroha_core/tests/zk_vk_deprecate_marks_status.rs:1`.
-3. **Schedule asset-policy transitions.** Once the new parameter IDs are live,
-   governance calls `ScheduleConfidentialPolicyTransition` with the desired
-   mode, transition window, and audit hash. The executor refuses conflicting
-   transitions or assets with outstanding transparent supply. Tests such as
-   `crates/iroha_core/tests/confidential_policy_gates.rs:300`–`384` verify that
-   aborted transitions clear `pending_transition`, while
-   `confidential_policy_transition_reaches_shielded_only_on_schedule` at
-   lines 385–433 confirms scheduled upgrades flip to `ShieldedOnly` exactly at
-   the effective height.
-4. **Policy application & mempool guard.** The block executor sweeps all pending
-   transitions at the start of each block (`apply_policy_if_due`) and emits
-   telemetry if a transition fails so operators can reschedule. During admission
-   the mempool refuses transactions whose effective policy would change mid-block,
-   ensuring deterministic inclusion across the transition window
+1. **Яңы параметр өйөмдәр баҫтырыу.** Операторҙар тапшыра
+   `PublishPedersenParams`/`PublishPoseidonParams` инструкциялары (CLI
+   `iroha app zk params publish ...`) яңы генератор комплекттарын метамағлүмәттәр менән ҡуйыу өсөн,
+   активация/аҫҡы windows, һәм статус маркерҙары. Башҡарыусы кире ҡаға .
+   дубликаты идентификаторҙар, артмаған версиялар, йәки насар статус күсеүҙәре бер
+   `crates/iroha_core/src/smartcontracts/isi/world.rs:2499`–`2635`, һәм
+   теркәү һынауҙары етешһеҙлектәр режимдарын ҡаплай (`crates/iroha_core/tests/confidential_params_registry.rs:93`–`226`).
+2. **Теркәү/тикшереү-төп яңыртыуҙар.** `RegisterVerifyingKey` backend үтәй,
+   йөкләмә, һәм схема/версия сикләүҙәре алдынан асҡыс инә ала
+   реестры (`crates/iroha_core/src/smartcontracts/isi/world.rs:2067`–`2137`).
+   Яңыртыу асҡыс автоматик рәүештә иҫке яҙма һәм салфеткалар рәтле байттарҙы ҡаҡшата,
+   `crates/iroha_core/tests/zk_vk_deprecate_marks_status.rs:1` тарафынан күнекмәләр үткәрелгән.
+3. **Практура актив-сәйәси күсеүҙәр.** Бер тапҡыр яңы параметр идентификаторҙары йәшәй,
+   идара итеү шылтыратыуҙары `ScheduleConfidentialPolicyTransition` менән теләк
+   режимы, күсеү тәҙрәһе, һәм аудит хеш. Башҡарыусы ҡапма-ҡаршылыҡлы баш тарта.
+   күсештәр йәки активтар менән асыҡ тәьмин ителгән. Һынауҙар, мәҫәлән,
+   `crates/iroha_core/tests/confidential_policy_gates.rs:300`–`384` X, тип раҫлай
+   аборт күсештәр асыҡ `pending_transition`, шул уҡ ваҡытта
+   Torii .
+   line385–433 раҫлай планлы яңыртыуҙар `ShieldedOnly` тиклем теүәл 2019 йылда 2000-гә тиклем әйләндерә.
+   һөҙөмтәле бейеклеге.
+4. **Сәйәсәт ҡушымтаһы & мемболь һаҡсыһы.** Блок башҡарыусы бөтә көтөп һепереп .
+   һәр блоктың башында күсеүҙәр (`apply_policy_if_due`) һәм сыға
+   телеметрия, әгәр күсеү етешһеҙлектәре шулай операторҙар үҙгәртеп була. Ҡабул итеү барышында
+   мемпуль операцияларҙан баш тарта, улар һөҙөмтәле сәйәсәт үҙгәрәсәк урта блок,
+   күсеү тәҙрәһе буйынса детерминистик инклюзияны тәьмин итеү
    (`docs/source/confidential_assets.md:60`).
 
-## Wallet & SDK Requirements
+## Батыр & SDK талаптары- Свифт һәм башҡа мобиль SDKs Torii ярҙамсылары әүҙем сәйәсәтте алыу өсөн фашлай
+  плюс теләһә ниндәй көтөлгән күсеү, шуға күрә янсыҡтар ҡул ҡуйыу алдынан ҡулланыусыларҙы иҫкәртергә мөмкин. Күрергә
+  `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:309` (ДТО) һәм улар менән бәйле
+  `IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift:591`-та һынауҙар.
+- CLI 18NI000000036X аша шул уҡ метамағлүмәттәрҙе көҙгөләй.
+  `crates/iroha_cli/src/main.rs:1497`–`1670` X), операторҙарға аудит үткәреү мөмкинлеген бирә.
+  сәйәсәт/параметр идентификаторҙары проводной активтар билдәләмәһе spelunkingһыҙ
+  блок магазины.
 
-- Swift and other mobile SDKs expose Torii helpers to fetch the active policy
-  plus any pending transition, so wallets can warn users before signing. See
-  `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:309` (DTO) and the associated
-  tests at `IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift:591`.
-- The CLI mirrors the same metadata via `iroha ledger assets data-policy get` (helper in
-  `crates/iroha_cli/src/main.rs:1497`–`1670`), enabling operators to audit the
-  policy/parameter IDs wired into an asset definition without spelunking the
-  block store.
+## Һынау & Телеметрия ҡаплау
 
-## Test & Telemetry Coverage
+- `crates/iroha_core/tests/zk_ledger_scaffold.rs:288`–`345` был сәйәсәтте раҫлай
+  күсештәр метамағлүмәттәр снимоктарына тарала һәм бер тапҡыр ҡулланыла.
+- `crates/iroha_core/tests/zk_dedup.rs:1` иҫбатлай, тип `Preverify` кэш
+  икеләтә сарыф итеү/икеләтә-иҫкәртмәләрҙе кире ҡаға, шул иҫәптән әйләнеш сценарийҙары ҡайҙа .
+  йөкләмәләр айырыла.
+— `crates/iroha_core/tests/zk_confidential_events.rs` һәм
+  `zk_shield_transfer_audit.rs` ҡапҡас ос-ос ҡалҡан → күсермәһе → ҡалҡан
+  ағымдар, тәьмин итеү аудит эҙҙәре параметр әйләнеше буйынса йәшәй.
+— `dashboards/grafana/confidential_assets.json` һәм
+  `docs/source/confidential_assets.md:401` документы 2000 йылда
+  тикшерелгән-кэш датчиктар, улар менән бергә һәр калибровка/әйләнеш йүгерә.
 
-- `crates/iroha_core/tests/zk_ledger_scaffold.rs:288`–`345` verifies that policy
-  transitions propagate into metadata snapshots and clear once applied.
-- `crates/iroha_core/tests/zk_dedup.rs:1` proves that the `Preverify` cache
-  rejects double-spends/double-proofs, including rotation scenarios where
-  commitments differ.
-- `crates/iroha_core/tests/zk_confidential_events.rs` and
-  `zk_shield_transfer_audit.rs` cover end-to-end shield → transfer → unshield
-  flows, ensuring the audit trail survives across parameter rotations.
-- `dashboards/grafana/confidential_assets.json` and
-  `docs/source/confidential_assets.md:401` document the CommitmentTree &
-  verifier-cache gauges that accompany every calibration/rotation run.
+## Runbook хужалығы
 
-## Runbook Ownership
-
-- **DevRel / Wallet SDK Leads:** maintain SDK snippets + quickstarts that show
-  how to surface pending transitions and replay the mint → transfer → reveal
-  tests locally (tracked under `docs/source/project_tracker/confidential_assets_phase_c.md:M3.2`).
-- **Program Mgmt / Confidential Assets TL:** approve transition requests, keep
-  `status.md` updated with upcoming rotations, and ensure waivers (if any) are
-  recorded alongside the calibration ledger.
+- **DevRel / Starle SDK Лидс:** SDK өҙөктәрен һаҡлау + caverstarts, улар күрһәтә .
+  нисек өҫкө көтөп күсеүҙәр һәм реплей мәтрүшкә → тапшырыу → асыу
+  урындағы анализдар (`docs/source/project_tracker/confidential_assets_phase_c.md:M3.2` буйынса күҙәтелә).
+- **Программа Mgmt / Конфиденциаль активтар TL:** күсеү запростарын раҫлай, һаҡлау
+  `crates/iroha_core/src/state.rs:6725` буласаҡ әйләнештәр менән яңыртыу, һәм тәьмин итеү отказ (әгәр бар икән) был
+  калибровка баш китабы менән бергә теркәлгән.

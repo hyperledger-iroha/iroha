@@ -6,58 +6,57 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 8ef338a20104dc5d15094e28a1332a604b68bdcfef1ff82fea784d43fdbd10b5
 source_last_modified: "2026-01-03T18:07:59.202230+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# GDPR DPIA Summary — Android SDK Telemetry (AND7)
+# جی ڈی پی آر ڈی پی آئی اے کا خلاصہ - اینڈروئیڈ ایس ڈی کے ٹیلی میٹری (اور 7)
 
-| Field | Value |
-|-------|-------|
-| Assessment Date | 2026-02-12 |
-| Processing Activity | Android SDK telemetry export to shared OTLP backends |
-| Controllers / Processors | SORA Nexus Ops (controller), partner operators (joint controllers), Hyperledger Iroha Contributors (processor) |
-| Reference Docs | `docs/source/sdk/android/telemetry_redaction.md`, `docs/source/android_support_playbook.md`, `docs/source/android_runbook.md` |
+| فیلڈ | قیمت |
+| ------- | ------- |
+| تشخیص کی تاریخ | 2026-02-12 |
+| پروسیسنگ سرگرمی | مشترکہ OTLP بیک اینڈ کو Android SDK ٹیلی میٹری ایکسپورٹ |
+| کنٹرولرز / پروسیسرز | SORA Nexus OPS (کنٹرولر) ، پارٹنر آپریٹرز (مشترکہ کنٹرولرز) ، Hyperledger Iroha شراکت کار (پروسیسر) |
+| حوالہ دستاویزات | `docs/source/sdk/android/telemetry_redaction.md` ، `docs/source/android_support_playbook.md` ، `docs/source/android_runbook.md` |
 
-## 1. Processing Description
+## 1. پروسیسنگ تفصیل
 
-- **Purpose:** Provide operational telemetry needed to support AND7 observability (latency, retries, attestation health) while mirroring the Rust node schema (§2 of `telemetry_redaction.md`).
-- **Systems:** Android SDK instrumentation -> OTLP exporter -> shared telemetry collector managed by SRE (see Support Playbook §8).
-- **Data subjects:** Operator staff using Android SDK-based apps; downstream Torii endpoints (authority strings are hashed per telemetry policy).
+۔
+۔
+- ** ڈیٹا مضامین: ** آپریٹر عملہ Android SDK پر مبنی ایپس کا استعمال کرتے ہوئے ؛ بہاو ​​Torii اختتامی مقامات (فی ٹیلی میٹری پالیسی میں اتھارٹی کے تاروں کو ہیش کیا جاتا ہے)۔
 
-## 2. Data Inventory & Mitigations
+## 2۔ ڈیٹا انوینٹری اور تخفیف
 
-| Channel | Fields | PII Risk | Mitigation | Retention |
-|---------|--------|----------|------------|-----------|
-| Traces (`android.torii.http.request`, `android.torii.http.retry`) | Route, status, latency | Low (no PII) | Authority hashed with Blake2b + rotating salt; no payload bodies exported. | 7–30 days (per telemetry doc). |
-| Events (`android.keystore.attestation.result`) | Alias label, security level, attestation digest | Medium (operational data) | Alias hashed (`alias_label`), `actor_role_masked` recorded for overrides with Norito audit tokens. | 90 days for success, 365 days for overrides/failures. |
-| Metrics (`android.pending_queue.depth`, `android.telemetry.export.status`) | Queue counts, exporter status | Low | Aggregated counts only. | 90 days. |
-| Device profile gauges (`android.telemetry.device_profile`) | SDK major, hardware tier | Medium | Bucketing (emulator/consumer/enterprise), no OEM or serial numbers. | 30 days. |
-| Network context events (`android.telemetry.network_context`) | Network type, roaming flag | Medium | Carrier name dropped entirely; supports compliance requirement to avoid subscriber data. | 7 days. |
+| چینل | فیلڈز | PII رسک | تخفیف | برقرار رکھنا |
+| --------- | -------- | ---------- | -------------- | ----------- |
+| نشانات (`android.torii.http.request` ، `android.torii.http.retry`) | راستہ ، حیثیت ، تاخیر | کم (نہیں PII) | اتھارٹی بلیک 2 بی + گھومنے والے نمک کے ساتھ ہیش ہوئی۔ کوئی پے لوڈ جسم برآمد نہیں ہوا۔ | 7–30 دن (فی ٹیلی میٹری ڈاکٹر) |
+| واقعات (`android.keystore.attestation.result`) | عرف لیبل ، سیکیورٹی لیول ، تصدیق ڈائجسٹ | میڈیم (آپریشنل ڈیٹا) | Norito آڈٹ ٹوکن کے ساتھ اوور رائڈس کے لئے `actor_role_masked` ریکارڈ کیا گیا ، عرف ہیشڈ (`alias_label`) ، `actor_role_masked` ریکارڈ کیا گیا۔ | کامیابی کے لئے 90 دن ، اوور رائڈس/ناکامیوں کے لئے 365 دن۔ |
+| میٹرکس (`android.pending_queue.depth` ، `android.telemetry.export.status`) | قطار گنتی ، برآمد کنندہ کی حیثیت | کم | مجموعی گنتی صرف۔ | 90 دن۔ |
+| ڈیوائس پروفائل گیجز (`android.telemetry.device_profile`) | ایس ڈی کے میجر ، ہارڈ ویئر ٹیر | میڈیم | بالٹینگ (ایمولیٹر/صارف/انٹرپرائز) ، کوئی OEM یا سیریل نمبر نہیں۔ | 30 دن |
+| نیٹ ورک کے سیاق و سباق کے واقعات (`android.telemetry.network_context`) | نیٹ ورک کی قسم ، رومنگ پرچم | میڈیم | کیریئر کا نام مکمل طور پر گرا۔ صارفین کے اعداد و شمار سے بچنے کے لئے تعمیل کی ضرورت کی حمایت کرتا ہے۔ | 7 دن۔ |
 
-## 3. Lawful Basis & Rights
+## 3. قانونی بنیاد اور حقوق
 
-- **Lawful basis:** Legitimate interest (Art. 6(1)(f)) — ensuring reliable operation of regulated ledger clients.
-- **Necessity test:** Metrics limited to operational health (no user content); hashed authority ensures parity with Rust nodes through reversible mapping available only to authorised support personnel (via override workflow).
-- **Balancing test:** Telemetry is scoped to operator-controlled devices, not end-user data. Overrides require signed Norito artefacts reviewed by Support + Compliance (Support Playbook §3 + §9).
-- **Data subject rights:** Operators contact Support Engineering (playbook §2) to request telemetry export/delete. Redaction overrides and logs (telemetry doc §Signal Inventory) enable fulfilment within 30 days.
+- ** حلال بنیاد: ** جائز دلچسپی (آرٹ۔ 6 (1) (f)) - ریگولیٹڈ لیجر کلائنٹس کے قابل اعتماد آپریشن کو یقینی بنانا۔
+- ** ضرورت ٹیسٹ: ** میٹرکس آپریشنل صحت (صارف کا کوئی مواد نہیں) تک محدود ؛ ہیشڈ اتھارٹی صرف مجاز سپورٹ اہلکاروں (اوور رائڈ ورک فلو کے ذریعے) کے لئے دستیاب ریورس ایبل میپنگ کے ذریعہ زنگ نوڈس کے ساتھ برابری کو یقینی بناتی ہے۔
+-** توازن ٹیسٹ: ** ٹیلی میٹری کو آپریٹر کے زیر کنٹرول آلات پر اسکوپ کیا جاتا ہے ، صارف کے آخری اعداد و شمار کو نہیں۔ اوور رائڈس کے لئے سپورٹ + تعمیل (سپورٹ پلے بوک §3 + §9) کے ذریعہ جائزہ لینے والے Norito نمونے کی ضرورت ہوتی ہے۔
+- ** ڈیٹا کے مضامین کے حقوق: ** آپریٹرز ٹیلی میٹری برآمد/حذف کرنے کی درخواست کرنے کے لئے سپورٹ انجینئرنگ (پلے بوک §2) سے رابطہ کریں۔ ریڈیکشن اوور رائڈس اور لاگز (ٹیلی میٹری ڈاک § سگنل انوینٹری) 30 دن کے اندر تکمیل کو قابل بناتا ہے۔
 
-## 4. Risk Assessment
+## 4. رسک تشخیص| خطرہ | امکان | اثر | بقایا تخفیف |
+| ------ | -------------- | -------- | ----------------------- |
+| ہیشڈ حکام کے ذریعہ دوبارہ شناخت | کم | میڈیم | نمک کی گردش `android.telemetry.redaction.salt_version` کے ذریعے ریکارڈ کی گئی ہے۔ محفوظ والٹ میں محفوظ کردہ نمکیات ؛ آڈٹ شدہ سہ ماہی میں اوور رائڈس۔ |
+| پروفائل بالٹیوں کے ذریعے ڈیوائس فنگر پرنٹ | کم | میڈیم | صرف ٹائر + ایس ڈی کے میجر برآمد ہوا۔ سپورٹ پلے بوک OEM/سیریل ڈیٹا کے لئے اضافے کی درخواستوں پر پابندی عائد کرتا ہے۔ |
+| اوور رائڈ غلط استعمال لیکنگ پی آئی آئی | بہت کم | اعلی | Norito اوور رائڈ درخواستوں کو لاگ ان ، 24h کے اندر ختم ہونے کی ضرورت ہے ، SRE منظوری (`docs/source/android_runbook.md` §3) کی ضرورت ہے۔ |
+| EU سے باہر ٹیلی میٹری اسٹوریج | میڈیم | میڈیم | EU + JP علاقوں میں تعینات جمع کرنے والے ؛ برقرار رکھنے کی پالیسی OTLP پسدید کنفیگریشن کے ذریعے نافذ کی گئی (سپورٹ پلے بوک §8 میں دستاویزی)۔ |
 
-| Risk | Likelihood | Impact | Residual Mitigation |
-|------|------------|--------|---------------------|
-| Re-identification via hashed authorities | Low | Medium | Salt rotation recorded through `android.telemetry.redaction.salt_version`; salts stored in secure vault; overrides audited quarterly. |
-| Device fingerprinting via profile buckets | Low | Medium | Only tier + SDK major exported; Support Playbook prohibits escalation requests for OEM/serial data. |
-| Override misuse leaking PII | Very Low | High | Norito override requests logged, expire within 24h, require SRE approval (`docs/source/android_runbook.md` §3). |
-| Telemetry storage outside EU | Medium | Medium | Collectors deployed in EU + JP regions; retention policy enforced via OTLP backend configuration (documented in Support Playbook §8). |
+مذکورہ بالا کنٹرول اور جاری نگرانی کے پیش نظر بقایا خطرہ قابل قبول سمجھا جاتا ہے۔
 
-Residual risk is deemed acceptable given the controls above and ongoing monitoring.
+## 5. اعمال اور فالو اپ
 
-## 5. Actions & Follow-ups
-
-1. **Quarterly review:** Validate telemetry schemas, salt rotations, and override logs; document in `docs/source/sdk/android/telemetry_redaction_minutes_YYYYMMDD.md`.
-2. **Cross-SDK alignment:** Coordinate with Swift/JS maintainers to maintain consistent hashing/bucketing rules (tracked in roadmap AND7).
-3. **Partner comms:** Include DPIA summary in partner onboarding kits (Support Playbook §9) and link to this document from `status.md`.
+1. ** سہ ماہی جائزہ: ** ٹیلی میٹری اسکیموں ، نمک کی گردشوں ، اور اوور رائڈ لاگز کی توثیق کریں۔ `docs/source/sdk/android/telemetry_redaction_minutes_YYYYMMDD.md` میں دستاویز۔
+2.
+3. ** پارٹنر کامس: ** پارٹنر آن بورڈنگ کٹس (سپورٹ پلے بوک §9) میں ڈی پی آئی اے سمری شامل کریں اور اس دستاویز سے `status.md` سے لنک کریں۔

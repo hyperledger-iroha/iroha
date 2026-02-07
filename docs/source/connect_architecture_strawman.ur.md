@@ -6,31 +6,32 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: a1a6bcc6bca3d7f70b82e35734b71d706ac46d8dc9c728351fabbd8a61dd3f31
 source_last_modified: "2026-01-04T10:50:53.610255+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Connect Session Architecture Strawman (Swift / Android / JS)
+# رابطہ سیشن آرکیٹیکچر اسٹرا مین (سوئفٹ / اینڈروئیڈ / جے ایس)
 
-This strawman proposal outlines the shared design for Nexus Connect workflows
-across the Swift, Android, and JavaScript SDKs. It is intended to support the
-Feb 2026 cross-SDK workshop and capture open questions before implementation.
+اس اسٹرا مین تجویز میں Nexus کنیکٹ ورک فلوز کے لئے مشترکہ ڈیزائن کا خاکہ پیش کیا گیا ہے
+سوئفٹ ، اینڈروئیڈ ، اور جاوا اسکرپٹ ایس ڈی کے میں۔ اس کا مقصد اس کی حمایت کرنا ہے
+فروری 2026 کراس ایس ڈی کے ورکشاپ اور عمل درآمد سے قبل کھلے سوالات پر قبضہ کریں۔
 
-> Last updated: 2026-01-29  
-> Authors: Swift SDK Lead, Android Networking TL, JS Lead  
-> Status: Draft for council review (threat model + data retention alignment added 2026-03-12)
+> آخری تازہ کاری: 2026-01-29  
+> مصنفین: سوئفٹ ایس ڈی کے لیڈ ، اینڈروئیڈ نیٹ ورکنگ ٹی ایل ، جے ایس لیڈ  
+> حیثیت: کونسل کے جائزے کے لئے مسودہ (خطرہ ماڈل + ڈیٹا برقرار رکھنے کی صف بندی میں 2026-03-12 شامل کیا گیا)
 
-## Goals
+## اہداف
 
-1. Align wallet ↔ dApp session lifecycle, including connection bootstrapping,
-   approvals, signing requests, and teardown.
-2. Define the Norito envelope schema (open/approve/sign/control) shared by all
-   SDKs and ensure parity with `connect_norito_bridge`.
-3. Split responsibilities between transport (WebSocket/WebRTC), encryption
-   (Norito Connect frames + key exchange), and application layers (SDK facades).
-4. Ensure deterministic behaviour across desktop/mobile platforms, including
-   offline buffering and reconnection.
+1. بٹوے کو سیدھ کریں ↔ ڈی اے پی پی سیشن لائف سائیکل ، بشمول کنکشن بوٹسٹریپنگ ،
+   منظوری ، درخواستوں پر دستخط کرنا ، اور آنسو۔
+2. Norito لفافہ اسکیما (اوپن/منظور/سائن/کنٹرول/کنٹرول) کی وضاحت کریں
+   SDKs اور `connect_norito_bridge` کے ساتھ برابری کو یقینی بنائیں۔
+3. ٹرانسپورٹ (ویب ساکٹ/ویبرٹ سی) کے مابین تقسیم ذمہ داریاں ، خفیہ کاری
+   .
+4. ڈیسک ٹاپ/موبائل پلیٹ فارمز میں ڈٹرمینسٹک سلوک کو یقینی بنائیں ، بشمول
+   آف لائن بفرنگ اور دوبارہ رابطہ۔
 
-## Session Lifecycle (High-Level)
+## سیشن لائف سائیکل (اعلی سطح)
 
 ```
 ┌────────────┐      ┌─────────────┐      ┌────────────┐
@@ -56,363 +57,342 @@ Feb 2026 cross-SDK workshop and capture open questions before implementation.
       │ 6. control frames for reject/close, error propagation, heartbeats.
 ```
 
-## Envelope/Norito Schema
+## لفافہ/Norito اسکیما
 
-All SDKs MUST use the canonical Norito schema defined in `connect_norito_bridge`:
+تمام SDKs کو `connect_norito_bridge` میں بیان کردہ کیننیکل Norito اسکیما کا استعمال کرنا چاہئے:
 
-- `EnvelopeV1` (open / approve / sign / control)
-- `ConnectFrameV1` (ciphertext frames w/ AEAD payload)
-- Control codes:
-  - `open_ext` (metadata, permissions)
-  - `approve_ext` (account, permissions, proofs, signature)
-  - `reject`, `close`, `ping/pong`, `error`
+- `EnvelopeV1` (کھلا / منظور / سائن / کنٹرول / کنٹرول)
+- `ConnectFrameV1` (ciphertext فریم W/ aaead payload)
+- کنٹرول کوڈ:
+  - `open_ext` (میٹا ڈیٹا ، اجازت)
+  - `approve_ext` (اکاؤنٹ ، اجازت ، ثبوت ، دستخط)
+  - `reject` ، `close` ، `ping/pong` ، `error`
 
-Swift previously shipped placeholder JSON encoders (`ConnectCodec.swift`). As of Apr 2026 the SDK
-always uses the Norito bridge and fails closed when the XCFramework is missing, but this strawman
-still captures the mandate that led to the bridge integration:
+اس سے قبل سوئفٹ نے پلیس ہولڈر JSON انکوڈرز (`ConnectCodec.swift`) بھیج دیا تھا۔ Apr2026 کے طور پر SDK
+Norito پل کا استعمال ہمیشہ استعمال کرتا ہے اور جب XCFramework غائب ہوتا ہے تو وہ بند ہوجاتا ہے ، لیکن یہ اسٹرا مین
+پھر بھی اس مینڈیٹ پر قبضہ کرتا ہے جس کی وجہ سے پل انضمام ہوتا ہے:
 
-| Function | Description | Status |
-|----------|-------------|--------|
-| `connect_norito_encode_control_open_ext` | dApp open frame | Implemented in bridge |
-| `connect_norito_encode_control_approve_ext` | Wallet approval | Implemented |
-| `connect_norito_encode_envelope_sign_request_tx/raw` | Sign requests | Implemented |
-| `connect_norito_encode_envelope_sign_result_ok/err` | Sign results | Implemented |
-| `connect_norito_decode_*` | Parsing for wallets/dApps | Implemented |
+| فنکشن | تفصیل | حیثیت |
+| ---------- | ------------- | -------- |
+| `connect_norito_encode_control_open_ext` | ڈی اے پی پی اوپن فریم | پل میں نافذ |
+| `connect_norito_encode_control_approve_ext` | پرس کی منظوری | نافذ |
+| `connect_norito_encode_envelope_sign_request_tx/raw` | اشارے کی درخواستیں | نافذ |
+| `connect_norito_encode_envelope_sign_result_ok/err` | اشارے کے نتائج | نافذ |
+| `connect_norito_decode_*` | بٹوے/ڈیپس کے لئے پارسنگ | نافذ |
 
-### Required Work
+### مطلوبہ کام
 
-- Swift: Replace placeholder `ConnectCodec` JSON helpers with bridge calls and surface
-  typed wrappers (`ConnectFrame`, `ConnectEnvelope`) using the shared Norito types. ✅ (Apr 2026)
-- Android/JS: Ensure the same wrappers exist; align error codes and metadata keys.
-- Shared: Document encryption (X25519 key exchange, AEAD) with consistent key derivation
-  per Norito spec, and provide sample integration tests using the Rust bridge.
+- سوئفٹ: پلیس ہولڈر `ConnectCodec` JSON مددگاروں کو پل کالز اور سطح کے ساتھ تبدیل کریں
+  مشترکہ Norito اقسام کا استعمال کرتے ہوئے ٹائپ شدہ ریپر (`ConnectFrame` ، `ConnectEnvelope`)۔ ✅ (اپریل 2026)
+- android/js: یقینی بنائیں کہ وہی ریپر موجود ہیں۔ غلطی کے کوڈز اور میٹا ڈیٹا کیز سیدھ کریں۔
+- مشترکہ: دستاویز کی خفیہ کاری (x25519 کلیدی تبادلہ ، AEAD) مستقل کلیدی مشتق کے ساتھ
+  فی Norito مخصوص ، اور مورچا پل کا استعمال کرتے ہوئے نمونہ انضمام ٹیسٹ فراہم کریں۔
 
-## Transport Contract
+## ٹرانسپورٹ کا معاہدہ- پرائمری ٹرانسپورٹ: ویب ساکٹ (`/v1/connect/ws?sid=<session_id>`)۔
+- اختیاری مستقبل: WEBRTC (TBD) - ابتدائی اسٹرا مین کے دائرہ کار سے باہر۔
+- حکمت عملی کو دوبارہ مربوط کریں: مکمل جٹر کے ساتھ کفایت شعاری بیک آف (بیس 5s ، زیادہ سے زیادہ 60s) ؛ سوئفٹ ، اینڈروئیڈ ، اور جے ایس کے پار مشترکہ مستقل مزاجی کی بحالی کی پیش گوئی کی جاسکتی ہے۔
+- پنگ/پونگ کیڈینس: 30s کی دل کی دھڑکن دوبارہ رابطہ قائم کرنے سے پہلے تین مس پونگوں کے لئے رواداری کے ساتھ۔ براؤزر تھروٹلنگ کے قواعد کو پورا کرنے کے لئے جے ایس کم سے کم وقفہ 15s تک کلیمپ کرتا ہے۔
+-پش ہکس: اینڈروئیڈ پرس ایس ڈی کے نے ویک اپ کے لئے اختیاری ایف سی ایم انضمام کو بے نقاب کیا ، جبکہ جے ایس پولنگ پر مبنی رہتا ہے (براؤزر پش اجازتوں کے لئے دستاویزی حدود)۔
+- ایس ڈی کے ذمہ داریاں:
+  - پنگ/پونگ دل کی دھڑکن کو برقرار رکھیں (موبائل پر بیٹریاں نکالنے سے پرہیز کریں)۔
+  - آف لائن (پابند قطار ، ڈی اے پی پی کے لئے برقرار رہتا ہے) جب بفر کے باہر جانے والے فریموں۔
+- ایونٹ اسٹریم API فراہم کریں (سوئفٹ جمع کریں `AsyncStream` ، Android فلو ، جے ایس Async Iter)۔
+- سطح کو دوبارہ جوڑیں اور دستی دوبارہ سبسکرائب کرنے کی اجازت دیں۔
+- ٹیلی میٹری ریڈیکشن: صرف سیشن کی سطح کے کاؤنٹرز (`sid` ہیش ، سمت ،
+  کنیکٹ ٹیلی میٹری میں دستاویز کردہ نمکیات کے ساتھ ترتیب ونڈو ، قطار کی گہرائی)
+  گائیڈ ؛ ہیڈر/چابیاں کبھی بھی نوشتہ جات یا ڈیبگ ڈور میں نہیں دکھائی دیتی ہیں۔
 
-- Primary transport: WebSocket (`/v1/connect/ws?sid=<session_id>`).
-- Optional future: WebRTC (TBD) – out of scope for initial strawman.
-- Reconnect strategy: exponential back-off with full jitter (base 5 s, max 60 s); shared constants across Swift, Android, and JS so retries remain predictable.
-- Ping/pong cadence: 30 s heartbeat with tolerance for three missed pongs before reconnect; JS clamps minimum interval to 15 s to satisfy browser throttling rules.
-- Push hooks: Android wallet SDK exposes optional FCM integration for wake-ups, while JS stays polling-based (documented limitations for browser push permissions).
-- SDK responsibilities:
-  - Maintain ping/pong heartbeats (avoid draining batteries on mobile).
-  - Buffer outgoing frames when offline (bounded queue, persisted for dApp).
-- Provide event stream API (Swift Combine `AsyncStream`, Android Flow, JS async iter).
-- Surface reconnect hooks and allow manual re-subscribe.
-- Telemetry redaction: only emit session-level counters (`sid` hash, direction,
-  sequence window, queue depth) with salts documented in the Connect telemetry
-  guide; headers/keys must never appear in logs or debug strings.
+## خفیہ کاری اور کلیدی انتظام
 
-## Encryption & Key Management
+### سیشن شناخت کرنے والے اور نمکیات
 
-### Session identifiers & salts
+- `sid` ایک 32 بائٹ شناخت کنندہ ہے جو `BLAKE2b-256("iroha-connect|sid|" || chain_id || app_ephemeral_pk || nonce16)` سے اخذ کیا گیا ہے۔  
+  `/v1/connect/session` کو فون کرنے سے پہلے اس کی گنتی کریں۔ بٹوے اسے `approve` فریموں میں گونجتے ہیں تاکہ دونوں فریق کلیدی جرائد اور ٹیلی میٹری کو مستقل طور پر اہم کرسکیں۔
+- ایک ہی نمک ہر کلیدی محنت کے مرحلے کو کھانا کھلاتا ہے لہذا ایس ڈی کے کبھی بھی میزبان پلیٹ فارم سے کٹائی کی جانے والی اینٹروپی پر انحصار نہیں کرتے ہیں۔
 
-- `sid` is a 32-byte identifier derived from `BLAKE2b-256("iroha-connect|sid|" || chain_id || app_ephemeral_pk || nonce16)`.  
-  DApps compute it before calling `/v1/connect/session`; wallets echo it in `approve` frames so both sides can key journals and telemetry consistently.
-- The same salt feeds every key-derivation step so SDKs never rely on entropy harvested from the host platform.
+### ابتدائی کلیدی ہینڈلنگ
 
-### Ephemeral key handling
+- ہر سیشن میں تازہ X25519 کلیدی مواد استعمال ہوتا ہے۔  
+  سوئفٹ اسے `ConnectCrypto` کے ذریعے کیچین/سیکیور انکلیو میں اسٹور کرتا ہے ، Android بٹوے کو مضبوط باکس میں ڈیفالٹ (ٹی کی حمایت یافتہ کی اسٹورز پر واپس گرتے ہوئے) ، اور جے ایس کو ایک محفوظ سیاق و سباق کی ویب کریپٹو مثال یا آبائی `iroha_js_host` پلگ ان کی ضرورت ہوتی ہے۔
+- اوپن فریموں میں ڈی اے پی پی ایففیمرل پبلک کلید کے علاوہ ایک اختیاری تصدیق کا بنڈل شامل ہے۔ بٹوے کی منظوری تعمیل کے بہاؤ کے ل needed بٹوے کی عوامی کلید اور کسی بھی ہارڈ ویئر کی تصدیق کو واپس کرتی ہے۔
+- تصدیق شدہ پے لوڈ قبول شدہ اسکیما کی پیروی کریں:  
+  `attestation { platform, evidence_b64, statement_hash }`۔  
+  براؤزر بلاک کو چھوڑ سکتے ہیں۔ جب بھی ہارڈ ویئر کی حمایت یافتہ چابیاں استعمال ہوتی ہیں تو دیسی بٹوے میں اس میں شامل ہوتا ہے۔
 
-- Every session uses fresh X25519 key material.  
-  Swift stores it in the Keychain/Secure Enclave via `ConnectCrypto`, Android wallets default to StrongBox (falling back to TEE-backed keystores), and JS requires a secure-context WebCrypto instance or the native `iroha_js_host` plug-in.
-- Open frames include the dApp ephemeral public key plus an optional attestation bundle. Wallet approvals return the wallet public key and any hardware attestation needed for compliance flows.
-- Attestation payloads follow the accepted schema:  
-  `attestation { platform, evidence_b64, statement_hash }`.  
-  Browsers may omit the block; native wallets include it whenever hardware-backed keys are in use.
+### دشاتمک کلیدیں اور AEAD
 
-### Directional keys & AEAD
+-مشترکہ رازوں کو HKDF-SHA256 (مورچا برج مددگاروں کے ذریعے) اور ڈومین سے الگ شدہ معلومات کے تاروں کے ساتھ بڑھایا جاتا ہے:
+  - `iroha-connect|k_app` → ایپ → پرس ٹریفک۔
+  - `iroha-connect|k_wallet` → والیٹ → ایپ ٹریفک۔
+- AEAD V1 لفافے (`connect_norito_bridge` ہر پلیٹ فارم پر مددگاروں کو بے نقاب کرتا ہے) کے لئے چاچا 20-پولی 1305 ہے۔  
+  وابستہ اعداد و شمار `("connect:v1", sid, dir, seq_le, kind=ciphertext)` کے برابر ہیں لہذا ہیڈر پر چھیڑ چھاڑ کا پتہ چل جاتا ہے۔
+- نونسس 64 بٹ ترتیب کاؤنٹر (`nonce[0..4]=0` ، `nonce[4..12]=seq_le`) سے اخذ کیے گئے ہیں۔ مشترکہ مددگار ٹیسٹ یقینی بناتے ہیں کہ SDKs میں بگینٹ/یوینٹ کے تبادلوں ایک جیسے ہی برتاؤ کرتے ہیں۔
 
-- Shared secrets are expanded with HKDF-SHA256 (via the Rust bridge helpers) and domain-separated info strings:
-  - `iroha-connect|k_app` → app→wallet traffic.
-  - `iroha-connect|k_wallet` → wallet→app traffic.
-- AEAD is ChaCha20-Poly1305 for the v1 envelope (`connect_norito_bridge` exposes helpers on every platform).  
-  Associated data equals `("connect:v1", sid, dir, seq_le, kind=ciphertext)` so tampering on headers is detected.
-- Nonces are derived from the 64-bit sequence counter (`nonce[0..4]=0`, `nonce[4..12]=seq_le`). Shared helper tests ensure BigInt/UInt conversions behave identically across SDKs.
+### گردش اور بازیابی ہینڈ شیک- گردش اختیاری رہتی ہے لیکن پروٹوکول کی وضاحت کی گئی ہے: ڈی اے پی پیز ایک `Control::RotateKeys` فریم خارج کرتے ہیں جب تسلسل کاؤنٹر لپیٹ گارڈ سے رجوع کرتے ہیں تو ، بٹوے نئی عوامی کلید کے ساتھ ساتھ ایک دستخط شدہ اعتراف کے ساتھ جواب دیتے ہیں ، اور دونوں فریق سیشن کو بند کیے بغیر فوری طور پر نئی سمتل کیز حاصل کرتے ہیں۔
+- بٹوے کی طرف سے کلیدی نقصان اسی مصافحہ کو متحرک کرتا ہے جس کے بعد `resume` کنٹرول ہوتا ہے تاکہ DAPPs کو فلش کیچڈ سیفر ٹیکسٹ کو فلش کرنا جانتا ہو جس نے ریٹائرڈ کلید کو نشانہ بنایا۔
 
-### Rotation & recovery handshake
+تاریخی کریپٹوکیٹ فال بیکس کے لئے `docs/connect_swift_ios.md` دیکھیں ؛ کوٹلن اور جے ایس کے پاس `docs/connect_kotlin_ws*.md` کے تحت مماثل حوالہ جات ہیں۔
 
-- Rotation remains optional but the protocol is defined: dApps emit a `Control::RotateKeys` frame when sequence counters approach the wrap guard, wallets respond with the new public key plus a signed acknowledgement, and both sides immediately derive new directional keys without closing the session.
-- Wallet-side key loss triggers the same handshake followed by a `resume` control so dApps know to flush cached ciphertext that targeted the retired key.
+## اجازت اور ثبوت
 
-For historic CryptoKit fallbacks see `docs/connect_swift_ios.md`; Kotlin and JS have matching references under `docs/connect_kotlin_ws*.md`.
+- پل کے ذریعہ برآمد کردہ مشترکہ Norito ڈھانچے کے ذریعے اجازت کے ظاہر ہونے کی اجازت لازمی ہے۔  
+  فیلڈز:
+  - `methods` - فعل (`sign_transaction` ، `sign_raw` ، `submit_proof` ،…)۔  
+  - `events` - سبسکرپشنز ڈی اے پی پی کو منسلک کرنے کی اجازت ہے۔  
+  - `resources` - اختیاری اکاؤنٹ/اثاثہ فلٹرز تاکہ بٹوے تک رسائی حاصل کرسکیں۔  
+  - `constraints` - چین ID ، TTL ، یا کسٹم پالیسی نوبس جو پرس پر دستخط کرنے سے پہلے نافذ ہوتا ہے۔
+- تعمیل میٹا ڈیٹا اجازتوں کے ساتھ ساتھ سواری کرتا ہے:
+  - اختیاری `attachments[]` میں Norito منسلک حوالہ جات (KYC بنڈل ، ریگولیٹر رسیدیں) پر مشتمل ہے۔  
+  - `compliance_manifest_id` درخواست کو پہلے سے منظور شدہ مینی فیسٹ سے جوڑتا ہے تاکہ آپریٹرز آڈٹ پرووننس کرسکیں۔
+- پرس کے جوابات متفقہ کوڈز کا استعمال کرتے ہیں:
+  - `user_declined` ، `permissions_mismatch` ، `compliance_failed` ، `internal_error`۔  
+  ہر ایک `localized_message` UI اشارے کے علاوہ ایک مشین پڑھنے کے قابل `reason_code` لے سکتا ہے۔
+- منظوری کے فریموں میں منتخب کردہ اکاؤنٹ/کنٹرولر ، اجازت کی بازگشت ، پروف بنڈل (زیڈ کے پروف یا تصدیق) ، اور کسی بھی پالیسی ٹوگل (جیسے ، `offline_queue_enabled`) شامل ہیں۔  
+  ردعمل اسی اسکیما کو خالی `proof` کے ساتھ آئینہ دار ہے لیکن پھر بھی آڈیٹیبلٹی کے لئے `sid` ریکارڈ کریں۔
 
-## Permissions & Proofs
+## SDK facades
 
-- Permission manifests must round-trip through the shared Norito struct exported by the bridge.  
-  Fields:
-  - `methods` — verbs (`sign_transaction`, `sign_raw`, `submit_proof`, …).  
-  - `events` — subscriptions the dApp is allowed to attach to.  
-  - `resources` — optional account/asset filters so wallets can scope access.  
-  - `constraints` — chain ID, TTL, or custom policy knobs that the wallet enforces before signing.
-- Compliance metadata rides alongside permissions:
-  - Optional `attachments[]` contain Norito attachment references (KYC bundles, regulator receipts).  
-  - `compliance_manifest_id` ties the request to a previously approved manifest so operators can audit provenance.
-- Wallet responses use the agreed codes:
-  - `user_declined`, `permissions_mismatch`, `compliance_failed`, `internal_error`.  
-  Each may carry a `localized_message` for UI hints plus a machine-readable `reason_code`.
-- Approval frames include the selected account/controller, permission echo, proof bundle (ZK proof or attestation), and any policy toggles (e.g., `offline_queue_enabled`).  
-  Rejections mirror the same schema with empty `proof` but still record the `sid` for auditability.
+| SDK | مجوزہ API | نوٹ |
+| ----- | -------------- | ------- |
+| سوئفٹ | `ConnectClient` ، `ConnectSession` ، `ConnectRequest` ، `ConnectApproval` | پلیس ہولڈرز کو ٹائپڈ ریپر + async ندیوں سے تبدیل کریں۔ |
+| android | کوٹلن کوروٹائنز + فریموں کے لئے مہر بند کلاس | پورٹیبلٹی کے لئے تیز ڈھانچے کے ساتھ سیدھ کریں۔ |
+| جے ایس | فریم اقسام کے لئے async Iterators + ٹائپ اسکرپٹ enums | بنڈلر دوستانہ SDK (براؤزر/نوڈ) فراہم کریں۔ |
 
-## SDK Facades
-
-| SDK | Proposed API | Notes |
-|-----|--------------|-------|
-| Swift | `ConnectClient`, `ConnectSession`, `ConnectRequest`, `ConnectApproval` | Replace placeholders with typed wrappers + async streams. |
-| Android | Kotlin coroutines + sealed classes for frames | Align with Swift structure for portability. |
-| JS | Async iterators + TypeScript enums for frame kinds | Provide bundler-friendly SDK (browser/node). |
-
-### Common behaviours
-
-- `ConnectSession` orchestrates lifecycle:
-  1. Establish WebSocket, perform handshake.
-  2. Exchange open/approve frames.
-  3. Handle sign requests/responses.
-  4. Emit events to application layer.
-- Provide high-level helpers:
+### عام طرز عمل- `ConnectSession` آرکیسٹریٹس لائف سائیکل:
+  1. ویب ساکٹ قائم کریں ، مصافحہ کریں۔
+  2. ایکسچینج اوپن/منظور فریم۔
+  3. سائن کی درخواستوں/جوابات کو سنبھالیں۔
+  4. ایپلیکیشن پرت میں واقعات کا اخراج کریں۔
+- اعلی سطحی مددگار فراہم کریں:
   - `requestSignature(tx, metadata)`
   - `approveSession(account, permissions)`
   - `reject(reason)`
-  - `cancelRequest(hash)` – emits a control frame acknowledged by the wallet.
-- Error handling: map Norito error codes to SDK-specific errors; include
-  domain-specific codes for UI using the shared taxonomy (`Transport`, `Codec`, `Authorization`, `Timeout`, `QueueOverflow`, `Internal`). Swift's baseline implementation + telemetry guide lives in [`connect_error_taxonomy.md`](connect_error_taxonomy.md) and is the reference for Android/JS parity.
-- Emit telemetry hooks for queue depth, reconnect counts, and request latency (`connect.queue_depth`, `connect.reconnects_total`, `connect.latency_ms`).
+  - `cancelRequest(hash)` - بٹوے کے ذریعہ تسلیم شدہ ایک کنٹرول فریم کا اخراج کرتا ہے۔
+- غلطی سے نمٹنے کے لئے: SDK- مخصوص غلطیوں کے لئے نقشہ Norito غلطی کوڈز ؛ شامل کریں
+  مشترکہ درجہ بندی (`Transport` ، `Codec` ، `Authorization` ، `Timeout` ، `QueueOverflow` ، `Internal`) کا استعمال کرتے ہوئے UI کے لئے ڈومین سے متعلق کوڈز۔ سوئفٹ کی بیس لائن پر عمل درآمد + ٹیلی میٹری گائیڈ [`connect_error_taxonomy.md`] (connect_error_taxonomy.md) میں رہتا ہے اور Android/JS برابری کا حوالہ ہے۔
+- قطار کی گہرائی ، دوبارہ منسلک گنتی ، اور درخواست میں تاخیر (`connect.queue_depth` ، `connect.reconnects_total` ، `connect.latency_ms`) کے لئے ٹیلی میٹری ہکس خارج کریں۔
  
-## Sequence Numbers & Flow Control
+## ترتیب نمبر اور فلو کنٹرول
 
-- Each direction keeps a dedicated 64-bit `sequence` counter that starts at zero when the session opens. The shared helper types clamp increments and trigger a `ConnectError.sequenceOverflow` + key-rotation handshake well before the counter would wrap.
-- Nonces and associated data reference the sequence number, so duplicates can be rejected without parsing payloads. SDKs must store `{sid, dir, seq, payload_hash}` in their journals to make deduplication deterministic across reconnects.
-- Wallets advertise back-pressure via a logical window (`FlowControl` control frames). DApps dequeue only when a window token is available; wallets emit new tokens after processing ciphertext to keep pipelines bounded.
-- Resume negotiation is explicit: both sides emit `Control::Resume { seq_app_max, seq_wallet_max, queue_depths }` after reconnecting so observers can verify how much data was re-sent and whether journals contain gaps.
-- Conflicts (e.g., two payloads with the same `(sid, dir, seq)` but different hashes) escalate to `ConnectError.Internal` and force a new `sid` to avoid silent divergence.
+- ہر سمت ایک سرشار 64 بٹ `sequence` کاؤنٹر رکھتا ہے جو صفر سے شروع ہوتا ہے جب سیشن کھلتا ہے۔ مشترکہ مددگار اقسام کلیمپ انکریمنٹس میں اضافہ کریں اور کاؤنٹر کے لپیٹنے سے پہلے ہی `ConnectError.sequenceOverflow` + کلیدی گردش کی ہینڈ شیک کو متحرک کریں۔
+- نونس اور اس سے وابستہ ڈیٹا حوالہ ترتیب نمبر کا حوالہ دیتے ہیں ، لہذا پے لوڈ کو پارس کیے بغیر نقل کو مسترد کیا جاسکتا ہے۔ ایس ڈی کے ایس کو لازمی طور پر `{sid, dir, seq, payload_hash}` کو اپنے جرائد میں ذخیرہ کرنا ہوگا تاکہ دوبارہ رابطہ قائم کرنے میں کٹوتی کا تعی .ن بنایا جاسکے۔
+- بٹوے ایک منطقی ونڈو (`FlowControl` کنٹرول فریم) کے ذریعے بیک پریشر کی تشہیر کرتے ہیں۔ ڈیپس ڈیوکیو صرف اس وقت جب ونڈو ٹوکن دستیاب ہو۔ پائپ لائنوں کو پابند رکھنے کے لئے بٹوے نئے ٹوکن کا اخراج کرتے ہیں۔
+- دوبارہ شروع کی بات چیت واضح ہے: دونوں فریقوں نے دوبارہ رابطہ قائم کرنے کے بعد `Control::Resume { seq_app_max, seq_wallet_max, queue_depths }` کا اخراج کیا تاکہ مبصرین اس بات کی تصدیق کرسکیں کہ کتنا ڈیٹا دوبارہ سینٹ تھا اور آیا جرائد میں فرق موجود ہے۔
+- تنازعات (جیسے ، ایک ہی `(sid, dir, seq)` کے ساتھ دو پے لوڈز لیکن مختلف ہیش) `ConnectError.Internal` میں بڑھ جاتے ہیں اور خاموش انحراف سے بچنے کے لئے ایک نیا `sid` پر مجبور کریں۔
 
-## Threat model and data retention alignment
+## خطرہ ماڈل اور ڈیٹا برقرار رکھنے کی صف بندی- ** سطحوں پر غور کیا گیا: ** ویب ساکٹ ٹرانسپورٹ ، Norito برج انکوڈ/ڈیکوڈ ،
+  جرنل کی استقامت ، ٹیلی میٹری برآمد کنندگان ، اور ایپ کا سامنا کرنے والی کال بیکس۔
+- ** بنیادی اہداف: ** سیشن کے راز کی حفاظت کریں (x25519 کیز ، اخذ کردہ AEAD کیز ،
+  نوشن/ترتیب کاؤنٹرز) لاگ/ٹیلی میٹری میں لیک سے ، ری پلے کو روکیں اور
+  ڈاون گریڈ حملے ، اور جرائد اور بے ضابطگی کی اطلاعات کو برقرار رکھنا۔
+- ** تخفیف کوڈفائڈ: **
+  - جرائد صرف سائپر ٹیکسٹ لے کر جاتے ہیں۔ ذخیرہ شدہ میٹا ڈیٹا ہیش ، لمبائی تک محدود ہے
+    فیلڈز ، ٹائم اسٹیمپس ، اور ترتیب نمبر۔
+  - ٹیلی میٹری پے لوڈ کسی بھی ہیڈر/پے لوڈ کے مواد کو ختم کردیتی ہے اور اس میں صرف شامل ہے
+    `sid` کے علاوہ مجموعی کاؤنٹرز کے نمکین ہیش ؛ redaction چیک لسٹ نے مشترکہ
+    آڈٹ برابری کے لئے ایس ڈی کے کے درمیان۔
+  - سیشن کے نوشتہ جات کو گھمایا جاتا ہے اور 7 دن کے بعد ڈیفالٹ کے ذریعہ عمر ختم ہوجاتی ہے۔ بٹوے بے نقاب ہیں
+    A `connectLogRetentionDays` KNOB (SDK ڈیفالٹ 7) اور طرز عمل کو دستاویز کریں
+    لہذا ریگولیٹڈ تعیناتی سخت ونڈوز کو پن کر سکتی ہے۔
+  - برج API غلط استعمال (گمشدہ پابندیاں ، بدعنوان Ciphertext ، غلط ترتیب)
+    خام پے لوڈ یا چابیاں کی بازگشت کے بغیر ٹائپ شدہ غلطیاں لوٹاتا ہے۔
 
-- **Surfaces considered:** WebSocket transport, Norito bridge encode/decode,
-  journal persistence, telemetry exporters, and app-facing callbacks.
-- **Primary goals:** protect session secrets (X25519 keys, derived AEAD keys,
-  nonce/sequence counters) from leaks in logs/telemetry, prevent replay and
-  downgrade attacks, and bound retention of journals and anomaly reports.
-- **Mitigations codified:**
-  - Journals carry ciphertext only; metadata stored is limited to hashes, length
-    fields, timestamps, and sequence numbers.
-  - Telemetry payloads redacts any header/payload content and includes only
-    salted hashes of `sid` plus aggregate counters; redaction checklist shared
-    between SDKs for audit parity.
-  - Session logs are rotated and age out after 7 days by default. Wallets expose
-    a `connectLogRetentionDays` knob (SDK default 7) and document the behaviour
-    so regulated deployments can pin stricter windows.
-  - Bridge API misuse (missing bindings, corrupt ciphertext, invalid sequence)
-    returns typed errors without echoing raw payloads or keys.
+جائزہ لینے سے زیر التواء سوالات `docs/source/sdk/swift/connect_workshop.md` میں ٹریک کیے گئے ہیں
+اور کونسل کے منٹوں میں حل ہوجائے گا۔ ایک بار بند ہونے کے بعد اسٹرا مین ہوگا
+ڈرافٹ سے قبول شدہ کو فروغ دیا گیا۔
 
-Pending questions from review are tracked in `docs/source/sdk/swift/connect_workshop.md`
-and will be resolved in the council minutes; once closed the strawman will be
-promoted from draft to accepted.
+## آف لائن بفرنگ اور دوبارہ رابطہ
 
-## Offline Buffering & Reconnections
+### جرنلنگ کا معاہدہ
 
-### Journaling contract
-
-Every SDK maintains an append-only journal per session so the dApp and wallet
-can queue frames while offline, resume without data loss, and provide evidence
-for telemetry. The contract mirrors the Norito bridge types so the same byte
-representation survives across the mobile/JS stacks.
-
-- Journals live under a hashed session identifier (`sha256(sid)`), producing two
-  files per session: `app_to_wallet.queue` and `wallet_to_app.queue`. Swift uses
-  a sandboxed file wrapper, Android stores the files via `Room`/`FileChannel`,
-  and JS writes to IndexedDB; all formats are binary and endian-stable.
-- Each record serialises as `ConnectJournalRecordV1`:
-  - `direction: u8` (`0 = app→wallet`, `1 = wallet→app`)
+ہر ایس ڈی کے فی سیشن میں صرف ایک ضمیمہ جرنل برقرار رکھتا ہے لہذا ڈی اے پی پی اور پرس
+آف لائن ہوتے ہوئے فریموں کی قطار لگاسکتے ہیں ، ڈیٹا کے نقصان کے بغیر دوبارہ شروع کرسکتے ہیں ، اور ثبوت فراہم کرسکتے ہیں
+ٹیلی میٹری کے لئے۔ معاہدہ Norito پل کی اقسام کو آئینہ دیتا ہے لہذا اسی بائٹ
+نمائندگی موبائل/جے ایس اسٹیکس میں باقی ہے۔- جرائد ایک ہیشڈ سیشن شناخت کنندہ (`sha256(sid)`) کے تحت رہتے ہیں ، دو تیار کرتے ہیں
+  فائلیں فی سیشن: `app_to_wallet.queue` اور `wallet_to_app.queue`۔ سوئفٹ استعمال کرتا ہے
+  ایک سینڈ باکسڈ فائل ریپر ، اینڈروئیڈ فائلوں کو `Room`/`FileChannel` کے ذریعے اسٹور کرتا ہے ،
+  اور جے ایس انڈیکسڈ بی کو لکھتا ہے۔ تمام فارمیٹس بائنری اور اینڈین مستحکم ہیں۔
+- `ConnectJournalRecordV1` کے بطور ہر ریکارڈ سیریلائزز:
+  - `direction: u8` (`0 = app→wallet` ، `1 = wallet→app`)
   - `sequence: u64`
-  - `payload_hash: [u8; 32]` (Blake3 of ciphertext + headers)
+  - `payload_hash: [u8; 32]` (Ciphertext + ہیڈر کا بلیک 3)
   - `ciphertext_len: u32`
   - `received_at_ms: u64`
   - `expires_at_ms: u64`
-  - `ciphertext: [u8; ciphertext_len]` (exact Norito frame already AEAD-wrapped)
-- Journals store ciphertext verbatim. We never re-encrypt the payload; AEAD
-  headers already authenticate direction keys, so persistence reduces to
-  fsyncing the appended record.
-- A `ConnectQueueState` struct in memory mirrors the file metadata (depth,
-  bytes used, oldest/newest seq). It feeds the telemetry exporters and the
-  `FlowControl` helper.
-- Journals cap at 32 frames / 1 MiB by default; hitting the cap evicts the
-  oldest entries (`reason=overflow`). `ConnectFeatureConfig.max_queue_len`
-  overrides these defaults per deployment.
-- Journals retain data for 24 h (`expires_at_ms`). Background GC removes stale
-  segments eagerly so the on-disk footprint stays bounded.
-- Crash safety: append, fsync, and update the memory mirror _before_ notifying
-  the caller. On startup, SDKs scan the directory, validate record checksums,
-  and rebuild `ConnectQueueState`. Corruption causes the offending record to be
-  skipped, flagged via telemetry, and optionally quarantined for support dumps.
-- Because ciphertext already satisfies the Norito privacy envelope, the only
-  additional metadata recorded is the hashed session id. Apps wanting extra
-  privacy can opt into `telemetry_opt_in = false`, which stores journals but
-  redacts queue-depth exports and disables sharing hashed `sid` in logs.
-- SDKs expose `ConnectQueueObserver` so wallets/dApps can inspect queue depth,
-  drains, and GC outcomes; this hook feeds status UIs without parsing logs.
+  - `ciphertext: [u8; ciphertext_len]` (عین مطابق Norito فریم پہلے ہی AEAD- لپیٹا ہوا ہے)
+- جرائد نے سائفر ٹیکسٹ وربیٹیم اسٹور کیا۔ ہم کبھی بھی پے لوڈ کو دوبارہ خفیہ نہیں کرتے ہیں۔ aead
+  ہیڈر پہلے ہی سمت کی چابیاں کی توثیق کرتے ہیں ، لہذا استقامت کم ہوجاتی ہے
+  fsyncing appendended ریکارڈ.
+- میموری میں ایک `ConnectQueueState` ڈھانچہ فائل میٹا ڈیٹا (گہرائی ،
+  بائٹس استعمال شدہ ، قدیم ترین/جدید ترین SEQ)۔ یہ ٹیلی میٹری برآمد کنندگان اور فیڈ کرتا ہے
+  `FlowControl` مددگار۔
+- 32 فریموں / 1 ایم بی میں جرائد کیپ ڈیفالٹ کے لحاظ سے ؛ ٹوپی کو مارنا اس کو بے دخل کرتا ہے
+  قدیم ترین اندراجات (`reason=overflow`)۔ `ConnectFeatureConfig.max_queue_len`
+  فی تعیناتی ان ڈیفالٹس کو اوور رائڈ کریں۔
+- جرائد 24H (`expires_at_ms`) کے لئے ڈیٹا برقرار رکھتے ہیں۔ پس منظر جی سی باسی کو ہٹاتا ہے
+  طبقات بے تابی سے لہذا آن ڈسک کے زیر اثر پابند رہتا ہے۔
+- کریش سیفٹی: ضمیمہ ، FSYNC ، اور میموری آئینے کو اپ ڈیٹ کریں _ بیفور_ مطلع کرنا
+  کال کرنے والا اسٹارٹ اپ پر ، ایس ڈی کے ڈائریکٹری کو اسکین کرتے ہیں ، ریکارڈ چیکوں کی توثیق کرتے ہیں ،
+  اور `ConnectQueueState` کو دوبارہ تعمیر کریں۔ بدعنوانی کا سبب بنتا ہے
+  چھوڑ دیا ، ٹیلی میٹری کے ذریعے جھنڈا لگایا گیا ، اور سپورٹ ڈمپوں کے لئے اختیاری طور پر قرنطین کیا گیا۔
+- کیونکہ سائفر ٹیکسٹ پہلے ہی Norito پرائیویسی لفافے کو پورا کرتا ہے ، صرف
+  اضافی میٹا ڈیٹا ریکارڈ کیا گیا ہیشڈ سیشن ID ہے۔ ایپس اضافی چاہتے ہیں
+  رازداری `telemetry_opt_in = false` میں انتخاب کرسکتی ہے ، جو جرائد کو محفوظ کرتی ہے لیکن
+  ریڈیکٹس قطار کی گہرائی سے برآمدات اور شیئرنگ ہیشڈ `sid` کو لاگوں میں غیر فعال کردیتی ہے۔
+- ایس ڈی کے `ConnectQueueObserver` کو بے نقاب کریں تاکہ بٹوے/DAPP قطار کی گہرائی کا معائنہ کرسکیں ،
+  نالیوں ، اور جی سی کے نتائج ؛ یہ ہک لاگ ان کے بغیر اسٹیٹس UIs کو کھلاتا ہے۔
 
-### Replay & resume semantics
+### ری پلے اور دوبارہ شروع کی گئی الفاظ
 
-1. When reconnecting, SDKs emit `Control::Resume` with `{seq_app_max,
-   seq_wallet_max, queued_app, queued_wallet, journal_hash}`. The hash is the
-   Blake3 digest of the append-only journal so mismatched peers can detect drift.
-2. The receiving peer compares the resume payload with its state, requests
-   retransmission when gaps exist, and acknowledges replayed frames via
-   `Control::ResumeAck`.
-3. Replayed frames always respect insertion order (`sequence` then write-time).
-   Wallet SDKs MUST apply back-pressure by issuing `FlowControl` tokens (also
-   journaled) so dApps cannot flood the queue while offline.
-4. Journals store ciphertext verbatim, so replay simply pumps the recorded bytes
-   back through the transport and decoder. No per-SDK re-encoding is allowed.
+1. دوبارہ رابطہ قائم کرتے وقت ، SDKs `Control::Resume` ext exam exac_app_max ،
+   Seq_wallet_max ، queud_app ، queed_wallet ، جرنل_ہش} `. ہیش ہے
+   صرف ضمیمہ جرنل کا بلیک 3 ڈائجسٹ تاکہ مماثل ہم عمر بڑھنے کا پتہ لگاسکیں۔
+2. وصول کنندہ ہم مرتبہ دوبارہ شروع کرنے والے پے لوڈ کو اپنی ریاست ، درخواستوں کے ساتھ موازنہ کرتا ہے
+   جب خلاء موجود ہو تو پھر سے دوبارہ کام کرنے سے ، اور ری پلےڈ فریموں کو اس کے ذریعے تسلیم کرتا ہے
+   `Control::ResumeAck`۔
+3. ری پلےڈ فریم ہمیشہ اندراج کے آرڈر کا احترام کرتے ہیں (`sequence` پھر لکھنے کا وقت)۔
+   بٹوے ایس ڈی کے لازمی طور پر `FlowControl` ٹوکن جاری کرکے بیک پریشر کا اطلاق کریں (یہ بھی
+   جرنل) لہذا ڈیپس آف لائن کے دوران قطار میں سیلاب نہیں کرسکتے ہیں۔
+4. روزنامچے اسٹور سیفر ٹیکسٹ وربیٹیم اسٹور کرتے ہیں ، لہذا ری پلے ریکارڈ شدہ بائٹس کو آسانی سے پمپ کرتا ہے
+   نقل و حمل اور ضابطہ کشائی کے ذریعے واپس۔ فی-SDK دوبارہ انکوڈنگ کی اجازت نہیں ہے۔
 
-### Reconnection flow
+### بحالی کا بہاؤ1. ٹرانسپورٹ ویب سائٹ کو دوبارہ قائم کرتا ہے اور نئے پنگ وقفہ پر بات چیت کرتا ہے۔
+2. ڈی اے پی پی ری پِل نے بٹوے سے بیک پریشر کا احترام کرتے ہوئے ، ترتیب میں فریموں کو ترتیب دیا
+   (`ConnectSession.nextControlFrame()` `FlowControl` ٹوکن حاصل کرتا ہے)۔
+3. بٹوے کے ڈکرپٹ بفرڈ نتائج ، ترتیب کی نیراکی کی تصدیق کرتے ہیں ، اور
+   منظوری/نتائج زیر التواء۔
+4. دونوں فریق ایک `resume` کنٹرول کا خلاصہ کرتے ہیں `seq_app_max` ، `seq_wallet_max` ،
+   اور ٹیلی میٹری کے لئے قطار کی گہرائی۔
+5. ڈپلیکیٹ فریم (`sequence` + `payload_hash` سے ملاپ) کو تسلیم کیا گیا ہے اور گرا دیا گیا ہے۔ تنازعات `ConnectError.Internal` کو بڑھاتے ہیں اور جبری سیشن کو دوبارہ شروع کرتے ہیں۔
 
-1. Transport re-establishes WebSocket and negotiates new ping interval.
-2. dApp replays queued frames in order, respecting back-pressure from wallet
-   (`ConnectSession.nextControlFrame()` yields `FlowControl` tokens).
-3. Wallet decrypts buffered results, verifies sequence monotonicity, and
-   replays pending approvals/results.
-4. Both sides emit a `resume` control summarising `seq_app_max`, `seq_wallet_max`,
-   and queue depths for telemetry.
-5. Duplicate frames (matching `sequence` + `payload_hash`) are acknowledged and dropped; conflicts raise `ConnectError.Internal` and trigger a forced session restart.
+### ناکامی کے طریقوں
 
-### Failure modes
+- اگر سیشن کو باسی سمجھا جاتا ہے (`offline_timeout_ms` ، پہلے سے طے شدہ 5 منٹ) ،
+  بفرڈ فریم صاف کردیئے جاتے ہیں اور ایس ڈی کے نے `ConnectError.sessionExpired` کو بڑھایا ہے۔
+- جرنل بدعنوانی کی صورت میں ، ایس ڈی کے ایک واحد Norito ڈیکوڈ کی مرمت کی کوشش کرتے ہیں۔ پر
+  ناکامی وہ جرنل کو چھوڑ دیتے ہیں اور `connect.queue_repair_failed` ٹیلی میٹری کا اخراج کرتے ہیں۔
+- تسلسل سے مماثل ٹرگرز `ConnectError.replayDetected` اور ایک تازہ پر مجبور کرتا ہے
+  ہینڈ شیک (نئے `sid` کے ساتھ سیشن دوبارہ شروع کریں)۔
 
-- If the session is considered stale (`offline_timeout_ms`, default 5 minutes),
-  buffered frames are purged and the SDK raises `ConnectError.sessionExpired`.
-- In case of journal corruption, SDKs attempt a single Norito decode repair; on
-  failure they drop the journal and emit `connect.queue_repair_failed` telemetry.
-- Sequence mismatch triggers `ConnectError.replayDetected` and forces a fresh
-  handshake (session restart with new `sid`).
+### آف لائن بفرنگ پلان اور آپریٹر کنٹرولز
 
-### Offline buffering plan & operator controls
+ورکشاپ کی فراہمی کے لئے ایک دستاویزی منصوبہ بندی کی ضرورت ہوتی ہے لہذا ہر ایس ڈی کے ایک ہی جہاز کرتا ہے
+آف لائن سلوک ، تدارک کا بہاؤ ، اور ثبوت سطحیں۔ ذیل میں منصوبہ ہے
+عام طور پر سوئفٹ (`ConnectSessionDiagnostics`) ، android
+(`ConnectDiagnosticsSnapshot`) ، اور جے ایس (`ConnectQueueInspector`)۔
 
-The workshop deliverable requires a documented plan so every SDK ships the same
-offline behaviour, remediation flow, and evidence surfaces. The plan below is
-common across Swift (`ConnectSessionDiagnostics`), Android
-(`ConnectDiagnosticsSnapshot`), and JS (`ConnectQueueInspector`).
+| ریاست | ٹرگر | خودکار جواب | دستی اوور رائڈ | ٹیلی میٹری پرچم |
+| ------- | --------- | ---------------------- | ---------------------------------------- |
+| `Healthy` | قطار کا استعمال  5/منٹ | نئی علامت کی درخواستوں کو روکیں ، آدھے شرح پر فلو کنٹرول ٹوکن کا اخراج | ایپس `clearOfflineQueue(.app|.wallet)` پر کال کرسکتی ہیں۔ ایک بار آن لائن ایک بار ہم مرتبہ سے SDK دوبارہ ہائیڈریٹ ریاست | `connect.queue_state=\"throttled\"` ، `connect.queue_watermark` گیج |
+| `Quarantined` | استعمال ≥ `disk_watermark_drop` (پہلے سے طے شدہ 85 ٪) ، بدعنوانی کا پتہ دو بار پتہ چلا ، یا `offline_timeout_ms` سے زیادہ | بفرنگ بند کرو ، `ConnectError.QueueQuarantined` کو بڑھاؤ ، آپریٹر کی شناخت کی ضرورت ہوتی ہے `ConnectSessionDiagnostics.forceReset()` بنڈل برآمد کرنے کے بعد جرائد کو حذف کرتا ہے `connect.queue_state=\"quarantined\"` ، `connect.queue_quarantine_total` کاؤنٹر |- دہلیز `ConnectFeatureConfig` (`disk_watermark_warn` میں ،
+  `disk_watermark_drop` ، `max_disk_bytes` ، `offline_timeout_ms`)۔ جب ایک میزبان
+  کسی قدر کو چھوڑ دیتا ہے ، SDKs اپنے ڈیفالٹس میں واپس گر جاتے ہیں اور انتباہ لاگ ان ہوتے ہیں تاکہ تشکیل کریں
+  ٹیلی میٹری سے آڈٹ کیا جاسکتا ہے۔
+- SDKs `ConnectQueueObserver` کے علاوہ تشخیص مددگاروں کو بے نقاب کریں:
+  - سوئفٹ: `ConnectSessionDiagnostics.snapshot()` پیداوار `{ریاست ، گہرائی ، بائٹس ،
+    وجہ} ` and `exportjournalbundle (url :) support دونوں کی حمایت کے لئے برقرار ہے۔
+  - Android: `ConnectDiagnostics.snapshot()` + `exportJournalBundle(path)`۔
+  - جے ایس: `ConnectQueueInspector.read()` ایک ہی ڈھانچے اور بلاب ہینڈل کو لوٹاتا ہے
+    وہ UI کوڈ Torii سپورٹ ٹولز پر اپ لوڈ کرسکتا ہے۔
+- جب ایک ایپ `offline_queue_enabled=false` کو ٹوگل کرتی ہے تو ، SDKS فوری طور پر نالی اور
+  دونوں جرائد کو صاف کریں ، ریاست کو `Disabled` کے طور پر نشان زد کریں ، اور ایک ٹرمینل کا اخراج کریں
+  ٹیلی میٹری ایونٹ۔ صارف کا سامنا کرنے کی ترجیح Norito میں آئینہ دار ہے
+  منظوری کا فریم تاکہ ساتھیوں کو معلوم ہو کہ آیا وہ بفرڈ فریم دوبارہ شروع کرسکتے ہیں۔
+- آپریٹرز `connect queue inspect --sid <sid>` (SDK کے ارد گرد CLI ریپر
+  افراتفری کے ٹیسٹ کے دوران تشخیص) ؛ یہ کمانڈ ریاستی منتقلی پرنٹ کرتا ہے ،
+  واٹر مارک کی تاریخ ، اور ثبوت دوبارہ شروع کریں تاکہ گورننس کے جائزوں پر انحصار نہ ہو
+  پلیٹ فارم سے متعلق ٹولنگ۔
 
-| State | Trigger | Automatic response | Manual override | Telemetry flag |
-|-------|---------|--------------------|-----------------|----------------|
-| `Healthy` | Queue usage < `disk_watermark_warn` (default 60 %) and `ttl_ok` | None | N/A | `connect.queue_state=\"healthy\"` |
-| `Throttled` | Usage ≥ `disk_watermark_warn` or retries > 5/min | Pause new sign requests, emit flow-control tokens at half rate | Apps may call `clearOfflineQueue(.app|.wallet)`; SDK re-hydrates state from peer once online | `connect.queue_state=\"throttled\"`, `connect.queue_watermark` gauge |
-| `Quarantined` | Usage ≥ `disk_watermark_drop` (default 85 %), corruption detected twice, or `offline_timeout_ms` exceeded | Stop buffering, raise `ConnectError.QueueQuarantined`, require operator acknowledgement | `ConnectSessionDiagnostics.forceReset()` deletes journals after exporting bundle | `connect.queue_state=\"quarantined\"`, `connect.queue_quarantine_total` counter |
+### ثبوت بنڈل ورک فلو
 
-- Thresholds live in `ConnectFeatureConfig` (`disk_watermark_warn`,
-  `disk_watermark_drop`, `max_disk_bytes`, `offline_timeout_ms`). When a host
-  omits a value, SDKs fall back to their defaults and log a warning so configs
-  can be audited from telemetry.
-- SDKs expose `ConnectQueueObserver` plus diagnostics helpers:
-  - Swift: `ConnectSessionDiagnostics.snapshot()` yields `{state, depth, bytes,
-    reason}` and `exportJournalBundle(url:)` persists both queues for support.
-  - Android: `ConnectDiagnostics.snapshot()` + `exportJournalBundle(path)`.
-  - JS: `ConnectQueueInspector.read()` returns the same struct and a blob handle
-    that UI code can upload to Torii support tools.
-- When an app toggles `offline_queue_enabled=false`, SDKs immediately drain and
-  purge both journals, mark the state as `Disabled`, and emit a terminal
-  telemetry event. The user-facing preference is mirrored in the Norito
-  approval frame so peers know whether they can resume buffered frames.
-- Operators run `connect queue inspect --sid <sid>` (CLI wrapper around the SDK
-  diagnostics) during chaos tests; this command prints the state transitions,
-  watermark history, and resume evidence so governance reviews do not depend on
-  platform-specific tooling.
+مدد اور تعمیل کرنے والی ٹیمیں آڈیٹنگ کے وقت عین مطابق ثبوتوں پر انحصار کرتی ہیں
+آف لائن سلوک۔ لہذا ہر ایس ڈی کے اسی تین مرحلہ برآمد کو نافذ کرتا ہے:
 
-### Evidence bundle workflow
+1. `exportJournalBundle(..)` `{app_to_wallet,wallet_to_app}.queue` پلس A لکھتا ہے
+   تعمیر ہیش ، فیچر جھنڈے ، اور ڈسک واٹر مارکس کو بیان کرتے ہوئے ظاہر۔
+2. `exportQueueMetrics(..)` آخری 1000 ٹیلی میٹری کے نمونے خارج کرتا ہے لہذا ڈیش بورڈز
+   آف لائن کی تشکیل نو کی جاسکتی ہے۔ نمونوں میں ہیشڈ سیشن ID شامل ہوتا ہے جب
+   صارف نے انتخاب کیا۔
+3. سی ایل آئی ہیلپر زپ دونوں برآمدات اور ایک دستخط شدہ Norito میٹا ڈیٹا فائل کو جوڑتا ہے
+   .
 
-Support and compliance teams rely on deterministic evidence when auditing
-offline behaviour. Each SDK therefore implements the same three-step export:
+`connect.evidence_invalid` کے ساتھ بنڈل کو ناکام بناتے ہیں
+ٹیلی میٹری تاکہ ایس ڈی کے ٹیم برآمد کنندہ کو دوبارہ پیش کرسکے اور اسے پیچ کرسکے۔
 
-1. `exportJournalBundle(..)` writes `{app_to_wallet,wallet_to_app}.queue` plus a
-   manifest describing the build hash, feature flags, and disk watermarks.
-2. `exportQueueMetrics(..)` emits the last 1 000 telemetry samples so dashboards
-   can be reconstructed offline. Samples include the hashed session id when the
-   user opted in.
-3. The CLI helper zips both exports and attaches a signed Norito metadata file
-   (`ConnectQueueEvidenceV1`) so Torii ingest can archive the bundle in SoraFS.
+## ٹیلی میٹری اور تشخیص- مشترکہ اوپینٹیلمیٹری برآمد کنندگان کے ذریعہ Norito JSON واقعات EMIT۔ لازمی میٹرکس:
+  - `connect.queue_depth{direction}` (گیج) `ConnectQueueState` کے ذریعہ کھلایا گیا۔
+  - `connect.queue_bytes{direction}` (گیج) ڈسک کی حمایت یافتہ پیروں کے لئے۔
+  - `connect.queue_dropped_total{reason}` (کاؤنٹر) `overflow|ttl|repair` کے لئے۔
+  - `connect.offline_flush_total{direction}` (کاؤنٹر) جب قطاریں لگیں
+    نقل و حمل کے بغیر ڈرین ؛ ناکامیوں میں اضافہ `connect.offline_flush_failed`۔
+  - `connect.replay_success_total`/`connect.replay_error_total`۔
+  - `connect.resume_latency_ms` ہسٹوگرام (دوبارہ رابطہ اور مستحکم کے درمیان وقت
+    ریاست) پلس `connect.resume_attempts_total`۔
+  - `connect.session_duration_ms` ہسٹوگرام (فی مکمل سیشن)۔
+  - `connect.error` `code` ، `fatal` ، `telemetry_profile` کے ساتھ سٹرکچرڈ واقعات۔
+- برآمد کنندگان کو لازمی طور پر `{platform, sdk_version, feature_hash}` لیبل لگائیں
+  ڈیش بورڈز ایس ڈی کے بلڈ کے ذریعہ تقسیم ہوسکتے ہیں۔ ہیشڈ `sid` اختیاری اور صرف ہے
+  جب ٹیلی میٹری آپٹ ان سچ ہے تو خارج ہوتا ہے۔
+- ایس ڈی کے سطح کے ہکس ایک ہی واقعات کی سطح پر ہیں تاکہ ایپس مزید تفصیل برآمد کرسکیں:
+  - سوئفٹ: `ConnectSession.addObserver(_:) -> ConnectEvent`۔
+  - Android: `Flow<ConnectEvent>`۔
+  - جے ایس: async Iterator یا کال بیک۔
+- سی آئی گیٹنگ: سوئفٹ ملازمتیں `make swift-ci` چلاتی ہیں ، Android `./gradlew sdkConnectCi` استعمال کرتی ہے ،
+  اور جے ایس `npm run test:connect` چلاتا ہے لہذا اس سے پہلے ٹیلی میٹری/ڈیش بورڈز سبز رہتے ہیں
+  مربوط ہونے والی تبدیلیوں کو ضم کرنا۔
+- ساختہ نوشتہ جات میں ہیشڈ `sid` ، `seq` ، `queue_depth` ، اور `sid_epoch` شامل ہیں
+  اقدار تو آپریٹر کلائنٹ کے مسائل سے وابستہ ہوسکتے ہیں۔ جرائد جو مرمت میں ناکام ہوجاتے ہیں
+  `connect.queue_repair_failed{reason}` واقعات کے علاوہ ایک اختیاری کریش ڈمپ راستہ۔
 
-Bundles that fail validation are rejected with `connect.evidence_invalid`
-telemetry so the SDK team can reproduce and patch the exporter.
+### ٹیلی میٹری ہکس اور گورننس ثبوت
 
-## Telemetry & Diagnostics
+- `connect.queue_state` روڈ میپ کے خطرے کے اشارے کے طور پر ڈبل ہوجاتا ہے۔ ڈیش بورڈز گروپ
+  `{platform, sdk_version}` کے ذریعہ اور ریاستی وقت میں پیش کریں تاکہ گورننس نمونہ لے سکے
+  اسٹیج رول آؤٹ کی منظوری سے پہلے ماہانہ ڈرل ثبوت۔
+- `connect.queue_watermark` اور `connect.queue_bytes` کنیکٹ رسک اسکور کو فیڈ کریں
+  (`risk.connect.offline_buffer`) ، جو خود بخود صفحات پر مشتمل ہوتا ہے جب اس سے زیادہ ہوتا ہے
+  5 ٪ سیشن `Throttled` میں 10 منٹ خرچ کرتے ہیں۔
+- برآمد کنندگان `feature_hash` کو ہر پروگرام سے منسلک کرتے ہیں تاکہ آڈیٹر ٹولنگ کی تصدیق ہوسکے
+  کہ Norito کوڈیک + آف لائن پلان جائزہ لینے والی تعمیر سے ملتے ہیں۔ SDK CI ناکام ہوجاتا ہے
+  جب ٹیلی میٹری کسی نامعلوم ہیش کی اطلاع دیتی ہے تو روزہ۔
+- اسٹرا مین کو اب بھی خطرہ ماڈل کے ضمیمہ کی ضرورت ہے۔ جب میٹرکس اس سے تجاوز کرتے ہیں
+  پالیسی کی دہلیز ، ایس ڈی کے ایس نے `connect.policy_violation` واقعات کا خلاصہ پیش کیا
+  گستاخ سڈ (ہیشڈ) ، ریاست ، اور حل شدہ کارروائی (`drain|purge|quarantine`)۔
+- اسی SoraFS نام کی جگہ میں `exportQueueMetrics` اراضی کے ذریعے پکڑے گئے شواہد
+  جیسا کہ کنیکٹ رن بوک نوادرات ہیں تاکہ کونسل کے جائزہ لینے والے ہر ڈرل کا سراغ لگاسکیں
+  داخلی نوشتہ جات کی درخواست کیے بغیر مخصوص ٹیلی میٹری کے نمونوں پر واپس جائیں۔
 
-- Emit Norito JSON events via shared OpenTelemetry exporters. Mandatory metrics:
-  - `connect.queue_depth{direction}` (gauge) fed by `ConnectQueueState`.
-  - `connect.queue_bytes{direction}` (gauge) for disk-backed footprint.
-  - `connect.queue_dropped_total{reason}` (counter) for `overflow|ttl|repair`.
-  - `connect.offline_flush_total{direction}` (counter) increments when queues
-    drain without transport; failures increment `connect.offline_flush_failed`.
-  - `connect.replay_success_total`/`connect.replay_error_total`.
-  - `connect.resume_latency_ms` histogram (time between reconnect and steady
-    state) plus `connect.resume_attempts_total`.
-  - `connect.session_duration_ms` histogram (per completed session).
-  - `connect.error` structured events with `code`, `fatal`, `telemetry_profile`.
-- Exporters MUST attach `{platform, sdk_version, feature_hash}` labels so
-  dashboards can split by SDK build. The hashed `sid` is optional and only
-  emitted when telemetry opt-in is true.
-- SDK-level hooks surface the same events so apps can export more detail:
-  - Swift: `ConnectSession.addObserver(_:) -> ConnectEvent`.
-  - Android: `Flow<ConnectEvent>`.
-  - JS: async iterator or callback.
-- CI gating: Swift jobs run `make swift-ci`, Android uses `./gradlew sdkConnectCi`,
-  and JS runs `npm run test:connect` so telemetry/dashboards remain green before
-  merging Connect changes.
-- Structured logs include the hashed `sid`, `seq`, `queue_depth`, and `sid_epoch`
-  values so operators can correlate client issues. Journals that fail repair emit
-  `connect.queue_repair_failed{reason}` events plus an optional crash dump path.
+## فریم کی ملکیت اور ذمہ داریاں| فریم / کنٹرول | مالک | تسلسل ڈومین | جرنل برقرار ہے؟ | ٹیلی میٹری لیبل | نوٹ |
+| ----------------- | ------- | -------------------------------------------------------------- | ------- |
+| `Control::Open` | ڈی اے پی پی | `seq_app` | ✅ (`app_to_wallet`) | `event=open` | میٹا ڈیٹا + اجازت بٹ میپ لے کر ؛ بٹوے اشارے سے پہلے تازہ ترین اوپن کو دوبارہ چلاتے ہیں۔ |
+| `Control::Approve` | پرس | `seq_wallet` | ✅ (`wallet_to_app`) | `event=approve` | اکاؤنٹ ، ثبوت ، دستخط شامل ہیں۔ میٹا ڈیٹا ورژن میں اضافہ یہاں ریکارڈ کیا گیا ہے۔ |
+| `Control::Reject` | پرس | `seq_wallet` | ✅ | `event=reject` ، `reason` | اختیاری مقامی پیغام ؛ ڈی اے پی پی کے زیر التواء سائن کی درخواستوں کو چھوڑ دیتا ہے۔ |
+| `Control::Close` (init) | ڈی اے پی پی | `seq_app` | ✅ | `event=close` ، `initiator=app` | پرس اپنے `Close` کے ساتھ تسلیم کرتا ہے۔ |
+| `Control::Close` (ACK) | پرس | `seq_wallet` | ✅ | `event=close` ، `initiator=wallet` | آنسو کی تصدیق ؛ ایک بار جب دونوں فریقوں کو فریم پر برقرار رکھنے کے بعد جی سی جرائد کو ہٹاتا ہے۔ |
+| `SignRequest` | ڈی اے پی پی | `seq_app` | ✅ | `event=sign_request` ، `payload_hash` | ری پلے تنازعات کا پتہ لگانے کے لئے پے لوڈ ہیش ریکارڈ کیا گیا۔ |
+| `SignResult` | پرس | `seq_wallet` | ✅ | `event=sign_result` ، `status=ok|err` | دستخط شدہ بائٹس کے بلیک 3 ہیش پر مشتمل ہے۔ ناکامیوں نے `ConnectError.Signing` کو بڑھایا۔ |
+| `Control::Error` | پرس (سب سے زیادہ) / ڈی اے پی پی (ٹرانسپورٹ) | مماثل مالک ڈومین | ✅ | `event=error` ، `code` | مہلک غلطیاں فورس سیشن دوبارہ شروع ؛ ٹیلی میٹری کے نشانات `fatal=true`۔ |
+| `Control::RotateKeys` | پرس | `seq_wallet` | ✅ | `event=rotate_keys` ، `reason` | نئی سمت کی چابیاں کا اعلان ؛ ڈی اے پی پی نے `RotateKeysAck` (ایپ سائیڈ پر جرنل) کے ساتھ جواب دیا۔ |
+| `Control::Resume` / `ResumeAck` | دونوں | صرف مقامی ڈومین | ✅ | `event=resume` ، `direction=app|wallet` | قطار کی گہرائی + SEQ ریاست کا خلاصہ۔ ہیشڈ جرنل ڈائجسٹ ایڈز کی تشخیص۔ |
 
-### Telemetry hooks & governance evidence
+- دشاتمک سائفر کیز ہر کردار (`app→wallet` ، `wallet→app`) کی ہم آہنگی باقی رہتی ہیں۔
+  بٹوے کی گردش کی تجاویز کی تشہیر `Control::RotateKeys` ، اور DAPPs کے ذریعے کی جاتی ہے
+  `Control::RotateKeysAck` خارج کرکے تسلیم کریں ؛ دونوں فریموں کو ڈسک کو نشانہ بنانا ہوگا
+  ری پلے گیپس سے بچنے کے لئے چابیاں تبادلہ کرنے سے پہلے۔
+- میٹا ڈیٹا منسلک (شبیہیں ، مقامی نام ، تعمیل کے ثبوت) پر دستخط کیے گئے ہیں
+  بٹوے اور ڈی اے پی پی کے ذریعہ کیشے۔ تازہ کاریوں کے ساتھ ایک تازہ منظوری کے فریم کی ضرورت ہوتی ہے
+  `metadata_version` میں اضافہ ہوا۔
+- مذکورہ بالا ملکیت کا میٹرکس SDK دستاویزات سے حوالہ دیا گیا ہے لہذا CLI/ویب/آٹومیشن
+  کلائنٹ ایک ہی معاہدے اور انسٹرومینٹیشن ڈیفالٹس کی پیروی کرتے ہیں۔
 
-- `connect.queue_state` doubles as the roadmap risk indicator. Dashboards group
-  by `{platform, sdk_version}` and render time-in-state so governance can sample
-  monthly drill evidence before approving staged rollouts.
-- `connect.queue_watermark` and `connect.queue_bytes` feed the Connect risk score
-  (`risk.connect.offline_buffer`), which automatically pages SRE when more than
-  5 % of sessions spend >10 minutes in `Throttled`.
-- Exporters attach `feature_hash` to every event so auditor tooling can confirm
-  that the Norito codec + offline plan match the reviewed build. SDK CI fails
-  fast when telemetry reports an unknown hash.
-- The strawman still requires a threat-model appendix; when metrics exceed the
-  policy thresholds, SDKs emit `connect.policy_violation` events summarising the
-  offending sid (hashed), state, and resolved action (`drain|purge|quarantine`).
-- Evidence captured via `exportQueueMetrics` lands in the same SoraFS namespace
-  as the Connect runbook artefacts so council reviewers can trace every drill
-  back to specific telemetry samples without requesting internal logs.
+## سوالات کھولیں
 
-## Frame Ownership & Responsibilities
+1. ** سیشن کی دریافت **: کیا ہمیں QR کوڈز / آؤٹ آف بینڈ ہینڈ شیک کی ضرورت ہے جیسے والیٹ کنیکٹ؟ (مستقبل کا کام۔)
+2. ** ملٹی سیگ **: ملٹی سائن منظوریوں کی نمائندگی کس طرح کی جاتی ہے؟ (متعدد دستخطوں کی حمایت کرنے کے لئے سائن کے نتائج کو بڑھاؤ۔)
+3. ** تعمیل **: ریگولیٹڈ فلو (فی روڈ میپ) کے لئے کون سے فیلڈ لازمی ہیں؟ (تعمیل ٹیم کی رہنمائی کا انتظار کریں۔)
+4. ** ایس ڈی کے پیکیجنگ **: کیا ہمیں مشترکہ کوڈ (جیسے ، Norito کوڈیکس کو کنیکٹ کوڈیکس) کو کراس پلیٹ فارم کریٹ میں عنصر کرنا چاہئے؟ (ٹی بی ڈی۔)
 
-| Frame / Control | Owner | Sequence domain | Journal persisted? | Telemetry labels | Notes |
-|-----------------|-------|-----------------|--------------------|------------------|-------|
-| `Control::Open` | dApp | `seq_app` | ✅ (`app_to_wallet`) | `event=open` | Carries metadata + permission bitmap; wallets replay the latest open before prompts. |
-| `Control::Approve` | Wallet | `seq_wallet` | ✅ (`wallet_to_app`) | `event=approve` | Includes account, proofs, signatures. Metadata version increments recorded here. |
-| `Control::Reject` | Wallet | `seq_wallet` | ✅ | `event=reject`, `reason` | Optional localized message; dApp drops pending sign requests. |
-| `Control::Close` (init) | dApp | `seq_app` | ✅ | `event=close`, `initiator=app` | Wallet acknowledges with its own `Close`. |
-| `Control::Close` (ack) | Wallet | `seq_wallet` | ✅ | `event=close`, `initiator=wallet` | Confirms teardown; GC removes journals once both sides persist the frame. |
-| `SignRequest` | dApp | `seq_app` | ✅ | `event=sign_request`, `payload_hash` | Payload hash recorded for replay conflict detection. |
-| `SignResult` | Wallet | `seq_wallet` | ✅ | `event=sign_result`, `status=ok|err` | Includes BLAKE3 hash of signed bytes; failures raise `ConnectError.Signing`. |
-| `Control::Error` | Wallet (most) / dApp (transport) | matching owner domain | ✅ | `event=error`, `code` | Fatal errors force session restart; telemetry marks `fatal=true`. |
-| `Control::RotateKeys` | Wallet | `seq_wallet` | ✅ | `event=rotate_keys`, `reason` | Announces new direction keys; dApp replies with `RotateKeysAck` (journaled on app side). |
-| `Control::Resume` / `ResumeAck` | Both | local domain only | ✅ | `event=resume`, `direction=app|wallet` | Summarises queue depth + seq state; hashed journal digest aids diagnosis. |
-
-- Directional cipher keys remain symmetric per role (`app→wallet`, `wallet→app`).
-  Wallet rotation proposals are advertised via `Control::RotateKeys`, and dApps
-  acknowledge by emitting `Control::RotateKeysAck`; both frames must hit disk
-  before keys swap to avoid replay gaps.
-- Metadata attachment (icons, localized names, compliance proofs) is signed by
-  the wallet and cached by the dApp; updates require a fresh approval frame with
-  incremented `metadata_version`.
-- Ownership matrix above is referenced from SDK docs so CLI/web/automation
-  clients follow the same contract and instrumentation defaults.
-
-## Open Questions
-
-1. **Session discovery**: Do we need QR codes / out-of-band handshake like WalletConnect? (Future work.)
-2. **Multisig**: How are multi-sign approvals represented? (Extend sign result to support multiple signatures.)
-3. **Compliance**: Which fields are mandatory for regulated flows (per roadmap)? (Await compliance team guidance.)
-4. **SDK packaging**: Should we factor shared code (e.g., Norito Connect codecs) into a cross-platform crate? (TBD.)
-
-## Next Steps
-
-- Circulate this strawman to the SDK council (Feb 2026 meeting).
-- Collect feedback on open questions and update doc accordingly.
-- Schedule implementation breakdown per SDK (Swift IOS7, Android AND7, JS Connect milestones).
-- Track progress via roadmap hot list; update `status.md` once strawman is ratified.
+## اگلے اقدامات- اس اسٹرا مین کو ایس ڈی کے کونسل (فروری 2026 کے اجلاس) میں گردش کریں۔
+- کھلے سوالات پر رائے جمع کریں اور اس کے مطابق ڈاکٹر کو اپ ڈیٹ کریں۔
+- شیڈول پر عمل درآمد خرابی فی ایس ڈی کے (سوئفٹ IOS7 ، Android اور 7 ، جے ایس کنیکٹ سنگ میل)۔
+- روڈ میپ ہاٹ لسٹ کے ذریعے ترقی کو ٹریک کریں۔ ایک بار اسٹرا مین کی توثیق ہونے کے بعد `status.md` کو اپ ڈیٹ کریں۔

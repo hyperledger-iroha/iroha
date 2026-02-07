@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 03275f401b49b62d8ccb361358235e5964b1ca791a68dcada0fd763bb6a4941b
 source_last_modified: "2026-01-31T19:25:45.072378+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Acceleration & Norito Heuristics Reference
+## აჩქარება და Norito ევრისტიკის მითითება
 
-The `[accel]` block in `iroha_config` threads through
-`crates/irohad/src/main.rs:1895` into `ivm::set_acceleration_config`. Every host
-applies the same knobs before instantiating the VM, so operators can deterministically
-pick which GPU backends are allowed while keeping scalar/SIMD fallbacks available.
-Swift, Android, and Python bindings load the same manifest via the bridge layer, so
-documenting these defaults unblocks WP6-C in the hardware-acceleration backlog.
+`[accel]` ბლოკი `iroha_config`-ში გადადის
+`crates/irohad/src/main.rs:1895` შევიდა `ivm::set_acceleration_config`. ყოველი მასპინძელი
+იყენებს იგივე ღილაკებს VM-ის ინსტალაციამდე, ასე რომ ოპერატორებს შეუძლიათ განსაზღვრონ
+აირჩიე რომელი GPU backends არის დაშვებული სკალარული/SIMD სარეზერვო საშუალებების ხელმისაწვდომობის დროს.
+Swift-ის, Android-ისა და Python-ის საკინძები იტვირთება იგივე მანიფესტს ხიდის ფენის მეშვეობით, ასე რომ
+ამ ნაგულისხმევის დოკუმენტირება განბლოკავს WP6-C-ს ტექნიკის აჩქარების ჩამორჩენაში.
 
-### `accel` (hardware acceleration)
+### `accel` (ტექნიკის აჩქარება)
 
-The table below mirrors `docs/source/references/peer.template.toml` and the
-`iroha_config::parameters::user::Acceleration` definition, exposing the environment
-variable that overrides each key.
+ქვემოთ მოყვანილი ცხრილი ასახავს `docs/source/references/peer.template.toml` და
+`iroha_config::parameters::user::Acceleration` განმარტება, გარემოს გამოვლენა
+ცვლადი, რომელიც აჭარბებს თითოეულ კლავიშს.
 
-| Key | Env var | Default | Description |
-|-----|---------|---------|-------------|
-| `enable_simd` | `ACCEL_ENABLE_SIMD` | `true` | Enables SIMD/NEON/AVX execution. When `false`, the VM forces scalar backends for vector ops and Merkle hashing to ease deterministic parity captures. |
-| `enable_cuda` | `ACCEL_ENABLE_CUDA` | `true` | Enables the CUDA backend when it is compiled in and the runtime passes all golden-vector checks. |
-| `enable_metal` | `ACCEL_ENABLE_METAL` | `true` | Enables the Metal backend on macOS builds. Even when true, Metal self-tests can still disable the backend at runtime if parity mismatches occur. |
-| `max_gpus` | `ACCEL_MAX_GPUS` | `0` (auto) | Caps how many physical GPUs the runtime initialises. `0` means “match hardware fan-out” and is clamped by `GpuManager`. |
-| `merkle_min_leaves_gpu` | `ACCEL_MERKLE_MIN_LEAVES_GPU` | `8192` | Minimum leaves required before Merkle leaf hashing offloads to GPU. Values below this threshold keep hashing on the CPU to avoid PCIe overhead (`crates/ivm/src/byte_merkle_tree.rs:49`). |
-| `merkle_min_leaves_metal` | `ACCEL_MERKLE_MIN_LEAVES_METAL` | `0` (inherit global) | Metal-specific override for the GPU threshold. When `0`, Metal inherits `merkle_min_leaves_gpu`. |
-| `merkle_min_leaves_cuda` | `ACCEL_MERKLE_MIN_LEAVES_CUDA` | `0` (inherit global) | CUDA-specific override for the GPU threshold. When `0`, CUDA inherits `merkle_min_leaves_gpu`. |
-| `prefer_cpu_sha2_max_leaves_aarch64` | `ACCEL_PREFER_CPU_SHA2_MAX_AARCH64` | `0` (32 768 internally) | Caps the tree size where ARMv8 SHA-2 instructions should win over GPU hashing. `0` keeps the compiled-in default of `32_768` leaves (`crates/ivm/src/byte_merkle_tree.rs:59`). |
-| `prefer_cpu_sha2_max_leaves_x86` | `ACCEL_PREFER_CPU_SHA2_MAX_X86` | `0` (32 768 internally) | Same as above but for x86/x86_64 hosts using SHA-NI (`crates/ivm/src/byte_merkle_tree.rs:63`). |
+| გასაღები | Env var | ნაგულისხმევი | აღწერა |
+|-----|---------|--------|-------------|
+| `enable_simd` | `ACCEL_ENABLE_SIMD` | `true` | რთავს SIMD/NEON/AVX შესრულებას. როდესაც `false`, VM აიძულებს ვექტორული ოპერაციების და Merkle-ის ჰეშინგს სკალარულ ბექენდებს დეტერმინისტული პარიტეტის აღების გასაადვილებლად. |
+| `enable_cuda` | `ACCEL_ENABLE_CUDA` | `true` | რთავს CUDA backend-ს, როდესაც ის კომპილირებულია და გაშვების დრო გადის ყველა ოქროს ვექტორის შემოწმებას. |
+| `enable_metal` | `ACCEL_ENABLE_METAL` | `true` | ჩართავს Metal backend-ს macOS კონსტრუქციებზე. მაშინაც კი, როცა სიმართლეა, Metal-ის თვითტესტს მაინც შეუძლია გამორთოს backend გაშვების დროს, თუ პარიტეტის შეუსაბამობა მოხდება. |
+| `max_gpus` | `ACCEL_MAX_GPUS` | `0` (ავტო) | იკავებს რამდენი ფიზიკური GPU-ს ინიციალიზაციას გაშვების დრო. `0` ნიშნავს „შესატყვისი ტექნიკის ვენტილაციას“ და დამაგრებულია `GpuManager`-ით. |
+| `merkle_min_leaves_gpu` | `ACCEL_MERKLE_MIN_LEAVES_GPU` | `8192` | მინიმალური ფოთლები საჭიროა Merkle-ის ფოთლის ჰეშინგამდე GPU-ში ჩატვირთვამდე. ამ ზღურბლზე დაბალი მნიშვნელობები განაგრძობს ჰეშირებას CPU-ზე, რათა თავიდან აიცილოს PCIe ზედნადები (`crates/ivm/src/byte_merkle_tree.rs:49`). |
+| `merkle_min_leaves_metal` | `ACCEL_MERKLE_MIN_LEAVES_METAL` | `0` (მემკვიდრეობით გლობალური) | ლითონის სპეციფიკური გადაფარვა GPU ზღვრისთვის. როდესაც `0`, მეტალი მემკვიდრეობით იღებს `merkle_min_leaves_gpu`. |
+| `merkle_min_leaves_cuda` | `ACCEL_MERKLE_MIN_LEAVES_CUDA` | `0` (მემკვიდრეობით გლობალური) | CUDA-ს სპეციფიკური გადაფარვა GPU ზღვრისთვის. როდესაც `0`, CUDA მემკვიდრეობით იღებს `merkle_min_leaves_gpu`. |
+| `prefer_cpu_sha2_max_leaves_aarch64` | `ACCEL_PREFER_CPU_SHA2_MAX_AARCH64` | `0` (32768 შიდა) | იკავებს ხის ზომას, სადაც ARMv8 SHA-2 ინსტრუქციებმა უნდა გაიმარჯვოს GPU ჰეშინგზე. `0` ინახავს `32_768` ფურცლების (`crates/ivm/src/byte_merkle_tree.rs:59`) შედგენილ ნაგულისხმევ ნაგულისხმევს. |
+| `prefer_cpu_sha2_max_leaves_x86` | `ACCEL_PREFER_CPU_SHA2_MAX_X86` | `0` (32768 შიდა) | იგივე, რაც ზემოთ, მაგრამ x86/x86_64 ჰოსტებისთვის SHA-NI (`crates/ivm/src/byte_merkle_tree.rs:63`) გამოყენებით. |
 
-`enable_simd` also controls RS16 erasure coding (Torii DA ingest + tooling). Disable it to
-force scalar parity generation while keeping outputs deterministic across hardware.
+`enable_simd` ასევე აკონტროლებს RS16 წაშლის კოდირებას (Torii DA ingest + tooling). გამორთეთ იგი
+აიძულეთ სკალარული პარიტეტის გენერირება, ხოლო გამოსავლები დეტერმინისტული შეინარჩუნეთ აპარატურაში.
 
-Example configuration:
+კონფიგურაციის მაგალითი:
 
 ```toml
 [accel]
@@ -53,17 +54,15 @@ merkle_min_leaves_cuda = 16384
 prefer_cpu_sha2_max_leaves_aarch64 = 65536
 ```
 
-Zero values for the last five keys mean “keep the compiled default”. Hosts must not
-set conflicting overrides (e.g., disabling CUDA while forcing CUDA-only thresholds),
-otherwise the request is ignored and the backend continues to follow the global policy.
+ბოლო ხუთი კლავიშის ნულოვანი მნიშვნელობები ნიშნავს „შეინარჩუნე შედგენილი ნაგულისხმევი“. მასპინძლები არ უნდა
+დააყენეთ კონფლიქტური უგულებელყოფა (მაგ. CUDA-ს გამორთვა მხოლოდ CUDA-ს ზღვრების იძულებით),
+წინააღმდეგ შემთხვევაში მოთხოვნა იგნორირებულია და backend აგრძელებს გლობალურ პოლიტიკას.
 
-### Inspecting runtime state
-
-Run `cargo xtask acceleration-state [--format table|json]` to snapshot the applied
-configuration alongside the Metal/CUDA runtime health bits. The command pulls the
-current `ivm::acceleration_config`, parity status, and sticky error strings (if a
-backend was disabled) so operations can feed the result directly into parity
-dashboards or incident reviews.
+### გაშვების მდგომარეობის შემოწმებაგაუშვით `cargo xtask acceleration-state [--format table|json]`, რომ გადაიღოთ გამოყენებული
+კონფიგურაცია Metal/CUDA გაშვების ჯანმრთელობის ბიტებთან ერთად. ბრძანება გაიყვანს
+მიმდინარე `ivm::acceleration_config`, პარიტეტის სტატუსი და წებოვანი შეცდომის სტრიქონები (თუ
+backend იყო გამორთული), ასე რომ, ოპერაციებმა შეიძლება შეასრულოს შედეგი პირდაპირ პარიტეტში
+დაფები ან ინციდენტების მიმოხილვა.
 
 ```
 $ cargo xtask acceleration-state
@@ -87,23 +86,23 @@ Metal   yes        yes         yes        yes       -
 CUDA    no         no          no         no        policy disabled (no CUDA libraries present)
 ```
 
-Use `--format json` when the snapshot needs to be ingested by automation (the JSON
-contains the same fields shown in the table).
+გამოიყენეთ `--format json`, როდესაც სნეპშოტი უნდა იქნას მიღებული ავტომატიზაციის საშუალებით (JSON
+შეიცავს იმავე ველებს, რომლებიც ნაჩვენებია ცხრილში).
 
-`acceleration_runtime_errors()` now calls out why SIMD fell back to scalar:
-`disabled by config`, `forced scalar override`, `simd unsupported on hardware`, or
-`simd unavailable at runtime` when detection succeeds but execution still runs
-without vectors. Clearing the override or re-enabling the policy drops the message
-on hosts that support SIMD.
+`acceleration_runtime_errors()` ახლა ამტკიცებს, რატომ დაბრუნდა SIMD სკალარზე:
+`disabled by config`, `forced scalar override`, `simd unsupported on hardware`, ან
+`simd unavailable at runtime`, როდესაც აღმოჩენა წარმატებულია, მაგრამ შესრულება კვლავ მუშაობს
+ვექტორების გარეშე. უგულებელყოფის გასუფთავება ან პოლიტიკის ხელახლა ჩართვა შეტყობინებას ტოვებს
+ჰოსტებზე, რომლებიც მხარს უჭერენ SIMD-ს.
 
-### Parity checks
+### პარიტეტული ჩეკები
 
-Flip `AccelerationConfig` between CPU-only and accel-on to prove deterministic results.
-The `poseidon_instructions_match_across_acceleration_configs` regression runs the
-Poseidon2/6 opcodes twice—first with `enable_cuda`/`enable_metal` set to `false`, then
-with both enabled—and asserts identical outputs plus CUDA parity when GPUs are present.【crates/ivm/tests/crypto.rs:100】
-Capture `acceleration_runtime_status()` alongside the run to record whether backends
-were configured/available in lab logs.
+გადაატრიალეთ `AccelerationConfig` მხოლოდ CPU-სა და Accel-ს შორის, რათა დაამტკიცოთ დეტერმინისტული შედეგები.
+`poseidon_instructions_match_across_acceleration_configs` რეგრესია მუშაობს
+Poseidon2/6 ორჯერ ახდენს ოპკოდებს — ჯერ `enable_cuda`/`enable_metal` დაყენებულია `false`-ზე, შემდეგ
+ორივე ჩართულია და ამტკიცებს იდენტურ გამომავალს, პლუს CUDA პარიტეტს GPU-ების არსებობისას.【crates/ivm/tests/crypto.rs:100】
+გადაიღეთ `acceleration_runtime_status()` გაშვების პარალელურად, რათა ჩაწეროთ არის თუ არა backends
+იყო კონფიგურირებული/ხელმისაწვდომი ლაბორატორიის ჟურნალებში.
 
 ```rust
 let baseline = ivm::acceleration_config();
@@ -126,90 +125,86 @@ SIMD-enabled baseline on the same host while surfacing the `simd` status/error
 fields via `acceleration_runtime_status`/`acceleration_runtime_errors`.【crates/ivm/tests/acceleration_simd.rs:9】
 ```
 
-### GPU defaults & heuristics
+### GPU ნაგულისხმევი და ევრისტიკა
 
-`MerkleTree` GPU offload kicks in at `8192` leaves by default, and the CPU SHA-2
-preference thresholds stay at `32_768` leaves per architecture. When neither CUDA nor
-Metal is available or has been disabled by health checks, the VM automatically falls
-back to SIMD/scalar hashing and the above numbers do not affect determinism.
+`MerkleTree` GPU გადმოტვირთვა იწყება `8192`-ზე ნაგულისხმევად და CPU SHA-2
+უპირატესობის ზღურბლები რჩება `32_768` ფურცლებზე თითო არქიტექტურაზე. როცა არც CUDA და არც
+ლითონი ხელმისაწვდომია ან გამორთულია ჯანმრთელობის შემოწმების შედეგად, VM ავტომატურად ეცემა
+დაუბრუნდით SIMD/სკალარ ჰეშინგს და ზემოაღნიშნული რიცხვები არ იმოქმედებს დეტერმინიზმზე.
 
-`max_gpus` clamps the pool size fed into `GpuManager`. Setting `max_gpus = 1` on
-multi-GPU hosts keeps telemetry simple while still allowing acceleration. Operators can
-use this switch to reserve the remaining devices for FASTPQ or CUDA Poseidon jobs.
+`max_gpus` ამაგრებს აუზის ზომას, რომელიც მიეწოდება `GpuManager`. `max_gpus = 1` ჩართულია
+მრავალ GPU მასპინძლები ინარჩუნებს ტელემეტრიას მარტივს, ხოლო აჩქარების საშუალებას იძლევა. ოპერატორებს შეუძლიათ
+გამოიყენეთ ეს გადამრთველი, რათა დაჯავშნოთ დარჩენილი მოწყობილობები FASTPQ ან CUDA Poseidon სამუშაოებისთვის.
 
-### Next acceleration targets & budgets
+### შემდეგი აჩქარების მიზნები და ბიუჯეტი
 
-The latest FastPQ Metal trace (`fastpq_metal_bench_20k_latest.json`, 32 K rows × 16
-columns, 5 iters) shows Poseidon column hashing dominating ZK workloads:
+უახლესი FastPQ ლითონის კვალი (`fastpq_metal_bench_20k_latest.json`, 32K მწკრივი × 16
+სვეტები, 5 იტერი) აჩვენებს Poseidon-ის სვეტის ჰეშინგს, რომელიც დომინირებს ZK დატვირთვაზე:
 
-- `poseidon_hash_columns`: CPU mean **3.64 s** vs. GPU mean **3.55 s** (1.03×).
-- `lde`: CPU mean **1.75 s** vs. GPU mean **1.57 s** (1.12×).
+- `poseidon_hash_columns`: CPU საშუალო **3.64s** GPU საშუალო **3.55s** (1.03×).
+- `lde`: CPU საშუალო **1.75s** GPU საშუალო **1.57s** (1.12×).
 
-IVM/Crypto will target these two kernels in the next accel sweep. Baseline budgets:
+IVM/Crypto მიზანმიმართული იქნება ამ ორ ბირთვს შემდეგი accel-ის გაწმენდისას. საბაზისო ბიუჯეტები:
 
-- Keep scalar/SIMD parity at or below the CPU means above, and capture
-  `acceleration_runtime_status()` alongside each run so Metal/CUDA availability is
-  logged with the budget numbers.
-- Target ≥1.3× speedup for `poseidon_hash_columns` and ≥1.2× for `lde` once tuned Metal
-  and CUDA kernels land, without changing outputs or telemetry labels.
+- შეინახეთ სკალარული/SIMD პარიტეტი CPU-ის ზემოთ ან მის ქვემოთ და დაჭერით
+  `acceleration_runtime_status()` თითოეულ გაშვებასთან ერთად, ამიტომ Metal/CUDA ხელმისაწვდომობაა
+  რეგისტრირებულია ბიუჯეტის ნომრებით.
+- სამიზნე ≥1.3× სიჩქარე `poseidon_hash_columns`-ისთვის და ≥1.2× `lde` ერთხელ დარეგულირებული ლითონისთვის
+  და CUDA ბირთვები მიწაზე, შედეგების ან ტელემეტრიული ეტიკეტების შეცვლის გარეშე.
 
-Attach the JSON trace and `cargo xtask acceleration-state --format json` snapshot to
-future lab runs so CI/regressions can assert both the budgets and backend health while
-comparing CPU-only vs. accel-on runs.
+მიამაგრეთ JSON კვალი და `cargo xtask acceleration-state --format json` სნეპშოტი
+მომავალი ლაბორატორია მუშაობს ისე, რომ CI/რეგრესიას შეუძლია დაამტკიცოს როგორც ბიუჯეტები, ასევე სარეზერვო ჯანმრთელობა, ხოლო
+შედარება მხოლოდ CPU და accel-on გაშვებები.
 
-### Norito heuristics (compile-time defaults)
+### Norito ევრისტიკა (კომპილაციის დროის ნაგულისხმევი ნაგულისხმევი)Norito-ის განლაგება და შეკუმშვის ევრისტიკა მუშაობს `crates/norito/src/core/heuristics.rs`-ში
+და შედგენილია ყველა ბინარში. ისინი არ არის კონფიგურირებადი გაშვების დროს, მაგრამ გამოვლენილია
+შეყვანები ეხმარება SDK-ს და ოპერატორის გუნდებს წინასწარ განსაზღვრონ, თუ როგორ მოიქცევა Norito GPU-ს ერთხელ
+შეკუმშვის ბირთვები ჩართულია.
+სამუშაო სივრცე ახლა აშენებს Norito-ს ნაგულისხმევად ჩართული `gpu-compression` ფუნქციით,
+ასე რომ, GPU zstd backends შედგენილია; გაშვების ხელმისაწვდომობა კვლავ დამოკიდებულია აპარატურაზე,
+დამხმარე ბიბლიოთეკა (`libgpuzstd_*`/`gpuzstd_cuda.dll`) და `allow_gpu_compression`
+კონფიგურაციის დროშა. შექმენით ლითონის დამხმარე `cargo build -p gpuzstd_metal --release` და
+მოათავსეთ `libgpuzstd_metal.dylib` ჩამტვირთველის გზაზე. ამჟამინდელი Metal Helper მართავს GPU-ს
+შესატყვისის პოვნა/მიმდევრობის გენერირება და იყენებს in-crate deterministic zstd ჩარჩოს
+ენკოდერი (Huffman/FSE + ჩარჩოს შეკრება) ჰოსტზე; დეკოდი იყენებს უჯრის ჩარჩოს
+დეკოდერი CPU zstd სარეზერვო ფრეიმებისთვის, სანამ GPU ბლოკის დეკოდი არ იქნება ჩართული.
 
-Norito’s layout and compression heuristics live in `crates/norito/src/core/heuristics.rs`
-and are compiled into every binary. They are not configurable at runtime, but exposing
-the inputs helps SDK and operator teams predict how Norito will behave once GPU
-compression kernels are enabled.
-The workspace now builds Norito with the `gpu-compression` feature enabled by default,
-so GPU zstd backends are compiled in; runtime availability still depends on hardware,
-the helper library (`libgpuzstd_*`/`gpuzstd_cuda.dll`), and the `allow_gpu_compression`
-config flag. Build the Metal helper with `cargo build -p gpuzstd_metal --release` and
-place `libgpuzstd_metal.dylib` on the loader path. The current Metal helper runs GPU
-match-finding/sequence generation and uses the in-crate deterministic zstd frame
-encoder (Huffman/FSE + frame assembly) on the host; decode uses the in-crate frame
-decoder with a CPU zstd fallback for unsupported frames until GPU block decode is wired in.
-
-| Field | Default | Purpose |
+| ველი | ნაგულისხმევი | დანიშნულება |
 |-------|---------|---------|
-| `min_compress_bytes_cpu` | `256` bytes | Below this, payloads skip zstd entirely to avoid overhead. |
-| `min_compress_bytes_gpu` | `1_048_576` bytes (1 MiB) | Payloads at or above this limit switch to GPU zstd when `norito::core::hw::has_gpu_compression()` is true. |
-| `zstd_level_small` / `zstd_level_large` | `1` / `3` | CPU compression levels for <32 KiB and ≥32 KiB payloads respectively. |
-| `zstd_level_gpu` | `1` | Conservative GPU level to keep latency consistent while filling command queues. |
-| `large_threshold` | `32_768` bytes | Size boundary between the “small” and “large” CPU zstd levels. |
-| `aos_ncb_small_n` | `64` rows | Below this row count adaptive encoders probe both AoS and NCB layouts to pick the smallest payload. |
-| `combo_no_delta_small_n_if_empty` | `2` rows | Prevents enabling u32/id delta encodings when 1–2 rows contain empty cells. |
-| `combo_id_delta_min_rows` / `combo_u32_delta_min_rows` | `2` | Deltas kick in only once there are at least two rows. |
-| `combo_enable_id_delta` / `combo_enable_u32_delta_names` / `combo_enable_u32_delta_bytes` | `true` | All delta transforms are enabled by default for well-behaved inputs. |
-| `combo_enable_name_dict` | `true` | Allows per-column dictionaries when hit ratios justify the memory overhead. |
-| `combo_dict_ratio_max` | `0.40` | Disable dictionaries when more than 40 % of rows are distinct. |
-| `combo_dict_avg_len_min` | `8.0` | Require average string length ≥8 before building dictionaries (short aliases stay inline). |
-| `combo_dict_max_entries` | `1024` | Hard cap on dictionary entries to guarantee bounded memory usage. |
+| `min_compress_bytes_cpu` | `256` ბაიტი | ამის ქვემოთ, ტვირთამწეობა მთლიანად გამოტოვებს zstd-ს ზედნადების თავიდან ასაცილებლად. |
+| `min_compress_bytes_gpu` | `1_048_576` ბაიტი (1MiB) | ტვირთამწეობა ამ ლიმიტზე ან ზემოთ გადადის GPU zstd-ზე, როდესაც `norito::core::hw::has_gpu_compression()` არის true. |
+| `zstd_level_small` / `zstd_level_large` | `1` / `3` | CPU-ის შეკუმშვის დონეები <32 KiB და ≥32 KiB დატვირთვისთვის შესაბამისად. |
+| `zstd_level_gpu` | `1` | კონსერვატიული GPU დონე ბრძანების რიგების შევსებისას ლატენტურობის შესანარჩუნებლად. |
+| `large_threshold` | `32_768` ბაიტი | ზომის საზღვარი "პატარა" და "დიდი" CPU zstd დონეებს შორის. |
+| `aos_ncb_small_n` | `64` რიგები | ამ მწკრივის დათვლის ქვემოთ ადაპტური ენკოდერები იკვლევენ როგორც AoS, ასევე NCB განლაგებას, რათა აირჩიონ ყველაზე მცირე დატვირთვა. |
+| `combo_no_delta_small_n_if_empty` | `2` რიგები | ხელს უშლის u32/id დელტა კოდირების ჩართვას, როდესაც 1–2 მწკრივი შეიცავს ცარიელ უჯრედებს. |
+| `combo_id_delta_min_rows` / `combo_u32_delta_min_rows` | `2` | დელტაები მხოლოდ ერთხელ იჭრება, სულ მცირე, ორი რიგი. |
+| `combo_enable_id_delta` / `combo_enable_u32_delta_names` / `combo_enable_u32_delta_bytes` | `true` | ყველა დელტა ტრანსფორმაცია ჩართულია ნაგულისხმევად კარგად მოვლილი შეყვანებისთვის. |
+| `combo_enable_name_dict` | `true` | ნებას რთავს თითო სვეტის ლექსიკონებს, როდესაც დარტყმის კოეფიციენტები ამართლებს მეხსიერების ზედმეტად. |
+| `combo_dict_ratio_max` | `0.40` | გამორთეთ ლექსიკონები, როდესაც მწკრივების 40%-ზე მეტი განსხვავებულია. |
+| `combo_dict_avg_len_min` | `8.0` | ლექსიკონების შექმნამდე მოითხოვეთ სტრიქონის საშუალო სიგრძე ≥8 (მოკლე მეტსახელები რჩება ხაზში). |
+| `combo_dict_max_entries` | `1024` | ლექსიკონის ჩანაწერებში მყარი ქუდი მეხსიერების შეზღუდული გამოყენების გარანტირებისთვის. |
 
-These heuristics keep GPU-enabled hosts aligned with CPU-only peers: the selector
-never makes a decision that would change the wire format, and the thresholds are fixed
-per release. When profiling uncovers better break-even points, Norito updates the
-canonical `Heuristics::canonical` implementation and `docs/source/benchmarks.md` plus
-`status.md` record the change alongside the versioned evidence.
+ეს ევრისტიკა ინარჩუნებს GPU-ზე ჩართული ჰოსტებს მხოლოდ CPU-ის თანატოლებთან: სელექტორი
+არასოდეს იღებს გადაწყვეტილებას, რომელიც შეცვლის მავთულის ფორმატს და ზღვრები ფიქსირდება
+თითო გამოშვებაზე. როდესაც პროფილირებით გამოვლენილია უკეთესი წყვეტის წერტილები, Norito განაახლებს
+კანონიკური `Heuristics::canonical` განხორციელება და `docs/source/benchmarks.md` plus
+`status.md` ჩაწერეთ ცვლილება ვერსიულ მტკიცებულებასთან ერთად.GPU zstd დამხმარე ახორციელებს იგივე `min_compress_bytes_gpu` შეწყვეტას მაშინაც კი, როდესაც
+პირდაპირ დარეკვა (მაგალითად, `norito::core::gpu_zstd::encode_all`-ის საშუალებით), ასე მცირე
+ტვირთამწეობა ყოველთვის რჩება CPU გზაზე, GPU ხელმისაწვდომობის მიუხედავად.
 
-The GPU zstd helper enforces the same `min_compress_bytes_gpu` cutoff even when
-called directly (for example via `norito::core::gpu_zstd::encode_all`), so small
-payloads always stay on the CPU path regardless of GPU availability.
+### პრობლემების აღმოფხვრა და პარიტეტის საკონტროლო სია
 
-### Troubleshooting and parity checklist
-
-- Snapshot runtime state with `cargo xtask acceleration-state --format json` and keep
-  the output alongside any failing logs; the report shows configured/available backends
-  plus parity/last-error strings.
-- Re-run the accel parity regression locally to rule out drift:
+- Snapshot გაშვების მდგომარეობა `cargo xtask acceleration-state --format json`-ით და შეინახეთ
+  გამომავალი ჩავარდნილ ჟურნალებთან ერთად; ანგარიშში ნაჩვენებია კონფიგურირებული/ხელმისაწვდომი ბექენდები
+  პლუს პარიტეტი/ბოლო შეცდომის სტრიქონები.
+- ხელახლა გაუშვით დაჩქარების პარიტეტის რეგრესია ადგილობრივად, რათა გამორიცხოთ დრიფტი:
   `cargo test -p ivm poseidon_instructions_match_across_acceleration_configs -- --nocapture`
-  (runs CPU-only then accel-on). Record `acceleration_runtime_status()` for the run.
-- If a backend fails self-tests, keep the node online in CPU-only mode (`enable_metal =
-  false`, `enable_cuda = false`) and open an incident with the captured parity output
-  instead of forcing the backend on. Results must remain deterministic across modes.
-- **CUDA parity smoke (lab NV hardware):** Run
+  (მუშაობს მხოლოდ CPU-ზე და შემდეგ აჩქარებს). ჩაწერეთ `acceleration_runtime_status()` გაშვებისთვის.
+- თუ ბექენდი ვერ ახერხებს თვითტესტირებას, შეინახეთ კვანძი ონლაინ რეჟიმში მხოლოდ CPU-ის რეჟიმში (`enable_metal =
+  false`, `enable_cuda = false`) და გახსენით ინციდენტი დაფიქსირებული პარიტეტის გამომავალით
+  ნაცვლად იძულებით backend on. შედეგები უნდა დარჩეს განმსაზღვრელი ყველა რეჟიმში.
+- ** CUDA პარიტეტული კვამლი (ლაბორატორია NV აპარატურა):** გაშვება
   `ACCEL_ENABLE_CUDA=1 cargo test -p ivm poseidon_instructions_match_across_acceleration_configs -- --nocapture`
-  on sm_8x hardware, capture `cargo xtask acceleration-state --format json`, and attach
-  the status snapshot (GPU model/driver included) to the benchmark artefacts.
+  sm_8x აპარატურაზე, გადაიღეთ `cargo xtask acceleration-state --format json` და მიამაგრეთ
+  სტატუსის სნეპშოტი (GPU მოდელი/დრაივერი მოყვება) საორიენტაციო არტეფაქტებს.

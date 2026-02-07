@@ -4,28 +4,30 @@ direction: rtl
 source: docs/portal/docs/soranet/pq-ratchet-runbook.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: pq-ratchet-runbook
-title: Simulacro PQ Ratchet do SoraNet
-sidebar_label: Runbook de PQ Ratchet
-description: Passos de ensaio on-call para promover ou rebaixar a politica de anonimato PQ em estagios com validacao deterministica de telemetria.
+ID: PQ-RATCHET-RINBOOK
+عنوان: سورانیٹ پی کیو رچیٹ سمولکرم
+سائڈبار_لیبل: پی کیو رچٹ رن بک
+تفصیل: ٹیلیفونک ٹیلی میٹری کی توثیق کے ساتھ انٹرنشپ میں پی کیو گمنامی پالیسی کو فروغ دینے یا اسے نیچے کرنے کے لئے کال ٹیسٹ کے اقدامات۔
 ---
 
-:::note Fonte canonica
-Esta pagina espelha `docs/source/soranet/pq_ratchet_runbook.md`. Mantenha ambas as copias sincronizadas.
+::: نوٹ کینونیکل ماخذ
+یہ صفحہ `docs/source/soranet/pq_ratchet_runbook.md` کا آئینہ دار ہے۔ دونوں کاپیاں ہم آہنگ رکھیں۔
 :::
 
-## Proposito
+## مقصد
 
-Este runbook guia a sequencia do simulacro para a politica de anonimato post-quantum (PQ) em estagios do SoraNet. Operadores ensaiam promocao (Stage A -> Stage B -> Stage C) e a despromocao controlada de volta a Stage B/A quando a oferta de PQ cai. O simulacro valida hooks de telemetria (`sorafs_orchestrator_policy_events_total`, `sorafs_orchestrator_brownouts_total`, `sorafs_orchestrator_pq_ratio_*`) e coleta artefatos para o log de rehearsal de incidentes.
+یہ رن بک سورنیٹ مراحل میں پوسٹ کوانٹم (پی کیو) کی گمنامی پالیسی کے نقلی ترتیب کی رہنمائی کرتی ہے۔ آپریٹرز پروموشن (اسٹیج اے -> اسٹیج بی -> اسٹیج سی) کی مشق کرتے ہیں اور جب پی کیو کی فراہمی میں کمی آتی ہے تو اسٹیج بی/اے پر دوبارہ کنٹرول شدہ ڈیموشن۔ سمیلاکرم ٹیلی میٹری ہکس (`sorafs_orchestrator_policy_events_total` ، `sorafs_orchestrator_brownouts_total` ، `sorafs_orchestrator_pq_ratio_*`) کی توثیق کرتا ہے اور واقعے کی مشق لاگ کے لئے نمونے جمع کرتا ہے۔
 
-## Prerequisitos
+## شرائط
 
-- Ultimo binario `sorafs_orchestrator` com capability-weighting (commit igual ou posterior ao reference do drill mostrado em `docs/source/soranet/reports/pq_ratchet_validation.md`).
-- Acesso ao stack Prometheus/Grafana que serve `dashboards/grafana/soranet_pq_ratchet.json`.
-- Snapshot nominal do guard directory. Busque e valide uma copia antes do simulacro:
+- آخری بائنری `sorafs_orchestrator` صلاحیت کے وزن کے ساتھ (`docs/source/soranet/reports/pq_ratchet_validation.md` میں دکھائے گئے ڈرل ریفرنس کے برابر یا اس سے زیادہ کا ارتکاب کریں)۔
+- اسٹیک Prometheus/Grafana تک رسائی جو `dashboards/grafana/soranet_pq_ratchet.json` کی خدمت کرتی ہے۔
+- گارڈ ڈائرکٹری کا برائے نام سنیپ شاٹ۔ نقالی سے پہلے ایک کاپی تلاش اور توثیق کریں:
 
 ```bash
 sorafs_cli guard-directory fetch \
@@ -34,9 +36,9 @@ sorafs_cli guard-directory fetch \
   --expected-directory-hash <directory-hash-hex>
 ```
 
-Se o source directory publicar apenas JSON, re-encode para Norito binary com `soranet-directory build` antes de rodar os helpers de rotacao.
+اگر ماخذ ڈائرکٹری صرف JSON شائع کرتی ہے تو ، گردش مددگار چلانے سے پہلے `soranet-directory build` کے ساتھ Norito بائنری میں دوبارہ انکوڈ کریں۔
 
-- Capture metadata e pre-stage artefatos de rotacao do issuer com o CLI:
+- CLI کے ساتھ میٹا ڈیٹا اور پری اسٹیج جاری کرنے والے گردش نمونے پر قبضہ کریں:
 
 ```bash
 soranet-directory inspect \
@@ -47,67 +49,67 @@ soranet-directory rotate \
   --keys-out ./artefacts/guard_issuer_rotation --overwrite
 ```
 
-- Janela de mudanca aprovada pelos times on-call de networking e observability.
+- آن کال نیٹ ورکنگ اور مشاہدہ کرنے والی ٹیموں کے ذریعہ منظور شدہ ونڈو کو تبدیل کریں۔
 
-## Passos de promocao
+## تشہیر کے اقدامات
 
-1. **Stage audit**
+1. ** اسٹیج آڈٹ **
 
-   Registre o stage inicial:
+   ابتدائی مرحلے کو رجسٹر کریں:
 
    ```bash
    sorafs_cli config get --config orchestrator.json sorafs.anonymity_policy
    ```
 
-   Espere `anon-guard-pq` antes da promocao.
+   پروموشن سے پہلے `anon-guard-pq` کا انتظار کریں۔
 
-2. **Promova para Stage B (Majority PQ)**
+2. ** اسٹیج بی (اکثریت پی کیو) کو فروغ دیں **
 
    ```bash
    sorafs_cli config set --config orchestrator.json \
      sorafs.anonymity_policy anon-majority-pq
    ```
 
-   - Aguarde >=5 minutos para manifests serem atualizados.
-   - No Grafana (dashboard `SoraNet PQ Ratchet Drill`) confirme que o painel "Policy Events" mostra `outcome=met` para `stage=anon-majority-pq`.
-   - Capture um screenshot ou JSON do painel e anexe ao log de incidentes.
+   - انتظار کریں> = 5 منٹ کی تازہ کاری کے ل .۔
+   - Grafana میں (ڈیش بورڈ `SoraNet PQ Ratchet Drill`) تصدیق کریں کہ "پالیسی واقعات" پینل `outcome=met` کو `stage=anon-majority-pq` کے لئے دکھاتا ہے۔
+   - ڈیش بورڈ کے اسکرین شاٹ یا JSON پر قبضہ کریں اور اسے واقعے کے لاگ سے منسلک کریں۔
 
-3. **Promova para Stage C (Strict PQ)**
+3. ** اسٹیج سی (سخت پی کیو) کو فروغ دیں **
 
    ```bash
    sorafs_cli config set --config orchestrator.json \
      sorafs.anonymity_policy anon-strict-pq
    ```
 
-   - Verifique que os histogramas `sorafs_orchestrator_pq_ratio_*` tendem a 1.0.
-   - Confirme que o contador de brownout permanece plano; caso contrario, siga os passos de despromocao.
+   - چیک کریں کہ ہسٹگرامس `sorafs_orchestrator_pq_ratio_*` 1.0 کی طرف جاتا ہے۔
+   - تصدیق کریں کہ براؤن آؤٹ کاؤنٹر فلیٹ رہتا ہے۔ بصورت دیگر ، تخفیف کے مراحل پر عمل کریں۔
 
-## Despromocao / brownout drill
+## ریلیگریشن / براؤن آؤٹ ڈرل
 
-1. **Induza uma escassez sintetica de PQ**
+1. ** مصنوعی پی کیو کی قلت کو راغب کریں **
 
-   Desative relays PQ no ambiente playground reduzindo o guard directory a entradas classicas apenas, depois recarregue o cache do orchestrator:
+   صرف کلاسک اندراجات میں گارڈ ڈائرکٹری کو کم کرکے کھیل کے میدان کے ماحول میں پی کیو ریلے کو غیر فعال کریں ، پھر آرکسٹریٹر کیشے کو دوبارہ لوڈ کریں:
 
    ```bash
    sorafs_cli guard-cache prune --config orchestrator.json --keep-classical-only
    ```
 
-2. **Observe a telemetria de brownout**
+2. ** براؤن آؤٹ ٹیلی میٹری کا مشاہدہ کریں **
 
-   - Dashboard: o painel "Brownout Rate" sobe acima de 0.
-   - PromQL: `sum(rate(sorafs_orchestrator_brownouts_total{region="$region"}[5m]))`
-   - `sorafs_fetch` deve reportar `anonymity_outcome="brownout"` com `anonymity_reason="missing_majority_pq"`.
+   - ڈیش بورڈ: "براؤن آؤٹ ریٹ" پینل 0 سے اوپر بڑھتا ہے۔
+   - پروم کیو ایل: `sum(rate(sorafs_orchestrator_brownouts_total{region="$region"}[5m]))`
+   - `sorafs_fetch` `anonymity_reason="missing_majority_pq"` کے ساتھ `anonymity_outcome="brownout"` کی اطلاع دینا چاہئے۔
 
-3. **Despromova para Stage B / Stage A**
+3. ** اسٹیج بی / اسٹیج اے ** کے لئے ڈیموٹ
 
    ```bash
    sorafs_cli config set --config orchestrator.json \
      sorafs.anonymity_policy anon-majority-pq
    ```
 
-   Se a oferta de PQ ainda for insuficiente, despromova para `anon-guard-pq`. O simulacro termina quando os contadores de brownout estabilizam e as promocoes podem ser reaplicadas.
+   اگر پی کیو سپلائی ابھی بھی ناکافی ہے تو ، `anon-guard-pq` میں نیچے کی جائیں۔ نقلی اس وقت ختم ہوتی ہے جب براؤن آؤٹ کاؤنٹر مستحکم ہوجاتے ہیں اور پروموشنز کو دوبارہ لاگو کیا جاسکتا ہے۔
 
-4. **Restaure o guard directory**
+4. ** گارڈ ڈائرکٹری کو بحال کریں **
 
    ```bash
    sorafs_cli guard-directory import \
@@ -115,14 +117,12 @@ soranet-directory rotate \
      --input ./artefacts/guard_directory_pre_drill.json
    ```
 
-## Telemetria e artefatos
+## ٹیلی میٹری اور نمونے- ** ڈیش بورڈ: ** `dashboards/grafana/soranet_pq_ratchet.json`
+۔
+- ** واقعہ لاگ: ** ٹیلی میٹری کے ٹکڑوں اور آپریٹر نوٹ کو `docs/examples/soranet_pq_ratchet_fire_drill.log` پر منسلک کریں۔
+۔
 
-- **Dashboard:** `dashboards/grafana/soranet_pq_ratchet.json`
-- **Alertas Prometheus:** garanta que o alerta de brownout de `sorafs_orchestrator_policy_events_total` fique abaixo do SLO configurado (&lt;5% em qualquer janela de 10 minutos).
-- **Incident log:** anexe trechos de telemetria e notas do operador em `docs/examples/soranet_pq_ratchet_fire_drill.log`.
-- **Captura assinada:** use `cargo xtask soranet-rollout-capture` para copiar o drill log e o scoreboard para `artifacts/soranet_pq_rollout/<timestamp>/`, calcular digests BLAKE3 e produzir um `rollout_capture.json` assinado.
-
-Exemplo:
+مثال:
 
 ```
 cargo xtask soranet-rollout-capture \
@@ -134,12 +134,12 @@ cargo xtask soranet-rollout-capture \
   --label "drill-2026-02-21"
 ```
 
-Anexe os metadata gerados e a assinatura ao pacote de governance.
+گورننس پیکیج میں تیار کردہ میٹا ڈیٹا اور دستخط منسلک کریں۔
 
-## Rollback
+## رول بیک
 
-Se o simulacro revelar escassez real de PQ, permanece em Stage A, notifique o Networking TL e anexe as metricas coletadas junto com os diffs do guard directory ao incident tracker. Use o export do guard directory capturado anteriormente para restaurar o servico normal.
+اگر نقلی حقیقی پی کیو کی قلت کو ظاہر کرتی ہے تو ، اسٹیج اے میں رہیں ، نیٹ ورکنگ ٹی ایل کو مطلع کریں اور جمع شدہ میٹرکس کو گارڈ ڈائرکٹری کے ساتھ منسلک کریں۔ معمول کی خدمت کو بحال کرنے کے لئے پہلے پکڑے گئے گارڈ ڈائرکٹری برآمد کا استعمال کریں۔
 
-:::tip Cobertura de regressao
-`cargo test -p sorafs_orchestrator pq_ratchet_fire_drill_records_metrics` fornece a validacao sintetica que sustenta este simulacro.
+::: ٹپ رجعت کی کوریج
+`cargo test -p sorafs_orchestrator pq_ratchet_fire_drill_records_metrics` مصنوعی توثیق فراہم کرتا ہے جو اس سمیلکرم کی حمایت کرتا ہے۔
 :::

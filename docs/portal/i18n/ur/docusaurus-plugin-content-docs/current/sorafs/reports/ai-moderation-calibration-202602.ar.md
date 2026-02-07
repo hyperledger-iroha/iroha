@@ -4,65 +4,67 @@ direction: rtl
 source: docs/portal/docs/sorafs/reports/ai-moderation-calibration-202602.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: تقرير معايرة إشراف الذكاء الاصطناعي (2026-02)
-summary: مجموعة بيانات معايرة أساسية وعتبات ولوحة نتائج لأول إصدار حوكمة MINFO-1.
+عنوان: AI نگرانی انشانکن رپورٹ (2026-02)
+خلاصہ: پہلی MINFO-1 گورننس کی رہائی کے لئے بیس لائن انشانکن ڈیٹاسیٹ ، حد اور اسکور بورڈ۔
 ---
 
-# تقرير معايرة إشراف الذكاء الاصطناعي - فبراير 2026
+#AI نگرانی انشانکن رپورٹ - فروری 2026
 
-يجمع هذا التقرير قطع معايرة البداية لـ **MINFO-1**. تم إنتاج dataset وmanifest وscoreboard
-في 2026-02-05، وتمت مراجعتها من مجلس الوزارة في 2026-02-10، وتم تثبيتها في DAG الحوكمة
-على الارتفاع `912044`.
+اس رپورٹ میں ** MINFO-1 ** کے لئے انشانکن پلاٹوں کو شروع کرنے کا آغاز کیا گیا ہے۔ ایک ڈیٹاسیٹ ، منشور اور اسکور بورڈ تیار کیا گیا تھا
+02-05-2026 کو ، وزارت کونسل نے 02-10-2026 کو اس کا جائزہ لیا ، اور اس کی تصدیق ڈی اے جی گورننس میں ہوئی۔
+عروج پر `912044`۔
 
-## Manifest مجموعة البيانات
+## ظاہر ڈیٹا سیٹ
 
-- **Dataset reference:** `c0956583-355a-43cc-9a60-e3a5d9a0f7d0`
-- **Slug:** `ai-moderation-calibration-202602`
-- **Entries:** manifest 480, chunk 12,800, metadata 920, audio 160
-- **Label mix:** safe 68%, suspect 19%, escalate 13%
-- **Artefact digest:** `9c4f86a3c099a48d0e3d7cfbf14d22bb9492960c41cba3858f0722519ff612ab`
-- **Distribution:** `sora://datasets/ministry/ai-moderation/calibration/2026-02.tar.zst`
+- ** ڈیٹاسیٹ حوالہ: ** `c0956583-355a-43cc-9a60-e3a5d9a0f7d0`
+- ** سلگ: ** `ai-moderation-calibration-202602`
+- ** اندراجات: ** منشور 480 ، حصہ 12،800 ، میٹا ڈیٹا 920 ، آڈیو 160
+- ** لیبل مکس: ** سیف 68 ٪ ، مشتبہ 19 ٪ ، 13 ٪ بڑھاو
+- ** آرٹ فیکٹ ڈائجسٹ: ** `9c4f86a3c099a48d0e3d7cfbf14d22bb9492960c41cba3858f0722519ff612ab`
+- ** تقسیم: ** `sora://datasets/ministry/ai-moderation/calibration/2026-02.tar.zst`
 
-يتوفر manifest الكامل في `docs/examples/ai_moderation_calibration_manifest_202602.json`
-ويتضمن توقيع الحوكمة بالإضافة إلى hash الخاص بالـ runner الملتقط وقت الإصدار.
+مکمل منشور `docs/examples/ai_moderation_calibration_manifest_202602.json` پر دستیاب ہے
+اس میں گورننس کے دستخط کے ساتھ ساتھ رہائی کے وقت رنر ہیش کی گرفتاری بھی شامل ہے۔
 
-## ملخص scoreboard
+## اسکور بورڈ کا خلاصہ
 
-تم تشغيل المعايرات باستخدام opset 17 ومسار البذور الحتمي. يسجل JSON الكامل للـ scoreboard
-(`docs/examples/ai_moderation_calibration_scorecard_202602.json`) hashes وdigests الخاصة بـ telemetry؛
-الجدول أدناه يبرز أهم المقاييس.
+انشانکن کو اوپٹ 17 اور ایک عصبی بیج کے راستے کا استعمال کرتے ہوئے چلایا گیا تھا۔ اسکور بورڈ کے لئے مکمل JSON اسکور
+(`docs/examples/ai_moderation_calibration_scorecard_202602.json`) ٹیلی میٹری ہیش اور ہضم ؛
+نیچے دیئے گئے جدول میں انتہائی اہم میٹرکس کو اجاگر کیا گیا ہے۔
 
-| النموذج (العائلة) | Brier | ECE | AUROC | Precision@Quarantine | Recall@Escalate |
-| --------------- | ----- | --- | ----- | -------------------- | --------------- |
-| ViT-H/14 Safety (vision) | 0.141 | 0.031 | 0.987 | 0.964 | 0.912 |
-| LLaVA-1.6 34B Safety (multimodal) | 0.118 | 0.028 | 0.978 | 0.942 | 0.904 |
-| Perceptual ensemble (perceptual) | 0.162 | 0.047 | 0.953 | 0.883 | 0.861 |
+| ماڈل (فیملی) | بریئر | ECE | auroc | صحت سے متعلق@قرنطین | یاد@اسکیلیٹ |
+| ----------------- | ----- | --- | ----- | ---------------------- | ----------------- |
+| وٹ-ایچ/14 سیفٹی (وژن) | 0.141 | 0.031 | 0.987 | 0.964 | 0.912 |
+| llava-1.6 34b سیفٹی (ملٹی موڈل) | 0.118 | 0.028 | 0.978 | 0.942 | 0.904 |
+| ادراک کا جوڑا (ادراک) | 0.162 | 0.047 | 0.953 | 0.883 | 0.861 |
 
-المقاييس المجمعة: `Brier = 0.126`, `ECE = 0.034`, `AUROC = 0.982`. كان توزيع
-الأحكام عبر نافذة المعايرة هو pass 91.2% وquarantine 6.8% وescalate 2.0%، وهو مطابق
-لتوقعات السياسة المسجلة في ملخص manifest. ظل backlog للإيجابيات الكاذبة عند الصفر،
-وبقي drift score (7.1%) أقل بكثير من عتبة التنبيه 20%.
+مشترکہ میٹرکس: `Brier = 0.126` ، `ECE = 0.034` ، `AUROC = 0.982`۔ اسے تقسیم کیا گیا تھا
+انشانکن ونڈو میں فیصلے 91.2 ٪ ، سنگرودھ 6.8 ٪ ، اور 2.0 ٪ کو بڑھاتے ہیں ، جو ایک جیسی ہیں
+پالیسی کی توقعات کے لئے منشور میں ریکارڈ کیا گیا۔ جھوٹے مثبت کا بیک بلاگ صفر پر رہا ،
+بڑھے ہوئے اسکور (7.1 ٪) 20 ٪ الرٹ کی حد سے نیچے رہا۔
 
-## العتبات والمصادقة
+## حد اور توثیق
 
-- `thresholds.quarantine = 0.42`
-- `thresholds.escalate = 0.78`
-- Governance motion: `MINFO-2026-02-07`
-- Signed by `ministry-council-seat-03` at `2026-02-10T11:33:12Z`
+-`thresholds.quarantine = 0.42`
+-`thresholds.escalate = 0.78`
+- گورننس موشن: `MINFO-2026-02-07`
+- `ministry-council-seat-03` کے ذریعہ `2026-02-10T11:33:12Z` پر دستخط کریں
 
-خزنت CI الحزمة الموقعة في `artifacts/ministry/ai_moderation/2026-02/` مع ثنائيات
-moderation runner. يجب الرجوع إلى digest الخاص بالـ manifest وhashes الخاصة بالـ scoreboard
-أعلاه أثناء عمليات التدقيق والاستئناف.
+سی آئی نے بائنریوں کے ساتھ `artifacts/ministry/ai_moderation/2026-02/` پر دستخط شدہ پیکیج کو محفوظ کیا
+اعتدال پسند رنر۔ آپ کو مینی فیسٹ کے ڈائجسٹ اور اسکور بورڈ کے ہیشوں کا حوالہ دینا ہوگا
+آڈٹ اور اپیلوں کے دوران اوپر
 
-## لوحات المتابعة والتنبيهات
+## نگرانی کرنے والے پینل اور انتباہات
 
-على SREs الخاصة بالموديريشن استيراد لوحة Grafana من
-`dashboards/grafana/ministry_moderation_overview.json` وقواعد تنبيهات Prometheus في
-`dashboards/alerts/ministry_moderation_rules.yml` (تغطية الاختبارات موجودة في
-`dashboards/alerts/tests/ministry_moderation_rules.test.yml`). تصدر هذه
-القطع تنبيهات لتوقفات ingestion وارتفاعات drift ونمو طابور quarantine، وتلبي متطلبات
-المراقبة المشار إليها في
-[AI Moderation Runner Specification](../../ministry/ai-moderation-runner.md).
+ترمیم SREs کو Grafana بورڈ سے درآمد کرنا چاہئے
+`dashboards/grafana/ministry_moderation_overview.json` اور Prometheus الرٹ میں قواعد
+`dashboards/alerts/ministry_moderation_rules.yml` (ٹیسٹ کی کوریج پر ہے
+`dashboards/alerts/tests/ministry_moderation_rules.test.yml`)۔ یہ جاری کیا گیا ہے
+انجیکشن اسٹاپ ، بڑھے ہوئے اسپائکس ، اور قرنطین قطار میں اضافے ، اور ضروریات کو پورا کرنے کے لئے ویجٹ الرٹ
+نگرانی میں
+[AI اعتدال رنر کی تفصیلات] (../../ministry/ai-moderation-runner.md)۔

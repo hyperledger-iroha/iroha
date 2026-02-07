@@ -7,69 +7,68 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 7548d481edd33d7e325d22559a5f53f261fa302ffd8710a1626acc4a5705e428
 source_last_modified: "2025-12-29T18:16:35.915400+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Iroha VM + Kotodama Docs Index
+# Iroha ቪኤም + Kotodama ሰነዶች መረጃ ጠቋሚ
 
-This index links the main design and reference documents for IVM, Kotodama, and the IVM‑first pipeline. 日本語訳は [`README.ja.md`](./README.ja.md) を参照してください。
+ይህ ኢንዴክስ የ IVM፣ Kotodama እና IVM-የመጀመሪያውን የቧንቧ መስመር ዋና ዲዛይን እና ማጣቀሻ ሰነዶችን ያገናኛል። 日本語訳は [`README.ja.md`](./README.ja.md) を参照してください。
 
-- IVM architecture and language mapping: `../../ivm.md`
-- IVM syscall ABI: `ivm_syscalls.md`
-- Generated syscall constants: `ivm_syscalls_generated.md` (run `make docs-syscalls` to refresh)
-- IVM bytecode header: `ivm_header.md`
-- Kotodama grammar and semantics: `kotodama_grammar.md`
-- Kotodama examples and syscall mappings: `kotodama_examples.md`
-- Transaction pipeline (IVM‑first): `../../new_pipeline.md`
-- Torii Contracts API (manifests): `torii_contracts_api.md`
-- Universal account/UAID operations guide: `universal_accounts_guide.md`
-- JSON query envelope (CLI / tooling): `query_json.md`
-- Norito streaming module reference: `norito_streaming.md`
-- Runtime ABI samples: `samples/runtime_abi_active.md`, `samples/runtime_abi_hash.md`, `samples/find_active_abi_versions.md`
-- ZK App API (attachments, prover, vote tally): `zk_app_api.md`
-- Torii ZK attachments/prover runbook: `zk/prover_runbook.md`
-- Torii ZK App API operator guide (attachments/prover; crate doc): `../../crates/iroha_torii/docs/zk_app_api.md`
-- VK/proof lifecycle (registry, verification, telemetry): `zk/lifecycle.md`
-- Torii Operator Aids (endpoints for visibility): `references/operator_aids.md`
-- Nexus default-lane quickstart: `quickstart/default_lane.md`
-- MOCHI supervisor quickstart & architecture: `mochi/index.md`
-- JavaScript SDK guides (quickstart, configuration, publishing): `sdk/js/index.md`
-- Swift SDK parity/CI dashboards: `references/ios_metrics.md`
-- Governance: `../../gov.md`
-- Domain endorsements (committees, policies, validation): `domain_endorsements.md`
-- JDG attestations (offline validation tooling): `jdg_attestations.md`
-- Clarification coordination prompts: `coordination_llm_prompts.md`
-- Roadmap: `../../roadmap.md`
-- Docker builder image usage: `docker_build.md`
+- IVM አርክቴክቸር እና የቋንቋ ካርታ፡ `../../ivm.md`
+- IVM syscall ABI፡ `ivm_syscalls.md`
+- የመነጩ syscall ቋሚዎች፡ `ivm_syscalls_generated.md` (ለማደስ `make docs-syscalls` ን ያሂዱ)
+- IVM ባይትኮድ ራስጌ፡ `ivm_header.md`
+- Kotodama ሰዋሰው እና ትርጓሜ፡ `kotodama_grammar.md`
+- Kotodama ምሳሌዎች እና syscall ካርታዎች፡ `kotodama_examples.md`
+- የግብይት ቧንቧ መስመር (IVM-መጀመሪያ): `../../new_pipeline.md`
+- Torii ኮንትራቶች ኤፒአይ (መግለጫዎች)፡ `torii_contracts_api.md`
+- ሁለንተናዊ መለያ/UAID ኦፕሬሽኖች መመሪያ፡ `universal_accounts_guide.md`
+- JSON መጠይቅ ፖስታ (CLI / tooling): `query_json.md`
+- Norito የዥረት ሞጁል ማጣቀሻ፡ `norito_streaming.md`
+- የሩጫ ጊዜ ABI ናሙናዎች፡ `samples/runtime_abi_active.md`፣ `samples/runtime_abi_hash.md`፣ `samples/find_active_abi_versions.md`
+- ZK መተግበሪያ API (አባሪዎች፣ prover፣ የድምጽ መጠን): `zk_app_api.md`
+- Torii ZK አባሪዎች/prover runbook: `zk/prover_runbook.md`
+- Torii ZK መተግበሪያ ኤፒአይ ኦፕሬተር መመሪያ (አባሪዎች/ፕሮቨር፣ crate doc)፡ `../../crates/iroha_torii/docs/zk_app_api.md`
+- ቪኬ/ማስረጃ የሕይወት ዑደት (መዝገብ ፣ ማረጋገጫ ፣ ቴሌሜትሪ): `zk/lifecycle.md`
+- Torii ኦፕሬተር ኤድስ (የታይነት የመጨረሻ ነጥቦች)፡ `references/operator_aids.md`
+- Nexus ነባሪ መስመር ፈጣን ጅምር፡ `quickstart/default_lane.md`
+- MOCHI ሱፐርቫይዘር ፈጣን ጅምር እና አርክቴክቸር፡ `mochi/index.md`
+- ጃቫ ስክሪፕት ኤስዲኬ መመሪያዎች (ፈጣን ጅምር፣ ውቅር፣ ማተም): `sdk/js/index.md`
+- ስዊፍት ኤስዲኬ እኩልነት/CI ዳሽቦርዶች፡ `references/ios_metrics.md`
+- አስተዳደር: `../../gov.md`
+- የጎራ ድጋፍ (ኮሚቴዎች፣ ፖሊሲዎች፣ ማረጋገጫዎች)፡ `domain_endorsements.md`
+- የጄዲጂ ማረጋገጫዎች (ከመስመር ውጭ የማረጋገጫ መሳሪያ)፡ `jdg_attestations.md`
+- የማብራሪያ ማስተባበሪያ ጥያቄዎች: `coordination_llm_prompts.md`
+- የመንገድ ካርታ: `../../roadmap.md`
+- Docker ግንበኛ ምስል አጠቃቀም፡ `docker_build.md`
 
-Usage tips
-- Build and run examples in `examples/` using external tools (`koto_compile`, `ivm_run`):
-  - `make examples-run` (and `make examples-inspect` if `ivm_tool` is available)
-- Optional integration tests (ignored by default) for examples and header checks live in `integration_tests/tests/`.
+የአጠቃቀም ምክሮች
+- ውጫዊ መሳሪያዎችን (`koto_compile`፣ `ivm_run`) በመጠቀም ምሳሌዎችን በ`examples/` ይገንቡ እና ያሂዱ።
+  - `make examples-run` (እና `make examples-inspect` ካለ)
+- የአማራጭ ውህደት ሙከራዎች (በነባሪነት ችላ የተባሉ) ምሳሌዎች እና የርዕስ ፍተሻዎች በቀጥታ በ`integration_tests/tests/`።የቧንቧ መስመር ውቅር
+- ሁሉም የሩጫ ጊዜ ባህሪ በ`iroha_config` ፋይሎች ነው የተዋቀረው። የአካባቢ ተለዋዋጮች ለኦፕሬተሮች ጥቅም ላይ አይውሉም.
+- አስተዋይ ነባሪዎች ቀርበዋል; አብዛኛዎቹ ማሰማራት ለውጦች አያስፈልጋቸውም።
+- ተዛማጅ ቁልፎች በ `[pipeline]`:
+  - `dynamic_prepass`፡ የመዳረሻ ስብስቦችን ለማግኘት IVM ንባብ-ብቻ ፕሪፓስን አንቃ (ነባሪ፡ እውነት)።
+  - `access_set_cache_enabled`: መሸጎጫ የተገኘ የመዳረሻ ስብስቦች በ `(code_hash, entrypoint)`; ፍንጮችን ለማረም አሰናክል (ነባሪ፡ እውነት)።
+  - `parallel_overlay`: ተደራቢዎችን በትይዩ መገንባት; ቁርጠኝነት ይቀራል (ነባሪ፡ እውነት)።
+  - `gpu_key_bucket`: በ `(key, tx_idx, rw_flag)` ላይ የተረጋጋ ራዲክስ በመጠቀም የጊዜ ሰሌዳ አስማሚው አማራጭ ቁልፍ ባልዲ; የሚወስን የሲፒዩ ውድቀት ሁል ጊዜ ንቁ ነው (ነባሪ፡ ሐሰት)።
+  - `cache_size`፡ የዓለማቀፉ IVM ቅድመ-ዲኮድ መሸጎጫ አቅም (የተለያዩ ዥረቶች)። ነባሪ፡ 128. መጨመር ለተደጋጋሚ ግድያዎች ጊዜን መፍታት ይቀንሳል።
 
-Pipeline configuration
-- All runtime behavior is configured via `iroha_config` files. Environment variables are not used for operators.
-- Sensible defaults are provided; most deployments won’t need changes.
-- Relevant keys under `[pipeline]`:
-  - `dynamic_prepass`: enable IVM read‑only prepass to derive access sets (default: true).
-  - `access_set_cache_enabled`: cache derived access sets per `(code_hash, entrypoint)`; disable to debug hints (default: true).
-  - `parallel_overlay`: build overlays in parallel; commit remains deterministic (default: true).
-  - `gpu_key_bucket`: optional key bucketing for the scheduler prepass using a stable radix on `(key, tx_idx, rw_flag)`; deterministic CPU fallback is always active (default: false).
-  - `cache_size`: capacity of the global IVM pre‑decode cache (decoded streams kept). Default: 128. Increasing can reduce decode time for repeated executions.
+ሰነዶች የማመሳሰል ፍተሻዎች
+- ሲስካል ቋሚዎች (ሰነዶች/ምንጭ/ivm_syscals_generated.md)
+  - እንደገና ማመንጨት: `make docs-syscalls`
+  - ብቻ ያረጋግጡ: `bash scripts/check_syscalls_doc.sh`
+- Syscall ABI ሰንጠረዥ (crates/ivm/docs/syscalls.md)
+  - ብቻ ያረጋግጡ: `cargo run -p ivm --bin gen_syscalls_doc -- --check --no-code`
+  - የመነጨውን ክፍል (እና የኮድ ሰነዶች ሰንጠረዥ) ያዘምኑ፡ `cargo run -p ivm --bin gen_syscalls_doc -- --write`
+- ጠቋሚ-ABI ሠንጠረዦች (ሳጥኖች/ivm/docs/pointer_abi.md እና ivm.md)
+  - ብቻ ያረጋግጡ: `cargo run -p ivm --bin gen_pointer_types_doc -- --check`
+  - ክፍሎችን አዘምን: `cargo run -p ivm --bin gen_pointer_types_doc -- --write`
+- IVM ራስጌ ፖሊሲ እና ABI hashes (docs/source/ivm_header.md)
+  - ቼክ ብቻ፡ `cargo run -p ivm --bin gen_header_doc -- --check` እና `cargo run -p ivm --bin gen_abi_hash_doc -- --check`
+  - ክፍሎችን ያዘምኑ፡ `cargo run -p ivm --bin gen_header_doc -- --write` እና `cargo run -p ivm --bin gen_abi_hash_doc -- --write`
 
-Docs sync checks
-- Syscall constants (docs/source/ivm_syscalls_generated.md)
-  - Regenerate: `make docs-syscalls`
-  - Check only: `bash scripts/check_syscalls_doc.sh`
-- Syscall ABI table (crates/ivm/docs/syscalls.md)
-  - Check only: `cargo run -p ivm --bin gen_syscalls_doc -- --check --no-code`
-  - Update generated section (and code docs table): `cargo run -p ivm --bin gen_syscalls_doc -- --write`
-- Pointer‑ABI tables (crates/ivm/docs/pointer_abi.md and ivm.md)
-  - Check only: `cargo run -p ivm --bin gen_pointer_types_doc -- --check`
-  - Update sections: `cargo run -p ivm --bin gen_pointer_types_doc -- --write`
-- IVM header policy and ABI hashes (docs/source/ivm_header.md)
-  - Check only: `cargo run -p ivm --bin gen_header_doc -- --check` and `cargo run -p ivm --bin gen_abi_hash_doc -- --check`
-  - Update sections: `cargo run -p ivm --bin gen_header_doc -- --write` and `cargo run -p ivm --bin gen_abi_hash_doc -- --write`
-
-CI
-- GitHub Actions workflow `.github/workflows/check-docs.yml` runs these checks on every push/PR and will fail if generated docs drift from the implementation.
-- [Governance Playbook](governance_playbook.md)
+ሲ.አይ
+- GitHub Actions የስራ ፍሰት `.github/workflows/check-docs.yml` እነዚህን ቼኮች በእያንዳንዱ ግፊት/PR ላይ ያካሂዳል እና የመነጩ ሰነዶች ከትግበራው ከተሳፉ አይሳካም።
+- [የመንግስት መጫወቻ መጽሐፍ](governance_playbook.md)

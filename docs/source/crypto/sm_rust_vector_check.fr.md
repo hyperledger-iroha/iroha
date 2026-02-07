@@ -6,23 +6,24 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: ce2f95b8b287c18c39232418333fbefdd300c030391be9dbfa4e29a3fd5f3e14
 source_last_modified: "2026-01-03T18:07:57.109606+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Notes on verifying SM2 Annex D vectors using RustCrypto crates.
+//! Notes sur la vérification des vecteurs SM2 Annexe D à l'aide des caisses RustCrypto.
 
-# SM2 Annex D Vector Verification (RustCrypto)
+# SM2 Annexe D Vérification du vecteur (RustCrypto)
 
-This walkthrough captures the steps we used to validate (and debug) the GM/T 0003 Annex D example with RustCrypto’s `sm2` crate. The canonical Annex Example 1 data (identity `ALICE123@YAHOO.COM`, message `"message digest"`, and the published `(r, s)`) is now recorded in `crates/iroha_crypto/tests/fixtures/sm_known_answers.toml`. OpenSSL/Tongsuo/gmssl happily verify the signature (see `sm_vectors.md`), but RustCrypto’s `sm2 v0.13.3` still rejects the point with `signature::Error`, so CLI parity is confirmed while the Rust harness remains pending an upstream fix.
+Cette procédure pas à pas capture les étapes que nous avons utilisées pour valider (et déboguer) l'exemple GM/T 0003 Annexe D avec la caisse `sm2` de RustCrypto. Les données canoniques de l'exemple 1 de l'annexe 1 (identité `ALICE123@YAHOO.COM`, message `"message digest"` et `(r, s)` publié) sont désormais enregistrées dans `crates/iroha_crypto/tests/fixtures/sm_known_answers.toml`. OpenSSL/Tongsuo/gmssl vérifie volontiers la signature (voir `sm_vectors.md`), mais `sm2 v0.13.3` de RustCrypto rejette toujours le point avec `signature::Error`, donc la parité CLI est confirmée tandis que le harnais Rust reste en attente d'un correctif en amont.
 
-## Temporary crate
+## Caisse temporaire
 
 ```bash
 cargo new /tmp/sm2_verify --bin
 cd /tmp/sm2_verify
 ```
 
-`Cargo.toml`:
+`Cargo.toml` :
 
 ```toml
 [package]
@@ -35,7 +36,7 @@ hex = "0.4"
 sm2 = "0.13.3"
 ```
 
-`src/main.rs`:
+`src/main.rs` :
 
 ```rust
 use hex::FromHex;
@@ -64,14 +65,14 @@ fn main() {
 }
 ```
 
-## Findings
+## Résultats
 
-- Verifying against the canonical Annex Example 1 `(r, s)` currently fails because `sm2::VerifyingKey::from_sec1_bytes` returns `signature::Error`; track upstream/root cause (likely due to curve-parameter mismatch in the crate’s current release).
-- The harness compiles cleanly with `sm2 v0.13.3` and will become an automated regression test once RustCrypto (or a patched fork) accepts the Annex Example 1 point/signature pair.
-- OpenSSL/Tongsuo/gmssl verification succeeds with the commands in `sm_vectors.md`; LibreSSL (macOS default) still lacks SM2/SM3 support, hence the local gap.
+- La vérification par rapport à l'exemple d'annexe canonique 1 `(r, s)` échoue actuellement, car `sm2::VerifyingKey::from_sec1_bytes` renvoie `signature::Error` ; suivre la cause en amont/racine (probablement en raison d'une inadéquation des paramètres de courbe dans la version actuelle de la caisse).
+- Le harnais se compile proprement avec `sm2 v0.13.3` et deviendra un test de régression automatisé une fois que RustCrypto (ou un fork corrigé) aura accepté la paire point/signature de l'exemple d'annexe 1.
+- La vérification OpenSSL/Tongsuo/gmssl réussit avec les commandes dans `sm_vectors.md` ; LibreSSL (macOS par défaut) ne prend toujours pas en charge SM2/SM3, d'où l'écart local.
 
-## Next steps
+## Étapes suivantes
 
-1. Re-test once `sm2` exposes an API that accepts the Annex Example 1 point (or after upstream confirms the curve parameters) so the harness can pass locally.
-2. Keep a CLI sanity check (OpenSSL/Tongsuo/gmssl) in CI pipelines to guard the canonical Annex Example until the RustCrypto fix lands.
-3. Promote the harness into Iroha’s regression suite after both RustCrypto and OpenSSL parity checks succeed.
+1. Effectuez un nouveau test une fois que `sm2` expose une API qui accepte le point de l'exemple 1 de l'annexe (ou après avoir confirmé en amont les paramètres de courbe) afin que le faisceau puisse passer localement.
+2. Conservez un contrôle d'intégrité CLI (OpenSSL/Tongsuo/gmssl) dans les pipelines CI pour protéger l'exemple d'annexe canonique jusqu'à ce que le correctif RustCrypto arrive.
+3. Promouvez le harnais dans la suite de régression de Iroha une fois les contrôles de parité RustCrypto et OpenSSL réussis.

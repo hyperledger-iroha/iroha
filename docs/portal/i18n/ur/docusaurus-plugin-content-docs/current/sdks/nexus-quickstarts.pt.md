@@ -4,11 +4,13 @@ direction: rtl
 source: docs/portal/docs/sdks/nexus-quickstarts.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-A guia completa esta em `docs/source/nexus_sdk_quickstarts.md`. Este resumo do portal destaca os prerequisitos compartilhados e os comandos por SDK para que os desenvolvedores verifiquem sua configuracao rapidamente.
+مکمل گائیڈ `docs/source/nexus_sdk_quickstarts.md` میں ہے۔ اس پورٹل سمری میں مشترکہ شرائط اور کمانڈز فی ایس ڈی کے کو اجاگر کیا گیا ہے تاکہ ڈویلپرز جلدی سے اپنی ترتیب کی تصدیق کرسکیں۔
 
-## Configuracao compartilhada
+## مشترکہ ترتیب
 
 ```bash
 export NEXUS_TORII_URL="https://torii.nexus.sora.org"
@@ -17,9 +19,9 @@ export NEXUS_CHAIN_ID="iroha3"
 export NEXUS_TRUSTED_PUBKEY="<peer-public-key>"
 ```
 
-Baixe o pacote de configuracao do Nexus, instale as dependencias de cada SDK e garanta que os certificados TLS correspondam ao perfil de release (veja `docs/source/sora_nexus_operator_onboarding.md`).
+Nexus کنفیگریشن پیکیج ڈاؤن لوڈ کریں ، ہر SDK کے لئے انحصار انسٹال کریں ، اور اس بات کو یقینی بنائیں کہ TLS سرٹیفکیٹ ریلیز پروفائل سے مماثل ہیں (`docs/source/sora_nexus_operator_onboarding.md` دیکھیں)۔
 
-## Rust
+## مورچا
 
 ```bash
 cargo run --bin nexus_quickstart \
@@ -28,25 +30,25 @@ cargo run --bin nexus_quickstart \
   --chain "${NEXUS_CHAIN_ID}"
 ```
 
-Refs: `docs/source/sdk/rust.md`
+ریفز: `docs/source/sdk/rust.md`
 
-## JavaScript / TypeScript
+## جاوا اسکرپٹ / ٹائپ اسکرپٹ
 
 ```bash
 npm run demo:nexus
 ```
 
-O script instancia `ToriiClient` com as variaveis de ambiente acima e imprime o bloco mais recente.
+اسکرپٹ `ToriiClient` کو مندرجہ بالا ماحولیاتی متغیرات کے ساتھ انسٹیٹ کرتا ہے اور حالیہ بلاک پرنٹ کرتا ہے۔
 
-## Swift
+## سوئفٹ
 
 ```bash
 make swift-nexus-demo
 ```
 
-Usa `Torii.Client` do `IrohaSwift` para buscar `FindNetworkStatus`.
+`IrohaSwift` سے `IrohaSwift` سے `FindNetworkStatus` کا استعمال کرتا ہے۔
 
-## Android
+## android
 
 ```bash
 ./gradlew :iroha-android:nexusQuickstartTest \
@@ -54,9 +56,9 @@ Usa `Torii.Client` do `IrohaSwift` para buscar `FindNetworkStatus`.
   -PNEXUS_PIPELINE_URL="${NEXUS_PIPELINE_URL}"
 ```
 
-Executa o teste de dispositivo gerenciado apontando para o endpoint de staging do Nexus.
+Nexus اسٹیجنگ اختتامی نقطہ کی طرف اشارہ کرتے ہوئے منظم ڈیوائس ٹیسٹ چلاتا ہے۔
 
-## CLI
+## سی ایل آئی
 
 ```bash
 iroha_cli app nexus quickstart \
@@ -65,10 +67,10 @@ iroha_cli app nexus quickstart \
   --chain-id "${NEXUS_CHAIN_ID}"
 ```
 
-## Solucao de problemas
+## خرابیوں کا سراغ لگانا
 
-- Falhas TLS -> confirme o bundle CA do tarball de release do Nexus.
-- `ERR_UNKNOWN_LANE` -> passe `--lane-id`/`--dataspace-id` quando o roteamento multi-lane for imposto.
-- `ERR_SETTLEMENT_PAUSED` -> verifique [Nexus operations](../nexus/nexus-operations) para o processo de incidente; a governanca pode ter pausado a lane.
+- TLS کی ناکامی -> Nexus ریلیز ٹربال سے CA بنڈل کی تصدیق کریں۔
+-`ERR_UNKNOWN_LANE` -> پاس `--lane-id`/`--dataspace-id` جب ملٹی لین روٹنگ نافذ کیا جاتا ہے۔
+- `ERR_SETTLEMENT_PAUSED` -> واقعہ کے عمل کے لئے [Nexus آپریشنز] (../nexus/nexus-operations) چیک کریں۔ ہوسکتا ہے کہ گورننس نے لین کو روک لیا ہو۔
 
-Para mais contexto e explicacoes por SDK veja `docs/source/nexus_sdk_quickstarts.md`.
+مزید سیاق و سباق اور وضاحتوں کے لئے SDK `docs/source/nexus_sdk_quickstarts.md` دیکھیں۔

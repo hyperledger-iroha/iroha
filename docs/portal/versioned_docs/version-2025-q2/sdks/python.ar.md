@@ -6,29 +6,30 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 4d1af3021d94540c338c921ea8393a10dd918ee1549965cdc09fbc612c938444
 source_last_modified: "2026-01-03T18:07:58.457499+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Python SDK Quickstart
+# بايثون SDK البدء السريع
 
-The Python SDK (`iroha-python`) mirrors the Rust client helpers so you can
-interact with Torii from scripts, notebooks, or web backends. This quickstart
-covers installation, transaction submission, and event streaming. For deeper
-coverage see `python/iroha_python/README.md` in the repository.
+يعكس Python SDK (`iroha-python`) مساعدي عميل Rust حتى تتمكن من ذلك
+التفاعل مع Torii من البرامج النصية أو دفاتر الملاحظات أو واجهات الويب الخلفية. هذه البداية السريعة
+يغطي التثبيت، وتقديم المعاملات، وتدفق الأحداث. لأعمق
+التغطية راجع `python/iroha_python/README.md` في المستودع.
 
-## 1. Install
+## 1. التثبيت
 
 ```bash
 pip install iroha-python
 ```
 
-Optional extras:
+الإضافات الاختيارية:
 
-- `pip install aiohttp` if you plan to run the asynchronous variants of the
-  streaming helpers.
-- `pip install pynacl` when you need Ed25519 key derivation outside of the SDK.
+- `pip install aiohttp` إذا كنت تخطط لتشغيل المتغيرات غير المتزامنة لـ
+  مساعدين التدفق.
+- `pip install pynacl` عندما تحتاج إلى اشتقاق مفتاح Ed25519 خارج SDK.
 
-## 2. Create a client and signers
+## 2. أنشئ عميلاً وموقعين
 
 ```python
 from iroha_python import (
@@ -46,14 +47,14 @@ client = ToriiClient(
 )
 ```
 
-`ToriiClient` accepts additional keyword arguments such as `timeout_ms`,
-`max_retries`, and `tls_config`. The helper `resolve_torii_client_config`
-parses a JSON configuration payload if you want parity with the Rust CLI.
+يقبل `ToriiClient` وسيطات كلمات رئيسية إضافية مثل `timeout_ms`،
+`max_retries` و`tls_config`. المساعد `resolve_torii_client_config`
+يوزع حمولة تكوين JSON إذا كنت تريد التكافؤ مع Rust CLI.
 
-## 3. Submit a transaction
+## 3. أرسل المعاملة
 
-The SDK ships instruction builders and transaction helpers so you rarely build
-Norito payloads by hand:
+تقوم حزمة SDK بشحن منشئي التعليمات ومساعدي المعاملات، لذا نادرًا ما تقوم بالإنشاء
+حمولات Norito يدويًا:
 
 ```python
 from iroha_python import Instruction
@@ -72,15 +73,15 @@ envelope, status = client.build_and_submit_transaction(
 print("Final status:", status)
 ```
 
-`build_and_submit_transaction` returns both the signed envelope and the last
-observed status (e.g., `Committed`, `Rejected`). If you already have a signed
-transaction envelope use `client.submit_transaction_envelope(envelope)` or the
-JSON-centric `submit_transaction_json`.
+يقوم `build_and_submit_transaction` بإرجاع كل من المظروف الموقع والأخير
+الحالة الملحوظة (على سبيل المثال، `Committed`، `Rejected`). إذا كان لديك توقيع بالفعل
+استخدم مظروف المعاملة `client.submit_transaction_envelope(envelope)` أو
+JSON تتمحور حول `submit_transaction_json`.
 
-## 4. Query state
+## 4. حالة الاستعلام
 
-All REST endpoints have JSON helpers and many expose typed dataclasses. For
-example, listing domains:
+تحتوي جميع نقاط نهاية REST على مساعدات JSON والعديد منها يعرض فئات البيانات المكتوبة. ل
+على سبيل المثال، إدراج المجالات:
 
 ```python
 domains = client.list_domains_typed()
@@ -88,13 +89,13 @@ for domain in domains.items:
     print(domain.name)
 ```
 
-Pagination-aware helpers (e.g., `list_accounts_typed`) return an object that
-contains both `items` and `next_cursor`.
+يقوم المساعدون الذين يدركون ترقيم الصفحات (على سبيل المثال، `list_accounts_typed`) بإرجاع كائن
+يحتوي على كلاً من `items` و`next_cursor`.
 
-## 5. Stream events
+## 5. بث الأحداث
 
-Torii SSE endpoints are exposed via generators. The SDK automatically resumes
-when `resume=True` and you provide an `EventCursor`.
+يتم كشف نقاط النهاية Torii SSE عبر المولدات. يتم استئناف SDK تلقائيًا
+عندما `resume=True` وتقوم بتوفير `EventCursor`.
 
 ```python
 from iroha_python import PipelineEventFilterBox, EventCursor
@@ -110,19 +111,19 @@ for event in client.stream_pipeline_blocks(
     print("Block height", event.data.block.height)
 ```
 
-Other convenience methods include `stream_pipeline_transactions`,
-`stream_events` (with typed filter builders), and `stream_verifying_key_events`.
+تتضمن طرق الراحة الأخرى `stream_pipeline_transactions`،
+`stream_events` (مع منشئي المرشحات المكتوبة)، و`stream_verifying_key_events`.
 
-## 6. Next steps
+## 6. الخطوات التالية
 
-- Explore the examples under `python/iroha_python/src/iroha_python/examples/`
-  for end-to-end flows covering governance, ISO bridge helpers, and Connect.
-- Use `create_torii_client` / `resolve_torii_client_config` when you want to
-  bootstrap the client from an `iroha_config` JSON file or environment.
-- For Norito RPC or Connect-specific APIs, check the specialised modules such as
-  `iroha_python.norito_rpc` and `iroha_python.connect`.
+- استكشف الأمثلة ضمن `python/iroha_python/src/iroha_python/examples/`
+  للتدفقات الشاملة التي تغطي الإدارة ومساعدي جسر ISO والاتصال.
+- استخدم `create_torii_client` / `resolve_torii_client_config` عندما تريد ذلك
+  قم بتمهيد العميل من ملف أو بيئة `iroha_config` JSON.
+- بالنسبة إلى Norito RPC أو واجهات برمجة التطبيقات الخاصة بالاتصال، تحقق من الوحدات النمطية المتخصصة مثل
+  `iroha_python.norito_rpc` و`iroha_python.connect`.
 
-With these building blocks you can exercise Torii from Python without writing
-your own HTTP glue or Norito codecs. As the SDK matures, additional high-level
-builders will be added; consult the README in the `python/iroha_python`
-directory for the latest status and migration notes.
+باستخدام هذه العناصر الأساسية، يمكنك ممارسة Torii من Python دون الكتابة
+الغراء HTTP الخاص بك أو برامج الترميز Norito. ومع نضوج SDK، سيتم إضافة المزيد من المستوى العالي
+سيتم إضافة بناة. راجع الملف التمهيدي الموجود في `python/iroha_python`
+الدليل للحصول على أحدث ملاحظات الحالة والهجرة.

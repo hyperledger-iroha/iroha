@@ -7,38 +7,39 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 65aff839e8970e96edb07dfb9655cb4e79f56d1d885b7782647f5dc8f328027b
 source_last_modified: "2025-12-29T18:16:35.921274+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Bridge proofs
+# Կամուրջի ապացույցներ
 
-Bridge proof submissions travel through the standard instruction path (`SubmitBridgeProof`) and land in the proof registry with a verified status. The current surface covers ICS-style Merkle proofs and transparent-ZK payloads with pinned retention and manifest binding.
+Կամուրջի ապացույցների ներկայացումները անցնում են ստանդարտ հրահանգների ուղով (`SubmitBridgeProof`) և հաստատված կարգավիճակով տեղավորվում ապացույցների գրանցամատյանում: Ընթացիկ մակերեսը ծածկում է ICS-ի ոճի Merkle proof-ները և թափանցիկ-ZK օգտակար բեռները՝ ամրացված պահմամբ և բացահայտ կապով:
 
-## Acceptance rules
+## Ընդունման կանոններ
 
-- Ranges must be ordered/non-empty and respect `zk.bridge_proof_max_range_len` (0 disables the cap).
-- Optional height windows reject stale/future proofs: `zk.bridge_proof_max_past_age_blocks` and `zk.bridge_proof_max_future_drift_blocks` are measured against the block height that ingests the proof (0 disables the guardrails).
-- Bridge proofs may not overlap an existing proof for the same backend (pinned proofs are preserved and block overlaps).
-- Manifest hashes must be non-zero; payloads are size-capped by `zk.max_proof_size_bytes`.
-- ICS payloads honour the configured Merkle depth cap and verify the path using the declared hash function; transparent payloads must declare a non-empty backend label.
-- Pinned proofs are exempt from retention pruning; unpinned proofs still respect the global `zk.proof_history_cap`/grace/batch settings.
+- Շրջանակները պետք է պատվիրված/ոչ դատարկ լինեն և հարգեն `zk.bridge_proof_max_range_len` (0-ն անջատում է գլխարկը):
+- Ընտրովի բարձրության պատուհանները մերժում են հնացած/ապագա ապացույցները. `zk.bridge_proof_max_past_age_blocks` և `zk.bridge_proof_max_future_drift_blocks` չափվում են այն բլոկի բարձրության համեմատ, որը կլանում է ապացույցը (0-ն անջատում է պաշտպանիչ բազրիքները):
+- Կամուրջի ապացույցները չեն կարող համընկնել գոյություն ունեցող ապացույցների հետ նույն հետևի համար (կապված ապացույցները պահպանվում են և արգելափակում են համընկնումները):
+- Մանիֆեստի հեշերը պետք է լինեն ոչ զրոյական; ծանրաբեռնվածության չափը սահմանվում է `zk.max_proof_size_bytes`-ով:
+- ICS օգտակար բեռները հարգում են կազմաձևված Merkle խորության գլխարկը և ստուգում են ուղին՝ օգտագործելով հայտարարված հեշ ֆունկցիան; թափանցիկ օգտակար բեռները պետք է հայտարարեն ոչ դատարկ հետնամասի պիտակ:
+- Ամրացված ապացույցները ազատված են պահպանման էտումից. չամրացված ապացույցները դեռևս հարգում են `zk.proof_history_cap`/grace/խմբաքանակի գլոբալ կարգավորումները:
 
-## Torii API surface
+## Torii API մակերես
 
-- `GET /v1/zk/proofs` and `GET /v1/zk/proofs/count` accept bridge-aware filters:
-  - `bridge_only=true` returns only bridge proofs.
-  - `bridge_pinned_only=true` narrows to pinned bridge proofs.
-  - `bridge_start_from_height` / `bridge_end_until_height` clamp the bridge range window.
-- `GET /v1/zk/proof/{backend}/{hash}` returns bridge metadata (range, manifest hash, payload summary) alongside the proof id/status/VK bindings.
-- The full Norito proof record (including payload bytes) remains available via `GET /v1/proofs/{proof_id}` for off-node verifiers.
+- `GET /v1/zk/proofs` և `GET /v1/zk/proofs/count` ընդունում են կամուրջների մասին տեղեկացված զտիչներ.
+  - `bridge_only=true`-ը վերադարձնում է միայն կամրջի ապացույցները:
+  - `bridge_pinned_only=true`-ը նեղանում է մինչև ամրացված կամուրջները:
+  - `bridge_start_from_height` / `bridge_end_until_height` սեղմել կամրջի միջակայքի պատուհանը:
+- `GET /v1/zk/proof/{backend}/{hash}`-ը վերադարձնում է կամուրջի մետատվյալները (միջակայք, մանիֆեստի հեշ, օգտակար բեռնվածքի ամփոփում) ապացուցման id/status/VK կապերի հետ մեկտեղ:
+- Norito ամբողջական ապացույցի գրառումը (ներառյալ օգտակար բայթերը) մնում է հասանելի `GET /v1/proofs/{proof_id}`-ի միջոցով՝ անջատված հաստատիչների համար:
 
-## Bridge receipt events
+## Կամուրջի ստացման իրադարձություններ
 
-Bridge lanes emit typed receipts via the `RecordBridgeReceipt` instruction. Executing this instruction
-records a `BridgeReceipt` payload and emits `DataEvent::Bridge(BridgeEvent::Emitted)` on the event
-stream, replacing the prior log-only stub. The CLI `iroha bridge emit-receipt` helper submits the
-typed instruction so indexers can consume receipts deterministically.
+Կամուրջի ուղիները տպագրված անդորրագրեր են հաղորդում `RecordBridgeReceipt` հրահանգի միջոցով: Այս հրահանգի կատարումը
+գրանցում է `BridgeReceipt` օգտակար բեռ և թողարկում `DataEvent::Bridge(BridgeEvent::Emitted)` միջոցառմանը
+հոսք՝ փոխարինելով միայն գրանցամատյանում պարունակվող նախկին կոճակը: CLI `iroha bridge emit-receipt` օգնականը ներկայացնում է
+մուտքագրված հրահանգ, որպեսզի ինդեքսավորողները կարողանան դետերմինիստական կերպով սպառել անդորրագրերը:
 
-## External verification sketch (ICS)
+## Արտաքին հաստատման ուրվագիծ (ICS)
 
 ```rust
 use iroha_data_model::bridge::{BridgeHashFunction, BridgeProofPayload, BridgeProofRecord};

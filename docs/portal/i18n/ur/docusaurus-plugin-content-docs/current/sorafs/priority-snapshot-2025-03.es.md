@@ -4,38 +4,40 @@ direction: rtl
 source: docs/portal/docs/sorafs/priority-snapshot-2025-03.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: priority-snapshot-2025-03
-title: Snapshot de prioridades — marzo de 2025 (Beta)
-description: Espejo del snapshot de steering de Nexus 2025-03; pendiente de ACKs antes del rollout publico.
+ID: ترجیحی-snapshot-2025-03
+عنوان: ترجیحات سنیپ شاٹ - مارچ 2025 (بیٹا)
+تفصیل: Nexus 2025-03 اسٹیئرنگ اسنیپ شاٹ آئینہ ؛ عوامی رول آؤٹ سے پہلے زیر التواء ACKs۔
 ---
 
-> Fuente canonica: `docs/source/sorafs/priority_snapshot_2025-03.md`
+> کیننیکل ماخذ: `docs/source/sorafs/priority_snapshot_2025-03.md`
 >
-> Estado: **Beta / esperando ACKs de steering** (Networking, Storage, Docs leads).
+> حیثیت: ** بیٹا / اسٹیئرنگ ACKs کا انتظار ** (نیٹ ورکنگ ، اسٹوریج ، دستاویزات لیڈز)۔
 
-## Resumen
+## خلاصہ
 
-El snapshot de marzo mantiene las iniciativas de docs/content-network alineadas
-con las pistas de entrega de SoraFS (SF-3, SF-6b, SF-9). Una vez que todos los
-leads confirmen el snapshot en el canal de steering de Nexus, elimina la nota
-“Beta” de arriba.
+مارچ اسنیپ شاٹ دستاویزات/مشمولات نیٹ ورک کے اقدامات کو جوڑتا ہے
+SoraFS (SF-3 ، SF-6B ، SF-9) کی ترسیل کے پٹریوں کے ساتھ۔ ایک بار سب
+لیڈز Nexus کے اسٹیئرنگ چینل میں اسنیپ شاٹ کی تصدیق کرتے ہیں ، نوٹ کو ہٹا دیں
+اوپر "بیٹا"۔
 
-### Hilos de enfoque
+### فوکس تھریڈز
 
-1. **Circular snapshot de prioridades** — recopilar acknowledgements y
-   registrarlos en las minutas del council del 2025-03-05.
-2. **Cierre del kickoff de Gateway/DNS** — ensayar el nuevo kit de facilitacion
-   (Seccion 6 del runbook) antes del workshop 2025-03-03.
-3. **Migracion de runbooks de operadores** — el portal `Runbook Index` esta live;
-   expone la URL de beta preview despues del sign-off de onboarding de reviewers.
-4. **Hilos de entrega de SoraFS** — alinear el trabajo restante de SF-3/6b/9 con
-   el plan/roadmap:
-   - Worker de ingesta PoR + endpoint de estado en `sorafs-node`.
-   - Pulido de bindings CLI/SDK en integraciones de orchestrator Rust/JS/Swift.
-   - Cableado de runtime del coordinador PoR y eventos de GovernanceLog.
+1. ** ترجیحات کا سرکلر اسنیپ شاٹ ** - اعترافات جمع کریں اور
+   انہیں 2025-03-05 کے کونسل منٹ میں ریکارڈ کریں۔
+2. ** گیٹ وے/ڈی این ایس کک آف بندش ** - نئی سہولت کٹ کی جانچ کریں
+   (رن بک کا سیکشن 6) ورکشاپ سے پہلے 2025-03-03۔
+3. ** آپریٹر رن بکس کی ہجرت ** - `Runbook Index` پورٹل براہ راست ہے ؛
+   جائزہ لینے والے پر بورڈنگ سائن آف کے بعد بیٹا پیش نظارہ یو آر ایل کو بے نقاب کرتا ہے۔
+4.
+   منصوبہ/روڈ میپ:
+   - `sorafs-node` پر پورجنگ ورکر + اسٹیٹ اینڈ پوائنٹ۔
+   - مورچا/جے ایس/سوئفٹ آرکیسٹریٹر انضمام میں پالش سی ایل آئی/ایس ڈی کے پابندیاں۔
+   - پور کوآرڈینیٹر رن ٹائم وائرنگ اور گورننسیلوگ واقعات۔
 
-Consulta el archivo fuente para la tabla completa, el checklist de distribucion
-y las entradas de log.
+مکمل جدول ، تقسیم کی چیک لسٹ کے لئے ماخذ فائل سے مشورہ کریں
+اور لاگ ان اندراجات۔

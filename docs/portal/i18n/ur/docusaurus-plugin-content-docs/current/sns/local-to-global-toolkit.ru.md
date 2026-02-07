@@ -4,49 +4,51 @@ direction: rtl
 source: docs/portal/docs/sns/local-to-global-toolkit.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Набор инструментов Local -> Global адресов
+# ٹول کٹ لوکل -> عالمی پتے
 
-Эта страница отражает `docs/source/sns/local_to_global_toolkit.md` из mono-repo. Она включает CLI helpers и runbooks, требуемые пунктом дорожной карты **ADDR-5c**.
+یہ صفحہ مونو-ریپو سے `docs/source/sns/local_to_global_toolkit.md` کی عکاسی کرتا ہے۔ اس میں CLI مددگاروں اور رن بکس شامل ہیں جو ** EDDR-5C ** روڈ میپ آئٹم کے ذریعہ درکار ہیں۔
 
-## Обзор
+## جائزہ
 
-- `scripts/address_local_toolkit.sh` оборачивает CLI `iroha`, чтобы получить:
-  - `audit.json` -- структурированный вывод `iroha tools address audit --format json`.
-  - `normalized.txt` -- преобразованные IH58 (предпочтительно) / compressed (`sora`) (второй выбор) literals для каждого Local-domain selector.
-- Используйте скрипт вместе с dashboard ingest адресов (`dashboards/grafana/address_ingest.json`)
-  и правилами Alertmanager (`dashboards/alerts/address_ingest_rules.yml`), чтобы доказать безопасность cutover Local-8 /
-  Local-12. Следите за панелями коллизий Local-8 и Local-12 и алертами
-  `AddressLocal8Resurgence`, `AddressLocal12Collision`, и `AddressInvalidRatioSlo` перед
-  продвижением изменений manifest.
-- Сверяйтесь с [Address Display Guidelines](address-display-guidelines.md) и
-  [Address Manifest runbook](../../../source/runbooks/address_manifest_ops.md) для UX и incident-response контекста.
+- `scripts/address_local_toolkit.sh` حاصل کرنے کے لئے CLI `iroha` کو لپیٹتا ہے:
+  - `audit.json` - ساختہ آؤٹ پٹ `iroha tools address audit --format json`۔
+  - `normalized.txt`- تبدیل شدہ IH58 (ترجیحی) / کمپریسڈ (`sora`) (دوسرا انتخاب) ہر مقامی ڈومین سلیکٹر کے ل liters لفظی۔
+- اسکرپٹ کو ڈیش بورڈ انجسٹ ایڈریسز (`dashboards/grafana/address_ingest.json`) کے ساتھ مل کر استعمال کریں
+  اور الرٹ مینجر قواعد (`dashboards/alerts/address_ingest_rules.yml`) کٹ اوور لوکل -8 / کی حفاظت کو ثابت کرنے کے لئے
+  مقامی 12۔ لوکل -8 اور لوکل -12 تصادم پینل اور الرٹس کی نگرانی کریں
+  `AddressLocal8Resurgence` ، `AddressLocal12Collision` ، اور `AddressInvalidRatioSlo` سے پہلے
+  تبدیلیوں کو فروغ دینا ظاہر ہوتا ہے۔
+- [ایڈریس ڈسپلے گائیڈ لائنز] (address-display-guidelines.md) اور دیکھیں
+  [ایڈریس مینی فیسٹ رن بک] (../../../source/runbooks/address_manifest_ops.md) UX اور واقعہ کے ردعمل کے سیاق و سباق کے لئے۔
 
-## Использование
+## استعمال
 
 ```bash
 scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format ih58
 ```
 
-Опции:
+اختیارات:
 
-- `--format compressed (`sora`)` для вывода `sora...` вместо IH58.
-- `--no-append-domain` для вывода bare literals.
-- `--audit-only` чтобы пропустить шаг конвертации.
-- `--allow-errors` чтобы продолжать сканирование при ошибочных строках (поведение совпадает с CLI).
+- `--format compressed (`SORA`)` `sora...` سے IH58 کی بجائے آؤٹ پٹ۔
+- ننگے لٹریلز آؤٹ پٹ کے لئے `--no-append-domain`۔
+- تبادلوں کے قدم کو چھوڑنے کے لئے `--audit-only`۔
+- `--allow-errors` اسکیننگ جاری رکھنے کے لئے جب غلط لکیریں ہوں (سلوک CLI کی طرح ہی ہے)۔
 
-Скрипт выводит пути артефактов в конце выполнения. Приложите оба файла к
-change-management ticket вместе с Grafana screenshot, подтверждающим ноль
-Local-8 детекций и ноль Local-12 коллизий минимум за >=30 дней.
+اسکرپٹ پر عمل درآمد کے اختتام پر نمونے کی راہیں دکھاتی ہیں۔ دونوں فائلوں کو منسلک کریں
+Grafana اسکرین شاٹ کے ساتھ تبدیل کریں
+کم از کم> = 30 دن کے لئے مقامی -8 کا پتہ لگانے اور صفر لوکل -12 تصادم۔
 
-## Интеграция CI
+## CI انضمام
 
-1. Запустите скрипт в отдельном job и загрузите outputs.
-2. Блокируйте merges, когда `audit.json` сообщает Local selectors (`domain.kind = local12`).
-   со значением по умолчанию `true` (меняйте на `false` только в dev/test при диагностике регрессий) и
-   добавьте `iroha tools address normalize --fail-on-warning --only-local` в CI, чтобы попытки регрессии
-   падали до production.
+1. اسکرپٹ کو علیحدہ ملازمت اور بوجھ کے نتائج میں چلائیں۔
+2. بلاک ضم ہوجاتا ہے جب `audit.json` مقامی سلیکٹرز (`domain.kind = local12`) کی اطلاع دیتا ہے۔
+   ڈیفالٹ ویلیو `true` کے ساتھ (جب رجعت پسندی کی تشخیص کرتے ہو تو صرف دیو/ٹیسٹ میں `false` میں تبدیل ہوتا ہے) اور
+   رجعت کی کوششوں کی اجازت دینے کے لئے CI میں `iroha tools address normalize --fail-on-warning --only-local` شامل کریں
+   پیداوار میں گر گیا۔
 
-См. исходный документ для деталей, evidence чеклистов и release-note snippet, который можно
-использовать при анонсе cutover для клиентов.
+تفصیلات ، شواہد چیک لسٹس اور ریلیز نوٹ کے اسنیپٹ کے لئے ماخذ دستاویز دیکھیں ، جو ہوسکتا ہے
+گاہکوں کے لئے کٹ اوور کا اعلان کرتے وقت استعمال کریں۔

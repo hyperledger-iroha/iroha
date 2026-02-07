@@ -7,27 +7,27 @@ generator: scripts/sync_docs_i18n.py
 source_hash: cff283a14bf65f185f81539f8fbcd78ddcc6447c5e9045e1b46493051febaf6a
 source_last_modified: "2025-12-29T18:16:35.913045+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Acceleration
+# མགྱོགས་ཐབས།
 
-The `[accel]` section controls optional hardware acceleration for IVM and helpers. All
-accelerated paths have deterministic CPU fallbacks; if a backend fails a golden
-self‑test at runtime it is disabled automatically and execution continues on CPU.
+`[accel]` དབྱེ་ཚན་འདི་གིས་ IVM དང་གྲོགས་རམ་གྱི་དོན་ལུ་ གདམ་ཁ་ཅན་གྱི་སྲ་ཆས་མགྱོགས་ཚད་ཚད་འཛིན་འབདཝ་ཨིན། གེ་ར
+མགྱོགས་དྲགས་ཅན་གྱི་འགྲུལ་ལམ་ཚུ་ལུ་ གཏན་འབེབས་སི་པི་ཡུ་ ཕོལཀ་ཚུ་ཡོདཔ་ཨིན། གལ་ཏེ་རྒྱབ་ལྗོངས།
+རང་གིས་རང་ རན་ཊའིམ་ལུ་བརྟག་དཔྱད་འབད་ནི་འདི་ རང་བཞིན་གྱིས་ ལྕོགས་མིན་བཟོ་སྟེ་ ལག་ལེན་འཐབ་ནི་དང་ ལག་ལེན་འཐབ་ནི་འདི་ སི་པི་ཡུ་གུ་འཕྲོ་མཐུད་དེ་འབདཝ་ཨིན།
 
-- `enable_cuda` (default: true) – Use CUDA when compiled and available.
-- `enable_metal` (default: true) – Use Metal on macOS when available.
-- `max_gpus` (default: 0) – Maximum GPUs to initialize; `0` means auto/no cap.
-- `merkle_min_leaves_gpu` (default: 8192) – Minimum leaves to offload Merkle
-  leaf hashing to GPU. Lower only for unusually fast GPUs.
-- Advanced (optional; usually inherit sensible defaults):
-  - `merkle_min_leaves_metal` (default: inherit `merkle_min_leaves_gpu`).
-  - `merkle_min_leaves_cuda` (default: inherit `merkle_min_leaves_gpu`).
-  - `prefer_cpu_sha2_max_leaves_aarch64` (default: 32768) – Prefer CPU SHA‑2 up to this many leaves on ARMv8 with SHA2.
-  - `prefer_cpu_sha2_max_leaves_x86` (default: 32768) – Prefer CPU SHA‑NI up to this many leaves on x86/x86_64.
+- `enable_cuda` (སྔོན་སྒྲིག་: fort) – བསྡུ་སྒྲིག་འབད་ཞིནམ་ལས་ འཐོབ་ཚུགས་པའི་སྐབས་ CUDA ལག་ལེན་འཐབ།
+- `enable_metal` (སྔོན་སྒྲིག་: form) – འཐོབ་ཚུགས་པའི་སྐབས་ macOS གུ་ལྕགས་རིགས་ལག་ལེན་འཐབ།
+- `max_gpus` (སྔོན་སྒྲིག་: ༠) – འགོ་བཙུགས་ནི་ལུ་ ཇི་པི་ཡུ་མཐོ་ཤོས་ཚུ་; `0` འདི་ རང་བཞིན་/མེད་མགུ་ཏོག་གོ།
+- `merkle_min_leaves_gpu` (སྔོན་སྒྲིག་: 8192) – མར་ཀལ་ཕབ་ལེན་འབད་ནིའི་དོན་ལུ་ ཉུང་མཐའ།
+  leaf hashing GPU. སྤྱིར་བཏང་མ་ཡིན་པའི་མགྱོགས་མྱུར་ GPUs གི་དོན་ལུ་རྐྱངམ་ཅིག་དམའ་བ།
+- ཡར་འཕེལ་ཅན་ (གདམ་ཁ་ཅན་; སྤྱིར་བཏང་ལུ་ ཤུལ་འཛིན་ཤེས་པའི་སྔོན་སྒྲིག་):
+  - `merkle_min_leaves_metal` (སྔོན་སྒྲིག་: `merkle_min_leaves_gpu` འདི་ ཤུལ་འཛིན་འབད།)
+  - `merkle_min_leaves_cuda` (སྔོན་སྒྲིག་: `merkle_min_leaves_gpu`)
+  - `prefer_cpu_sha2_max_leaves_aarch64` (སྔོན་སྒྲིག་: 32768) – SHA2 དང་མཉམ་དུ་ ARMv8 གུ་ འདབ་མ་མང་པོ་འདི་ལུ་ CPU SHA‐2 ལུ་དགའ་གདམ་འབད།
+  - `prefer_cpu_sha2_max_leaves_x86` (སྔོན་སྒྲིག་: ༣༢༧༦༨) – འདི་གི་དོན་ལུ་ CPU SHA‐NI ལུ་ x86/NI ལུ་ x86/NI ལུ་ x86/NI ལུ་ x86/NI ལུ་ x86/NI
 
-Notes
-- Determinism first: acceleration never changes observable outputs; backends
-  run golden tests on init and fall back to scalar/SIMD when mismatches are detected.
-- Configure via `iroha_config`; avoid environment variables in production.
-
+དྲན་ཐོ་ཚུ།
+- གཏན་འབེབས་བཟོ་ནི། མགྱོགས་ཚད་འདི་གིས་ བལྟ་བརྟོག་འབད་བཏུབ་པའི་ཐོན་འབྲས་ཚུ་ ནམ་ཡང་བསྒྱུར་བཅོས་མ་འབད། རྒྱབ་ལོག
+  གསེར་གྱི་བརྟག་དཔྱད་ཚུ་ init གུ་བཙུགས་ཏེ་ མ་མཐུནམ་ཚུ་ བརྟག་དཔྱད་འབད་བའི་སྐབས་ scalar/SIMD ལུ་ལོག་འོང་།
+- `iroha_config` བརྒྱུད་དེ་རིམ་སྒྲིག་འབད།; ཐོན་སྐྱེད་ནང་ མཐའ་འཁོར་འགྱུར་ལྡོག་ཚུ་ བཀག་ཐབས་འབདཝ་ཨིན།

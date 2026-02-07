@@ -7,84 +7,86 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: 2026 Q1 routed-trace audit report (B1)
 description: Mirror of `docs/source/nexus_routed_trace_audit_report_2026q1.md`, covering the quarterly telemetry rehearsal outcomes.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-:::note Canonical Source
-This page mirrors `docs/source/nexus_routed_trace_audit_report_2026q1.md`. Keep both copies aligned until remaining translations land.
+:::注意規範來源
+此頁面鏡像 `docs/source/nexus_routed_trace_audit_report_2026q1.md`。保持兩個副本對齊，直到剩餘的翻譯落地。
 :::
 
-# 2026 Q1 Routed-Trace Audit Report (B1)
+# 2026 年第一季度路由跟踪審計報告 (B1)
 
-Roadmap item **B1 — Routed-Trace Audits & Telemetry Baseline** requires a
-quarterly review of the Nexus routed-trace program. This report documents the
-Q1 2026 audit window (January–March) so the governance council can sign off the
-telemetry posture before the Q2 launch rehearsals.
+路線圖項目 **B1 — 路由跟踪審核和遙測基線** 需要
+Nexus 路由跟踪計劃的季度審查。該報告記錄了
+Q12026 審計窗口（一月至三月），以便治理委員會可以簽署
+Q2發射前的遙測姿態排練。
 
-## Scope & Timeline
+## 範圍和時間表
 
-| Trace ID | Window (UTC) | Objective |
-|----------|--------------|-----------|
-| `TRACE-LANE-ROUTING` | 2026-02-17 09:00–09:45 | Verify lane-admission histograms, queue gossip, and alert flow before multi-lane enablement. |
-| `TRACE-TELEMETRY-BRIDGE` | 2026-02-24 10:00–10:45 | Validate OTLP replay, diff bot parity, and SDK telemetry ingestion ahead of AND4/AND7 milestones. |
-| `TRACE-CONFIG-DELTA` | 2026-03-01 12:00–12:30 | Confirm governance-approved `iroha_config` deltas and rollback readiness prior to the RC1 cut. |
+|跟踪 ID |窗口 (UTC) |目標 |
+|----------|--------------|------------|
+| `TRACE-LANE-ROUTING` | 2026-02-17 09:00–09:45 |在啟用多通道之前驗證通道准入直方圖、隊列八卦和警報流。 |
+| `TRACE-TELEMETRY-BRIDGE` | 2026-02-24 10:00–10:45 |在 AND4/AND7 里程碑之前驗證 OTLP 重播、diff 機器人奇偶校驗和 SDK 遙測攝取。 |
+| `TRACE-CONFIG-DELTA` | 2026-03-01 12:00–12:30 |在 RC1 削減之前確認治理批准的 `iroha_config` 增量和回滾準備情況。 |
 
-Each rehearsal ran on production-like topology with the routed-trace
-instrumentation enabled (`nexus.audit.outcome` telemetry + Prometheus counters),
-Alertmanager rules loaded, and evidence exported into `docs/examples/`.
+每次排練都在類似生產的拓撲上運行，並帶有路由跟踪
+啟用儀器（`nexus.audit.outcome` 遙測 + Prometheus 計數器），
+已加載 Alertmanager 規則，並將證據導出到 `docs/examples/`。
 
-## Methodology
+## 方法論
 
-1. **Telemetry collection.** All nodes emitted the structured
-   `nexus.audit.outcome` event and accompanying metrics
-   (`nexus_audit_outcome_total*`). The helper
-   `scripts/telemetry/check_nexus_audit_outcome.py` tailed the JSON log,
-   validated the event status, and archived the payload under
-   `docs/examples/nexus_audit_outcomes/`.【scripts/telemetry/check_nexus_audit_outcome.py:1】
-2. **Alert validation.** `dashboards/alerts/nexus_audit_rules.yml` and its test
-   harness ensured alert noise thresholds and payload templating stayed
-   consistent. CI runs `dashboards/alerts/tests/nexus_audit_rules.test.yml` on
-   every change; the same rules were exercised manually during each window.
-3. **Dashboard capture.** Operators exported the routed-trace panels from
-   `dashboards/grafana/soranet_sn16_handshake.json` (handshake health) and the
-   telemetry overview dashboards to correlate queue health with audit outcomes.
-4. **Reviewer notes.** The governance secretary logged reviewer initials,
-   decision, and any mitigation tickets in [Nexus transition notes](./nexus-transition-notes)
-   and the config delta tracker (`docs/source/project_tracker/nexus_config_deltas/2026Q1.md`).
+1. **遙測收集。 ** 所有節點都發出結構化的
+   `nexus.audit.outcome` 事件和隨附指標
+   （`nexus_audit_outcome_total*`）。幫手
+   `scripts/telemetry/check_nexus_audit_outcome.py` 追踪 JSON 日誌，
+   驗證事件狀態，並將有效負載存檔在
+   `docs/examples/nexus_audit_outcomes/`.【腳本/遙測/check_nexus_audit_outcome.py:1】
+2. **警報驗證。 ** `dashboards/alerts/nexus_audit_rules.yml` 及其測試
+   線束確保警報噪音閾值和有效負載模板保持不變
+   一致。 CI 運行 `dashboards/alerts/tests/nexus_audit_rules.test.yml`
+   每一次改變；在每個窗口期間手動執行相同的規則。
+3. **儀表板捕獲。 ** 操作員從
+   `dashboards/grafana/soranet_sn16_handshake.json`（握手健康）和
+   遙測概覽儀表板將隊列運行狀況與審計結果關聯起來。
+4. **審稿人註釋。 ** 治理秘書記錄了審稿人姓名縮寫，
+   決定，以及 [Nexus 過渡說明](./nexus-transition-notes) 中的任何緩解票據
+   和配置增量跟踪器 (`docs/source/project_tracker/nexus_config_deltas/2026Q1.md`)。
 
-## Findings
+## 調查結果
 
-| Trace ID | Outcome | Evidence | Notes |
-|----------|---------|----------|-------|
-| `TRACE-LANE-ROUTING` | Pass | Alert fire/recover screenshots (internal link) + `dashboards/alerts/tests/soranet_lane_rules.test.yml` replay; telemetry diffs recorded in [Nexus transition notes](./nexus-transition-notes#quarterly-routed-trace-audit-schedule). | Queue-admission P95 remained 612 ms (target ≤750 ms). No follow-up required. |
-| `TRACE-TELEMETRY-BRIDGE` | Pass | Archived outcome payload `docs/examples/nexus_audit_outcomes/TRACE-TELEMETRY-BRIDGE-20260224T101732Z-pass.json` plus OTLP replay hash recorded in `status.md`. | SDK redaction salts matched the Rust baseline; diff bot reported zero deltas. |
-| `TRACE-CONFIG-DELTA` | Pass (mitigation closed) | Governance tracker entry (`docs/source/project_tracker/nexus_config_deltas/2026Q1.md`) + TLS profile manifest (`artifacts/nexus/tls_profile_rollout_2026q2/tls_profile_manifest.json`) + telemetry pack manifest (`artifacts/nexus/rehearsals/2026q1/telemetry_manifest.json`). | Q2 rerun hashed the approved TLS profile and confirmed zero stragglers; telemetry manifest records slot range 912–936 and workload seed `NEXUS-REH-2026Q2`. |
+|跟踪 ID |結果|證據|筆記|
+|----------|---------|----------|--------|
+| `TRACE-LANE-ROUTING` |通行證 |警報火災/恢復截圖（內部鏈接）+ `dashboards/alerts/tests/soranet_lane_rules.test.yml` 重播；遙測差異記錄在 [Nexus 轉換註釋](./nexus-transition-notes#quarterly-routed-trace-audit-schedule) 中。 |隊列准入 P95 保持 612ms（目標 ≤750ms）。無需後續行動。 |
+| `TRACE-TELEMETRY-BRIDGE` |通行證 |存檔的結果有效負載 `docs/examples/nexus_audit_outcomes/TRACE-TELEMETRY-BRIDGE-20260224T101732Z-pass.json` 加上 `status.md` 中記錄的 OTLP 重播哈希。 | SDK 修訂鹽與 Rust 基線相匹配； diff 機器人報告零增量。 |
+| `TRACE-CONFIG-DELTA` |通過（緩解已關閉）|治理跟踪器條目 (`docs/source/project_tracker/nexus_config_deltas/2026Q1.md`) + TLS 配置文件清單 (`artifacts/nexus/tls_profile_rollout_2026q2/tls_profile_manifest.json`) + 遙測包清單 (`artifacts/nexus/rehearsals/2026q1/telemetry_manifest.json`)。 |第二季度重新運行對批准的 TLS 配置文件進行哈希處理並確認零落後者；遙測清單記錄插槽範圍 912–936 和工作負載種子 `NEXUS-REH-2026Q2`。 |
 
-All traces produced at least one `nexus.audit.outcome` event within their
-windows, satisfying the Alertmanager guardrails (`NexusAuditOutcomeFailure`
-remained green for the quarter).
+所有跟踪在其內部至少產生一個 `nexus.audit.outcome` 事件
+windows，滿足Alertmanager護欄（`NexusAuditOutcomeFailure`
+本季度保持綠色）。
 
-## Follow-ups
+## 後續行動
 
-- Routed-trace appendix updated with TLS hash `1fa0bd5974a78d680de68e744eab837e4328668d6aab8de1489c3fc3b5a0dbeb`;
-  mitigation `NEXUS-421` closed in the transition notes.
-- Continue attaching raw OTLP replays and Torii diff artifacts to the archive to
-  bolster parity evidence for Android AND4/AND7 reviews.
-- Confirm that upcoming `TRACE-MULTILANE-CANARY` rehearsals reuse the same
-  telemetry helper so Q2 sign-off benefits from the validated workflow.
+- 使用 TLS 哈希 `1fa0bd5974a78d680de68e744eab837e4328668d6aab8de1489c3fc3b5a0dbeb` 更新路由跟踪附錄；
+  緩解措施 `NEXUS-421` 在過渡說明中關閉。
+- 繼續將原始 OTLP 回放和 Torii diff 工件附加到存檔中
+  為 Android AND4/AND7 評論提供同等證據。
+- 確認即將進行的 `TRACE-MULTILANE-CANARY` 排練會重複使用相同的內容
+  遙測助手，因此第二季度簽核受益於經過驗證的工作流程。
 
-## Artefact Index
+## 文物索引
 
-| Asset | Location |
-|-------|----------|
-| Telemetry validator | `scripts/telemetry/check_nexus_audit_outcome.py` |
-| Alert rules & tests | `dashboards/alerts/nexus_audit_rules.yml`, `dashboards/alerts/tests/nexus_audit_rules.test.yml` |
-| Sample outcome payload | `docs/examples/nexus_audit_outcomes/TRACE-TELEMETRY-BRIDGE-20260224T101732Z-pass.json` |
-| Config delta tracker | `docs/source/project_tracker/nexus_config_deltas/2026Q1.md` |
-| Routed-trace schedule & notes | [Nexus transition notes](./nexus-transition-notes) |
+|資產|地點 |
+|--------|----------|
+|遙測驗證器 | `scripts/telemetry/check_nexus_audit_outcome.py` |
+|警報規則和測試 | `dashboards/alerts/nexus_audit_rules.yml`，`dashboards/alerts/tests/nexus_audit_rules.test.yml` |
+|結果負載示例 | `docs/examples/nexus_audit_outcomes/TRACE-TELEMETRY-BRIDGE-20260224T101732Z-pass.json` |
+|配置增量跟踪器 | `docs/source/project_tracker/nexus_config_deltas/2026Q1.md` |
+|路由跟踪時間表和註釋| [Nexus 過渡說明](./nexus-transition-notes) |
 
-This report, the artefacts above, and the alert/telemetry exports should be
-attached to the governance decision log to close B1 for the quarter.
+該報告、上述工件以及警報/遙測導出應該是
+附在治理決策日誌中以結束本季度的 B1。

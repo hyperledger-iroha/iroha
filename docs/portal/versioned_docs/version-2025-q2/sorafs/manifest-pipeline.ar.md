@@ -6,54 +6,55 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: e77b792e19fbfa8e1efeddd042adbe68a48287a582a1be76aa518af7830774e2
 source_last_modified: "2026-01-04T10:50:53.604570+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SoraFS Chunking → Manifest Pipeline
+# SoraFS التقطيع → خط أنابيب البيان
 
-This companion to the quickstart traces the end-to-end pipeline that turns raw
-bytes into Norito manifests suitable for the SoraFS Pin Registry. The content is
-adapted from [`docs/source/sorafs/manifest_pipeline.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/manifest_pipeline.md);
-consult that document for the canonical specification and changelog.
+يتتبع هذا المصاحب للبدء السريع خط الأنابيب الشامل الذي يتحول إلى الخام
+البايتات في Norito تظهر بشكل مناسب لـ SoraFS Pin Registry. المحتوى هو
+مقتبس من [`docs/source/sorafs/manifest_pipeline.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/manifest_pipeline.md)؛
+راجع هذا المستند لمعرفة المواصفات الأساسية وسجل التغيير.
 
-## 1. Chunk deterministically
+## 1. قطعة قطعية
 
-SoraFS uses the SF-1 (`sorafs.sf1@1.0.0`) profile: a FastCDC-inspired rolling
-hash with a 64 KiB minimum chunk size, 256 KiB target, 512 KiB maximum, and a
-`0x0000ffff` break mask. The profile is registered in
+يستخدم SoraFS ملف التعريف SF-1 (`sorafs.sf1@1.0.0`): ملف تعريف مستوحى من FastCDC
+تجزئة مع الحد الأدنى لحجم القطعة 64 كيلو بايت، والهدف 256 كيلو بايت، والحد الأقصى 512 كيلو بايت، و
+قناع الكسر `0x0000ffff`. تم تسجيل الملف الشخصي في
 `sorafs_manifest::chunker_registry`.
 
-### Rust helpers
+### مساعدين الصدأ
 
-- `sorafs_car::CarBuildPlan::single_file` – Emits chunk offsets, lengths, and
-  BLAKE3 digests while preparing CAR metadata.
-- `sorafs_car::ChunkStore` – Streams payloads, persists chunk metadata, and
-  derives the 64 KiB / 4 KiB Proof-of-Retrievability (PoR) sampling tree.
-- `sorafs_chunker::chunk_bytes_with_digests` – Library helper behind both CLIs.
+- `sorafs_car::CarBuildPlan::single_file` – يصدر إزاحات وأطوال و
+  يتم هضم BLAKE3 أثناء إعداد البيانات التعريفية لـ CAR.
+- `sorafs_car::ChunkStore` - تدفق الحمولات، وبيانات تعريف القطعة المستمرة، و
+  يشتق شجرة عينات إثبات الاسترجاع (PoR) بقدرة 64 كيلو بايت / 4 كيلو بايت.
+- `sorafs_chunker::chunk_bytes_with_digests` - مساعد المكتبة خلف كلا سطر الأوامر.
 
-### CLI tooling
+### أدوات سطر الأوامر
 
 ```bash
 cargo run -p sorafs_chunker --bin sorafs-chunk-dump -- ./payload.bin \
   > chunk-plan.json
 ```
 
-The JSON contains the ordered offsets, lengths, and chunk digests. Persist the
-plan when constructing manifests or orchestrator fetch specifications.
+يحتوي JSON على الإزاحات والأطوال وملخصات القطع المطلوبة. الإصرار على
+التخطيط عند إنشاء البيانات أو جلب المنسق للمواصفات.
 
-### PoR witnesses
+### شهود PoR
 
-`ChunkStore` exposes `--por-proof=<chunk>:<segment>:<leaf>` and
-`--por-sample=<count>` so auditors can request deterministic witness sets. Pair
-those flags with `--por-proof-out` or `--por-sample-out` to record the JSON.
+يعرض `ChunkStore` `--por-proof=<chunk>:<segment>:<leaf>` و
+`--por-sample=<count>` حتى يتمكن المدققون من طلب مجموعات الشهود الحتمية. زوج
+تلك العلامات ذات `--por-proof-out` أو `--por-sample-out` لتسجيل JSON.
 
-## 2. Wrap a manifest
+## 2. قم بلف البيان
 
-`ManifestBuilder` combines chunk metadata with governance attachments:
+يجمع `ManifestBuilder` بيانات تعريف المجموعة مع مرفقات الإدارة:
 
-- Root CID (dag-cbor) and CAR commitments.
-- Alias proofs and provider capability claims.
-- Council signatures and optional metadata (e.g., build IDs).
+- التزامات الجذر CID (dag-cbor) وCAR.
+- البراهين الاسم المستعار ومطالبات قدرة المزود.
+- توقيعات المجلس والبيانات التعريفية الاختيارية (على سبيل المثال، معرفات البناء).
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
@@ -64,57 +65,55 @@ cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
   --json-out=payload.report.json
 ```
 
-Important outputs:
+مخرجات مهمة:
 
-- `payload.manifest` – Norito-encoded manifest bytes.
-- `payload.report.json` – Human/automation readable summary, including
-  `chunk_fetch_specs`, `payload_digest_hex`, CAR digests, and alias metadata.
-- `payload.manifest_signatures.json` – Envelope containing manifest BLAKE3
-  digest, chunk-plan SHA3 digest, and sorted Ed25519 signatures.
+- `payload.manifest` - بايت البيان المشفر Norito.
+- `payload.report.json` – ملخص قابل للقراءة من قبل الإنسان/الأتمتة، بما في ذلك
+  `chunk_fetch_specs`، `payload_digest_hex`، ملخصات CAR، وبيانات تعريف الاسم المستعار.
+- `payload.manifest_signatures.json` - مظروف يحتوي على البيان BLAKE3
+  ملخص، ملخص SHA3 للخطة المقطوعة، وتوقيعات Ed25519 المصنفة.
 
-Use `--manifest-signatures-in` to verify envelopes supplied by external
-signatories before writing them back out, and `--chunker-profile-id` or
-`--chunker-profile=<handle>` to lock the registry selection.
+استخدم `--manifest-signatures-in` للتحقق من المغلفات المقدمة من الخارج
+الموقعون قبل كتابتهم مرة أخرى، و`--chunker-profile-id` أو
+`--chunker-profile=<handle>` لقفل اختيار التسجيل.
 
-## 3. Publish and pin
+## 3. النشر والتثبيت
 
-1. **Governance submission** – Provide the manifest digest and signature
-   envelope to the council so the pin can be admitted. External auditors should
-   store the chunk-plan SHA3 digest alongside the manifest digest.
-2. **Pin payloads** – Upload the CAR archive (and optional CAR index) referenced
-   in the manifest to the Pin Registry. Ensure the manifest and CAR share the
-   same root CID.
-3. **Record telemetry** – Persist the JSON report, PoR witnesses, and any fetch
-   metrics in release artifacts. These records feed operator dashboards and
-   help reproduce issues without downloading large payloads.
+1. **تقديم الحوكمة** – تقديم ملخص البيان والتوقيع
+   مظروف إلى المجلس حتى يمكن قبول الدبوس. ينبغي للمدققين الخارجيين
+   قم بتخزين ملخص SHA3 الخاص بخطة القطع جنبًا إلى جنب مع ملخص البيان.
+2. **تثبيت الحمولات** - تحميل أرشيف CAR (وفهرس CAR الاختياري) المشار إليه
+   في البيان إلى Pin Registry. تأكد من مشاركة البيان وCAR
+   نفس الجذر CID.
+3. **تسجيل القياس عن بعد** – استمر في تقرير JSON وشهود إثبات صحة البيانات وأي عملية جلب
+   المقاييس في القطع الأثرية الإصدار. تغذي هذه السجلات لوحات معلومات المشغل و
+   المساعدة في إعادة إنتاج المشكلات دون تنزيل حمولات كبيرة.
 
-## 4. Multi-provider fetch simulation
+## 4. محاكاة جلب متعددة الموفرين
 
-`cargo run -p sorafs_car --bin sorafs_fetch -- --plan=payload.report.json \
+`تشغيل البضائع -p sorafs_car --bin sorafs_fetch -- --plan=payload.report.json \
   --provider=alpha=providers/alpha.bin --provider=beta=providers/beta.bin#4@3 \
-  --output=payload.bin --json-out=fetch_report.json`
+  --output=payload.bin --json-out=fetch_report.json`- يزيد `#<concurrency>` من التوازي لكل موفر (`#4` أعلاه).
+- `@<weight>` يضبط انحياز الجدولة؛ الإعدادات الافتراضية إلى 1.
+- يحدد `--max-peers=<n>` عدد الموفرين المقرر تشغيلهم
+  الاكتشاف ينتج مرشحين أكثر من المطلوب.
+- `--expect-payload-digest` و`--expect-payload-len` يحميان من الصمت
+  الفساد.
+- يتحقق `--provider-advert=name=advert.to` من إمكانيات الموفر من قبل
+  استخدامها في المحاكاة.
+- يتجاوز `--retry-budget=<n>` عدد مرات إعادة المحاولة لكل مجموعة (الافتراضي: 3) لذلك CI
+  يمكن أن تظهر الانحدارات بشكل أسرع عند اختبار سيناريوهات الفشل.
 
-- `#<concurrency>` increases per-provider parallelism (`#4` above).
-- `@<weight>` tunes scheduling bias; defaults to 1.
-- `--max-peers=<n>` caps the number of providers scheduled for a run when
-  discovery yields more candidates than desired.
-- `--expect-payload-digest` and `--expect-payload-len` guard against silent
-  corruption.
-- `--provider-advert=name=advert.to` verifies provider capabilities before
-  using them in the simulation.
-- `--retry-budget=<n>` overrides the per-chunk retry count (default: 3) so CI
-  can surface regressions faster when testing failure scenarios.
+`fetch_report.json` أسطح المقاييس المجمعة (`chunk_retry_total`،
+`provider_failure_rate`، وما إلى ذلك) مناسب لتأكيدات CI وإمكانية الملاحظة.
 
-`fetch_report.json` surfaces aggregated metrics (`chunk_retry_total`,
-`provider_failure_rate`, etc.) suitable for CI assertions and observability.
+## 5. تحديثات التسجيل والحوكمة
 
-## 5. Registry updates & governance
+عند اقتراح ملفات تعريف مقسمة جديدة:
 
-When proposing new chunker profiles:
+1. قم بتأليف الواصف في `sorafs_manifest::chunker_registry_data`.
+2. تحديث `docs/source/sorafs/chunker_registry.md` والمواثيق ذات الصلة.
+3. قم بإعادة إنشاء التركيبات (`export_vectors`) والتقاط البيانات الموقعة.
+4. تقديم تقرير الالتزام بالميثاق مع توقيعات الحوكمة.
 
-1. Author the descriptor in `sorafs_manifest::chunker_registry_data`.
-2. Update `docs/source/sorafs/chunker_registry.md` and related charters.
-3. Regenerate fixtures (`export_vectors`) and capture signed manifests.
-4. Submit the charter compliance report with governance signatures.
-
-Automation should prefer canonical handles (`namespace.name@semver`) and fall
+يجب أن تفضل الأتمتة المقابض الأساسية (`namespace.name@semver`) والسقوط

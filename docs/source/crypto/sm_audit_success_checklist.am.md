@@ -7,66 +7,67 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 624ef9305dc14d477a616923c80445094c692bc6a38d69465f679b54ccd52e92
 source_last_modified: "2025-12-29T18:16:35.940844+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Audit Success Criteria
-% Iroha Crypto Working Group
+% SM2/SM3/SM4 የኦዲት ስኬት መስፈርቶች
+% Iroha Crypto የስራ ቡድን
 % 2026-01-30
 
-# Purpose
+# ዓላማ
 
-This checklist captures the concrete criteria required for a successful
-completion of the SM2/SM3/SM4 external audit. It should be reviewed during
-kick-off, revisited at each status checkpoint, and used to confirm exit
-conditions before enabling SM signing for production validators.
+ይህ የማረጋገጫ ዝርዝር ለስኬት የሚያስፈልጉትን ተጨባጭ መመዘኛዎች ይይዛል
+የ SM2/SM3/SM4 የውጭ ኦዲት ማጠናቀቅ። ወቅት መከለስ አለበት
+መጀመር፣ በእያንዳንዱ የሁኔታ ፍተሻ ነጥብ ላይ በድጋሚ የተጎበኘ እና መውጣቱን ለማረጋገጥ ጥቅም ላይ ይውላል
+ለምርት አረጋጋጮች SM መፈረም ከማንቃት በፊት ሁኔታዎች።
 
-# Pre-Engagement Readiness
+# የቅድመ-ተሳታፊነት ዝግጁነት
 
-- [ ] Contract signed, including scope, deliverables, confidentiality, and
-      remediation support language.
-- [ ] Audit team receives repository mirror access, CI artefact bucket, and
-      documentation bundle listed in `docs/source/crypto/sm_audit_brief.md`.
-- [ ] Points of contact confirmed with backups for each role
-      (crypto, IVM, platform ops, security, docs).
-- [ ] Internal stakeholders align on target release date and freeze windows.
-- [ ] SBOM export (`cargo auditable` + CycloneDX) generated and shared.
-- [ ] OpenSSL/Tongsuo build provenance package prepared
-      (source tarball hash, build script, reproducibility notes).
-- [ ] Latest deterministic test outputs captured:
-      `scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`, and
-      Norito round-trip fixtures.
-- [ ] Torii `/v1/node/capabilities` advert (via `iroha runtime capabilities`) recorded, verifying the `crypto.sm` manifest fields and acceleration policy snapshot.
+- [ ] የተፈረመ ውል፣ ወሰንን፣ ማድረስ፣ ሚስጥራዊነትን እና ጨምሮ
+      የማሻሻያ ድጋፍ ቋንቋ.
+- [] የኦዲት ቡድን የማጠራቀሚያ መስታወት መዳረሻን፣ CI artefact ባልዲ፣ እና ይቀበላል
+      የሰነድ ቅርቅብ በ`docs/source/crypto/sm_audit_brief.md` ውስጥ ተዘርዝሯል።
+- [ ] ለእያንዳንዱ ሚና በመጠባበቂያዎች የተረጋገጡ የመገናኛ ነጥቦች
+      (crypto, IVM, መድረክ ኦፕስ, ደህንነት, ሰነዶች).
+- [ ] የውስጥ ባለድርሻ አካላት በታለመው የተለቀቀበት ቀን ላይ ይሰለፋሉ እና መስኮቶችን ያቆማሉ።
+- [ ] SBOM ወደ ውጭ መላክ (`cargo auditable` + CycloneDX) የመነጨ እና የተጋራ ነው።
+- [ ] OpenSSL/Tongsuo የግንባታ ፕሮቨንሽን ጥቅል ተዘጋጅቷል።
+      (ምንጭ ታርቦል ሃሽ፣ የግንባታ ስክሪፕት፣ የመባዛት ማስታወሻዎች)።
+- [ ] የቅርብ ጊዜ የመወሰን ሙከራ ውጤቶች ተይዘዋል፡
+      `scripts/sm_openssl_smoke.sh`፣ `cargo test -p iroha_crypto sm`፣ እና
+      Norito የዙር ጉዞዎች።
+- [ ] Torii `/v1/node/capabilities` ማስታወቂያ (በ`iroha runtime capabilities` በኩል) ተመዝግቧል፣ የ`crypto.sm` አንጸባራቂ መስኮችን እና የፍጥነት ፖሊሲ ቅጽበተ ፎቶን ያረጋግጣል።
 
-# Engagement Execution
+# የተሳትፎ አፈፃፀም
 
-- [ ] Kick-off workshop completed with shared understanding of goals,
-      timelines, and communication cadence.
-- [ ] Weekly status reports received and triaged; risk register updated.
-- [ ] Findings communicated within one business day of discovery when severity
-      is High or Critical.
-- [ ] Audit team validates determinism paths on ≥2 CPU architectures (x86_64,
-      aarch64) with matching outputs.
-- [ ] Side-channel review includes constant-time proofs or empirical testing
-      evidence for both Rust and FFI paths.
-- [ ] Compliance and documentation review confirms operator guidance matches
-      regulatory obligations.
-- [ ] Differential testing against reference implementations (RustCrypto,
-      OpenSSL/Tongsuo) executed with auditor oversight.
-- [ ] Fuzz harnesses evaluated; new seed corpora provided where gaps exist.
+- [ ] የጅማሬ አውደ ጥናት የተጠናቀቀው በጋራ ግቦች ግንዛቤ፣
+      የጊዜ ሰሌዳዎች እና የመገናኛ ዘዴዎች።
+- [ ] ሳምንታዊ ሁኔታ ሪፖርቶች ተቀብለዋል እና የተከፋፈለ; የአደጋ መዝገብ ተዘምኗል።
+- [ ] ግኝቶች ግኝቶች በተገኙበት በአንድ የስራ ቀን ውስጥ የተነገሩት ከባድነት
+      ከፍተኛ ወይም ወሳኝ ነው።
+- [] የኦዲት ቡድን በ≥2 ሲፒዩ አርክቴክቸር (x86_64፣) ላይ የመወሰን መንገዶችን ያረጋግጣል።
+      aarch64) ከተዛማጅ ውጤቶች ጋር.
+- [] የጎን ቻናል ግምገማ የቋሚ ጊዜ ማረጋገጫዎችን ወይም ተጨባጭ ሙከራዎችን ያካትታል
+      ለሁለቱም የዝገት እና የኤፍኤፍአይ መንገዶች ማስረጃ።
+- [ ] ማክበር እና የሰነድ ግምገማ የኦፕሬተር መመሪያ ግጥሚያዎችን ያረጋግጣል
+      የቁጥጥር ግዴታዎች.
+- [] በማጣቀሻ አተገባበር ላይ ልዩ ሙከራ (RustCrypto,
+      OpenSSL/Tongsuo) በኦዲተር ቁጥጥር ተፈፅሟል።
+- [] Fuzz መታጠቂያዎች ተገምግመዋል; ክፍተቶች ባሉበት አዲስ የዘር ኮርፖሬሽን ይቀርባል.
 
-# Remediation & Exit
+# ማገገሚያ እና መውጣት
 
-- [ ] All findings categorised with severity, impact, exploitability, and
-      recommended remediation steps.
-- [ ] High/Critical issues receive patches or mitigations with auditor-approved
-      verification; residual risks documented.
-- [ ] Auditor supplies re-test validation evidencing fixed issues (diff, test
-      runs, or signed attestation).
-- [ ] Final report delivered: executive summary, detailed findings, methodology,
-      determinism verdict, compliance verdict.
-- [ ] Internal sign-off meeting concludes next steps, release adjustments,
-      and documentation updates.
-- [ ] `status.md` updated with audit outcome and outstanding remediation
-      follow-ups.
-- [ ] Post-mortem captured in `docs/source/crypto/sm_program.md` (lessons
-      learned, future hardening tasks).
+- [] ሁሉም ግኝቶች በክብደት፣ በተፅእኖ፣ በብዝበዛ እና
+      የሚመከሩ የማሻሻያ እርምጃዎች.
+- [ ] ከፍተኛ/ወሳኝ ጉዳዮች በኦዲተር ከተፈቀደላቸው ጥገናዎች ወይም ቅነሳዎች ይቀበላሉ።
+      ማረጋገጥ; ቀሪ አደጋዎች ተመዝግበዋል.
+- [ ] ኦዲተር ቋሚ ችግሮችን የሚያረጋግጥ የድጋሚ ሙከራ ማረጋገጫ ያቀርባል (ልዩነት፣ ፈተና
+      ይሮጣል ወይም የተፈረመ ማረጋገጫ)።
+- [] የመጨረሻ ሪፖርት አቅርቧል፡ የሥራ አስፈፃሚ ማጠቃለያ፣ ዝርዝር ግኝቶች፣ ዘዴ፣
+      determinism ፍርድ, ተገዢነት ፍርድ.
+- [ ] የውስጥ የማቋረጥ ስብሰባ ቀጣይ እርምጃዎችን ያጠናቅቃል ፣ ማስተካከያዎችን ይልቀቁ ፣
+      እና የሰነድ ዝማኔዎች.
+- [ ] `status.md` በኦዲት ውጤት እና የላቀ ማሻሻያ ተዘምኗል
+      ክትትል.
+- [ ] ድህረ-ሟች በ`docs/source/crypto/sm_program.md` (ትምህርቶች) ተይዟል።
+      የተማረ, የወደፊት የማጠንከሪያ ስራዎች).

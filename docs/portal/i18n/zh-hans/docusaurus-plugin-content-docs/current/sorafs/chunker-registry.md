@@ -8,49 +8,51 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Chunker Profile Registry
 sidebar_label: Chunker Registry
 description: Profile IDs, parameters, and negotiation plan for the SoraFS chunker registry.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::注意规范来源
 :::
 
-## SoraFS Chunker Profile Registry (SF-2a)
+## SoraFS Chunker 配置文件注册表 (SF-2a)
 
-The SoraFS stack negotiates chunking behaviour via a small, namespaced registry.
-Each profile assigns deterministic CDC parameters, semver metadata, and the
-expected digest/multicodec used in manifests and CAR archives.
+SoraFS 堆栈通过小型命名空间注册表协商分块行为。
+每个配置文件分配确定性 CDC 参数、semver 元数据和
+预期在清单和 CAR 档案中使用摘要/多编解码器。
 
-Profile authors should consult
+简介作者应咨询
 [`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md)
-for the required metadata, validation checklist, and proposal template before
-submitting new entries. Once governance has approved a change, follow the
-[registry rollout checklist](./chunker-registry-rollout-checklist.md) and the
-[staging manifest playbook](./staging-manifest-playbook) to promote
-the fixtures through staging and production.
+之前所需的元数据、验证清单和提案模板
+提交新条目。一旦治理批准变更，请遵循
+[注册表推出清单](./chunker-registry-rollout-checklist.md) 和
+[暂存清单剧本](./staging-manifest-playbook) 推广
+通过舞台和生产的固定装置。
 
-### Profiles
+### 个人资料
 
-| Namespace | Name | SemVer | Profile ID | Min (bytes) | Target (bytes) | Max (bytes) | Break mask | Multihash | Aliases | Notes |
-|-----------|------|--------|------------|-------------|----------------|-------------|------------|-----------|---------|-------|
-| `sorafs`  | `sf1` | `1.0.0` | `1` | 65 536 | 262 144 | 524 288 | `0x0000ffff` | `0x1f` (BLAKE3-256) | `["sorafs.sf1@1.0.0"]` | Canonical profile used in SF-1 fixtures |
+|命名空间 |名称 |语义版本 |个人资料 ID |最小（字节）|目标（字节）|最大（字节）|打破面具|多重哈希 |别名 |笔记|
+|------------|------|--------|------------|------------|----------------|-------------|------------|------------|---------|--------|
+| `sorafs` | `sf1` | `1.0.0` | `1` | 65536 | 262144 | 262144 524288 | 524288 `0x0000ffff` | `0x1f` (BLAKE3-256) | `["sorafs.sf1@1.0.0"]` | SF-1 灯具中使用的规范轮廓 |
 
-The registry lives in code as `sorafs_manifest::chunker_registry` (governed by [`chunker_registry_charter.md`](./chunker-registry-charter.md)). Each entry
-is expressed as a `ChunkerProfileDescriptor` with:
+注册表的代码为 `sorafs_manifest::chunker_registry`（由 [`chunker_registry_charter.md`](./chunker-registry-charter.md) 管理）。每个条目
+表示为 `ChunkerProfileDescriptor`，其中：
 
-* `namespace` – logical grouping of related profiles (e.g., `sorafs`).
-* `name` – human-readable profile label (`sf1`, `sf1-fast`, …).
-* `semver` – semantic version string for the parameter set.
-* `profile` – the actual `ChunkProfile` (min/target/max/mask).
-* `multihash_code` – the multihash used when producing chunk digests (`0x1f`
-  for the SoraFS default).
+* `namespace` – 相关配置文件的逻辑分组（例如，`sorafs`）。
+* `name` – 人类可读的配置文件标签（`sf1`、`sf1-fast`，...）。
+* `semver` – 参数集的语义版本字符串。
+* `profile` – 实际 `ChunkProfile`（最小值/目标/最大值/掩码）。
+* `multihash_code` – 生成块摘要时使用的多重哈希 (`0x1f`
+  对于 SoraFS 默认值）。
 
-The manifest serializes profiles via `ChunkingProfileV1`. The structure records
-the registry metadata (namespace, name, semver) alongside the raw CDC
-parameters and the alias list shown above. Consumers should first attempt a
-registry lookup by `profile_id` and fall back to the inline parameters when
-unknown IDs appear. Registry charter rules require the canonical handle
-(`namespace.name@semver`) to be the first entry in `profile_aliases`.
+清单通过 `ChunkingProfileV1` 序列化配置文件。结构记录
+注册表元数据（命名空间、名称、semver）以及原始 CDC
+参数和别名列表如上所示。消费者应首先尝试
+通过 `profile_id` 进行注册表查找，并在以下情况下回退到内联参数：
+出现未知 ID。注册机构章程规则需要规范句柄
+(`namespace.name@semver`) 是 `profile_aliases` 中的第一个条目。
 
-To inspect the registry from tooling, run the helper CLI:
+要通过工具检查注册表，请运行帮助器 CLI：
 
 ```
 $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
@@ -78,7 +80,7 @@ To inspect a specific PoR witness, provide chunk/segment/leaf indices and
 optionally persist the proof to disk:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
+$ cars run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-proof=0:0:0 --por-proof-out=leaf.proof.json
 ```
 
@@ -91,7 +93,7 @@ registered aliases) that can be pasted into `chunker_registry_data.rs` when
 promoting a new default profile:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
+$ 货物运行 -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
     --promote-profile=sorafs.sf1@1.0.0
 ```
 
@@ -104,7 +106,7 @@ To validate an existing proof against a payload, pass the path via
 matches the computed root):
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
+$ cars run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-proof-verify=leaf.proof.json
 ```
 
@@ -113,10 +115,10 @@ output path. The CLI guarantees deterministic ordering (`splitmix64` seeded)
 and will transparently truncate when the request exceeds the available leaves:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
+$ cars run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-sample=8 --por-sample-seed=0xfeedface --por-sample-out=por.samples.json
 
-The manifest stub mirrors the same data, which is convenient when scripting `--chunker-profile-id` selection in pipelines. Both chunk store CLIs also accept the canonical handle form (`--profile=sorafs.sf1@1.0.0`) so build scripts can avoid hard-coding numeric IDs:
+清单存根镜像相同的数据，这在管道中编写 `--chunker-profile-id` 选择脚本时很方便。两个块存储 CLI 还接受规范句柄形式 (`--profile=sorafs.sf1@1.0.0`)，因此构建脚本可以避免硬编码数字 ID：
 
 ```
 $ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
@@ -136,12 +138,12 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-prof
 ]
 ```
 
-The `handle` field (`namespace.name@semver`) matches what the CLIs accept via
-`--profile=…`, making it safe to copy directly into automation.
+`handle` 字段 (`namespace.name@semver`) 与 CLI 接受的内容相匹配
+`--profile=…`，可以安全地直接复制到自动化中。
 
-### Negotiating Chunkers
+### 谈判分块
 
-Gateways and clients advertise supported profiles via provider adverts:
+网关和客户端通过提供商广告宣传支持的配置文件：
 
 ```
 ProviderAdvertBodyV1 {
@@ -151,30 +153,30 @@ ProviderAdvertBodyV1 {
 }
 ```
 
-Multi-source chunk scheduling is announced via the `range` capability. The
-CLI accepts it with `--capability=range[:streams]`, where the optional numeric
-suffix encodes the provider's preferred range-fetch concurrency (for example,
-`--capability=range:64` advertises a 64-stream budget). When omitted, consumers
-fall back to the general `max_streams` hint published elsewhere in the advert.
+多源块调度是通过 `range` 功能宣布的。的
+CLI 通过 `--capability=range[:streams]` 接受它，其中可选数字
+后缀对提供者的首选范围获取并发进行编码（例如，
+`--capability=range:64` 公布 64 流预算）。当省略时，消费者
+回到广告中其他地方发布的一般 `max_streams` 提示。
 
-When requesting CAR data, clients should send an `Accept-Chunker` header listing
-supported `(namespace, name, semver)` tuples in preference order:
+请求 CAR 数据时，客户端应发送 `Accept-Chunker` 标头列表
+按优先顺序支持的 `(namespace, name, semver)` 元组：
 
 ```
 Accept-Chunker: sorafs.sf1;version=1.0.0
 ```
 
-Gateways select a mutually supported profile (defaulting to `sorafs.sf1@1.0.0`)
-and reflect the decision via the `Content-Chunker` response header. Manifests
-embed the chosen profile so downstream nodes can validate the chunk layout
-without relying on HTTP negotiation.
+网关选择相互支持的配置文件（默认为 `sorafs.sf1@1.0.0`）
+并通过 `Content-Chunker` 响应标头反映该决定。舱单
+嵌入所选配置文件，以便下游节点可以验证块布局
+不依赖 HTTP 协商。
 
-### Conformance
+### 一致性
 
-* The `sorafs.sf1@1.0.0` profile maps to the public fixtures in
-  `fixtures/sorafs_chunker` and the corpora registered under
-  `fuzz/sorafs_chunker`. End-to-end parity is exercised in Rust, Go, and Node
-  via the provided tests.
-* `chunker_registry::lookup_by_profile` asserts that the descriptor parameters
-  match `ChunkProfile::DEFAULT` to guard accidental divergence.
-* Manifests produced by `iroha app sorafs toolkit pack` and `sorafs_manifest_stub` include the registry metadata.
+* `sorafs.sf1@1.0.0` 配置文件映射到公共装置
+  `fixtures/sorafs_chunker` 和注册的语料库
+  `fuzz/sorafs_chunker`。 Rust、Go 和 Node 中执行端到端奇偶校验
+  通过提供的测试。
+* `chunker_registry::lookup_by_profile` 断言描述符参数
+  匹配 `ChunkProfile::DEFAULT` 以防止意外发散。
+* `iroha app sorafs toolkit pack` 和 `sorafs_manifest_stub` 生成的清单包括注册表元数据。

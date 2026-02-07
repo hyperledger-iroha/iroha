@@ -7,28 +7,29 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 4d1af3021d94540c338c921ea8393a10dd918ee1549965cdc09fbc612c938444
 source_last_modified: "2025-12-29T18:16:35.908874+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 # Python SDK Quickstart
 
-The Python SDK (`iroha-python`) mirrors the Rust client helpers so you can
-interact with Torii from scripts, notebooks, or web backends. This quickstart
-covers installation, transaction submission, and event streaming. For deeper
-coverage see `python/iroha_python/README.md` in the repository.
+Python SDK (`iroha-python`) ასახავს Rust კლიენტის დამხმარეებს, ასე რომ თქვენ შეგიძლიათ
+ურთიერთქმედება Torii-თან სკრიპტებიდან, ნოუთბუქებიდან ან ვებ გვერდიდან. ეს სწრაფი დაწყება
+მოიცავს ინსტალაციას, ტრანზაქციის წარდგენას და ღონისძიების სტრიმინგს. უფრო ღრმად
+დაფარვა იხილეთ `python/iroha_python/README.md` საცავში.
 
-## 1. Install
+## 1. დააინსტალირეთ
 
 ```bash
 pip install iroha-python
 ```
 
-Optional extras:
+არჩევითი დამატებები:
 
-- `pip install aiohttp` if you plan to run the asynchronous variants of the
-  streaming helpers.
-- `pip install pynacl` when you need Ed25519 key derivation outside of the SDK.
+- `pip install aiohttp` თუ გეგმავთ ასინქრონული ვარიანტების გაშვებას
+  ნაკადის დამხმარეები.
+- `pip install pynacl` როდესაც გჭირდებათ Ed25519 გასაღების დერივაცია SDK-ის გარეთ.
 
-## 2. Create a client and signers
+## 2. შექმენით კლიენტი და ხელმომწერები
 
 ```python
 from iroha_python import (
@@ -46,14 +47,14 @@ client = ToriiClient(
 )
 ```
 
-`ToriiClient` accepts additional keyword arguments such as `timeout_ms`,
-`max_retries`, and `tls_config`. The helper `resolve_torii_client_config`
-parses a JSON configuration payload if you want parity with the Rust CLI.
+`ToriiClient` იღებს საკვანძო სიტყვების დამატებით არგუმენტებს, როგორიცაა `timeout_ms`,
+`max_retries` და `tls_config`. დამხმარე `resolve_torii_client_config`
+აანალიზებს JSON კონფიგურაციის დატვირთვას, თუ გსურთ პარიტეტი Rust CLI-თან.
 
-## 3. Submit a transaction
+## 3. წარადგინეთ ტრანზაქცია
 
-The SDK ships instruction builders and transaction helpers so you rarely build
-Norito payloads by hand:
+SDK აგზავნის ინსტრუქციების შემქმნელებს და ტრანზაქციის დამხმარეებს, ასე რომ თქვენ იშვიათად აშენებთ
+Norito დატვირთვა ხელით:
 
 ```python
 from iroha_python import Instruction
@@ -72,15 +73,15 @@ envelope, status = client.build_and_submit_transaction(
 print("Final status:", status)
 ```
 
-`build_and_submit_transaction` returns both the signed envelope and the last
-observed status (e.g., `Committed`, `Rejected`). If you already have a signed
-transaction envelope use `client.submit_transaction_envelope(envelope)` or the
-JSON-centric `submit_transaction_json`.
+`build_and_submit_transaction` აბრუნებს როგორც ხელმოწერილ კონვერტს, ასევე ბოლო
+დაკვირვებული სტატუსი (მაგ., `Committed`, `Rejected`). თუ უკვე გაქვთ ხელმოწერილი
+ტრანზაქციის კონვერტის გამოყენება `client.submit_transaction_envelope(envelope)` ან
+JSON-ცენტრირებული `submit_transaction_json`.
 
-## 4. Query state
+## 4. შეკითხვის მდგომარეობა
 
-All REST endpoints have JSON helpers and many expose typed dataclasses. For
-example, listing domains:
+ყველა REST ბოლო წერტილს აქვს JSON დამხმარეები და ბევრი ასახავს აკრეფილ მონაცემთა კლასებს. ამისთვის
+მაგალითად, დომენების ჩამონათვალი:
 
 ```python
 domains = client.list_domains_typed()
@@ -88,13 +89,13 @@ for domain in domains.items:
     print(domain.name)
 ```
 
-Pagination-aware helpers (e.g., `list_accounts_typed`) return an object that
-contains both `items` and `next_cursor`.
+პაგინაციის მცოდნე დამხმარეები (მაგ., `list_accounts_typed`) აბრუნებენ ობიექტს, რომელიც
+შეიცავს `items` და `next_cursor`.
 
-## 5. Stream events
+## 5. მოვლენების სტრიმინგი
 
-Torii SSE endpoints are exposed via generators. The SDK automatically resumes
-when `resume=True` and you provide an `EventCursor`.
+Torii SSE ბოლო წერტილები გამოვლენილია გენერატორების მეშვეობით. SDK ავტომატურად განახლდება
+როდესაც `resume=True` და თქვენ მოგაწოდებთ `EventCursor`.
 
 ```python
 from iroha_python import PipelineEventFilterBox, EventCursor
@@ -110,19 +111,19 @@ for event in client.stream_pipeline_blocks(
     print("Block height", event.data.block.height)
 ```
 
-Other convenience methods include `stream_pipeline_transactions`,
-`stream_events` (with typed filter builders), and `stream_verifying_key_events`.
+სხვა მოსახერხებელი მეთოდები მოიცავს `stream_pipeline_transactions`,
+`stream_events` (აკრეფილი ფილტრის შემქმნელებით) და `stream_verifying_key_events`.
 
-## 6. Next steps
+## 6. შემდეგი ნაბიჯები
 
-- Explore the examples under `python/iroha_python/src/iroha_python/examples/`
-  for end-to-end flows covering governance, ISO bridge helpers, and Connect.
-- Use `create_torii_client` / `resolve_torii_client_config` when you want to
-  bootstrap the client from an `iroha_config` JSON file or environment.
-- For Norito RPC or Connect-specific APIs, check the specialised modules such as
-  `iroha_python.norito_rpc` and `iroha_python.connect`.
+- გამოიკვლიეთ მაგალითები `python/iroha_python/src/iroha_python/examples/`-ში
+  მმართველობის, ISO ხიდის დამხმარეებისა და დაკავშირებისთვის, ბოლოდან ბოლომდე ნაკადებისთვის.
+- გამოიყენეთ `create_torii_client` / `resolve_torii_client_config` როცა გინდათ
+  ჩატვირთეთ კლიენტი `iroha_config` JSON ფაილიდან ან გარემოდან.
+- Norito RPC ან Connect-სპეციფიკური API-ებისთვის, შეამოწმეთ სპეციალიზებული მოდულები, როგორიცაა
+  `iroha_python.norito_rpc` და `iroha_python.connect`.
 
-With these building blocks you can exercise Torii from Python without writing
-your own HTTP glue or Norito codecs. As the SDK matures, additional high-level
-builders will be added; consult the README in the `python/iroha_python`
-directory for the latest status and migration notes.
+ამ სამშენებლო ბლოკებით შეგიძლიათ ივარჯიშოთ Torii პითონიდან წერის გარეშე
+თქვენი საკუთარი HTTP წებო ან Norito კოდეკები. როგორც SDK მწიფდება, უფრო მაღალი დონის
+დაემატება მშენებლები; მიმართეთ README-ს `python/iroha_python`-ში
+დირექტორია უახლესი სტატუსისა და მიგრაციის შენიშვნებისთვის.

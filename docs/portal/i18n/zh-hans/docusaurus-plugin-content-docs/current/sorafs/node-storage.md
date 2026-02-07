@@ -8,34 +8,36 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Node Storage Design
 sidebar_label: Node Storage Design
 description: Storage architecture, quotas, and lifecycle hooks for Torii nodes hosting SoraFS data.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::注意规范来源
 :::
 
-## SoraFS Node Storage Design (Draft)
+## SoraFS节点存储设计（草案）
 
-This note refines how an Iroha (Torii) node can opt-in to the SoraFS data
-availability layer and dedicate a slice of local disk for storing and serving
-chunks. It complements the `sorafs_node_client_protocol.md` discovery spec and
-the SF-1b fixture work by outlining the storage-side architecture, resource
-controls, and configuration plumbing that must land in the node and gateway
-code paths. Practical operator drills live in the
-[Node Operations Runbook](./node-operations).
+本说明细化了 Iroha (Torii) 节点如何选择加入 SoraFS 数据
+可用性层并专用于本地磁盘片用于存储和服务
+大块。它补充了 `sorafs_node_client_protocol.md` 发现规范，并且
+SF-1b 夹具通过概述存储端架构、资源来工作
+必须落在节点和网关中的控制和配置管道
+代码路径。实际操作员演习现场
+[节点操作操作手册](./node-operations)。
 
-### Goals
+### 目标
 
-- Allow any validator or auxiliary Iroha process to expose spare disk as a
-  SoraFS provider without affecting the core ledger responsibilities.
-- Keep the storage module deterministic and Norito-driven: manifests,
-  chunk plans, Proof-of-Retrievability (PoR) roots, and provider adverts are the
-  source of truth.
-- Enforce operator-defined quotas so a node cannot exhaust its own resources by
-  accepting too many pin or fetch requests.
-- Surface health/telemetry (PoR sampling, chunk fetch latency, disk pressure)
-  back to governance and clients.
+- 允许任何验证器或辅助 Iroha 进程将备用磁盘公开为
+  SoraFS 提供者不影响核心账本职责。
+- 保持存储模块确定性和 Norito 驱动：清单、
+  块计划、可检索性证明 (PoR) 根和提供商广告是
+  真相的来源。
+- 强制执行运营商定义的配额，以便节点无法耗尽自己的资源
+  接受过多的 pin 或获取请求。
+- 表面健康/遥测（PoR 采样、块获取延迟、磁盘压力）
+  回到治理和客户。
 
-### High-level Architecture
+### 高层架构
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -64,28 +66,28 @@ code paths. Practical operator drills live in the
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-Key modules:
+关键模块：
 
-- **Gateway**: exposes Norito HTTP endpoints for pin proposals, chunk fetch
-  requests, PoR sampling, and telemetry. It validates Norito payloads and
-  marshals requests into the chunk store. Reuses the existing Torii HTTP stack
-  to avoid a new daemon.
-- **Pin Registry**: the manifest pin state tracked in `iroha_data_model::sorafs`
-  and `iroha_core`. When a manifest is accepted the registry records the
-  manifest digest, chunk plan digest, PoR root, and provider capability flags.
-- **Chunk Storage**: disk-backed `ChunkStore` implementation that ingests
-  signed manifests, materialises chunk plans using `ChunkProfile::DEFAULT`, and
-  persists chunks under a deterministic layout. Each chunk is associated with a
-  content fingerprint and PoR metadata so sampling can re-validate without
-  re-reading the entire file.
-- **Quota/Scheduler**: enforces operator-configured limits (maximum disk bytes,
-  maximum outstanding pins, maximum parallel fetches, chunk TTL) and coordinates
-  IO so the node's ledger duties are not starved. The scheduler is also
-  responsible for serving PoR proofs and sampling requests with bounded CPU.
+- **网关**：公开 Norito HTTP 端点以进行 pin 建议、块获取
+  请求、PoR 采样和遥测。它验证 Norito 有效负载和
+  将请求编组到块存储中。重用现有的 Torii HTTP 堆栈
+  以避免新的守护进程。
+- **Pin 注册表**：`iroha_data_model::sorafs` 中跟踪的清单 pin 状态
+  和 `iroha_core`。当清单被接受时，注册表会记录
+  清单摘要、块计划摘要、PoR 根和提供者能力标志。
+- **块存储**：摄取的磁盘支持的 `ChunkStore` 实现
+  签署清单，使用 `ChunkProfile::DEFAULT` 实现块计划，以及
+  在确定性布局下保留块。每个块都与一个相关联
+  内容指纹和 PoR 元数据，因此采样可以重新验证，无需
+  重新读取整个文件。
+- **配额/调度程序**：强制执行操作员配置的限制（最大磁盘字节，
+  最大未完成引脚、最大并行读取、块 TTL）和坐标
+  IO 因此节点的账本职责不会匮乏。调度器也是
+  负责使用有限的 CPU 提供 PoR 证明和采样请求。
 
-### Configuration
+### 配置
 
-Add a new section to `iroha_config`:
+向 `iroha_config` 添加新部分：
 
 ```toml
 [sorafs.storage]
@@ -103,40 +105,40 @@ adverts:
   topics = ["sorafs.sf1.primary:global"]
 ```
 
-- `enabled`: participation toggle. When false the gateway returns a 503 for
-  storage endpoints and the node does not advertise in discovery.
-- `data_dir`: root directory for chunk data, PoR trees, and fetch telemetry.
-  Defaults to `<iroha.data_dir>/sorafs`.
-- `max_capacity_bytes`: hard limit for pinned chunk data. A background task
-  rejects new pins when the limit is reached.
-- `max_parallel_fetches`: concurrency cap enforced by the scheduler to balance
-  bandwidth/disk IO against validator workload.
-- `max_pins`: maximum number of manifest pins the node accepts before applying
-  eviction/back pressure.
-- `por_sample_interval_secs`: cadence for automatic PoR sampling jobs. Each job
-  samples `N` leaves (configurable per manifest) and emits telemetry events.
-  Governance can scale `N` deterministically by setting the capacity metadata
-  key `profile.sample_multiplier` (integer `1-4`). The value may be a single
-  number/string or an object with per-profile overrides, e.g.
-  `{"default":2,"sorafs.sf2@1.0.0":3}`.
-- `adverts`: structure used by the provider advert generator to fill
-  `ProviderAdvertV1` fields (stake pointer, QoS hints, topics). If omitted the
-  node uses defaults from the governance registry.
+- `enabled`：参与切换。当 false 时，网关返回 503
+  存储端点和节点不在发现中通告。
+- `data_dir`：块数据、PoR 树和获取遥测数据的根目录。
+  默认为 `<iroha.data_dir>/sorafs`。
+- `max_capacity_bytes`：固定块数据的硬限制。后台任务
+  当达到限制时拒绝新的引脚。
+- `max_parallel_fetches`：调度程序强制执行并发上限以平衡
+  带宽/磁盘 IO 与验证器工作负载的比较。
+- `max_pins`：应用之前节点接受的清单引脚的最大数量
+  驱逐/背压。
+- `por_sample_interval_secs`：自动 PoR 采样作业的节奏。每份工作
+  样本 `N` 离开（可根据清单进行配置）并发出遥测事件。
+  治理可以通过设置容量元数据来确定性地扩展 `N`
+  密钥 `profile.sample_multiplier`（整数 `1-4`）。该值可能是单个
+  数字/字符串或具有每个配置文件覆盖的对象，例如
+  `{"default":2,"sorafs.sf2@1.0.0":3}`。
+- `adverts`：提供商广告生成器用来填充的结构
+  `ProviderAdvertV1` 字段（权益指针、QoS 提示、主题）。如果省略
+  节点使用治理注册表中的默认值。
 
-Config plumbing:
+配置管道：
 
-- `[sorafs.storage]` is defined in `iroha_config` as `SorafsStorage` and is
-  loaded from the node config file.
-- `iroha_core` and `iroha_torii` thread the storage config into the gateway
-  builder and chunk store at startup.
-- Dev/test env overrides exist (`SORAFS_STORAGE_*`, `SORAFS_STORAGE_PIN_*`), but
-  production deployments should rely on the config file.
+- `[sorafs.storage]` 在 `iroha_config` 中定义为 `SorafsStorage`，并且是
+  从节点配置文件加载。
+- `iroha_core` 和 `iroha_torii` 将存储配置线程到网关中
+  启动时的构建器和块存储。
+- 存在开发/测试环境覆盖（`SORAFS_STORAGE_*`、`SORAFS_STORAGE_PIN_*`），但是
+  生产部署应依赖配置文件。
 
-### CLI Utilities
+### CLI 实用程序
 
-While Torii’s HTTP surface is still being wired, the `sorafs_node` crate ships a
-thin CLI so operators can script ingestion/export drills against the persistent
-backend.【crates/sorafs_node/src/bin/sorafs-node.rs:1】
+虽然 Torii 的 HTTP 表面仍在接线，但 `sorafs_node` 板条箱运送了
+精简 CLI，以便操作员可以针对持久性数据编写摄取/导出演练脚本
+后端.【crates/sorafs_node/src/bin/sorafs-node.rs:1】
 
 ```bash
 cargo run -p sorafs_node --bin sorafs-node ingest \
@@ -146,106 +148,104 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
   --plan-json-out ./plan.json
 ```
 
-- `ingest` expects a Norito-encoded manifest `.to` file plus the matching payload
-  bytes. It reconstructs the chunk plan from the manifest’s chunking profile,
-  enforces digest parity, persists chunk files, and optionally emits a
-  `chunk_fetch_specs` JSON blob so downstream tooling can sanity-check the
-  layout.
-- `export` accepts a manifest ID and writes the stored manifest/payload to disk
-  (with optional plan JSON) so fixtures remain reproducible across environments.
+- `ingest` 需要 Norito 编码的清单 `.to` 文件以及匹配的有效负载
+  字节。它根据清单的分块配置文件重建块计划，
+  强制摘要奇偶校验，保留块文件，并可选择发出
+  `chunk_fetch_specs` JSON blob，以便下游工具可以对
+  布局。
+- `export` 接受清单 ID 并将存储的清单/有效负载写入磁盘
+  （使用可选的计划 JSON），因此灯具在不同环境中保持可重复性。
 
-Both commands print a Norito JSON summary to stdout, making it easy to pipe into
-scripts. The CLI is covered by an integration test to ensure manifests and
-payloads round-trip cleanly before the Torii APIs land.【crates/sorafs_node/tests/cli.rs:1】
+这两个命令都将 Norito JSON 摘要打印到标准输出，从而可以轻松通过管道输入
+脚本。 CLI 包含集成测试，以确保清单和
+在 Torii API 落地之前有效负载干净利落地往返。【crates/sorafs_node/tests/cli.rs:1】
 
-> HTTP parity
+> HTTP 奇偶校验
 >
-> The Torii gateway now exposes read-only helpers backed by the same
-> `NodeHandle`:
+> Torii 网关现在公开由相同支持的只读帮助程序
+> `NodeHandle`：
 >
-> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — returns the stored
->   Norito manifest (base64) alongside digest/metadata.【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — returns the deterministic
->   chunk plan JSON (`chunk_fetch_specs`) for downstream tooling.【crates/iroha_torii/src/sorafs/api.rs:1259】
+> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — 返回存储的
+> Norito 清单（base64）和摘要/元数据。【crates/iroha_torii/src/sorafs/api.rs:1207】
+> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — 返回确定性
+> 用于下游工具的块计划 JSON (`chunk_fetch_specs`)。【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
-> These endpoints mirror the CLI output so pipelines can switch from local
-> scripts to HTTP probes without changing parsers.【crates/iroha_torii/src/sorafs/api.rs:1207】【crates/iroha_torii/src/sorafs/api.rs:1259】
+> 这些端点镜像 CLI 输出，以便管道可以从本地切换
+> 无需更改解析器即可编写HTTP探针脚本。【crates/iroha_torii/src/sorafs/api.rs:1207】【crates/iroha_torii/src/sorafs/api.rs:1259】
 
-### Node Lifecycle
+### 节点生命周期
 
-1. **Startup**:
-   - If storage is enabled the node initialises the chunk store with the
-     configured directory and capacity. This includes verifying or creating the
-     PoR manifest database and replaying pinned manifests to warm caches.
-   - Register the SoraFS gateway routes (Norito JSON POST/GET endpoints for pin,
-     fetch, PoR sample, telemetry).
-   - Spawn the PoR sampling worker and quota monitor.
-2. **Discovery / Adverts**:
-   - Generate `ProviderAdvertV1` documents using current capacity/health, sign
-     them with the council-approved key, and publish via the discovery channel.
-     available.
-3. **Pin Workflow**:
-   - Gateway receives a signed manifest (including chunk plan, PoR root, council
-     signatures). Validate the alias list (`sorafs.sf1@1.0.0` required) and
-     ensure the chunk plan matches the manifest metadata.
-   - Check quotas. If capacity/pin limits would be exceeded respond with a
-     policy error (Norito structured).
-   - Stream chunk data into the `ChunkStore`, verifying digests as we ingest.
-     Update PoR trees and store manifest metadata in the registry.
-4. **Fetch Workflow**:
-   - Serve chunk range requests from disk. Scheduler enforces
-     `max_parallel_fetches` and returns `429` when saturated.
-   - Emit structured telemetry (Norito JSON) with latency, bytes served, and
-     error counts for downstream monitoring.
-5. **PoR Sampling**:
-   - Worker selects manifests proportional to weight (e.g., bytes stored) and
-     runs deterministic sampling using the chunk store's PoR tree.
-   - Persist results for governance audits and include summaries in provider
-     adverts / telemetry endpoints.
-6. **Eviction / Quota Enforcement**:
-   - When capacity is reached the node rejects new pins by default. Optionally,
-     operators may configure eviction policies (e.g., TTL-based, LRU) once the
-     governance model is agreed; for now the design assumes strict quotas and
-     operator-initiated unpin operations.
+1. **启动**：
+   - 如果启用存储，节点将使用以下命令初始化块存储：
+     配置目录和容量。这包括验证或创建
+     PoR 清单数据库并将固定清单重播到热缓存。
+   - 注册 SoraFS 网关路由（Norito JSON POST/GET 引脚端点，
+     获取、PoR 样本、遥测）。
+   - 生成 PoR 采样工作人员和配额监视器。
+2. **发现/广告**：
+   - 使用当前容量/运行状况生成 `ProviderAdvertV1` 文件，签名
+     使用理事会批准的密钥，并通过发现频道发布。
+     可用的。
+3. **固定工作流程**：
+   - 网关收到已签名的清单（包括块计划、PoR 根、理事会
+     签名）。验证别名列表（需要 `sorafs.sf1@1.0.0`）并
+     确保块计划与清单元数据匹配。
+   - 检查配额。如果超出容量/引脚限制，请响应
+     策略错误（Norito 结构）。
+   - 将块数据流式传输到 `ChunkStore`，在我们摄取时验证摘要。
+     更新 PoR 树并将清单元数据存储在注册表中。
+4. **获取工作流程**：
+   - 服务来自磁盘的块范围请求。调度程序强制执行
+     `max_parallel_fetches` 并在饱和时返回 `429`。
+   - 发出结构化遥测数据 (Norito JSON)，包含延迟、服务字节数和
+     下游监控的错误计数。
+5. **PoR 采样**：
+   - 工作人员选择与重量成比例的清单（例如，存储的字节数）和
+     使用块存储的 PoR 树运行确定性采样。
+   - 保留治理审计的结果并将摘要包含在提供商中
+     广告/遥测端点。
+6. **驱逐/配额执行**：
+   - 当达到容量时，节点默认拒绝新的引脚。可选地，
+     操作员可以配置驱逐策略（例如，基于 TTL、LRU）
+     治理模式已达成一致；目前，该设计假设有严格的配额，并且
+     操作员发起的取消固定操作。
 
-### Capacity Declaration & Scheduling Integration
+### 容量声明和调度集成- Torii 现在从 `/v1/sorafs/capacity/declare` 中继 `CapacityDeclarationRecord` 更新
+  到嵌入式 `CapacityManager`，因此每个节点都会构建其自身的内存视图
+  已提交的分块器和车道分配。管理器公开只读快照
+  用于遥测 (`GET /v1/sorafs/capacity/state`) 并强制按配置文件或按通道
+  接受新订单前的预约。【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
+- `/v1/sorafs/capacity/schedule` 端点接受治理颁发的 `ReplicationOrderV1`
+  有效负载。当订单针对本地提供商时，经理会检查
+  重复调度，验证分块器/通道容量，保留切片，以及
+  返回 `ReplicationPlan` 描述剩余容量，以便编排工具
+  可以继续摄入。其他供应商的订单均通过
+  `ignored` 响应以简化多操作员工作流程。【crates/iroha_torii/src/routing.rs:4845】
+- 完成挂钩（例如，在摄取成功后触发）命中
+  `POST /v1/sorafs/capacity/complete` 通过以下方式释放预订
+  `CapacityManager::complete_order`。响应包括 `ReplicationRelease`
+  快照（剩余总数、分块器/通道残差），因此编排工具可以
+  无需轮询即可对下一个订单进行排队。后续工作会将其连接到块中
+  一旦摄取逻辑落地，就存储管道。【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
+- 嵌入式 `TelemetryAccumulator` 可以通过以下方式进行变异
+  `NodeHandle::update_telemetry`，让后台工作人员记录 PoR/正常运行时间样本
+  并最终导出规范的 `CapacityTelemetryV1` 有效负载，而无需触及
+  调度器内部结构。【crates/sorafs_node/src/lib.rs:142】【crates/sorafs_node/src/telemetry.rs:1】
 
-- Torii now relays `CapacityDeclarationRecord` updates from `/v1/sorafs/capacity/declare`
-  to the embedded `CapacityManager`, so each node builds an in-memory view of its
-  committed chunker and lane allocations. The manager exposes read-only snapshots
-  for telemetry (`GET /v1/sorafs/capacity/state`) and enforces per-profile or per-lane
-  reservations before new orders are accepted.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- The `/v1/sorafs/capacity/schedule` endpoint accepts governance-issued `ReplicationOrderV1`
-  payloads. When the order targets the local provider the manager checks for
-  duplicate scheduling, verifies chunker/lane capacity, reserves the slice, and
-  returns a `ReplicationPlan` describing remaining capacity so orchestration tools
-  can proceed with ingestion. Orders for other providers are acknowledged with an
-  `ignored` response to ease multi-operator workflows.【crates/iroha_torii/src/routing.rs:4845】
-- Completion hooks (e.g., triggered after ingestion succeeds) hit
-  `POST /v1/sorafs/capacity/complete` to release reservations via
-  `CapacityManager::complete_order`. The response includes a `ReplicationRelease`
-  snapshot (remaining totals, chunker/lane residuals) so orchestration tooling can
-  queue the next order without polling. Follow-up work will wire this into the chunk
-  store pipeline once ingestion logic lands.【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
-- The embedded `TelemetryAccumulator` can be mutated through
-  `NodeHandle::update_telemetry`, letting background workers record PoR/uptime samples
-  and eventually derive canonical `CapacityTelemetryV1` payloads without touching the
-  scheduler internals.【crates/sorafs_node/src/lib.rs:142】【crates/sorafs_node/src/telemetry.rs:1】
+### 集成和未来的工作
 
-### Integrations & Future Work
+- **治理**：通过存储遥测扩展 `sorafs_pin_registry_tracker.md`
+  （PoR 成功率、磁盘利用率）。入学政策可能要求最低
+  接受广告之前的容量或最低 PoR 成功率。
+- **客户端 SDK**：公开新的存储配置（磁盘限制、别名），以便
+  管理工具可以通过编程方式引导节点。
+- **遥测**：与现有指标堆栈集成（Prometheus /
+  OpenTelemetry），因此存储指标出现在可观察性仪表板中。
+- **安全性**：在专用异步任务池中运行存储模块
+  背压并考虑通过 io_uring 或 tokio 的沙箱块读取
+  有界池，以防止恶意客户端耗尽资源。
 
-- **Governance**: extend `sorafs_pin_registry_tracker.md` with storage telemetry
-  (PoR success rate, disk utilisation). Admission policies can require minimum
-  capacity or minimum PoR success rate before adverts are accepted.
-- **Client SDKs**: expose the new storage config (disk limits, alias) so
-  management tooling can bootstrap nodes programmatically.
-- **Telemetry**: integrate with the existing metrics stack (Prometheus /
-  OpenTelemetry) so storage metrics appear in observability dashboards.
-- **Security**: run the storage module inside a dedicated async task pool with
-  back-pressure and consider sandboxing chunk reads via io_uring or tokio's
-  bounded pools to prevent malicious clients from exhausting resources.
-
-This design keeps the storage module optional and deterministic while giving
-operators the knobs they need to participate in the SoraFS data availability
-layer. Implementing it will involve changes across `iroha_config`, `iroha_core`,
-`iroha_torii`, and the Norito gateway, plus the provider advert tooling.
+这种设计使存储模块保持可选性和确定性，同时给出
+操作员参与 SoraFS 数据可用性所需的旋钮
+层。实施它将涉及 `iroha_config`、`iroha_core`、
+`iroha_torii` 和 Norito 网关，以及提供商广告工具。

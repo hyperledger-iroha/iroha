@@ -7,25 +7,26 @@ generator: scripts/sync_docs_i18n.py
 source_hash: fa548ec31fe928decc5c23719472618ff97f4eb45b084f9f9084df82b96cfac6
 source_last_modified: "2025-12-29T18:16:35.933651+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Client API Configuration Reference
+## Client API konfiguratsiya ma'lumotnomasi
 
-This document tracks the Torii client-facing configuration knobs that are
-surfaces through `iroha_config::parameters::user::Torii`. The section below
-focuses on the Norito-RPC transport controls introduced for NRPC-1; future
-client API settings should extend this file.
+Ushbu hujjat Torii mijozga qaragan konfiguratsiya tugmalarini kuzatib boradi.
+`iroha_config::parameters::user::Torii` orqali yuzalar. Quyidagi bo'lim
+NRPC-1 uchun joriy qilingan Norito-RPC transport boshqaruvlariga e'tibor qaratadi; kelajak
+mijoz API sozlamalari ushbu faylni kengaytirishi kerak.
 
 ### `torii.transport.norito_rpc`
 
-| Key | Type | Default | Description |
+| Kalit | Tur | Standart | Tavsif |
 |-----|------|---------|-------------|
-| `enabled` | `bool` | `true` | Master switch that enables binary Norito decoding. When `false`, Torii rejects every Norito-RPC request with `403 norito_rpc_disabled`. |
-| `stage` | `string` | `"disabled"` | Rollout tier: `disabled`, `canary`, or `ga`. Stages drive admission decisions and `/rpc/capabilities` output. |
-| `require_mtls` | `bool` | `false` | Enforces mTLS for Norito-RPC transport: when `true`, Torii rejects Norito-RPC requests that do not carry an mTLS marker header (e.g. `X-Forwarded-Client-Cert`). The flag is surfaced via `/rpc/capabilities` so SDKs can warn on misconfigured environments. |
-| `allowed_clients` | `array<string>` | `[]` | Canary allowlist. When `stage = "canary"`, only requests carrying an `X-API-Token` header present in this list are accepted. |
+| `enabled` | `bool` | `true` | Ikkilik Norito dekodlash imkonini beruvchi asosiy kalit. `false`, Torii, `403 norito_rpc_disabled` bilan har bir Norito-RPC so'rovini rad etadi. |
+| `stage` | `string` | `"disabled"` | Chiqarish darajasi: `disabled`, `canary` yoki `ga`. Bosqichlar qabul qilish qarorlarini va `/rpc/capabilities` chiqishini boshqaradi. |
+| `require_mtls` | `bool` | `false` | Norito-RPC tashish uchun mTLSni qo'llaydi: `true`, Torii mTLS marker sarlavhasi (masalan, I10000X) bo'lmagan Norito-RPC so'rovlarini rad etadi. Bayroq `/rpc/capabilities` orqali chiqariladi, shuning uchun SDK noto'g'ri sozlangan muhitlar haqida ogohlantirishi mumkin. |
+| `allowed_clients` | `array<string>` | `[]` | Kanareykalar ro'yxati. `stage = "canary"` bo'lsa, ushbu ro'yxatda faqat `X-API-Token` sarlavhasi mavjud bo'lgan so'rovlar qabul qilinadi. |
 
-Example configuration:
+Konfiguratsiyaga misol:
 
 ```toml
 [torii.transport.norito_rpc]
@@ -35,16 +36,16 @@ stage = "canary"
 allowed_clients = ["alpha-canary-token", "beta-canary-token"]
 ```
 
-Stage semantics:
+Bosqich semantikasi:
 
-- **disabled** — Norito-RPC is unavailable even if `enabled = true`. Clients
-  receive `403 norito_rpc_disabled`.
-- **canary** — Requests must include an `X-API-Token` header that matches one
-  of the `allowed_clients`. All other requests receive `403
+- **o'chirilgan** — Norito-RPC hatto `enabled = true` bo'lsa ham mavjud emas. Mijozlar
+  `403 norito_rpc_disabled` qabul qiling.
+- **kanarey** — So‘rovlar biriga mos keladigan `X-API-Token` sarlavhasini o‘z ichiga olishi kerak
+  `allowed_clients`. Boshqa barcha so'rovlar `403-ni oladi
   norito_rpc_canary_denied`.
-- **ga** — Norito-RPC is available to every authenticated caller (subject to the
-  usual rate and pre-auth limits).
+- **ga** — Norito-RPC har bir autentifikatsiya qilingan qo'ng'iroq qiluvchi uchun mavjud (shartga muvofiq)
+  odatiy tarif va avtoulovdan oldingi chegaralar).
 
-Operators can update these values dynamically through `/v1/config`. Each change
-is reflected immediately in `/rpc/capabilities`, allowing SDKs and observability
-dashboards to show the live transport posture.
+Operatorlar ushbu qiymatlarni `/v1/config` orqali dinamik ravishda yangilashlari mumkin. Har bir o'zgarish
+darhol `/rpc/capabilities` da aks ettirilib, SDK va kuzatuvchanlikka imkon beradi
+jonli transport holatini ko'rsatish uchun asboblar paneli.

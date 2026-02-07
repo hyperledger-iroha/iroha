@@ -7,183 +7,166 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 08e2e1e4a54390d9142d6788aad2385e93282a33423b9fc7f3418e3633f3f86a
 source_last_modified: "2026-01-23T23:46:10.134857+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! SM2/SM3/SM4 enablement architecture brief for Hyperledger Iroha v2.
+//! Hyperledger Iroha v2 үшін SM2/SM3/SM4 қосу архитектурасы қысқаша.
 
-# SM Program Architecture Brief
+# SM бағдарламасының архитектурасы туралы қысқаша
 
-## Purpose
-Define the technical plan, supply-chain posture, and risk boundaries for introducing Chinese national cryptography (SM2/SM3/SM4) across the Iroha v2 stack while preserving deterministic execution and auditability.
+## Мақсат
+Iroha v2 стегі арқылы Қытайдың ұлттық криптографиясын (SM2/SM3/SM4) енгізу үшін техникалық жоспарды, жеткізу тізбегінің қалпын және тәуекел шекараларын анықтаңыз, бұл ретте детерминирленген орындалу мен тексерілу мүмкіндігін сақтаңыз.
 
-## Scope
-- **Consensus-critical paths:** `iroha_crypto`, `iroha`, `irohad`, IVM host, Kotodama intrinsics.
-- **Client SDKs and tooling:** Rust CLI, Kagami, Python/JS/Swift SDKs, genesis utilities.
-- **Configuration & serialization:** `iroha_config` knobs, Norito data model tags, manifest handling, multicodec updates.
-- **Testing & compliance:** Unit/property/interop suites, Wycheproof harnesses, performance profiling, export/regulatory guidance. *(Status: RustCrypto-backed SM stack merged; optional `sm_proptest` fuzz suite and OpenSSL parity harness available for extended CI.)*
+## Ауқым
+- **Консенсус-критикалық жолдар:** `iroha_crypto`, `iroha`, `irohad`, IVM хост, Kotodama ішкі.
+- **Клиент SDK және құралдар:** Rust CLI, Kagami, Python/JS/Swift SDK, генезис утилиталары.
+- **Конфигурация және сериялау:** `iroha_config` тұтқалары, Norito деректер үлгісі тегтері, манифестті өңдеу, мультикодек жаңартулары.
+- **Тестілеу және сәйкестік:** Бірлік/мүлік/жұмыстылық жиынтықтары, Wycheproof белдіктер, өнімділік профилін жасау, экспорт/нұсқаулық. *(Күйі: RustCrypto қолдауы бар SM стек біріктірілді; қосымша `sm_proptest` fuzz жинағы және кеңейтілген CI үшін қол жетімді OpenSSL паритет жинағы.)*
 
-Out of scope: PQ algorithms, non-deterministic host acceleration in consensus paths; wasm/`no_std` builds are retired.
+Қолданылу аясынан тыс: PQ алгоритмдері, консенсус жолдарындағы детерминирленген емес хост жеделдету; wasm/`no_std` құрастырулары ескірген.
 
-## Algorithm Inputs & Deliverables
-| Artifact | Owner | Due | Notes |
+## Алгоритмді енгізу және жеткізу
+| Артефакт | Иесі | Мерзімі | Ескертпелер |
 |----------|-------|-----|-------|
-| SM algorithm feature design (`SM-P0`) | Crypto WG | 2025-02 | Feature gating, dependency audit, risk register. |
-| Core Rust integration (`SM-P1`) | Crypto WG / Data Model | 2025-03 | RustCrypto-based verify/hash/AEAD helpers, Norito extensions, fixtures. |
-| Signing + VM syscalls (`SM-P2`) | IVM Core / SDK Program | 2025-04 | Deterministic signing wrappers, syscalls, Kotodama coverage. |
-| Optional provider & ops enablement (`SM-P3`) | Platform Ops / Performance WG | 2025-06 | OpenSSL/Tongsuo backend, ARM intrinsics, telemetry, documentation. |
+| SM алгоритм ерекшеліктерін жобалау (`SM-P0`) | Crypto WG | 2025-02 | Функция гатингі, тәуелділік аудиті, тәуекелдер тізілімі. |
+| Core Rust интеграциясы (`SM-P1`) | Crypto WG / Деректер моделі | 2025-03 | RustCrypto негізіндегі тексеру/хэш/AEAD көмекшілері, Norito кеңейтімдері, арматура. |
+| Қол қою + VM жүйе қоңыраулары (`SM-P2`) | IVM Core / SDK бағдарламасы | 2025-04 | Детерминистік қолтаңба орауыштары, жүйелер, Kotodama қамту. |
+| Қосымша провайдер мен операцияны қосу (`SM-P3`) | Platform Ops / Performance WG | 2025-06 | OpenSSL/Tongsuo сервері, ARM интринстері, телеметрия, құжаттама. |
 
-## Selected Libraries
-- **Primary:** RustCrypto crates (`sm2`, `sm3`, `sm4`) with `rfc6979` feature enabled and SM3 bound to deterministic nonces.
-- **Optional FFI:** OpenSSL 3.x provider API or Tongsuo for deployments requiring certified stacks or hardware engines; feature-gated and disabled by default in consensus binaries.
+## Таңдалған кітапханалар
+- **Негізгі:** RustCrypto жәшіктері (`sm2`, `sm3`, `sm4`) `rfc6979` мүмкіндігі қосылған және SM3 детерминирленген еместерге байланысты.
+- **Қосымша FFI:** OpenSSL 3.x провайдері API немесе сертификатталған стектерді немесе аппараттық құрал қозғалтқыштарын қажет ететін орналастырулар үшін Tongsuo; консенсус екілік файлдарында әдепкі бойынша мүмкіндік қақпасы бар және өшірілген.### Негізгі кітапхана интеграциясының күйі
+- `iroha_crypto::sm` біртұтас `sm` мүмкіндігі бойынша SM3 хэштеу, SM2 растау және SM4 GCM/CCM көмекшілерін көрсетеді, детерминирленген RFC6979 қол қою жолдары SDK үшін қолжетімді `Sm2PrivateKey`.【crates/iroha_crypto/src/sm.rs:1049】【crates/iroha_crypto/src/sm.rs:1128】【crates/iroha_crypto/src/sm.rs:1236】
+- Norito/Norito-JSON тегтері мен мультикодек көмекшілері SM2 ашық кілттерін/қолтаңбаларын және SM3/SM4 пайдалы жүктемелерін қамтиды, осылайша нұсқаулар белгілі бір түрде серияланады. хосттар.【crates/iroha_data_model/src/isi/registry.rs:407】【crates/iroha_data_model/tests/sm_norito_roundtrip.rs:12】
+- Белгілі жауап жинақтары RustCrypto интеграциясын (`sm3_sm4_vectors.rs`, `sm2_negative_vectors.rs`) тексереді және түйіндер қол қоюды жалғастырған кезде тексеруді детерминистік күйде сақтай отырып, CI `sm` мүмкіндік тапсырмаларының бөлігі ретінде іске қосылады. Ed25519.【crates/iroha_crypto/tests/sm3_sm4_vectors.rs:15】【crates/iroha_crypto/tests/sm2_negative_vectors.rs:1】
+- Қосымша `sm` мүмкіндікті құрастыру валидациясы: `cargo check -p iroha_crypto --features sm --locked` (суық 7,9 с / жылы 0,23 с) және `cargo check -p iroha_crypto --no-default-features --features "std sm" --locked` (1,0 с) екеуі де сәтті; мүмкіндікті қосу 11 жәшік қосады (`base64ct`, `ghash`, `opaque-debug`, `pem-rfc7468`, `pkcs8`, `polyval`0, Hyperledger, Hyperledger, `ghash` `sm2`, `sm3`, `sm4`, `sm4-gcm`). Табылған деректер `docs/source/crypto/sm_rustcrypto_spike.md`.【docs/source/crypto/sm_rustcrypto_spike.md:1】
+- BouncyCastle/GmSSL теріс тексеру құрылғылары `crates/iroha_crypto/tests/fixtures/sm/sm2_negative_vectors.json` астында жұмыс істейді, бұл канондық сәтсіздік жағдайларын (r=0, s=0, ажырату идентификаторының сәйкессіздігі, бұрмаланған ашық кілт) кеңінен таралған құрылғылармен сәйкестендірілуін қамтамасыз етеді. провайдерлер.【crates/iroha_crypto/tests/sm2_negative_vectors.rs:1】【crates/iroha_crypto/tests/fixtures/sm/sm2_negative_vectors.json:1】
+- `sm-ffi-openssl` қазір сатушы OpenSSL 3.x құралдар тізбегін (`openssl` жәшігі `vendored` мүмкіндігі) құрастырады, сондықтан LibreSSL/OpenSSL жүйесі жоқ болса да алдын ала қарау құрастырулары мен сынақтары әрқашан заманауи SM қабілетті провайдерге бағытталған. алгоритмдер.【crates/iroha_crypto/Cargo.toml:59】
+- `sm_accel` енді орындалу уақытында AArch64 NEON анықтайды және `crypto.sm_intrinsics` конфигурациялау тетігін орындай отырып, x86_64/RISC-V жіберу арқылы SM3/SM4 ілмектерін өткізеді. (`auto`/`force-enable`/`force-disable`). Векторлық серверлер болмаған кезде диспетчер әлі де скаляр RustCrypto жолы арқылы бағытталады, осылайша орындықтар мен саясат ауыстырып-қосқыштары хосттар арасында тұрақты әрекет етеді.【crates/iroha_crypto/src/sm.rs:702】【crates/iroha_crypto/src/sm.rs:733】
 
-### Core Library Integration Status
-- `iroha_crypto::sm` exposes SM3 hashing, SM2 verification, and SM4 GCM/CCM helpers under the unified `sm` feature, with deterministic RFC 6979 signing paths available to SDKs via `Sm2PrivateKey`.【crates/iroha_crypto/src/sm.rs:1049】【crates/iroha_crypto/src/sm.rs:1128】【crates/iroha_crypto/src/sm.rs:1236】
-- Norito/Norito-JSON tags and multicodec helpers cover SM2 public keys/signatures and SM3/SM4 payloads so instructions serialize deterministically across hosts.【crates/iroha_data_model/src/isi/registry.rs:407】【crates/iroha_data_model/tests/sm_norito_roundtrip.rs:12】
-- Known-answer suites validate the RustCrypto integration (`sm3_sm4_vectors.rs`, `sm2_negative_vectors.rs`) and run as part of CI’s `sm` feature jobs, keeping verification deterministic while nodes continue signing with Ed25519.【crates/iroha_crypto/tests/sm3_sm4_vectors.rs:15】【crates/iroha_crypto/tests/sm2_negative_vectors.rs:1】
-- Optional `sm` feature build validation: `cargo check -p iroha_crypto --features sm --locked` (cold 7.9 s / warm 0.23 s) and `cargo check -p iroha_crypto --no-default-features --features "std sm" --locked` (1.0 s) both succeed; enabling the feature adds 11 crates (`base64ct`, `ghash`, `opaque-debug`, `pem-rfc7468`, `pkcs8`, `polyval`, `primeorder`, `sm2`, `sm3`, `sm4`, `sm4-gcm`). Findings recorded in `docs/source/crypto/sm_rustcrypto_spike.md`.【docs/source/crypto/sm_rustcrypto_spike.md:1】
-- BouncyCastle/GmSSL negative verification fixtures live under `crates/iroha_crypto/tests/fixtures/sm/sm2_negative_vectors.json`, ensuring canonical failure cases (r=0, s=0, distinguishing-ID mismatch, tampered public key) stay aligned with widely deployed providers.【crates/iroha_crypto/tests/sm2_negative_vectors.rs:1】【crates/iroha_crypto/tests/fixtures/sm/sm2_negative_vectors.json:1】
-- `sm-ffi-openssl` now compiles the vendored OpenSSL 3.x toolchain (`openssl` crate `vendored` feature) so preview builds and tests always target a modern SM-capable provider even when system LibreSSL/OpenSSL lacks SM algorithms.【crates/iroha_crypto/Cargo.toml:59】
-- `sm_accel` now detects AArch64 NEON at runtime and threads the SM3/SM4 hooks through x86_64/RISC-V dispatch while honouring the configuration knob `crypto.sm_intrinsics` (`auto`/`force-enable`/`force-disable`). When vector back-ends are absent the dispatcher still routes through the scalar RustCrypto path so benches and policy toggles behave consistently across hosts.【crates/iroha_crypto/src/sm.rs:702】【crates/iroha_crypto/src/sm.rs:733】
+### Norito схемасы және деректер үлгісінің беттері| Norito түрі / тұтынушы | Өкілдік | Шектеулер мен ескертпелер |
+|---------------------------------|----------------|---------------------|
+| `Sm3Digest` (`iroha_crypto::Sm3Digest`) | Жалаңаш: 32 байт блоб · JSON: бас әріпті он алтылық жол (`"4F4D..."`) | Канондық Norito кортежді орау `[u8; 32]`. JSON/жалаң декодтау ≠32 ұзындықты қабылдамайды. `sm_norito_roundtrip::sm3_digest_norito_roundtrip` арқылы бару-қайтулар. |
+| `Sm2PublicKey` / `Sm2Signature` | Multicodec префиксті блоктар (`0x1306` уақытша) | Ашық кілттер қысылмаған SEC1 нүктелерін кодтайды; қолтаңбалар DER талдау қорғаушылары бар `(r∥s)` (әрқайсысы 32 байт). |
+| `Sm4Key` | Жалаңаш: 16 байт блоб | Kotodama/CLI әсеріне ұшыраған қаптаманы нөлге келтіру. JSON сериялауы әдейі өткізілмейді; операторлар кілттерді блоктар (келісімшарттар) немесе CLI он алтылық (`--key-hex`) арқылы беруі керек. |
+| `sm4_gcm_seal/open` операндтары | 4 блоктан тұратын кортеж: `(key, nonce, aad, payload)` | Кілт = 16 байт; nonce = 12 байт; Тег ұзындығы 16 байтқа бекітілген. `(ciphertext, tag)` қайтарады; Kotodama/CLI hex және base64 көмекшілерін шығарады.【crates/ivm/tests/sm_syscalls.rs:728】 |
+| `sm4_ccm_seal/open` операндтары | 4 блоктан тұратын кортеж (кілт, бір рет емес, aad, пайдалы жүктеме) + `r14` ішіндегі тег ұзындығы | 7–13 байт емес; тег ұзындығы ∈ {4,6,8,10,12,14,16}. `sm` мүмкіндігі `sm-ccm` жалауының артында CCM көрсетеді. |
+| Kotodama ішкі белгілері (`sm::hash`, `sm::seal_gcm`, `sm::open_gcm`, …) | Жоғарыдағы SCALLs картасы | Енгізуді тексеру хост ережелерін көрсетеді; дұрыс емес өлшемдер `ExecutionError::Type` жоғарылайды. |
 
-### Norito Schema & Data-Model Surfaces
+Пайдаланудың жылдам анықтамасы:
+- **Келісімшарттардағы/сынақтардағы SM3 хэшингі:** `Sm3Digest::hash(b"...")` (Rust) немесе Kotodama `sm::hash(input_blob)`. JSON 64 он алтылық таңбаны күтеді.
+- **CLI арқылы SM4 AEAD:** `iroha tools crypto sm4 gcm-seal --key-hex <32 hex> --nonce-hex <24 hex> --plaintext-hex …` он алтылық/негізгі64 шифрлық мәтін+тег жұптарын береді. Сәйкес `gcm-open` арқылы шифрды шешіңіз.
+- **Multicodec жолдары:** SM2 ашық кілттері/қолтаңбалары `PublicKey::from_str`/`Signature::from_bytes` арқылы қабылданған көп негізді жолдан/қабылданады, Norito манифесттері мен тіркелгі идентификаторларына SM қол қоюшыларын тасымалдауға мүмкіндік береді.
 
-| Norito type / consumer | Representation | Constraints & notes |
-|------------------------|----------------|---------------------|
-| `Sm3Digest` (`iroha_crypto::Sm3Digest`) | Bare: 32-byte blob · JSON: uppercase hex string (`"4F4D..."`) | Canonical Norito tuple wrapping `[u8; 32]`. JSON/Bare decoding rejects lengths ≠ 32. Round-trips covered by `sm_norito_roundtrip::sm3_digest_norito_roundtrip`. |
-| `Sm2PublicKey` / `Sm2Signature` | Multicodec prefixed blobs (`0x1306` provisional) | Public keys encode uncompressed SEC1 points; signatures are `(r∥s)` (32 bytes each) with DER parsing guards. |
-| `Sm4Key` | Bare: 16-byte blob | Zeroizing wrapper exposed to Kotodama/CLI. JSON serialization is deliberately omitted; operators should pass keys via blobs (contracts) or CLI hex (`--key-hex`). |
-| `sm4_gcm_seal/open` operands | Tuple of 4 blobs: `(key, nonce, aad, payload)` | Key = 16 bytes; nonce = 12 bytes; tag length fixed at 16 bytes. Returns `(ciphertext, tag)`; Kotodama/CLI emit both hex and base64 helpers.【crates/ivm/tests/sm_syscalls.rs:728】 |
-| `sm4_ccm_seal/open` operands | Tuple of 4 blobs (key, nonce, aad, payload) + tag length in `r14` | Nonce 7–13 bytes; tag length ∈ {4,6,8,10,12,14,16}. `sm` feature exposes CCM behind `sm-ccm` flag. |
-| Kotodama intrinsics (`sm::hash`, `sm::seal_gcm`, `sm::open_gcm`, …) | Map to SCALLs above | Input validation mirrors host rules; malformed sizes raise `ExecutionError::Type`. |
+Деректер үлгісінің тұтынушылары SM4 кілттері мен тегтерін өтпелі блоктар ретінде қарастыруы керек; шынжырдағы шикі кілттерді ешқашан сақтамаңыз. Аудит қажет болғанда келісім-шарттар тек шифрлық мәтін/тег шығыстарын немесе алынған дайджесттерді (мысалы, кілттің SM3) сақтауы керек.
 
-Usage quick reference:
-- **SM3 hashing in contracts/tests:** `Sm3Digest::hash(b"...")` (Rust) or Kotodama `sm::hash(input_blob)`. JSON expects 64 hex characters.
-- **SM4 AEAD via CLI:** `iroha tools crypto sm4 gcm-seal --key-hex <32 hex> --nonce-hex <24 hex> --plaintext-hex …` yields hex/base64 ciphertext+tag pairs. Decrypt with matching `gcm-open`.
-- **Multicodec strings:** SM2 public keys/signatures parse from/to the multibase string accepted by `PublicKey::from_str`/`Signature::from_bytes`, enabling Norito manifests and account IDs to carry SM signatories.
-
-Data-model consumers should treat SM4 keys and tags as transient blobs; never persist raw keys on-chain. Contracts should store only ciphertext/tag outputs or derived digests (e.g., SM3 of the key) when auditing is required.
-
-### Supply-Chain & Licensing
-| Component | License | Mitigation |
-|-----------|---------|-----------|
-| `sm2`, `sm3`, `sm4` | Apache-2.0 / MIT | Track upstream commits, vendor if lockstep releases required, schedule third-party audit before validator signing GA. |
-| `rfc6979` | Apache-2.0 / MIT | Already used in other algorithms; confirm deterministic `k` binding with SM3 digest. |
-| Optional OpenSSL/Tongsuo | Apache-2.0 / BSD-style | Keep behind `sm-ffi-openssl` feature, require explicit operator opt-in and packaging checklist. |
-
-### Feature Flags & Ownership
-| Surface | Default | Maintainer | Notes |
+### Жеткізу тізбегі және лицензиялау
+| Құрамдас | Лицензия | Жеңілдету |
+|----------|---------|-----------|
+| `sm2`, `sm3`, `sm4` | Apache-2.0 / MIT | Валидатор GA-ға қол қоймас бұрын, жоғары ағындық міндеттемелерді бақылаңыз, егер lockstep шығарылымдары қажет болса, жеткізуші, үшінші тарап аудитін жоспарлаңыз. |
+| `rfc6979` | Apache-2.0 / MIT | Басқа алгоритмдерде бұрыннан қолданылған; SM3 дайджестімен детерминирленген `k` байланысуын растаңыз. |
+| Қосымша OpenSSL/Tongsuo | Apache-2.0 / BSD стиліндегі | `sm-ffi-openssl` мүмкіндігін артта қалдырыңыз, оператордың нақты қосылуын және қаптаманы тексеру тізімін талап етеді. |### Функция жалаушалары және иелік
+| Беткі | Әдепкі | Жетекші | Ескертпелер |
 |---------|---------|------------|-------|
-| `iroha_crypto/sm-core`, `sm-ccm`, `sm` | Off | Crypto WG | Enables RustCrypto SM primitives; `sm` bundles CCM helpers for clients that require authenticated encryption. |
-| `ivm/sm` | Off | IVM Core Team | Builds SM syscalls (`sm3_hash`, `sm2_verify`, `sm4_gcm_*`, `sm4_ccm_*`). Host gating derives from `crypto.allowed_signing` (presence of `sm2`). |
-| `iroha_crypto/sm_proptest` | Off | QA / Crypto WG | Property-test harness covering malformed signatures/tags. Enabled only in extended CI. |
-| `crypto.allowed_signing` + `default_hash` | `["ed25519"]`, `blake2b-256` | Config WG / Operators WG | Presence of `sm2` plus `sm3-256` hash enables SM syscalls/signatures; removing `sm2` returns to verify-only mode. |
-| Optional `sm-ffi-openssl` (preview) | Off | Platform Ops | Placeholder feature for OpenSSL/Tongsuo provider integration; remains disabled until certification & packaging SOPs land. |
+| `iroha_crypto/sm-core`, `sm-ccm`, `sm` | Өшірулі | Crypto WG | RustCrypto SM примитивтерін қосады; `sm` аутентификацияланған шифрлауды қажет ететін клиенттерге арналған CCM көмекшілерін жинақтайды. |
+| `ivm/sm` | Өшірулі | IVM Негізгі топ | SM жүйе қоңырауларын құрастырады (`sm3_hash`, `sm2_verify`, `sm4_gcm_*`, `sm4_ccm_*`). Хост ысырмасы `crypto.allowed_signing` (`sm2` болуы) арқылы алынған. |
+| `iroha_crypto/sm_proptest` | Өшірулі | QA / Crypto WG | Қате пішінделген қолтаңбаларды/тегтерді қамтитын сипат сынағы. Тек кеңейтілген CI жүйесінде қосылған. |
+| `crypto.allowed_signing` + `default_hash` | `["ed25519"]`, `blake2b-256` | ЖТ конфигурациялау / Операторлар ЖТ | `sm2` плюс `sm3-256` хэшінің болуы SM жүйе қоңырауларын/қолтаңбаларын қосады; `sm2` жою тек тексеру режиміне қайтарылады. |
+| Қосымша `sm-ffi-openssl` (алдын ала қарау) | Өшірулі | Platform Ops | OpenSSL/Tongsuo провайдерін біріктіру үшін толтырғыш мүмкіндігі; сертификаттау және орау SOPs жерге жеткенше өшірілген күйінде қалады. |
 
-Network policy now exposes `network.require_sm_handshake_match` and
-`network.require_sm_openssl_preview_match` (both default to `true`). Clearing either flag allows
-mixed deployments where Ed25519-only observers connect to SM-enabled validators; mismatches are
-logged at `WARN`, but consensus nodes should keep the defaults enabled to prevent accidental
-divergence between SM-aware and SM-disabled peers.
-The CLI surfaces these toggles via `iroha_cli app sorafs handshake update
---allow-sm-handshake-mismatch` and `--allow-sm-openssl-preview-mismatch`, or the matching `--require-*`
-flags to restore strict enforcement.
+Желі саясаты енді `network.require_sm_handshake_match` және
+`network.require_sm_openssl_preview_match` (екеуі де әдепкі бойынша `true`). Кез келген жалаушаны тазалау мүмкіндік береді
+тек Ed25519 бақылаушылары SM қосылған валидаторларға қосылатын аралас орналастырулар; сәйкессіздіктер болып табылады
+`WARN` сайтында тіркелді, бірақ консенсус түйіндері кездейсоқтықты болдырмау үшін әдепкі параметрлерді қосулы ұстауы керек.
+SM-хабардар және SM-мүгедек құрдастар арасындағы алшақтық.
+CLI бұл ауыстырып-қосқыштарды `iroha_cli қолданбасы sorafs қол алысу жаңартуы арқылы көрсетеді
+--allow-sm-handshake- mismatch` and `--allow-sm-openssl-алдын ала қарау-үйлесімсіздік`, or the matching `--талап ету-*`
+қатаң орындауды қалпына келтіру үшін жалаулар.#### OpenSSL/Tongsuo алдын ала қарау (`sm-ffi-openssl`)
+- **Ауқым.** OpenSSL орындау уақытының қолжетімділігін растайтын және OpenSSL қолдайтын SM3 хэштеуін, SM2 растауын және SM4-GCM шифрлауын/шифрын ашатын тек алдын ала қарауға арналған провайдерді (`OpenSslProvider`) құрастырады. Консенсус екілік файлдары RustCrypto жолын пайдалануды жалғастыруы керек; FFI сервері шеткі тексеру/қол қою пилоттары үшін қатаң түрде қосылады.
+- **Алғышарттарды құрастырыңыз.** `cargo build -p iroha_crypto --features "sm sm-ffi-openssl"` көмегімен құрастырыңыз және OpenSSL/Tongsuo 3.0+ (SM2/SM3/SM4 қолдауы бар `libcrypto`) қарсы құралдар тізбегі сілтемелерін қамтамасыз етіңіз. Статикалық байланыстыру ұсынылмайды; оператор басқаратын динамикалық кітапханаларды таңдайды.
+- **Әзірлеуші ​​түтінін тексеру.** `cargo check -p iroha_crypto --features "sm sm-ffi-openssl"`, одан кейін `cargo test -p iroha_crypto --features "sm sm-ffi-openssl" --test sm_openssl_smoke -- --nocapture` орындау үшін `scripts/sm_openssl_smoke.sh` іске қосыңыз; көмекші OpenSSL ≥3 әзірлеу тақырыптары қолжетімсіз болғанда (немесе `pkg-config` жоқ) автоматты түрде өткізіп жібереді және әзірлеушілер SM2 растауының Rust іске қосылғанын немесе қайта оралғанын көре алатындай түтіннің шығуын көрсетеді.
+- **Тотқа қарсы тірек.** `openssl_sm` модулі енді алдын ала қарау ауыстырып-қосқыштары мен жарамсыз кілт/белгісіз/тег ұзындықтарын қамтитын құрылымдық қателері бар OpenSSL арқылы SM3 хэштеу, SM2 растау (ZA алдын ала хэш + SM2 ECDSA) және SM4 GCM шифрлау/шифрын ашуды бағыттайды; SM4 CCM қосымша FFI қондырылғанша, тек таза тот болып қалады.
+- **Өткізіп жіберу әрекеті.** OpenSSL ≥3.0 тақырыптары немесе кітапханалары болмаған кезде түтін сынағы өткізіп жіберу баннерін басып шығарады (`-- --nocapture` арқылы), бірақ әлі де сәтті шығады, осылайша CI ортадағы бос орындарды шынайы регрессиялардан ажырата алады.
+- **Орындау уақытының қоршаулары.** OpenSSL алдын ала қарауы әдепкі бойынша өшірілген; FFI жолын қолданбас бұрын оны конфигурация (`crypto.enable_sm_openssl_preview` / `OpenSslProvider::set_preview_enabled(true)`) арқылы қосыңыз. Өндіріс кластерлерін тек тексеру режимінде ұстаңыз (`sm2` нұсқасын `allowed_signing` ішінен алып тастаңыз), провайдер бітірмейінше, RustCrypto детерминирленген резервіне сеніңіз және қол қою пилоттарын оқшауланған орталармен шектеңіз.
+- **Қаптаманы тексеру тізімі.** Орналастыру манифесттеріндегі провайдер нұсқасын, орнату жолын және тұтастық хэштерін құжаттаңыз. Операторлар бекітілген OpenSSL/Tongsuo құрылымын орнататын орнату сценарийлерін қамтамасыз етуі керек, оны ОЖ сенімді қоймасында тіркейді (қажет болса) және жаңартуларды техникалық қызмет көрсету терезелерінің артына бекітеді.
+- **Келесі қадамдар.** Болашақ кезеңдерге детерминирленген SM4 CCM FFI байланыстары, CI түтін тапсырмалары (`ci/check_sm_openssl_stub.sh` қараңыз) және телеметрия қосылады. `roadmap.md` ішіндегі SM-P3.1.x астында орындалу барысын бақылаңыз.
 
-#### OpenSSL/Tongsuo preview (`sm-ffi-openssl`)
-- **Scope.** Builds a preview-only provider shim (`OpenSslProvider`) that validates OpenSSL runtime availability and exposes OpenSSL-backed SM3 hashing, SM2 verification, and SM4-GCM encrypt/decrypt while remaining opt-in. Consensus binaries must continue using the RustCrypto path; the FFI backend is strictly opt-in for edge verification/signing pilots.
-- **Build prerequisites.** Compile with `cargo build -p iroha_crypto --features "sm sm-ffi-openssl"` and ensure the toolchain links against OpenSSL/Tongsuo 3.0+ (`libcrypto` with SM2/SM3/SM4 support). Static linking is discouraged; prefer dynamic libraries managed by the operator.
-- **Developer smoke test.** Run `scripts/sm_openssl_smoke.sh` to execute `cargo check -p iroha_crypto --features "sm sm-ffi-openssl"` followed by `cargo test -p iroha_crypto --features "sm sm-ffi-openssl" --test sm_openssl_smoke -- --nocapture`; the helper skips automatically when OpenSSL ≥ 3 development headers are unavailable (or `pkg-config` is missing) and surfaces smoke output so developers can see whether SM2 verification ran or fell back to the Rust implementation.
-- **Rust scaffolding.** The `openssl_sm` module now routes SM3 hashing, SM2 verification (ZA prehash + SM2 ECDSA), and SM4 GCM encrypt/decrypt through OpenSSL with structured errors covering preview toggles and invalid key/nonce/tag lengths; SM4 CCM remains pure-Rust-only until additional FFI shims land.
-- **Skip behaviour.** When OpenSSL ≥ 3.0 headers or libraries are absent the smoke test prints a skip banner (via `-- --nocapture`) but still exits successfully so CI can distinguish environment gaps from genuine regressions.
-- **Runtime guardrails.** The OpenSSL preview is disabled by default; enable it via configuration (`crypto.enable_sm_openssl_preview` / `OpenSslProvider::set_preview_enabled(true)`) before attempting to use the FFI path. Keep production clusters in verify-only mode (omit `sm2` from `allowed_signing`) until the provider graduates, rely on the deterministic RustCrypto fallback, and confine signing pilots to isolated environments.
-- **Packaging checklist.** Document the provider version, installation path, and integrity hashes in deployment manifests. Operators must provide installation scripts that install the approved OpenSSL/Tongsuo build, register it with the OS trust store (if required), and pin upgrades behind maintenance windows.
-- **Next steps.** Future milestones add deterministic SM4 CCM FFI bindings, CI smoke jobs (see `ci/check_sm_openssl_stub.sh`), and telemetry. Track progress under SM-P3.1.x in `roadmap.md`.
+#### Кодты иелену суреті
+- **Crypto WG:** `iroha_crypto`, SM құрылғылары, сәйкестік құжаттамасы.
+- **IVM Core:** жүйені іске асыру, Kotodama ішкі элементтері, хост шлюзі.
+- **Config WG:** קונפיגורציית `crypto.allowed_signing`/`default_hash`, ולידציית מניפסט, חיובטט.
+- **SDK бағдарламасы:** CLI/Kagami/SDK арқылы SM хабардар құрал, ортақ құрылғылар.
+- **Platform Ops & Performance WG:** жеделдету ілмектері, телеметрия, операторды қосу.
 
-#### Code Ownership Snapshot
-- **Crypto WG:** `iroha_crypto`, SM fixtures, compliance documentation.
-- **IVM Core:** syscall implementations, Kotodama intrinsics, host gating.
-- **Config WG:** קונפיגורציית `crypto.allowed_signing`/`default_hash`, ולידציית מניפסט, חיווט קבלה.
-- **SDK Program:** SM-aware tooling across CLI/Kagami/SDKs, shared fixtures.
-- **Platform Ops & Performance WG:** acceleration hooks, telemetry, operator enablement.
+## Конфигурацияны көшіру кітабыТек Ed25519 желілерінен SM қосылған орналастыруларға көшетін операторлар
+кезеңдік процесті қадағалаңыз
+[`sm_config_migration.md`](sm_config_migration.md). Нұсқаулық құрылысты қамтиды
+валидация, `iroha_config` қабаттау (`defaults` → `user` → `actual`), генезис
+`kagami` қайта анықтау арқылы регенерация (мысалы, `kagami genesis generate --allowed-signing sm2 --default-hash sm3-256`), ұшу алдындағы тексеру және кері қайтару
+конфигурация суреттері мен манифестері барлық жерде тұрақты болып қалатындай жоспарлау
+флот.
 
-## Configuration Migration Playbook
+## Детерминистік саясат
+- SDK және қосымша хостқа қол қоюдағы барлық SM2 қол қою жолдары үшін RFC6979-дан алынған нұқсандарды орындау; тексерушілер тек қана канондық r∥s кодтауларын қабылдайды.
+- Басқару-жазықтық байланыс (ағындық) Ed25519 қалады; Басқару кеңейтуді мақұлдамаса, SM2 деректер жазықтығы қолтаңбаларымен шектеледі.
+- Орындалу уақыты мүмкіндігін анықтау және бағдарламалық құралды қалпына келтіру арқылы детерминирленген тексеру/хэш операцияларымен шектелген ішкі элементтер (ARM SM3/SM4).
 
-Operators moving from Ed25519-only networks to SM-enabled deployments should
-follow the staged process in
-[`sm_config_migration.md`](sm_config_migration.md). The guide covers build
-validation, `iroha_config` layering (`defaults` → `user` → `actual`), genesis
-regeneration via `kagami` overrides (for example `kagami genesis generate --allowed-signing sm2 --default-hash sm3-256`), pre-flight validation, and rollback
-planning so configuration snapshots and manifests stay consistent across the
-fleet.
+## Norito және кодтау жоспары
+1. `iroha_data_model` форматындағы алгоритм сандарын `Sm2PublicKey`, `Sm2Signature`, `Sm3Digest`, `Sm4Key` арқылы кеңейтіңіз.
+2. DER анық еместігін болдырмау үшін SM2 қолтаңбаларын үлкен-енді бекітілген ені `r∥s` массивтері (32+32 байт) ретінде сериялаңыз; адаптерлерде өңделген түрлендірулер. *(Орындалды: `Sm2Signature` көмекшілерінде іске асырылды; Norito/JSON айналмалы сапарлары орнында.)*
+3. Егер мультипішімдерді пайдалансаңыз, мультикодек идентификаторларын (`sm3-256`, `sm2-pub`, `sm4-key`) тіркеңіз, құрылғылар мен құжаттарды жаңартыңыз. *(Барысы: `sm2-pub` уақытша коды `0x1306` енді алынған кілттермен расталды; SM3/SM4 кодтары соңғы тағайындауды күтуде, `sm_known_answers.toml` арқылы бақыланады.)*
+4. Айналмалы сапарларды және дұрыс емес кодтауларды қабылдамауды қамтитын Norito алтын сынақтарын жаңартыңыз (қысқа/ұзын r немесе s, жарамсыз қисық параметрлері).## Хост пен VM біріктіру жоспары (SM-2)
+1. Қолданыстағы ГОСТ хэш-шимінің көшірмелерін көрсететін `sm3_hash` хост жағындағы жүйені іске қосыңыз; `Sm3Digest::hash` қайта пайдаланыңыз және детерминирленген қате жолдарын көрсетіңіз. *(Қонды: хост Blob TLV қайтарады; `DefaultHost` іске асыру және `sm_syscalls.rs` регрессиясын қараңыз.)*
+2. VM жүйесін шақыру кестесін `sm2_verify` көмегімен кеңейтіңіз, ол канондық r∥ қолтаңбаларын қабылдайды, ерекшеленетін идентификаторларды тексереді және детерминирленген қайтару кодтарына қателерді салыстырады. *(Орындалды: хост + Kotodama ішкі деректер қайтарылуы `1/0`; регрессия жинағы енді қысқартылған қолтаңбаларды, дұрыс емес ашық кілттерді, блб емес TLVs және UTF-8/бос/сәйкес емес Hyperledger пайдалы жүктемелерді қамтиды*)
+3. `sm4_gcm_seal`/`sm4_gcm_open` (және міндетті түрде CCM) жүйелік қоңырауларды анық емес/тег өлшемімен қамтамасыз етіңіз (RFC 8998). *(Орындалды: GCM бекітілген 12 байт нонстарды + 16 байт тегтерді пайдаланады; CCM `r14` арқылы басқарылатын {4,6,8,10,12,14,16} тегтері бар 7–13 байт нонстарды қолдайды; Kotodama018 сияқты Kotodama018 ретінде басқарылады. `sm::seal_ccm/open_ccm`.) Қайта пайдаланбау саясатын әзірлеуші анықтамалығында құжаттаңыз.*
+4. Оң және теріс жағдайларды қамтитын Kotodama сым түтін келісім-шарттары және IVM біріктіру сынақтары (өзгертілген тегтер, дұрыс емес қолтаңбалар, қолдау көрсетілмейтін алгоритмдер). *(SM3/SM2/SM4 үшін хост регрессияларын шағылыстыру `crates/ivm/tests/kotodama_sm_syscalls.rs` арқылы орындалды.)*
+5. Жүйені шақырудың рұқсат етілген тізімдерін, саясаттарын және ABI құжаттарын (`crates/ivm/docs/syscalls.md`) жаңартыңыз және жаңа жазбаларды қосқаннан кейін хэштелген манифесттерді жаңартыңыз.
 
-## Deterministic Policy
-- Enforce RFC6979-derived nonces for all SM2 signing paths in SDKs and optional host signing; verifiers accept canonical r∥s encodings only.
-- Control-plane communication (streaming) remains Ed25519; SM2 limited to data-plane signatures unless governance approves expansion.
-- Intrinsics (ARM SM3/SM4) restricted to deterministic verification/hash operations with runtime feature detection and software fallback.
+### Хост және VM біріктіру күйі
+- DefaultHost, CoreHost және WsvHost SM3/SM2/SM4 жүйелік қоңырауларын көрсетеді және оларды `sm_enabled` жүйесінде бекітеді, орындау уақыты жалаушасы болған кезде `PermissionDenied` қайтарады. жалған.【crates/ivm/src/host.rs:915】【crates/ivm/src/core_host.rs:833】【crates/ivm/src/mock_wsv.rs:2307】
+- `crypto.allowed_signing` шлюзі құбыр/орындаушы/күй арқылы бұрандалы, сондықтан өндірістік түйіндер конфигурация арқылы анықтауды таңдайды; `sm2` қосу SM көмекшісінің қолжетімділігін ауыстырып қосады.`【crates/iroha_core/src/smartcontracts/ivm/host.rs:170】【crates/iroha_core/src/state.rs:7673】【crator/iroha】【crator/8:38】
+- SM3 хэштеу, SM2 тексеру және SM4 GCM/CCM мөрі/ашық үшін қосылған және өшірілген жолдарды (DefaultHost/CoreHost/WsvHost) регрессияны қамту жаттығулары ағындары.【crates/ivm/tests/sm_syscalls.rs:129】【crates/ivm/tests/sm_syscalls.rs:733】【crates/ivm/tests/sm_syscalls.rs:1036】
 
-## Norito & Encoding Plan
-1. Extend algorithm enums in `iroha_data_model` with `Sm2PublicKey`, `Sm2Signature`, `Sm3Digest`, `Sm4Key`.
-2. Serialize SM2 signatures as big-endian fixed-width `r∥s` arrays (32+32 bytes) to avoid DER ambiguities; conversions handled in adapters. *(Done: implemented in `Sm2Signature` helpers; Norito/JSON round-trips in place.)*
-3. Register multicodec identifiers (`sm3-256`, `sm2-pub`, `sm4-key`) if using multiformats, update fixtures and docs. *(Progress: `sm2-pub` provisional code `0x1306` now validated with derived keys; SM3/SM4 codes pending final assignment, tracked via `sm_known_answers.toml`.)*
-4. Update Norito golden tests covering roundtrips and rejection of malformed encodings (short/long r or s, invalid curve parameters).
+## Конфигурация ағындары
+- `crypto.allowed_signing`, `crypto.default_hash`, `crypto.sm2_distid_default` және қосымша `crypto.enable_sm_openssl_preview` `iroha_config` ішіне қосыңыз. Деректер моделінің сантехникасы криптографиялық жәшіктің айнасын көрсететініне көз жеткізіңіз (`iroha_data_model` `sm` → `iroha_crypto/sm` көрсетеді).
+- Манифесттер/генезис файлдары рұқсат етілген алгоритмдерді анықтау үшін қабылдау саясатына сымды конфигурациялау; басқару жазықтығы әдепкі бойынша Ed25519 болып қалады.### CLI және SDK жұмысы (SM-3)
+1. **Torii CLI** (`crates/iroha_cli`): SM2 кілтін/импортын/экспортын (белгілі), SM3 хэштеу көмекшілерін және SM4 AEAD шифрлау/шифрын шешу пәрмендерін қосыңыз. Интерактивті сұраулар мен құжаттарды жаңартыңыз.
+2. **Жасау құралы** (`xtask`, `scripts/`): манифесттерге рұқсат етілген қол қою алгоритмдері мен әдепкі хэштерді жариялауға мүмкіндік береді, егер SM сәйкес конфигурациялау түймелерінсіз қосылса, тез істен шығады. *(Орындалды: `RawGenesisTransaction` қазір `crypto` блогы бар `default_hash`/`allowed_signing`/`sm2_distid_default`; `ManifestCrypto::validate` және `ManifestCrypto::validate` және I10222X және Kotodama параметрлерін қайтару әдепкі мәндер/генезис манифесті суретті жарнамалайды.)*
+3. **SDK беттері**:
+   - Rust (`iroha_client`): SM2 қол қою/тексеру көмекшілерін, SM3 хэштеуін, детерминирленген әдепкі мәндері бар SM4 AEAD орауыштарын көрсетіңіз.
+   - Python/JS/Swift: Rust API айнасы; тіларалық сынақтар үшін `sm_known_answers.toml` ішіндегі кезеңдік құрылғыларды қайта пайдаланыңыз.
+4. CLI/SDK жылдам іске қосуларында SM қосу үшін оператордың жұмыс процесін құжаттаңыз және JSON/YAML конфигурацияларының жаңа алгоритм тегтерін қабылдайтынына көз жеткізіңіз.
 
-## Host & VM Integration Plan (SM-2)
-1. Implement host-side `sm3_hash` syscall mirroring the existing GOST hash shim; reuse `Sm3Digest::hash` and expose deterministic error paths. *(Landed: host returns Blob TLV; see `DefaultHost` implementation and `sm_syscalls.rs` regression.)*
-2. Extend the VM syscall table with `sm2_verify` that accepts canonical r∥s signatures, validates distinguishing IDs, and maps failures to deterministic return codes. *(Done: host + Kotodama intrinsics return `1/0`; regression suite now covers truncated signatures, malformed public keys, non-blob TLVs, and UTF-8/empty/mismatched `distid` payloads.)*
-3. Provide `sm4_gcm_seal`/`sm4_gcm_open` (and optionally CCM) syscalls with explicit nonce/tag sizing (RFC 8998). *(Done: GCM uses fixed 12-byte nonces + 16-byte tags; CCM supports 7–13 byte nonces with tag lengths {4,6,8,10,12,14,16} controlled via `r14`; Kotodama exposes these as `sm::seal_gcm/open_gcm` and `sm::seal_ccm/open_ccm`.) Document nonce reuse policy in the developer handbook.*
-4. Wire Kotodama smoke contracts and IVM integration tests covering positive and negative cases (altered tags, malformed signatures, unsupported algorithms). *(Done via `crates/ivm/tests/kotodama_sm_syscalls.rs` mirroring host regressions for SM3/SM2/SM4.)*
-5. Update syscall allowlists, policies, and ABI docs (`crates/ivm/docs/syscalls.md`) and refresh hashed manifests after adding the new entries.
+#### CLI барысы
+- `cargo run -p iroha_cli --features sm -- crypto sm2 keygen --distid CN12345678901234` енді `client.toml` үзіндісімен (`public_key_config`, `private_key_hex`, Hyperledger) бірге SM2 кілттер жұбын сипаттайтын JSON пайдалы жүктемесін шығарады. Пәрмен детерминирленген құру үшін `--seed-hex` қабылдайды және хосттар пайдаланатын RFC 6979 туындысын көрсетеді.
+- `cargo xtask sm-operator-snippet --distid CN12345678901234` бір қадамда бірдей `sm2-key.json`/`client-sm2.toml` шығыстарын жаза отырып, keygen/экспорт ағынын орайды. `--json-out <path|->` / `--snippet-out <path|->` файлдарын қайта бағыттау немесе оларды stdout бағдарламасына ағынмен ағынмен автоматтандыру үшін `jq` тәуелділігін жойыңыз.
+- `iroha_cli tools crypto sm2 import --private-key-hex <hex> [--distid ...]` бар материалдан бірдей метадеректерді алады, осылайша операторлар қабылдау алдында ерекшеленетін идентификаторларды тексере алады.
+- `iroha_cli tools crypto sm2 export --private-key-hex <hex> --emit-json` конфигурация үзіндісін (соның ішінде `allowed_signing`/`sm2_distid_default` нұсқаулығын) басып шығарады және таңдау бойынша сценарий жасау үшін JSON кілті тізімдемесін қайта шығарады.
+- `iroha_cli tools crypto sm3 hash --data <string>` ерікті пайдалы жүктемелерді хэштейді; `--data-hex` / `--file` екілік кірістерді қамтиды және пәрмен манифест құралына арналған алтылық және базалық64 дайджесттерін хабарлайды.
+- `iroha_cli tools crypto sm4 gcm-seal --key-hex <KEY> --nonce-hex <NONCE> --plaintext-hex <PT>` (және `gcm-open`) хост SM4-GCM көмекшілерін және `ciphertext_hex`/`tag_hex` немесе ашық мәтін пайдалы жүктемелерін орап алады. `sm4 ccm-seal` / `sm4 ccm-open` бір рет емес ұзындығы (7–13 байт) және тег ұзындығы (4,6,8,10,12,14,16) валидациясы бар CCM үшін бірдей UX қамтамасыз етеді; екі пәрмен де дискіге шикі байттарды міндетті түрде шығарады.## Тестілеу стратегиясы
+### Бірлік/белгілі жауап тесттері
+- SM3 үшін GM/T 0004 & GB/T 32905 векторлары (мысалы, `"abc"`).
+- SM4 үшін GM/T 0002 & RFC 8998 векторлары (блок + GCM/CCM).
+- SM2 үшін GM/T 0003/GB/T 32918 мысалдары (Z-мәні, қолтаңбаны тексеру), соның ішінде `ALICE123@YAHOO.COM` идентификаторы бар 1-қосымша.
+- Аралық орнату файлы: `crates/iroha_crypto/tests/fixtures/sm_known_answers.toml`.
+- Wycheproof туынды SM2 регрессия жинағы (`crates/iroha_crypto/tests/sm2_wycheproof.rs`) енді бит-флип, хабарды бұрмалау және қысқартылған қолтаңба негативтері бар детерминирленген құрылғыларды (Қосымша D, SDK тұқымдары) қабаттастыратын 52 жағдайда корпусты қамтиды. Залалсыздандырылған JSON `crates/iroha_crypto/tests/fixtures/wycheproof_sm2.json` ішінде тұрады және `sm2_fuzz.rs` оны тікелей тұтынады, осылайша бақытты жол және бұрмалау сценарийлері анық емес/сипатты іске қосулар бойынша тураланады. 벡터들은 표준 곡선뿐만 아니라 Қосымша 영역도 다루며, 필요 시 내장 `Sm2PublicKey` Big 백업 루틴이 추적을 완료합니다.
+- `cargo xtask sm-wycheproof-sync --input <wycheproof-sm2.json>` (немесе `--input-url <https://…>`) кез келген жоғары ағынның түсуін (генератор тегі міндетті емес) детерминирленген түрде қысқартады және `crates/iroha_crypto/tests/fixtures/wycheproof_sm2.json` қайта жазады. C2SP ресми корпусты жариялағанша, шанышқыларды қолмен жүктеп алып, оларды көмекші арқылы беріңіз; ол кілттерді, сандарды және жалаушаларды қалыпқа келтіреді, осылайша рецензенттер айырмашылықтарды есептей алады.
+- `crates/iroha_data_model/tests/sm_norito_roundtrip.rs` ішінде расталған SM2/SM3 Norito айналма сапарлары.
+- `crates/ivm/tests/sm_syscalls.rs` жүйесіндегі SM3 хост жүйесін шақыру регрессиясы (SM мүмкіндігі).
+- SM2 `crates/ivm/tests/sm_syscalls.rs` жүйесінде жүйе шақыруының регрессиясын тексереді (сәттілік + сәтсіздік жағдайлары).
 
-### Host & VM Integration Status
-- DefaultHost, CoreHost, and WsvHost expose the SM3/SM2/SM4 syscalls and gate them on `sm_enabled`, returning `PermissionDenied` when the runtime flag is false.【crates/ivm/src/host.rs:915】【crates/ivm/src/core_host.rs:833】【crates/ivm/src/mock_wsv.rs:2307】
-- `crypto.allowed_signing` gating is threaded through pipeline/executor/state so production nodes opt in deterministically via configuration; adding `sm2` toggles SM helper availability.`【crates/iroha_core/src/smartcontracts/ivm/host.rs:170】【crates/iroha_core/src/state.rs:7673】【crates/iroha_core/src/executor.rs:683】
-- Regression coverage exercises both enabled and disabled paths (DefaultHost/CoreHost/WsvHost) for SM3 hashing, SM2 verification, and SM4 GCM/CCM seal/open flows.【crates/ivm/tests/sm_syscalls.rs:129】【crates/ivm/tests/sm_syscalls.rs:733】【crates/ivm/tests/sm_syscalls.rs:1036】
+### Меншік және регрессия сынақтары
+- Жарамсыз қисықтарды, канондық емес r/s және бейтараптарды қайта пайдалануды қабылдамайтын SM2 сұрауы. *(`crates/iroha_crypto/tests/sm2_fuzz.rs` нұсқасында қол жетімді, `sm_proptest` артында орналасқан; `cargo test -p iroha_crypto --features "sm sm_proptest"` арқылы қосыңыз.)*
+- Түрлі режимдерге бейімделген Wycheproof SM4 векторлары (блок/AES-режимі); SM2 толықтырулары үшін жоғары ағынды бақылаңыз. `sm3_sm4_vectors.rs` енді GCM және CCM үшін тег биттерін ауыстыруды, кесілген тегтерді және шифрлық мәтінді бұрмалауды жүзеге асырады.
 
-## Configuration Threads
-- Add `crypto.allowed_signing`, `crypto.default_hash`, `crypto.sm2_distid_default`, and the optional `crypto.enable_sm_openssl_preview` to `iroha_config`. Ensure data-model feature plumbing mirrors the crypto crate (`iroha_data_model` exposes `sm` → `iroha_crypto/sm`).
-- Wire config to admission policies so manifests/genesis files define allowable algorithms; control-plane remains Ed25519 by default.
-
-### CLI & SDK Work (SM-3)
-1. **Torii CLI** (`crates/iroha_cli`): add SM2 keygen/import/export (distid aware), SM3 hashing helpers, and SM4 AEAD encrypt/decrypt commands. Update interactive prompts and docs.
-2. **Genesis tooling** (`xtask`, `scripts/`): allow manifests to declare allowed signing algorithms and default hashes, fail fast if SM is enabled without corresponding config knobs. *(Done: `RawGenesisTransaction` now carries a `crypto` block with `default_hash`/`allowed_signing`/`sm2_distid_default`; `ManifestCrypto::validate` and `kagami genesis validate` reject inconsistent SM settings and defaults/genesis manifest advertises the snapshot.)*
-3. **SDK surfaces**:
-   - Rust (`iroha_client`): expose SM2 signing/verification helpers, SM3 hashing, SM4 AEAD wrappers with deterministic defaults.
-   - Python/JS/Swift: mirror the Rust API; reuse staged fixtures in `sm_known_answers.toml` for cross-language tests.
-4. Document operator workflow for enabling SM in CLI/SDK quickstarts and ensure JSON/YAML configs accept the new algorithm tags.
-
-#### CLI progress
-- `cargo run -p iroha_cli --features sm -- crypto sm2 keygen --distid CN12345678901234` now emits a JSON payload describing the SM2 key pair together with a `client.toml` snippet (`public_key_config`, `private_key_hex`, `distid`). The command accepts `--seed-hex` for deterministic generation and mirrors the RFC 6979 derivation used by hosts.
-- `cargo xtask sm-operator-snippet --distid CN12345678901234` wraps the keygen/export flow, writing the same `sm2-key.json`/`client-sm2.toml` outputs in one step. Use `--json-out <path|->` / `--snippet-out <path|->` to redirect files or stream them to stdout, removing the `jq` dependency for automation.
-- `iroha_cli tools crypto sm2 import --private-key-hex <hex> [--distid ...]` derives the same metadata from existing material so operators can validate distinguishing IDs before admission.
-- `iroha_cli tools crypto sm2 export --private-key-hex <hex> --emit-json` prints the config snippet (including `allowed_signing`/`sm2_distid_default` guidance) and optionally re-emits the JSON key inventory for scripting.
-- `iroha_cli tools crypto sm3 hash --data <string>` hashes arbitrary payloads; `--data-hex` / `--file` cover binary inputs and the command reports both hex and base64 digests for manifest tooling.
-- `iroha_cli tools crypto sm4 gcm-seal --key-hex <KEY> --nonce-hex <NONCE> --plaintext-hex <PT>` (and `gcm-open`) wrap the host SM4-GCM helpers and surface `ciphertext_hex`/`tag_hex` or plaintext payloads. `sm4 ccm-seal` / `sm4 ccm-open` provide the same UX for CCM with nonce length (7–13 bytes) and tag length (4,6,8,10,12,14,16) validation baked in; both commands optionally emit raw bytes to disk.
-
-## Testing Strategy
-### Unit/Known Answer Tests
-- GM/T 0004 & GB/T 32905 vectors for SM3 (e.g., `"abc"`).
-- GM/T 0002 & RFC 8998 vectors for SM4 (block + GCM/CCM).
-- GM/T 0003/GB/T 32918 examples for SM2 (Z-value, signature verification), including Annex Example 1 with ID `ALICE123@YAHOO.COM`.
-- Interim fixture staging file: `crates/iroha_crypto/tests/fixtures/sm_known_answers.toml`.
-- Wycheproof-derived SM2 regression suite (`crates/iroha_crypto/tests/sm2_wycheproof.rs`) now carries a 52-case corpus that layers deterministic fixtures (Annex D, SDK seeds) with bit-flip, message-tamper, and truncated-signature negatives. The sanitized JSON lives in `crates/iroha_crypto/tests/fixtures/wycheproof_sm2.json`, and `sm2_fuzz.rs` consumes it directly so both happy-path and tamper scenarios stay aligned across fuzz/property runs. 벡터들은 표준 곡선뿐만 아니라 Annex 영역도 다루며, 필요 시 내장 `Sm2PublicKey` 검증 이후 BigInt 백업 루틴이 추적을 완료합니다.
-- `cargo xtask sm-wycheproof-sync --input <wycheproof-sm2.json>` (or `--input-url <https://…>`) deterministically trims any upstream drop (generator tag optional) and rewrites `crates/iroha_crypto/tests/fixtures/wycheproof_sm2.json`. Until C2SP publishes the official corpus, download forks manually and feed them through the helper; it normalises keys, counts, and flags so reviewers can reason over diffs.
-- SM2/SM3 Norito round-trips validated in `crates/iroha_data_model/tests/sm_norito_roundtrip.rs`.
-- SM3 host syscall regression in `crates/ivm/tests/sm_syscalls.rs` (SM feature).
-- SM2 verify syscall regression in `crates/ivm/tests/sm_syscalls.rs` (success + failure cases).
-
-### Property & Regression Tests
-- Proptest for SM2 rejecting invalid curves, non-canonical r/s, and reuse of nonces. *(Available in `crates/iroha_crypto/tests/sm2_fuzz.rs`, gated behind `sm_proptest`; enable via `cargo test -p iroha_crypto --features "sm sm_proptest"`.)*
-- Wycheproof SM4 vectors (block/AES-mode) adapted for varied modes; track upstream for SM2 additions. `sm3_sm4_vectors.rs` now exercises tag bit-flips, truncated tags, and ciphertext tampering for both GCM and CCM.
-
-### Interop & Performance
-- RustCrypto ↔ OpenSSL/Tongsuo parity suite for SM2 sign/verify, SM3 digests, and SM4 ECB/GCM lives in `crates/iroha_crypto/tests/sm_cli_matrix.rs`; invoke it with `scripts/sm_interop_matrix.sh`. CCM parity vectors now run in `sm3_sm4_vectors.rs`; CLI matrix support will follow once upstream CLIs expose CCM helpers.
-- SM3 NEON helper now runs the Armv8 compression/padding path end-to-end with runtime gating through `sm_accel::is_sm3_enabled` (feature + env overrides mirrored across SM3/SM4). Golden digests (zero/`"abc"`/long-block + randomized lengths) and forced-disable tests keep parity with the scalar RustCrypto backend, and the Criterion micro-bench (`crates/sm3_neon/benches/digest.rs`) captures scalar vs NEON throughput on AArch64 hosts.
-- Perf harness mirroring `scripts/gost_bench.sh` to compare Ed25519/SHA-2 vs SM2/SM3/SM4 and validate tolerance thresholds.
-
-#### Arm64 Baseline (local Apple Silicon; Criterion `sm_perf`, refreshed 2025-12-05)
-- `scripts/sm_perf.sh` now runs the Criterion bench and enforces medians against `crates/iroha_crypto/benches/sm_perf_baseline.json` (recorded on aarch64 macOS; tolerance 25 % by default, baseline metadata captures the host triple). The new `--mode` flag lets engineers capture scalar vs NEON vs `sm-neon-force` datapoints without editing the script; the current capture bundle (raw JSON + aggregated summary) lives under `artifacts/sm_perf/2026-03-lab/m3pro_native/` and stamps every payload with `cpu_label="m3-pro-native"`.
-- Acceleration modes now auto-select the scalar baseline as a comparison target. `scripts/sm_perf.sh` threads `--compare-baseline/--compare-tolerance/--compare-label` through `sm_perf_check`, emitting per-benchmark deltas against the scalar reference and failing when the slowdown exceeds the configured threshold. Per-benchmark tolerances from the baseline drive the comparison guard (SM3 is capped at 12 % on the Apple scalar baseline, while the SM3 comparison delta now permits up to 70 % against the scalar reference to avoid flapping); the Linux baselines reuse the same comparison map because they are exported from the `neoverse-proxy-macos` capture, and we will tighten them after a bare-metal Neoverse run if the medians differ. Pass `--compare-tolerance` explicitly when capturing stricter bounds (e.g., `--compare-tolerance 0.20`) and use `--compare-label` to annotate alternative reference hosts.
-- Baselines recorded on the CI reference machine now live in `crates/iroha_crypto/benches/sm_perf_baseline_aarch64_macos_scalar.json`, `sm_perf_baseline_aarch64_macos_auto.json`, and `sm_perf_baseline_aarch64_macos_neon_force.json`. Refresh them with `scripts/sm_perf.sh --mode scalar --write-baseline`, `--mode auto --write-baseline`, or `--mode neon-force --write-baseline` (set `SM_PERF_CPU_LABEL` before capturing) and archive the generated JSON alongside the run logs. Keep the aggregated helper output (`artifacts/.../aggregated.json`) with the PR so reviewers can audit every sample. Linux/Neoverse baselines now ship in `sm_perf_baseline_aarch64_unknown_linux_gnu_{mode}.json`, promoted from `artifacts/sm_perf/2026-03-lab/neoverse-proxy-macos/aggregated.json` (CPU label `neoverse-proxy-macos`, SM3 compare tolerance 0.70 for aarch64 macOS/Linux); rerun on bare-metal Neoverse hosts when available to tighten the tolerances.
-- Baseline JSON files may now carry an optional `tolerances` object to tighten guardrails per benchmark. Example:
+### Өзара әрекеттесу және өнімділік
+- RustCrypto ↔ SM2 белгі/тексеру, SM3 дайджесттері және SM4 ECB/GCM үшін `crates/iroha_crypto/tests/sm_cli_matrix.rs` өмір сүретін OpenSSL/Tongsuo паритет жинағы; оны `scripts/sm_interop_matrix.sh` арқылы шақырыңыз. CCM паритет векторлары енді `sm3_sm4_vectors.rs` ішінде орындалады; CLI матрицасын қолдау жоғары ағындағы CLI CCM көмекшілерін ашқаннан кейін орындалады.
+- SM3 NEON көмекшісі енді Armv8 қысу/толтыру жолын `sm_accel::is_sm3_enabled` (SM3/SM4 арқылы шағылыстырылған мүмкіндік + env қайта анықтау) арқылы орындау уақыты шлюзімен соңына дейін іске қосады. Алтын дайджесттер (нөл/`"abc"`/ұзын блок + рандомизацияланған ұзындықтар) және мәжбүрлеп өшіру сынақтары скалярлық RustCrypto серверімен паритетті сақтайды, ал Criterion микро-стендісі (`crates/sm3_neon/benches/digest.rs`) A.Arch хостында скаляр және NEON4 өткізу қабілетін түсіреді.
+- Ed25519/SHA-2 мен SM2/SM3/SM4 салыстыру және төзімділік шегін растау үшін `scripts/gost_bench.sh` перфтік арқанды шағылыстыру.#### Arm64 Baseline (жергілікті Apple Silicon; `sm_perf` шарты, 2025-12-05 жаңартылды)
+- `scripts/sm_perf.sh` қазір Criterion тақтасын іске қосады және `crates/iroha_crypto/benches/sm_perf_baseline.json` қарсы медиандарды мәжбүрлейді (aarch64 macOS жүйесінде жазылған; әдепкі бойынша төзімділік 25%, негізгі метадеректер хосттың үш еселігін түсіреді). Жаңа `--mode` жалауы инженерлерге сценарийді өңдеусіз скаляр және NEON және `sm-neon-force` деректер нүктелерін түсіруге мүмкіндік береді; ағымдағы түсіру жинағы (шикі JSON + жиынтық жиынтық) `artifacts/sm_perf/2026-03-lab/m3pro_native/` астында өмір сүреді және әрбір пайдалы жүктемеге `cpu_label="m3-pro-native"` мөрін қояды.
+- Жеделдету режимдері енді салыстыру мақсаты ретінде скалярлық негізгі сызықты автоматты түрде таңдайды. `scripts/sm_perf.sh` ағындары `--compare-baseline/--compare-tolerance/--compare-label` және `sm_perf_check`, скаляр сілтемеге қарсы әр эталондық дельталарды шығарады және баяулау конфигурацияланған шекті мәннен асқанда сәтсіздікке ұшырайды. Базалық деңгейден алынған әр эталондық рұқсаттар салыстыру қорғанысын басқарады (SM3 Apple скалярлық базалық сызығында 12%-ға шектелген, ал SM3 салыстыру дельтасы қазір скалярлық сілтемеге қарсы 70%-ға дейін соғуды болдырмауға мүмкіндік береді); Linux базалық сызықтары бірдей салыстыру картасын қайта пайдаланады, себебі олар `neoverse-proxy-macos` түсірілімінен экспортталады және медианалар әртүрлі болса, біз оларды жалаң металл Neoverse жұмысынан кейін қатайтамыз. Қатаң шекараларды (мысалы, `--compare-tolerance 0.20`) алу кезінде `--compare-tolerance` өтіңіз және балама анықтамалық хосттарға түсініктеме беру үшін `--compare-label` пайдаланыңыз.
+- CI анықтамалық машинасында жазылған негізгі сызықтар қазір `crates/iroha_crypto/benches/sm_perf_baseline_aarch64_macos_scalar.json`, `sm_perf_baseline_aarch64_macos_auto.json` және `sm_perf_baseline_aarch64_macos_neon_force.json` тілдерінде тұрады. Оларды `scripts/sm_perf.sh --mode scalar --write-baseline`, `--mode auto --write-baseline` немесе `--mode neon-force --write-baseline` (суретке түсіру алдында `SM_PERF_CPU_LABEL` орнатыңыз) арқылы жаңартыңыз және жасалған JSON файлын іске қосу журналдарымен бірге мұрағаттаңыз. Сарапшылар әрбір үлгіні тексере алуы үшін жиынтық көмекші шығысын (`artifacts/.../aggregated.json`) PR-мен бірге сақтаңыз. Linux/Neoverse базалық көрсеткіштері енді `sm_perf_baseline_aarch64_unknown_linux_gnu_{mode}.json` жүйесінде жеткізіледі, `artifacts/sm_perf/2026-03-lab/neoverse-proxy-macos/aggregated.json` (CPU белгісі `neoverse-proxy-macos`, SM3 aarch64 macOS/Linux үшін 0,70 төзімділікті салыстырады); рұқсаттарды қатайту үшін қолжетімді болған кезде жалаң металл Neoverse хосттарында қайта іске қосыңыз.
+- Базалық JSON файлдары енді бір эталон бойынша қоршауларды қатайту үшін қосымша `tolerances` нысанын қамтуы мүмкін. Мысалы:
   ```json
   {
     "benchmarks": { "...": 12.34 },
@@ -193,165 +176,150 @@ fleet.
     }
   }
   ```
-  `sm_perf_check` applies these fractional limits (8 % and 12 % in the example) while using the global CLI tolerance for any benchmarks not listed.
-- Comparison guards can also honour `compare_tolerances` in the comparison baseline. Use this to allow a looser delta against the scalar reference (for example, `\"sm3_vs_sha256_hash/sm3_hash\": 0.70` in the scalar baseline) while keeping the primary `tolerances` strict for direct baseline checks.
-- The checked-in Apple Silicon baselines now ship with concrete guardrails: SM2/SM4 operations allow 12–20 % drift depending on variance, while SM3/ChaCha comparisons sit at 8–12 %. The scalar baseline’s `sm3` tolerance is now tightened to 0.12; the `unknown_linux_gnu` files mirror the `neoverse-proxy-macos` export with the same tolerance map (SM3 compare 0.70) and metadata notes indicating they are shipped for the Linux gate until a bare-metal Neoverse rerun is available.
-- SM2 signing: 298 µs per op (Ed25519: 32 µs) ⇒ ~9.2× slower; verification: 267 µs (Ed25519: 41 µs) ⇒ ~6.5× slower.
-- SM3 hashing (4 KiB payload): 11.2 µs, effectively parity with SHA-256 at 11.3 µs (≈356 MiB/s vs 353 MiB/s).
-- SM4-GCM seal/open (1 KiB payload, 12-byte nonce): 15.5 µs vs ChaCha20-Poly1305 at 1.78 µs (≈64 MiB/s vs 525 MiB/s).
-- Benchmark artefacts (`target/criterion/sm_perf*`) captured for reproducibility; the Linux baselines are sourced from `artifacts/sm_perf/2026-03-lab/neoverse-proxy-macos/` (CPU label `neoverse-proxy-macos`, SM3 compare tolerance 0.70) and can be refreshed on bare-metal Neoverse hosts (`SM-4c.1`) once lab time opens to tighten tolerances.
+  `sm_perf_check` тізімде жоқ кез келген эталондар үшін жаһандық CLI төзімділігін пайдалану кезінде осы бөлшек шектеулерді (мысалда 8% және 12%) қолданады.
+- Салыстыру күзетшілері салыстырудың бастапқы деңгейінде `compare_tolerances`-ті де құрметтей алады. Тікелей базалық тексерулер үшін бастапқы `tolerances` қатаң сақтай отырып, скалярлық сілтемеге қарсы (мысалы, `\"sm3_vs_sha256_hash/sm3_hash\": 0.70` скалярлық сызықта) жеңілірек дельтаға рұқсат беру үшін мұны пайдаланыңыз.- Тексерілген Apple Silicon базалық сызықтары енді бетон қоршауларымен жеткізіледі: SM2/SM4 операциялары ауытқуға байланысты 12–20% дрейфке мүмкіндік береді, ал SM3/ChaCha салыстырулары 8–12% деңгейінде болады. Скалярлық базалық сызықтың `sm3` төзімділігі енді 0,12-ге дейін қатайтылды; `unknown_linux_gnu` файлдары `neoverse-proxy-macos` экспортын бірдей төзімділік картасымен (SM3 салыстыру 0,70) және жалаң металл Neoverse қайталау қол жетімді болғанша Linux қақпасы үшін жіберілетінін көрсететін метадеректер жазбаларымен бейнелейді.
+- SM2 қолтаңбасы: операция үшін 298μs (Ed25519: 32μs) ⇒ ~9,2× баяу; тексеру: 267μс (Ed25519: 41μs) ⇒ ~6,5× баяу.
+- SM3 хэштеу (4KiB пайдалы жүктеме): 11,2μс, SHA-256-мен 11,3μс-те тиімді паритет (≈356МБ/с және 353МБ/с).
+- SM4-GCM пломба/ашық (пайдалы жүктеме 1KiB, 12 байт емес): 15,5μс және ChaCha20-Poly1305 1,78μс (≈64МБ/с қарсы 525МБ/с).
+- қайталану үшін түсірілген эталондық артефактілер (`target/criterion/sm_perf*`); Linux базалық деректері `artifacts/sm_perf/2026-03-lab/neoverse-proxy-macos/` (CPU белгісі `neoverse-proxy-macos`, SM3 төзімділік 0,70 салыстыру) арқылы алынған және төзімділікті қатайту үшін зертханалық уақыт ашылғаннан кейін жалаң металл Neoverse хосттарында (`SM-4c.1`) жаңартылуы мүмкін.
 
-#### Cross-architecture capture checklist
-- Run `scripts/sm_perf_capture_helper.sh` **on the target machine** (x86_64 workstation, Neoverse ARM server, etc.). Pass `--cpu-label <host>` to stamp the captures and (when running in matrix mode) to pre-populate the generated plan/commands for lab scheduling. The helper prints mode-specific commands that:
-  1. execute the Criterion suite with the correct feature set, and
-  2. write medians into `crates/iroha_crypto/benches/sm_perf_baseline_${arch}_${os}_${mode}.json`.
-- Capture the scalar baseline first, then re-run the helper for `auto` (and `neon-force` on AArch64 platforms). Use a meaningful `SM_PERF_CPU_LABEL` so reviewers can trace host details in the JSON metadata.
-- After each run, archive the raw `target/criterion/sm_perf*` directory and include it in the PR together with the generated baselines. Tighten per-benchmark tolerances as soon as two consecutive runs stabilise (see `sm_perf_baseline_aarch64_macos_*.json` for reference formatting).
-- Record the medians + tolerances in this section and update `status.md`/`roadmap.md` when a new architecture is covered. The Linux baselines are now checked in from the `neoverse-proxy-macos` capture (metadata notes the export to the aarch64-unknown-linux-gnu gate); rerun on bare-metal Neoverse/x86_64 hosts as follow-ups when those lab slots are available.
+#### Сәулет аралық суретті бақылау тізімі
+- `scripts/sm_perf_capture_helper.sh` **мақсатты құрылғыда** іске қосыңыз (x86_64 жұмыс станциясы, Neoverse ARM сервері, т.б.). Түсірулерді белгілеу үшін `--cpu-label <host>` өтіңіз және зертханалық жоспарлау үшін жасалған жоспарды/пәрмендерді алдын ала толтыру үшін (матрицалық режимде іске қосылғанда). Көмекші режимге тән пәрмендерді басып шығарады:
+  1. дұрыс мүмкіндіктер жиынымен Шарт жиынтығын орындаңыз және
+  2. `crates/iroha_crypto/benches/sm_perf_baseline_${arch}_${os}_${mode}.json` ішіне медианаларды жазыңыз.
+- Алдымен скалярлық базаны түсіріңіз, содан кейін `auto` (және AArch64 платформаларында `neon-force`) үшін көмекшіні қайта іске қосыңыз. Маңызды `SM_PERF_CPU_LABEL` пайдаланыңыз, осылайша шолушылар JSON метадеректерінде хост мәліметтерін бақылай алады.
+- Әрбір іске қосылғаннан кейін өңделмеген `target/criterion/sm_perf*` каталогын мұрағаттаңыз және оны жасалған негізгі сызықтармен бірге PR-ға қосыңыз. Қатарынан екі іске қосу тұрақтана бастағанда, әр эталондық рұқсаттарды қатайтыңыз (анықтамалық пішімдеу үшін `sm_perf_baseline_aarch64_macos_*.json` бөлімін қараңыз).
+- Осы бөлімдегі медианаларды + рұқсат етілген мәндерді жазып алыңыз және жаңа архитектура қамтылған кезде `status.md`/`roadmap.md` жаңартыңыз. Linux базалық сызықтары енді `neoverse-proxy-macos` түсірілімінен тексерілді (метадеректер aarch64-unknown-linux-gnu қақпасына экспорттауды ескертеді); Neoverse/x86_64 жалаң металл хосттарында сол зертханалық слоттар қол жетімді болған кезде, қосымшалар ретінде қайта іске қосыңыз.
 
-#### ARMv8 SM3/SM4 intrinsics vs scalar paths
-`sm_accel` (see `crates/iroha_crypto/src/sm.rs:739`) provides the runtime dispatch layer for NEON-backed SM3/SM4 helpers. The feature is guarded at three levels:
-
-| Layer | Control | Notes |
+#### ARMv8 SM3/SM4 ішкі белгілері мен скалярлық жолдар
+`sm_accel` (`crates/iroha_crypto/src/sm.rs:739` қараңыз) NEON қолдайтын SM3/SM4 көмекшілері үшін орындау уақытының жіберу деңгейін қамтамасыз етеді. Бұл мүмкіндік үш деңгейде қорғалған:| Қабат | Бақылау | Ескертпелер |
 |-------|---------|-------|
-| Compile time | `--features sm` (now pulls in `sm-neon` automatically on `aarch64`) or `sm-neon-force` (tests/benchmarks) | Builds the NEON modules and links `sm3-neon`/`sm4-neon`. |
-| Runtime auto-detect | `sm4_neon::is_supported()` | Only true on CPUs that expose AES/PMULL equivalents (e.g., Apple M-series, Neoverse V1/N2). VMs that mask NEON or FEAT_SM4 fall back to scalar code. |
-| Operator override | `crypto.sm_intrinsics` (`auto`/`force-enable`/`force-disable`) | Config-driven dispatch applied at startup; use `force-enable` only for profiling in trusted environments and prefer `force-disable` when validating scalar fallbacks. |
+| Компиляция уақыты | `--features sm` (қазір `sm-neon` жүйесін `aarch64` жүйесінде автоматты түрде тартады) немесе `sm-neon-force` (сынақтар/сынақтар) | NEON модульдерін және `sm3-neon`/`sm4-neon` сілтемелерін құрастырады. |
+| Орындау уақыты автоматты анықтау | `sm4_neon::is_supported()` | AES/PMULL баламаларын (мысалы, Apple M-series, Neoverse V1/N2) көрсететін процессорларда ғана дұрыс. NEON немесе FEAT_SM4 жасыратын VM құрылғылары скалярлық кодқа оралады. |
+| Операторды қайта анықтау | `crypto.sm_intrinsics` (`auto`/`force-enable`/`force-disable`) | Іске қосу кезінде қолданылатын конфигурацияға негізделген жіберу; `force-enable` параметрін тек сенімді орталарда профильдеу үшін пайдаланыңыз және скалярлық резервтерді тексеру кезінде `force-disable` параметрін таңдаңыз. |
 
-**Performance envelope (Apple M3 Pro; medians recorded in `sm_perf_baseline_aarch64_macos_{mode}.json`):**
+**Өнімділік конверті (Apple M3 Pro; `sm_perf_baseline_aarch64_macos_{mode}.json` ішінде жазылған медианалар):**
 
-| Mode | SM3 digest (4 KiB) | SM4-GCM seal (1 KiB) | Notes |
+| Режим | SM3 дайджесті (4КБ) | SM4-GCM тығыздағыш (1КиБ) | Ескертпелер |
 |------|-------------------|----------------------|-------|
-| Scalar | 11.6 µs | 15.9 µs | Deterministic RustCrypto path; used everywhere the `sm` feature is compiled but NEON is unavailable. |
-| NEON auto | ~2.7× faster than scalar | ~2.3× faster than scalar | Current NEON kernels (SM-5a.2c) widen the schedule four words at a time and use dual queue fan-out; exact medians vary per host, so consult the baseline JSON metadata. |
-| NEON force | Mirrors NEON auto but disables fallback entirely | Same as NEON auto | Exercised via `scripts/sm_perf.sh --mode neon-force`; keeps CI honest even on hosts that would default to scalar mode. |
+| Скалярлық | 11,6μс | 15,9μс | Детерминистік RustCrypto жолы; барлық жерде пайдаланылады `sm` мүмкіндігі құрастырылған, бірақ NEON қолжетімді емес. |
+| NEON auto | ~2,7× скаляр | ~2,3× скаляр | Ағымдағы NEON ядролары (SM-5a.2c) кестені бір уақытта төрт сөзді кеңейтеді және қос кезекті желдетуді пайдаланады; нақты медианалар әр хостқа байланысты өзгереді, сондықтан негізгі JSON метадеректерін қараңыз. |
+| NEON күші | NEON автоматты түрде айналады, бірақ қалпына келтіруді толығымен өшіреді | NEON auto | сияқты `scripts/sm_perf.sh --mode neon-force` арқылы орындалады; CI адалдығын тіпті скалярлық режимге әдепкі бойынша беретін хосттарда да сақтайды. |
 
-**Determinism & deployment guidance**
-- Intrinsics never change observable results—`sm_accel` returns `None` when the accelerated path is unavailable so the scalar helper runs. Consensus code paths therefore remain deterministic as long as the scalar implementation is correct.
-- Do **not** gate business logic on whether the NEON path was used. Treat the acceleration purely as a perf hint and expose the status via telemetry only (e.g., `sm_intrinsics_enabled` gauge).
-- Always run `ci/check_sm_perf.sh` (or `make check-sm-perf`) after touching SM code so the Criterion harness validates both scalar and accelerated paths using the tolerances embedded in each baseline JSON.
-- When benchmarking or debugging, prefer the config knob `crypto.sm_intrinsics` over compile-time flags; recompiling with `sm-neon-force` disables the scalar fallback entirely, whereas `force-enable` simply nudges runtime detection.
-- Document the chosen policy in release notes: production builds should leave the policy in `Auto`, letting each validator discover hardware capabilities independently while still sharing the same binary artefacts.
-- Avoid shipping binaries that mix statically linked vendor intrinsics (e.g., third-party SM4 libraries) unless they respect the same dispatch and testing flow—otherwise perf regressions will not be caught by our baseline tooling.
+**Анықтау және орналастыру бойынша нұсқаулық**
+- Ішкі элементтер ешқашан бақыланатын нәтижелерді өзгертпейді—`sm_accel` жеделдетілген жол қолжетімді болмаған кезде `None` қайтарады, сондықтан скалярлық көмекші іске қосылады. Сондықтан консенсус код жолдары скалярлық енгізу дұрыс болғанша детерминистік болып қалады.
+- NEON жолының пайдаланылған-қолданбағанына бизнес-логиканы **бау**. Жеделдетуді тек тамаша кеңес ретінде қарастырыңыз және күйді тек телеметрия арқылы ашыңыз (мысалы, `sm_intrinsics_enabled` өлшеуіш).
+- SM кодын түрткеннен кейін әрқашан `ci/check_sm_perf.sh` (немесе `make check-sm-perf`) іске қосыңыз, осылайша Шарт қосқышы әрбір негізгі JSON ішіне енгізілген рұқсаттарды пайдаланып скалярлық және жеделдетілген жолдарды тексереді.
+- салыстыру немесе жөндеу кезінде компиляция уақыты жалаушаларынан гөрі `crypto.sm_intrinsics` конфигурациялау тұтқасына артықшылық беріңіз; `sm-neon-force` көмегімен қайта құрастыру скалярлық қалпына келтіруді толығымен өшіреді, ал `force-enable` орындалу уақытын анықтауды жай ғана итереді.
+- Таңдалған саясатты шығарылым жазбаларында құжаттаңыз: өндіріс құрастырулары `Auto` саясатын қалдыруы керек, бұл әрбір валидаторға бірдей екілік артефактілерді бөлісе отырып, аппараттық құралдар мүмкіндіктерін дербес ашуға мүмкіндік береді.
+- Бірдей жөнелту мен сынақ ағынын сақтамайынша, статикалық түрде байланыстырылған жеткізушінің ішкі элементтерін (мысалы, үшінші тараптың SM4 кітапханалары) араластыратын екілік файлдарды жіберуден аулақ болыңыз, әйтпесе біздің негізгі құралдарымыз перф регрессияларын ұстамайды.#### x86_64 Rosetta baseline (Apple M3 Pro; 2025-12-01 түсірілген)
+- Негізгі сызықтар `artifacts/sm_perf/2026-03-lab/m3pro_rosetta/` астында өңделмеген + жинақталған түсірулермен `crates/iroha_crypto/benches/sm_perf_baseline_x86_64_macos_{scalar,auto,neon_force}.json` (cpu_label=`m3-pro-rosetta`) ішінде тұрады.
+- x86_64 үшін әр эталондық рұқсаттар SM2 үшін 20%, Ed25519/SHA-256 үшін 15% және SM4/ChaCha үшін 12% етіп орнатылған. `scripts/sm_perf.sh` енді AAarch64 емес хосттардағы жеделдету салыстыру рұқсатын әдепкі етіп 25% құрайды, сондықтан Neoverse қайта іске қосылғанға дейін ортақ `m3-pro-native` негізгі сызығы үшін AArch64 жүйесінде 5,25 босаңсуды қалдырып, скаляр-авто-авто тығыз болып қалады.
 
-#### x86_64 Rosetta baseline (Apple M3 Pro; captured 2025-12-01)
-- Baselines live in `crates/iroha_crypto/benches/sm_perf_baseline_x86_64_macos_{scalar,auto,neon_force}.json` (cpu_label=`m3-pro-rosetta`), with raw + aggregated captures under `artifacts/sm_perf/2026-03-lab/m3pro_rosetta/`.
-- Per-benchmark tolerances on x86_64 are set to 20 % for SM2, 15 % for Ed25519/SHA-256, and 12 % for SM4/ChaCha. `scripts/sm_perf.sh` now defaults the acceleration comparison tolerance to 25 % on non-AArch64 hosts so scalar-vs-auto stays tight while leaving the 5.25 slack on AArch64 for the shared `m3-pro-native` baseline until a Neoverse rerun lands.
+| Эталон | Скалярлық | Авто | Neon-Force | Автоматты және скалярлық | Неон скалярға қарсы | Neon vs Auto |
+|----------|--------|------|------------|----------------|---------------|--------------|
+| sm2_vs_ed25519_sign/ed25519_sign |    57,43 |  57.12 |      55,77 |          -0,53% |         -2,88% |        -2,36% |
+| sm2_vs_ed25519_sign/sm2_sign |   572,76 | 568,71 |     557,83 |          -0,71% |         -2,61% |        -1,91% |
+| sm2_vs_ed25519_verify/verify/ed25519 |    69.03 |  68,42 |      66,28 |          -0,88% |         -3,97% |        -3,12% |
+| sm2_vs_ed25519_verify/verify/sm2 |   521,73 | 514,50 |     502.17 |          -1,38% |         -3,75% |        -2,40% |
+| sm3_vs_sha256_hash/sha256_hash |    16.78 |  16.58 |      16.16 |          -1,19% |         -3,69% |        -2,52% |
+| sm3_vs_sha256_hash/sm3_hash |    15.78 |  15.51 |      15.04 |          -1,71% |         -4,69% |        -3,03% |
+| sm4_vs_chacha20poly1305_decrypt/chacha20poly1305_decrypt |     1,96 |   1,97 |       1,97 |           0,39% |          0,16% |        -0,23% |
+| sm4_vs_chacha20poly1305_decrypt/sm4_gcm_decrypt |    16.26 |  16.38 |      16.26 |           0,72% |         -0,01% |        -0,72% |
+| sm4_vs_chacha20poly1305_encrypt/chacha20poly1305_encrypt |     1,96 |   2.00 |       1,93 |           2,23% |         -1,14% |        -3,30% |
+| sm4_vs_chacha20poly1305_encrypt/sm4_gcm_encrypt |    16.60 |  16.58 |      16.15 |          -0,10% |         -2,66% |        -2,57% |
 
-| Benchmark | Scalar | Auto | Neon-Force | Auto vs Scalar | Neon vs Scalar | Neon vs Auto |
-|-----------|--------|------|------------|----------------|---------------|--------------|
-| sm2_vs_ed25519_sign/ed25519_sign |    57.43 |  57.12 |      55.77 |          -0.53% |         -2.88% |        -2.36% |
-| sm2_vs_ed25519_sign/sm2_sign |   572.76 | 568.71 |     557.83 |          -0.71% |         -2.61% |        -1.91% |
-| sm2_vs_ed25519_verify/verify/ed25519 |    69.03 |  68.42 |      66.28 |          -0.88% |         -3.97% |        -3.12% |
-| sm2_vs_ed25519_verify/verify/sm2 |   521.73 | 514.50 |     502.17 |          -1.38% |         -3.75% |        -2.40% |
-| sm3_vs_sha256_hash/sha256_hash |    16.78 |  16.58 |      16.16 |          -1.19% |         -3.69% |        -2.52% |
-| sm3_vs_sha256_hash/sm3_hash |    15.78 |  15.51 |      15.04 |          -1.71% |         -4.69% |        -3.03% |
-| sm4_vs_chacha20poly1305_decrypt/chacha20poly1305_decrypt |     1.96 |   1.97 |       1.97 |           0.39% |          0.16% |        -0.23% |
-| sm4_vs_chacha20poly1305_decrypt/sm4_gcm_decrypt |    16.26 |  16.38 |      16.26 |           0.72% |         -0.01% |        -0.72% |
-| sm4_vs_chacha20poly1305_encrypt/chacha20poly1305_encrypt |     1.96 |   2.00 |       1.93 |           2.23% |         -1.14% |        -3.30% |
-| sm4_vs_chacha20poly1305_encrypt/sm4_gcm_encrypt |    16.60 |  16.58 |      16.15 |          -0.10% |         -2.66% |        -2.57% |
+#### x86_64 / aarch64 емес басқа мақсаттар
+- Ағымдағы құрастырулар әлі де x86_64 бойынша детерминирленген RustCrypto скалярлық жолын жібереді; `sm` қосулы күйде ұстаңыз, бірақ SM-4c.1b қонғанша сыртқы AVX2/VAES ядроларын **енгізбеңіз. Орындау уақыты саясаты ARM шағылысады: әдепкі `Auto`, `crypto.sm_intrinsics` құрметтеңіз және бірдей телеметриялық өлшеуіштерді көрсетеді.
+- Linux/x86_64 түсірулері жазылады; сол аппараттық құралдағы көмекшіні қайта пайдаланыңыз және медианаларды Rosetta базалық сызықтары мен жоғарыдағы төзімділік картасымен бірге `sm_perf_baseline_x86_64_unknown_linux_gnu_{mode}.json` ішіне тастаңыз.**Жалпы қателіктер**
+1. **Виртуалдандырылған ARM даналары:** Көптеген бұлттар NEON көрсетеді, бірақ `sm4_neon::is_supported()` тексеретін SM4/AES кеңейтімдерін жасырады. Сол орталарда скаляр жолды күтіңіз және сәйкесінше перф негізгі сызықтарды алыңыз.
+2. **Ішінара қайта анықтау:** Орындаулар арасында тұрақты `crypto.sm_intrinsics` мәндерін араластыру сәйкес келмейтін перф көрсеткіштеріне әкеледі. Жаңа негізгі сызықтарды түсірмес бұрын эксперимент билетіндегі болжалды қайта анықтауды құжаттаңыз және конфигурацияны қалпына келтіріңіз.
+3. **CI паритеті:** Кейбір macOS жүгіргіштері NEON белсенді болған кезде қарсы негізделген перф үлгісін алуға рұқсат бермейді. `scripts/sm_perf_capture_helper.sh` шығыстарын PR-ға тіркелген күйде сақтаңыз, сонда шолушылар жүгіруші сол есептегіштерді жасырса да, жеделдетілген жолдың орындалғанын растай алады.
+4. **Болашақ ISA нұсқалары (SVE/SVE2):** Ағымдағы ядролар NEON жолақ пішіндерін қабылдайды. SVE/SVE2 портына көшірмес бұрын, `sm_accel::NeonPolicy` нұсқасын арнайы нұсқамен кеңейтіңіз, осылайша біз CI, телеметрия және оператор түймелерін тураланған күйде сақтай аламыз.
 
-#### x86_64 / other non-aarch64 targets
-- Current builds still ship only the deterministic RustCrypto scalar path on x86_64; keep `sm` enabled but do **not** inject external AVX2/VAES kernels until SM-4c.1b lands. Runtime policy mirrors ARM: default to `Auto`, honour `crypto.sm_intrinsics`, and surface the same telemetry gauges.
-- Linux/x86_64 captures remain to be recorded; reuse the helper on that hardware and drop the medians into `sm_perf_baseline_x86_64_unknown_linux_gnu_{mode}.json` alongside the Rosetta baselines and tolerance map above.
+SM-5a/SM-4c.1 астында қадағаланатын әрекеттер элементтері CI әрбір жаңа архитектура үшін паритеттік дәлелдемелерді алуын қамтамасыз етеді және жол картасы Neoverse/x86 базалық сызықтары мен NEON-және скалярлық рұқсаттар біріктірілгенше 🈺 күйінде қалады.
 
-**Common pitfalls**
-1. **Virtualised ARM instances:** Many clouds expose NEON but hide the SM4/AES extensions that `sm4_neon::is_supported()` checks. Expect the scalar path in those environments and capture perf baselines accordingly.
-2. **Partial overrides:** Mixing persisted `crypto.sm_intrinsics` values between runs leads to inconsistent perf readings. Document the intended override in the experiment ticket and reset the config before capturing new baselines.
-3. **CI parity:** Some macOS runners do not allow counter-based perf sampling while NEON is active. Keep `scripts/sm_perf_capture_helper.sh` outputs attached to PRs so reviewers can confirm that the accelerated path was exercised even if the runner hides those counters.
-4. **Future ISA variants (SVE/SVE2):** The current kernels assume NEON lane shapes. Before porting to SVE/SVE2, extend `sm_accel::NeonPolicy` with a dedicated variant so we can keep CI, telemetry, and operator knobs aligned.
+## Сәйкестік және нормативтік ескертпелер
 
-Action items tracked under SM-5a/SM-4c.1 ensure that CI captures parity proofs for every new architecture, and the roadmap stays at 🈺 until Neoverse/x86 baselines and NEON-vs-scalar tolerances converge.
+### Стандарттар мен Нормативтік сілтемелер
+- **GM/T 0002-2012** (SM4), **GM/T 0003-2012** + **GB/T 32918 сериясы** (SM2), **GM/T 0004-2012** + **GB/T 32905/32907** (SM39th), және анықтамалар, сынақ векторлары және арматуралар тұтынатын KDF байламдары.【docs/source/crypto/sm_vectors.md#L79】
+- `docs/source/crypto/sm_compliance_brief.md` сәйкестік анықтамасы осы стандарттарды инженерлік, SRE және заң топтары үшін құжаттарды беру/экспорттау міндеттерімен қатар байланыстырады; GM/T каталогы қайта қаралған сайын осы қысқаша ақпаратты жаңартып отырыңыз.
 
-## Compliance & Regulatory Notes
+### Материктік Қытай реттеуші жұмыс барысы
+1. **Өнім беру (开发备案):** Материктік Қытайдан SM қосылған екілік файлдарды жібермес бұрын, артефакт манифестін, детерминирленген құрастыру қадамдарын және тәуелділік тізімін провинциялық криптография әкімшілігіне жіберіңіз. Өтініш үлгілері және сәйкестікті тексеру тізімі `docs/source/crypto/sm_compliance_brief.md` және тіркемелер каталогында (`sm_product_filing_template.md`, `sm_sales_usage_filing_template.md`, `sm_export_statement_template.md`) тұрады.
+2. **Сату/пайдалану файлы (销售/使用备案):** Құрлықта SM-қосылған түйіндерді іске қосатын операторлар өздерінің орналастыру ауқымын, негізгі басқару қалпын және телеметрия жоспарын тіркеуі керек. Өтініш беру кезінде қол қойылған манифесттерді және `iroha_sm_*` метрикалық суретті тіркеңіз.
+3. **Аккредиттелген тестілеу:** Маңызды инфрақұрылым операторлары сертификатталған зертханалық есептерді талап етуі мүмкін. Жаңғыртылатын құрастыру сценарийлерін, SBOM экспорттарын және Wycheproof/интероп артефактілерін (төменде қараңыз) қамтамасыз етіңіз, осылайша төменгі ағындық аудиторлар кодты өзгертпестен векторларды қайта шығара алады.
+4. **Күй-күйді бақылау:** Аяқталған өтінімдерді шығару билетіне және `status.md` файлына жазыңыз; жетіспейтін өтініштер тек тексеруден қол қоятын ұшқыштарға дейін жылжытуды блоктайды.### Экспорт және тарату жағдайы
+- Treat SM-capable binaries as controlled items under **US EAR Category 5 Part 2** and **EU Regulation 2021/821 Annex 1 (5D002)**. Дереккөзді жариялау ашық бастапқы/ENC нұсқаларына сәйкес келеді, бірақ эмбарго қойылған бағыттарға қайта бөлу әлі де заңды тексеруді қажет етеді.
+- Шығарылым манифесттері ENC/TSU негізіне сілтеме жасайтын экспорт мәлімдемесін жинақтауы және FFI алдын ала қарауы бумаланған болса, OpenSSL/Tongsuo құрастыру идентификаторларының тізімін көрсетуі керек.
+- Операторларға трансшекаралық тасымалдау мәселелерін болдырмау үшін құрлықта тарату қажет болған кезде аймақтық жергілікті қаптамаға (мысалы, материктік айналар) артықшылық беріңіз.
 
-### Standards & Normative References
-- **GM/T 0002-2012** (SM4), **GM/T 0003-2012** + **GB/T 32918 series** (SM2), **GM/T 0004-2012** + **GB/T 32905/32907** (SM3), and **RFC 8998** govern the algorithm definitions, test vectors, and KDF bindings that our fixtures consume.【docs/source/crypto/sm_vectors.md#L79】
-- The compliance brief in `docs/source/crypto/sm_compliance_brief.md` cross-links these standards alongside the filing/export responsibilities for engineering, SRE, and legal teams; keep that brief updated whenever the GM/T catalog revises.
+### Оператордың құжаттамасы және дәлелдері
+- Осы архитектуралық қысқаша мазмұнын `docs/source/crypto/sm_operator_rollout.md` жүйесіндегі шығаруды тексеру тізімімен және `docs/source/crypto/sm_compliance_brief.md` жүйесіндегі сәйкестікті толтыру нұсқаулығымен жұптаңыз.
+- `docs/genesis.md`, `docs/genesis.he.md` және `docs/genesis.ja.md` арасында генезис/оператордың жылдам іске қосылуын синхрондаңыз; SM2/SM3 CLI жұмыс үрдісінде `crypto` манифесттерін егу үшін операторға қатысты ақиқат көзі бар.
+- OpenSSL/Tongsuo шығу тегін, `scripts/sm_openssl_smoke.sh` шығысын және `scripts/sm_interop_matrix.sh` паритет журналдарын әрбір шығарылым бумасымен мұрағаттау, сондықтан сәйкестік пен аудит серіктестерінің детерминирленген артефактілері болады.
+- Бағдарлама күйін анықтау мүмкіндігін сақтау үшін сәйкестік ауқымы өзгерген сайын (жаңа юрисдикциялар, өтініштерді толтыру немесе экспорттау шешімдері) `status.md` жаңартыңыз.
+- `docs/source/release_dual_track_runbook.md` суретінде түсірілген кезеңдік дайындық шолуларын (`SM-RR1`–`SM-RR3`) орындаңыз; Тек тексеру, пилоттық және GA қол қою кезеңдері арасында жылжыту сол жерде санамаланған артефактілерді қажет етеді.
 
-### Mainland China Regulatory Workflow
-1. **Product filing (开发备案):** Prior to shipping SM-enabled binaries from mainland China, submit the artifact manifest, deterministic build steps, and dependency list to the provincial cryptography administration. Filing templates and the compliance checklist live in `docs/source/crypto/sm_compliance_brief.md` and the attachments directory (`sm_product_filing_template.md`, `sm_sales_usage_filing_template.md`, `sm_export_statement_template.md`).
-2. **Sales/Usage filing (销售/使用备案):** Operators running SM-enabled nodes onshore must register their deployment scope, key management posture, and telemetry plan. Attach signed manifests plus `iroha_sm_*` metric snapshots when filing.
-3. **Accredited testing:** Critical infrastructure operators may require certified lab reports. Provide reproducible build scripts, SBOM exports, and the Wycheproof/interop artefacts (see below) so downstream auditors can reproduce the vectors without altering the code.
-4. **Status tracking:** Record completed filings in the release ticket and `status.md`; missing filings block promotion from verify-only to signing pilots.
+## Interop рецепттері
 
-### Export & Distribution Posture
-- Treat SM-capable binaries as controlled items under **US EAR Category 5 Part 2** and **EU Regulation 2021/821 Annex 1 (5D002)**. Publication of source continues to qualify for the open-source/ENC carve-outs, but redistribution to embargoed destinations still requires legal review.
-- Release manifests must bundle an export statement referencing the ENC/TSU basis and list the OpenSSL/Tongsuo build identifiers if the FFI preview is packaged.
-- Prefer region-local packaging (e.g., mainland mirrors) when operators need onshore distribution to avoid cross-border transfer issues.
+### RustCrypto ↔ OpenSSL/Tongsuo матрицасы
+1. OpenSSL/Tongsuo CLI қол жетімді екеніне көз жеткізіңіз (`IROHA_SM_CLI="openssl /opt/tongsuo/bin/openssl"` нақты құралдарды таңдауға мүмкіндік береді).
+2. `scripts/sm_interop_matrix.sh` іске қосыңыз; ол `cargo test -p iroha_crypto --test sm_cli_matrix --features sm` шақырады және SM2 белгісін/тексеруін, SM3 дайджесттерін және SM4 ECB/GCM ағындарын әрбір провайдерге қарсы орындап, жоқ кез келген CLI-ді өткізіп жібереді.【scripts/sm_interop_matrix.sh#L1】
+3. Нәтижедегі `target/debug/deps/sm_cli_matrix*.log` файлдарын шығарылым артефактілерімен мұрағатлаңыз.
 
-### Operator Documentation & Evidence
-- Pair this architecture brief with the rollout checklist in `docs/source/crypto/sm_operator_rollout.md` and the compliance filing guide in `docs/source/crypto/sm_compliance_brief.md`.
-- Keep the genesis/operator quickstart in sync across `docs/genesis.md`, `docs/genesis.he.md`, and `docs/genesis.ja.md`; the SM2/SM3 CLI workflow there is the operator-facing source of truth for seeding `crypto` manifests.
-- Archive OpenSSL/Tongsuo provenance, `scripts/sm_openssl_smoke.sh` output, and `scripts/sm_interop_matrix.sh` parity logs with every release bundle so compliance and audit partners have deterministic artefacts.
-- Update `status.md` whenever compliance scope changes (new jurisdictions, filing completions, or export decisions) to keep programme state discoverable.
-- Follow the staged readiness reviews (`SM-RR1`–`SM-RR3`) captured in `docs/source/release_dual_track_runbook.md`; promotion between verify-only, pilot, and GA signing phases requires the artefacts enumerated there.
+### OpenSSL алдын ала қарау түтін (қаптама қақпасы)
+1. OpenSSL ≥3.0 әзірлеу тақырыптарын орнатыңыз және `pkg-config` оларды таба алатынына көз жеткізіңіз.
+2. `scripts/sm_openssl_smoke.sh` орындаңыз; көмекші `cargo check`/`cargo test --test sm_openssl_smoke` іске қосады, SM3 хэштеуін, SM2 тексеруін және FFI сервері арқылы SM4-GCM айналмалы сапарларын жүзеге асырады (сынақ қосқышы алдын ала қарауға нақты мүмкіндік береді).【scripts/sm_openssl_smo
+3. Кез келген өткізіп жібермейтін сәтсіздікті босату блокаторы ретінде қарастырыңыз; аудиторлық дәлелдер үшін консоль шығысын түсіріңіз.
 
-## Interop Recipes
+### Детерминистік фиксаторды жаңарту
+- Әрбір сәйкестік тапсыру алдында SM құрылғыларын (`sm_vectors.md`, `fixtures/sm/…`) қалпына келтіріңіз, содан кейін паритеттік матрицаны және түтін белгішесін қайта іске қосыңыз, осылайша аудиторлар өтінімдермен бірге жаңа детерминирленген транскрипттерді алады.## Сыртқы аудитке дайындық
+- `docs/source/crypto/sm_audit_brief.md` сыртқы шолу үшін мәтінмәнді, аумақты, кестені және контактілерді бумалайды.
+- Аудит артефактілері `docs/source/crypto/attachments/` (OpenSSL түтін журналы, жүк ағашының суреті, жүк метадеректерін экспорттау, құралдар жинағы шығуы) және `fuzz/sm_corpus_manifest.json` (бар регрессия векторларынан алынған детерминирленген SM анық емес тұқымдар) астында өмір сүреді. macOS жүйесінде түтін журналы қазір өткізіп алынған іске қосуды жазады, себебі жұмыс кеңістігінің тәуелділік циклі `cargo check` алдын алады; Linux циклсіз құрастыру алдын ала қарау серверін толығымен пайдаланады.
+- RFQ жіберу алдында туралау үшін Crypto WG, Platform Ops, Security және Docs/DevRel жетекшілеріне 2026-01-30 күні таратылды.
 
-### RustCrypto ↔ OpenSSL/Tongsuo Matrix
-1. Ensure OpenSSL/Tongsuo CLIs are available (`IROHA_SM_CLI="openssl /opt/tongsuo/bin/openssl"` allows explicit tool selection).
-2. Run `scripts/sm_interop_matrix.sh`; it invokes `cargo test -p iroha_crypto --test sm_cli_matrix --features sm` and exercises SM2 sign/verify, SM3 digests, and SM4 ECB/GCM flows against each provider, skipping any CLI that is absent.【scripts/sm_interop_matrix.sh#L1】
-3. Archive the resulting `target/debug/deps/sm_cli_matrix*.log` files with the release artefacts.
+### Аудитке қатысу күйі
 
-### OpenSSL Preview Smoke (Packaging Gate)
-1. Install OpenSSL ≥ 3.0 development headers and ensure `pkg-config` can locate them.
-2. Execute `scripts/sm_openssl_smoke.sh`; the helper runs `cargo check`/`cargo test --test sm_openssl_smoke`, exercising SM3 hashing, SM2 verification, and SM4-GCM round-trips via the FFI backend (the test harness enables the preview explicitly).【scripts/sm_openssl_smoke.sh#L1】
-3. Treat any non-skip failure as a release blocker; capture the console output for audit evidence.
+- **Bits Trail (CN криптография тәжірибесі)** — Орындалған жұмыс туралы мәлімдеме **2026-02-21**, басталу уақыты **2026-02-24**, далалық жұмыс терезесі **2026-02-24-2026-03-22**, қорытынды есеп **4-2016**0. Апта сайынғы күйді бақылау пункті әр сәрсенбіде 09:00UTC Crypto WG жетекші және Қауіпсіздік инженериясымен байланысады. Контактілерді, жеткізілімдерді және дәлелдемелерді тіркемелерді [`sm_audit_brief.md`](sm_audit_brief.md#engagement-status) қараңыз.
+- **NCC Group APAC (төтенше жағдайларға арналған слот)** — Қосымша қорытындылар немесе реттеушінің сұраулары екінші пікірді қажет ететін болса, кейінгі/параллель шолу ретінде 2026 жылдың мамыр айындағы терезе сақталған. Қатысу мәліметтері мен ұлғайту ілмектері `sm_audit_brief.md` ішіндегі Trail of Bits жазбасымен қатар жазылған.
 
-### Deterministic Fixture Refresh
-- Regenerate SM fixtures (`sm_vectors.md`, `fixtures/sm/…`) before each compliance filing, then re-run the parity matrix and smoke harness so auditors receive fresh deterministic transcripts alongside the filings.
+## Тәуекелдер және азайту шаралары
 
-## External Audit Preparation
-- `docs/source/crypto/sm_audit_brief.md` packages the context, scope, schedule, and contacts for the external review.
-- Audit artefacts live under `docs/source/crypto/attachments/` (OpenSSL smoke log, cargo tree snapshot, cargo metadata export, toolkit provenance) and `fuzz/sm_corpus_manifest.json` (deterministic SM fuzz seeds sourced from existing regression vectors). On macOS the smoke log currently records a skipped run because the workspace dependency cycle prevents `cargo check`; Linux builds without the cycle will exercise the preview backend fully.
-- Circulated to Crypto WG, Platform Ops, Security, and Docs/DevRel leads on 2026-01-30 for alignment ahead of RFQ dispatch.
-
-### Audit Engagement Status
-
-- **Trail of Bits (CN cryptography practice)** — Statement of Work executed on **2026-02-21**, kick-off **2026-02-24**, fieldwork window **2026-02-24 – 2026-03-22**, final report due **2026-04-15**. Weekly status checkpoint every Wednesday 09:00 UTC with the Crypto WG lead and Security Engineering liaison. See [`sm_audit_brief.md`](sm_audit_brief.md#engagement-status) for contacts, deliverables, and evidence attachments.
-- **NCC Group APAC (contingency slot)** — Reserved the May 2026 window as a follow-up/parallel review should additional findings or regulator requests require a second opinion. Engagement details and escalation hooks are recorded alongside the Trail of Bits entry in `sm_audit_brief.md`.
-
-## Risks & Mitigations
-
-Full register: see [`sm_risk_register.md`](sm_risk_register.md) for detailed
-probability/impact scoring, monitoring triggers, and sign-off history. The
-summary below tracks the headline items surfaced to release engineering.
-| Risk | Severity | Owner | Mitigation |
+Толық тіркелу: толық ақпаратты [`sm_risk_register.md`](sm_risk_register.md) қараңыз.
+ықтималдық/әсерді бағалау, триггерлерді бақылау және шығу тарихы. The
+төмендегі жиынтықта инженерияны шығару үшін пайда болған тақырып элементтерін бақылайды.
+| Тәуекел | Ауырлығы | Иесі | Жеңілдету |
 |------|----------|-------|------------|
-| Lack of external audit for RustCrypto SM crates | High | Crypto WG | Contract Trail of Bits/NCC Group, keep verify-only until audit report accepted. |
-| Deterministic nonce regressions across SDKs | High | SDK Program Leads | Share fixtures across SDK CI; enforce canonical r∥s encoding; add cross-SDK integration tests (tracked in SM-3c). |
-| ISA-specific bugs in intrinsics | Medium | Performance WG | Feature-gate intrinsics, require CI coverage on ARM, maintain software fallback. Hardware validation matrix maintained in `sm_perf.md`. |
-| Compliance ambiguity delaying adoption | Medium | Docs & Legal Liaison | Publish compliance brief & operator checklist (SM-6a/SM-6b) before GA; gather legal input. Filing checklist shipped in `sm_compliance_brief.md`. |
-| FFI backend drift with provider updates | Medium | Platform Ops | Pin provider versions, add parity tests, keep FFI backend opt-in until packaging stabilises (SM-P3). |
+| RustCrypto SM жәшіктері үшін сыртқы аудиттің болмауы | Жоғары | Crypto WG | Contract Trail of Bits/NCC Group, тек тексеру есебін аудиторлық есеп қабылданғанға дейін сақтаңыз. |
+| SDK бойынша детерминистік емес регрессиялар | Жоғары | SDK бағдарламасының жетекшілері | Арматураларды SDK CI бойынша бөлісу; канондық r∥ кодтауды енгізу; кросс SDK интеграция сынақтарын қосыңыз (SM-3c-де қадағаланады). |
+| Ішкі элементтердегі ISA-арнайы қателер | Орташа | Өнімділік WG | Функция қақпасының ішкі қасиеттері, ARM жүйесінде CI қамтуын талап етеді, бағдарламалық жасақтаманы қалпына келтіреді. `sm_perf.md` ішінде сақталған жабдықты тексеру матрицасы. |
+| Сәйкестік түсініксіздігі бала асырап алуды кешіктіру | Орташа | Құжаттар және құқықтық байланыс | GA алдында сәйкестік туралы қысқаша және оператордың тексеру тізімін (SM-6a/SM-6b) жариялау; құқықтық мәліметтерді жинау. `sm_compliance_brief.md` ішінде жіберілген файлды тексеру парағы. |
+| Провайдер жаңартулары бар FFI серверлік дрейф | Орташа | Platform Ops | Провайдер нұсқаларын бекітіңіз, паритет сынақтарын қосыңыз, қаптама тұрақтанғанша (SM-P3) FFI серверіне қосылу мүмкіндігін сақтаңыз. |## Ашық сұрақтар / бақылаулар
+1. Rust жүйесінде SM алгоритмдерімен тәжірибесі бар тәуелсіз аудит серіктестерін таңдаңыз.
+   - **Жауап (2026-02-24):** Trail of Bits’ CN криптографиялық тәжірибесі SOW бастапқы аудитіне қол қойды (басталуы 2026-02-24, жеткізілім 2026-04-15) және NCC Group APAC мамырда күтпеген жағдайларға арналған слотқа ие, сондықтан реттеушілер қайта қараусыз екінші тексеруді сұрай алады. Келісімнің ауқымы, контактілері және бақылау тізімдері [`sm_audit_brief.md`](sm_audit_brief.md#engagement-status) ішінде көрсетіледі және `sm_audit_vendor_landscape.md` ішінде көрсетіледі.
+2. Ресми Wycheproof SM2 деректер жинағы үшін жоғары ағынды бақылауды жалғастырыңыз; жұмыс кеңістігі қазіргі уақытта таңдалған 52 корпустық жинақты (детерминирленген қондырғылар + синтезделген бұрмалау корпустары) жібереді және оны `sm2_wycheproof.rs`/`sm2_fuzz.rs` ішіне береді. Жоғарғы JSON қонғаннан кейін корпусты `cargo xtask sm-wycheproof-sync` арқылы жаңартыңыз.
+   - Track Bouncy Castle және GmSSL теріс векторлық жиынтықтары; бар корпусты толықтыру үшін лицензиялау тазартылғаннан кейін `sm2_fuzz.rs` ішіне импорттау.
+3. SM қабылдау мониторингі үшін негізгі телеметрияны (метрика, журнал жүргізу) анықтаңыз.
+4. Kotodama/VM экспозициясы үшін SM4 AEAD әдепкі GCM немесе CCM екенін шешіңіз.
+5. 1-қосымшаға (ID `ALICE123@YAHOO.COM`) арналған RustCrypto/OpenSSL тепе-теңдігін бақылау: жарияланған ашық кілт пен `(r, s)` үшін кітапхана қолдауын растаңыз, осылайша арматура регрессия сынақтарына көтерілуі мүмкін.
 
-## Open Questions / Follow-ups
-1. Select independent audit partners experienced with SM algorithms in Rust.
-   - **Answer (2026-02-24):** Trail of Bits’ CN cryptography practice signed the primary audit SOW (kick-off 2026-02-24, delivery 2026-04-15) and NCC Group APAC holds a May contingency slot so regulators can request a second review without reopening procurement. Engagement scope, contacts, and checklists live in [`sm_audit_brief.md`](sm_audit_brief.md#engagement-status) and are mirrored in `sm_audit_vendor_landscape.md`.
-2. Continue tracking upstream for an official Wycheproof SM2 dataset; the workspace currently ships a curated 52-case suite (deterministic fixtures + synthesized tamper cases) and feeds it into `sm2_wycheproof.rs`/`sm2_fuzz.rs`. Update the corpus via `cargo xtask sm-wycheproof-sync` once the upstream JSON lands.
-   - Track Bouncy Castle and GmSSL negative vector suites; import into `sm2_fuzz.rs` once licensing cleared to supplement the existing corpus.
-3. Define baseline telemetry (metrics, logging) for SM adoption monitoring.
-4. Decide whether SM4 AEAD default is GCM or CCM for Kotodama/VM exposure.
-5. Track RustCrypto/OpenSSL parity for Annex Example 1 (ID `ALICE123@YAHOO.COM`): confirm library support for the published public key and `(r, s)` so fixtures can be promoted to regression tests.
+## Әрекет элементтері
+- [x] Қауіпсіздік трекерінде тәуелділік аудитін және түсіруді аяқтаңыз.
+- [x] RustCrypto SM жәшіктері үшін аудит серіктесінің келісімін растаңыз (SM-P0 бақылауы). Trail of Bits (CN криптографиялық тәжірибесі) `sm_audit_brief.md` құжатында жазылған басталу/жеткізу күндері бар бастапқы шолуға ие және NCC Group APAC реттеушінің немесе басқарудың бақылауларын қанағаттандыру үшін 2026 жылдың мамырында күтпеген жағдайға арналған слотты сақтап қалды.
+- [x] SM4 CCM бұрмалау жағдайлары (SM-4a) үшін Wycheproof қамтуын кеңейтіңіз.
+- [x] SDK және сым арқылы CI (SM-3c/SM-1b.1) арқылы жердегі канондық SM2 қол қою құрылғылары; `scripts/check_sm2_sdk_fixtures.py` арқылы қорғалған (`ci/check_sm2_sdk_fixtures.sh` қараңыз).
 
-## Action Items
-- [x] Finalise dependency audit and capture in the security tracker.
-- [x] Confirm audit partner engagement for the RustCrypto SM crates (SM-P0 follow-up). Trail of Bits (CN cryptography practice) owns the primary review with kickoff/delivery dates recorded in `sm_audit_brief.md`, and NCC Group APAC retained a May 2026 contingency slot to satisfy regulator or governance follow-ups.
-- [x] Extend Wycheproof coverage for SM4 CCM tamper cases (SM-4a).
-- [x] Land canonical SM2 signing fixtures across SDKs and wire into CI (SM-3c/SM-1b.1); guarded by `scripts/check_sm2_sdk_fixtures.py` (see `ci/check_sm2_sdk_fixtures.sh`).
+## Сәйкестік қосымшасы (мемлекеттік коммерциялық криптография)
 
-## Compliance Appendix (State Commercial Cryptography)
+- **Жіктеу:** SM2/SM3/SM4 Қытайдың *мемлекеттік коммерциялық криптография* режимі бойынша жеткізіледі (ҚХР Криптография заңы, 3-бап). Бұл алгоритмдерді Iroha бағдарламалық жасақтамасында жеткізу жобаны негізгі/жалпы (мемлекеттік құпия) деңгейлерге ** орналастырмайды**, бірақ оларды ҚХР орналастыруларында пайдаланатын операторлар коммерциялық крипто файлын және MLPS міндеттемелерін орындауы керек.【docs/source/crypto/sm_chinese_crypto.【d_law_crypto.
+- **Стандарттар желісі:** Қоғамдық құжаттаманы GM/T сипаттамаларының ресми GB/T түрлендірулерімен сәйкестендіріңіз:
 
-- **Classification:** SM2/SM3/SM4 ship under China’s *state commercial cryptography* regime (PRC Cryptography Law, Art. 3). Shipping these algorithms in Iroha software does **not** place the project in the core/common (state-secret) tiers, but operators using them in PRC deployments must follow commercial-crypto filing and MLPS obligations.【docs/source/crypto/sm_chinese_crypto_law_brief.md:14】
-- **Standards lineage:** Align public documentation with the official GB/T conversions of the GM/T specs:
-
-| Algorithm | GB/T reference | GM/T origin | Notes |
-|-----------|----------------|-------------|-------|
-| SM2 | GB/T 32918 (all parts) | GM/T 0003 | ECC digital signature + key exchange; Iroha exposes verification in core nodes and deterministic signing to SDKs. |
-| SM3 | GB/T 32905 | GM/T 0004 | 256-bit hash; deterministic hashing across scalar and ARMv8 accelerated paths. |
-| SM4 | GB/T 32907 | GM/T 0002 | 128-bit block cipher; Iroha provides GCM/CCM helpers and ensures big-endian parity across implementations. |
-
-- **Capability manifest:** The Torii `/v1/node/capabilities` endpoint advertises the following JSON shape so operators and tooling can consume the SM manifest programmatically:
+| Алгоритм | GB/T анықтамасы | GM/T шығу тегі | Ескертпелер |
+|----------|----------------|-------------|-------|
+| SM2 | GB/T32918 (барлық бөліктер) | GM/T0003 | ECC цифрлық қолтаңбасы + кілт алмасу; Iroha негізгі түйіндердегі тексеруді және SDK-ге детерминирленген қол қоюды көрсетеді. |
+| SM3 | GB/T32905 | GM/T0004 | 256-бит хэш; скаляр және ARMv8 жеделдетілген жолдар бойынша детерминирленген хэштеу. |
+| SM4 | GB/T32907 | GM/T0002 | 128 биттік блоктық шифр; Iroha GCM/CCM көмекшілерін қамтамасыз етеді және іске асырулар арасында үлкен-эндиандық паритетті қамтамасыз етеді. |- **Мүмкіндік манифесті:** Torii `/v1/node/capabilities` соңғы нүктесі келесі JSON пішінін жарнамалайды, осылайша операторлар мен құралдар SM манифестін бағдарламалық түрде пайдалана алады:
 
 ```json
 {
@@ -376,13 +344,13 @@ summary below tracks the headline items surfaced to release engineering.
 }
 ```
 
-The CLI subcommand `iroha runtime capabilities` surfaces the same payload locally, printing a one-line summary alongside the JSON advert for compliance evidence collection.
+CLI ішкі пәрмені `iroha runtime capabilities` сәйкестік дәлелдерін жинауға арналған JSON жарнамасымен бірге бір жолды қорытындыны басып шығара отырып, бірдей пайдалы жүктемені жергілікті түрде көрсетеді.
 
-- **Documentation deliverables:** publish release notes and SBOMs that identify the algorithms/standards above, and keep the full compliance brief (`sm_chinese_crypto_law_brief.md`) bundled with release artefacts so operators can attach it to provincial filings.【docs/source/crypto/sm_chinese_crypto_law_brief.md:59】
-- **Operator hand-off:** remind deployers that MLPS 2.0/GB/T 39786-2021 require crypto application assessments, SM key-management SOPs, and ≥ 6 year evidence retention; point them to the operator checklist in the compliance brief.【docs/source/crypto/sm_chinese_crypto_law_brief.md:43】【docs/source/crypto/sm_chinese_crypto_law_brief.md:74】
+- **Жеткізу құжаттары:** жоғарыдағы алгоритмдерді/стандарттарды анықтайтын шығарылым жазбалары мен SBOM файлдарын жариялаңыз және операторлар оны провинциялық құжаттарға тіркей алуы үшін шығарылым артефактілерімен бірге толық сәйкестік қысқашасын (`sm_chinese_crypto_law_brief.md`) сақтаңыз. файлдар.【docs/source/crypto/sm_chinese_crypto_law_brief.md:59】
+- **Операторды тапсыру:** орналастырушыларға MLPS2.0/GB/T39786-2021 криптографиялық қолданбаларды бағалауды, SM кілтін басқару SOPs және ≥6 жыл дәлелдемелерді сақтауды қажет ететінін еске салады; оларды сәйкестік туралы қысқаша ақпаратта оператордың тексеру тізіміне көрсетіңіз.【docs/source/crypto/sm_chinese_crypto_law_brief.md:43】【docs/source/crypto/sm_chinese_crypto_law_brief.md:74】
 
-## Communication Plan
-- **Audience:** Crypto WG core members, Release Engineering, Security Review board, SDK program leads.
-- **Artifacts:** `sm_program.md`, `sm_lock_refresh_plan.md`, `sm_vectors.md`, `sm_wg_sync_template.md`, roadmap excerpt (SM-0 .. SM-7a).
-- **Channel:** Weekly Crypto WG sync agenda + follow-up email summarising action items and requesting approval for lock refresh and dependency intake (draft circulated 2025-01-19).
-- **Owner:** Crypto WG lead (delegate acceptable).
+## Коммуникация жоспары
+- **Аудитория:** Crypto WG негізгі мүшелері, Release Engineering, Қауіпсіздікті шолу кеңесі, SDK бағдарламасы жетекшілері.
+- **Артефактілер:** `sm_program.md`, `sm_lock_refresh_plan.md`, `sm_vectors.md`, `sm_wg_sync_template.md`, жол картасының үзіндісі (SM-0 .. SM-7a).
+- **Арна:** Апталық Crypto WG синхрондау күн тәртібі + әрекет элементтерін қорытындылайтын және құлыпты жаңартуды және тәуелділікті қабылдауды мақұлдауды сұрайтын кейінгі электрондық пошта (жоба 2025-01-19 тараған).
+- **Иесі:** Crypto WG жетекші (делегат қолайлы).

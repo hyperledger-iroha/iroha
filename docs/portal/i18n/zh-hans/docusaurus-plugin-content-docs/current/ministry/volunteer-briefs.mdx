@@ -6,40 +6,39 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Volunteer Briefs
 description: Submit, lint, and publish citizen briefs for Ministry blacklist reviews.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import VolunteerLintStatusTable from '@site/src/components/VolunteerLintStatusTable';
+从 '@site/src/components/VolunteerLintStatusTable' 导入 VolunteerLintStatusTable；
 
-## Overview
+## 概述
 
-Volunteer briefs capture the support/oppose/context viewpoints that the Ministry of Information reviews whenever blacklist or policy changes are proposed. Every submission must follow the canonical schema implemented by `iroha_data_model::ministry::VolunteerBriefV1` (version `1`) so that:
+志愿者简报捕捉了信息部在提出黑名单或政策变更时审查的支持/反对/背景观点。每次提交都必须遵循 `iroha_data_model::ministry::VolunteerBriefV1`（版本 `1`）实现的规范模式，以便：
 
-1. Governance dashboards can compare fact tables deterministically.
-2. Conflict-of-interest disclosures are enforced before publication.
-3. Off-topic or astroturfed submissions are suppressed without removing them from the audit trail.
+1. 治理仪表板可以确定性地比较事实表。
+2. 利益冲突披露在发布前强制执行。
+3. 偏离主题或不合时宜的提交内容将被抑制，但不会将其从审计跟踪中删除。
 
-Use the template in `docs/source/ministry/volunteer_brief_template.md` or the `cargo xtask ministry-transparency ingest` helper to build a payload. The CLI validates the Norito struct, lints moderation tags, and emits a summary showing how many fact rows, citations, and disclosures were accepted.
+使用 `docs/source/ministry/volunteer_brief_template.md` 或 `cargo xtask ministry-transparency ingest` 帮助程序中的模板构建有效负载。 CLI 验证 Norito 结构、lints 审核标签，并发出一个摘要，显示有多少事实行、引用和披露被接受。
 
-## Publication pipeline & SLA
+## 发布流程和 SLA
 
-| Stage | Window | Details |
-|-------|--------|---------|
-| Intake & validation | T+0 to 6 hours | Payloads are uploaded through the volunteer form or the CLI. `VolunteerBriefV1::validate` enforces the schema (version, RFC 3339 timestamp, disclosure policy, digest formatting). Failures are rejected immediately with actionable error codes. |
-| Translation & moderation | T+6 to 24 hours | Reviewers apply moderation tags (`needs-translation`, `duplicate`, `policy-escalation`, etc.), redact contacts, and flag off-topic entries. Tags are stored in the Norito payload so downstream automation can suppress or highlight entries. |
-| Portal publication | T+24 to 48 hours | Valid briefs are published alongside the corresponding proposal page under **Volunteer Opinions**. Off-topic entries remain in the raw archive but are excluded from aggregate stance counts. |
+|舞台|窗口|详情 |
+|--------|--------|---------|
+|摄入和验证| T+0 至 6 小时 |有效负载通过志愿者表单或 CLI 上传。 `VolunteerBriefV1::validate` 强制实施架构（版本、RFC3339 时间戳、披露策略、摘要格式）。失败会立即被拒绝，并带有可操作的错误代码。 |
+|翻译和审核 | T+6 至 24 小时 |审阅者应用审核标签（`needs-translation`、`duplicate`、`policy-escalation` 等）、编辑联系人并标记偏离主题的条目。标签存储在 Norito 有效负载中，因此下游自动化可以抑制或突出显示条目。 |
+|门户刊物| T+24 至 48 小时 |有效的简报与相应的提案页面一起发布在**志愿者意见**下。离题条目保留在原始存档中，但从总体立场计数中排除。 |
 
-Expedited handling (≤12 hours) is triggered automatically when the `policy-escalation` or `astroturf` tags are present. Operators can audit compliance via the Volunteer Briefs Grafana panel, which tracks the time between `submitted_at` and portal publication.
+当存在 `policy-escalation` 或 `astroturf` 标签时，会自动触发加急处理（≤12 小时）。运营商可以通过志愿者简报 Grafana 面板审核合规性，该面板跟踪 `submitted_at` 和门户发布之间的时间。
 
-## Deliverables
+## 可交付成果
 
-- **Schema & docs:** `VolunteerBriefV1` lives in the shared data model, and the detailed field guide plus example payload reside in `docs/source/ministry/volunteer_brief_template.md` and `docs/examples/ministry/volunteer_brief_template.json`.
-- **Validation tooling:** `cargo xtask ministry-transparency volunteer-validate --input <file> [--json-output artifacts/ministry/volunteer-lint.json]` runs the same lints used by the portal build; `ingest --volunteer <file>` remains available when you want to stage an entire bundle for publication.
-- **Portal surfacing:** Each proposal page links to the decoded support/oppose/context briefs, making citizen opinions visible without downloading raw JSON. Moderation metadata is rendered alongside the brief so jurors understand why an entry may have been delayed or excluded.
+- **架构和文档：** `VolunteerBriefV1` 位于共享数据模型中，详细的现场指南和示例有效负载位于 `docs/source/ministry/volunteer_brief_template.md` 和 `docs/examples/ministry/volunteer_brief_template.json` 中。
+- **验证工具：** `cargo xtask ministry-transparency volunteer-validate --input <file> [--json-output artifacts/ministry/volunteer-lint.json]` 运行门户构建所使用的相同 lint；当您想要暂存整个捆绑包以供发布时，`ingest --volunteer <file>` 仍然可用。
+- **门户展示：** 每个提案页面都链接到解码的支持/反对/背景摘要，使公民意见可见，而无需下载原始 JSON。审核元数据与简报一起呈现，以便陪审员了解条目可能被延迟或排除的原因。
 
-Refer to the roadmap item **MINFO-3 — Volunteer interest panel infrastructure** if additional automation (e.g., bulk import APIs or extended analytics) is required.
+如果需要额外的自动化（例如批量导入 API 或扩展分析），请参阅路线图项目 **MINFO-3 — 志愿者兴趣小组基础设施**。
 
-## Lint status dashboard
+## Lint 状态仪表板门户构建现在运行 `npm run generate:volunteer-lint`，它会在每个签入的志愿者简介中调用 `cargo xtask ministry-transparency volunteer-validate --json-output …`。生成的清单如下所示，以便审阅者可以在发布之前确认每个提案的 lint 状态。
 
-The portal build now runs `npm run generate:volunteer-lint`, which invokes `cargo xtask ministry-transparency volunteer-validate --json-output …` across every checked-in volunteer brief. The resulting manifest is rendered below so reviewers can confirm each proposal’s lint status before publishing.
-
-<VolunteerLintStatusTable />

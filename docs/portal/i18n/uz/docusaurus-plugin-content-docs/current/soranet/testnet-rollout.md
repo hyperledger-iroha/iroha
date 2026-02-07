@@ -8,82 +8,84 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraNet testnet rollout (SNNet-10)
 sidebar_label: Testnet Rollout (SNNet-10)
 description: Phased activation plan, onboarding kit, and telemetry gates for SoraNet testnet promotions.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+::: Eslatma Kanonik manba
 :::
 
-SNNet-10 coordinates the staged activation of the SoraNet anonymity overlay across the network. Use this plan to translate the roadmap bullet into concrete deliverables, runbooks, and telemetry gates so every operator understands the expectations before SoraNet becomes the default transport.
+SNNet-10 tarmoq bo'ylab SoraNet anonimlik qoplamasini bosqichma-bosqich faollashtirishni muvofiqlashtiradi. SoraNet standart transportga aylanishidan oldin har bir operator kutilgan narsalarni tushunib olishi uchun yo‘l xaritasi o‘qini aniq natijalarga, ishga tushirish kitoblariga va telemetriya darvozalariga tarjima qilish uchun ushbu rejadan foydalaning.
 
-## Launch phases
+## Ishga tushirish bosqichlari
 
-| Phase | Timeline (target) | Scope | Required artefacts |
+| Bosqich | Xronologiya (maqsad) | Qo'llash doirasi | Kerakli artefaktlar |
 |-------|-------------------|-------|--------------------|
-| **T0 — Closed Testnet** | Q4 2026 | 20–50 relays across ≥3 ASNs operated by core contributors. | Testnet onboarding kit, guard pinning smoke suite, baseline latency + PoW metrics, brownout drill log. |
-| **T1 — Public Beta** | Q1 2027 | ≥100 relays, guard rotation enabled, exit bonding enforced, SDK betas default to SoraNet with `anon-guard-pq`. | Updated onboarding kit, operator verification checklist, directory publishing SOP, telemetry dashboard pack, incident rehearsal reports. |
-| **T2 — Mainnet Default** | Q2 2027 (gated on SNNet-6/7/9 completion) | Production network defaults to SoraNet; obfs/MASQUE transports and PQ ratchet enforcement enabled. | Governance approval minutes, direct-only rollback procedure, downgrade alarms, signed success metrics report. |
+| **T0 — Yopiq Testnet** | 2026 yil 4-chorak | Asosiy ishtirokchilar tomonidan boshqariladigan ≥3 ASN bo'ylab 20–50 o'rni. | Testnet ishga tushirish to'plami, qo'riqchi tutashuvchi tutun to'plami, asosiy kechikish + PoW ko'rsatkichlari, burg'ulash jurnali. |
+| **T1 — Ommaviy Beta** | 2027 yil 1-chorak | ≥100 oʻrni, qoʻriqchi aylanishi yoqilgan, chiqish ulanishi kuchga kirgan, `anon-guard-pq` bilan SoraNet uchun standart SDK beta. | Yangilangan bort to'plami, operatorni tekshirish ro'yxati, ma'lumotnomalarni nashr qilish SOP, telemetriya asboblar paneli to'plami, voqea-hodisalar bo'yicha takroriy hisobotlar. |
+| **T2 — Asosiy tarmoq standarti** | 2027 yil 2-chorak (SNNet-6/7/9 tugallanishiga e'tibor qaratildi) | Ishlab chiqarish tarmog'ining sukut bo'yicha SoraNet; obfs/MASQUE transportlari va PQ ratchet ijrosi yoqilgan. | Boshqaruvni tasdiqlash daqiqalari, faqat to'g'ridan-to'g'ri orqaga qaytarish tartibi, pasaytirish signallari, imzolangan muvaffaqiyat ko'rsatkichlari hisoboti. |
 
-There is **no skip path**—each phase must ship the telemetry and governance artefacts from the preceding stage before promotion.
+**Oʻtkazib yuborish yoʻli yoʻq** — har bir bosqich telemetriya va boshqaruv artefaktlarini ilgari surishdan oldin oldingi bosqichdan joʻnatishi kerak.
 
-## Testnet onboarding kit
+## Testnet ishga tushirish to'plami
 
-Every relay operator receives a deterministic package with the following files:
+Har bir relay operatori quyidagi fayllar bilan deterministik paketni oladi:
 
-| Artefact | Description |
+| Artefakt | Tavsif |
 |----------|-------------|
-| `01-readme.md` | Overview, contact points, and timeline. |
-| `02-checklist.md` | Pre-flight checklist (hardware, network reachability, guard policy verification). |
-| `03-config-example.toml` | Minimal SoraNet relay + orchestrator configuration aligned with SNNet-9 compliance blocks, including a `guard_directory` block that pins the latest guard snapshot hash. |
-| `04-telemetry.md` | Instructions for wiring the SoraNet privacy metrics dashboards and alert thresholds. |
-| `05-incident-playbook.md` | Brownout/downgrade response procedure with escalation matrix. |
-| `06-verification-report.md` | Template operators complete and return once smoke tests pass. |
+| `01-readme.md` | Umumiy ko'rinish, aloqa nuqtalari va vaqt jadvali. |
+| `02-checklist.md` | Parvoz oldidan nazorat ro'yxati (apparat, tarmoqqa kirish imkoniyati, qo'riqlash siyosatini tekshirish). |
+| `03-config-example.toml` | Minimal SoraNet relay + orchestrator konfiguratsiyasi SNNet-9 muvofiqlik bloklari bilan moslangan, shu jumladan `guard_directory` bloki, so'nggi guard snapshot xesh. |
+| `04-telemetry.md` | SoraNet maxfiylik o'lchovlari asboblar paneli va ogohlantirish chegaralarini ulash bo'yicha ko'rsatmalar. |
+| `05-incident-playbook.md` | Eskalatsiya matritsasi bilan qo'ng'iroq qilish/pastga tushirish javob protsedurasi. |
+| `06-verification-report.md` | Shablon operatorlari tutun sinovlari o'tgandan so'ng yakunlaydi va qaytib keladi. |
 
-A rendered copy lives in `docs/examples/soranet_testnet_operator_kit/`. Each promotion refreshes the kit; version numbers track the phase (for example, `testnet-kit-vT0.1`).
+Ko'rsatilgan nusxa `docs/examples/soranet_testnet_operator_kit/` da saqlanadi. Har bir aksiya to'plamni yangilaydi; versiya raqamlari fazani kuzatib boradi (masalan, `testnet-kit-vT0.1`).
 
-For public-beta (T1) operators, the concise onboarding brief in `docs/source/soranet/snnet10_beta_onboarding.md` summarises prerequisites, telemetry deliverables, and the submission workflow while pointing back to the deterministic kit and validator helpers.
+Ommaviy beta (T1) operatorlari uchun `docs/source/soranet/snnet10_beta_onboarding.md` dagi ixcham ishga tushirish boʻyicha qisqacha maʼlumot deterministik toʻplam va validator yordamchilariga ishora qilib, dastlabki shartlar, telemetriya natijalari va joʻnatish ish jarayonini umumlashtiradi.
 
-`cargo xtask soranet-testnet-feed` generates the JSON feed that aggregates the promotion window, relay roster, metrics report, drill evidence, and attachment hashes referenced by the stage-gate template. Sign drill logs plus attachments with `cargo xtask soranet-testnet-drill-bundle` first so the feed can record `drill_log.signed = true`.
+`cargo xtask soranet-testnet-feed` reklama oynasi, oʻtish roʻyxati, koʻrsatkichlar hisoboti, burgʻulash dalillari va sahna darvozasi shabloniga havola qilingan biriktirma xeshlarini jamlaydigan JSON tasmasi ishlab chiqaradi. Tasma `drill_log.signed = true` yozib olishi uchun avval `cargo xtask soranet-testnet-drill-bundle` bilan matkap jurnallari va biriktirmalarni imzolang.
 
-## Success metrics
+## Muvaffaqiyat ko'rsatkichlari
 
-Promotion between phases is gated on the following telemetry, collected for a minimum of two weeks:
+Fazalar orasidagi targ'ibot kamida ikki hafta davomida to'plangan quyidagi telemetriya bo'yicha amalga oshiriladi:
 
-- `soranet_privacy_circuit_events_total`: 95 % of circuits complete without brownout or downgrade events; remaining 5 % capped by PQ supply.
-- `sorafs_orchestrator_policy_events_total{outcome="brownout"}`: &lt;1 % of fetch sessions per day trigger brownout outside scheduled drills.
-- `soranet_privacy_gar_reports_total`: variance within ±10 % of expected GAR category mix; spikes must be explained by approved policy updates.
-- PoW ticket success rate: ≥99 % within the 3 s target window; reported via `soranet_privacy_throttles_total{scope="congestion"}`.
-- Latency (95th percentile) per region: &lt;200 ms once circuits are fully built, captured via `soranet_privacy_rtt_millis{percentile="p95"}`.
+- `soranet_privacy_circuit_events_total`: 95% sxemalar ishdan chiqish yoki pasaytirish hodisalarisiz tugallandi; qolgan 5% PQ ta'minoti bilan cheklangan.
+- `sorafs_orchestrator_policy_events_total{outcome="brownout"}`: Kuniga olib tashlash seanslarining <1% rejalashtirilgan mashqlardan tashqarida ishlamay qolishiga olib keladi.
+- `soranet_privacy_gar_reports_total`: kutilayotgan GAR toifasi aralashmasining ±10% ichida dispersiya; o'sishlar tasdiqlangan siyosat yangilanishlari bilan tushuntirilishi kerak.
+- PoW chiptasining muvaffaqiyat darajasi: 3s maqsadli oyna ichida ≥99%; `soranet_privacy_throttles_total{scope="congestion"}` orqali xabar qilingan.
+- Har bir mintaqa uchun kechikish (95-persentil): sxemalar toʻliq qurilganidan keyin <200ms, `soranet_privacy_rtt_millis{percentile="p95"}` orqali yozib olinadi.
 
-Dashboard and alert templates live in `dashboard_templates/` and `alert_templates/`; mirror them into your telemetry repository and add them to CI lint checks. Use `cargo xtask soranet-testnet-metrics` to generate the governance-facing report before requesting promotion.
+Boshqaruv paneli va ogohlantirish shablonlari `dashboard_templates/` va `alert_templates/` da ishlaydi; ularni telemetriya omboringizga aks ettiring va ularni CI lint tekshiruvlariga qo'shing. Ko‘tarilish so‘rovidan oldin boshqaruv hisobotini yaratish uchun `cargo xtask soranet-testnet-metrics` dan foydalaning.
 
-Stage-gate submissions must follow `docs/source/soranet/snnet10_stage_gate_template.md`, which links to the ready-to-copy Markdown form stored under `docs/examples/soranet_testnet_stage_gate/stage_gate_report_template.md`.
+Bosqichli jo‘natmalar `docs/examples/soranet_testnet_stage_gate/stage_gate_report_template.md` ostida saqlangan nusxa ko‘chirishga tayyor Markdown formasiga havola qiluvchi `docs/source/soranet/snnet10_stage_gate_template.md` ga amal qilishi kerak.
 
-## Verification checklist
+## Tekshirish roʻyxati
 
-Operators must sign off on the following before entering each phase:
+Operatorlar har bir bosqichga kirishdan oldin quyidagilardan chiqishlari kerak:
 
-- ✅ Relay advert signed with current admission envelope.
-- ✅ Guard rotation smoke test (`tools/soranet-relay --check-rotation`) passes.
-- ✅ `guard_directory` points at the latest `GuardDirectorySnapshotV2` artefact and `expected_directory_hash_hex` matches the committee digest (relay startup logs the validated hash).
-- ✅ PQ ratchet metrics (`sorafs_orchestrator_pq_ratio`) stay above target thresholds for the requested stage.
-- ✅ GAR compliance config matches the latest tag (see SNNet-9 catalogue).
-- ✅ Downgrade alarm simulation (disable collectors, expect alert within 5 min).
-- ✅ PoW/DoS drill executed with documented mitigation steps.
+- ✅ Joriy qabul konverti bilan imzolangan e'lonni o'tkazish.
+- ✅ Guard aylanish tutuni sinovi (`tools/soranet-relay --check-rotation`) o'tadi.
+- ✅ `guard_directory` oxirgi `GuardDirectorySnapshotV2` artefaktini koʻrsatadi va `expected_directory_hash_hex` qoʻmita dayjestiga mos keladi (releyni ishga tushirish tasdiqlangan xeshni qayd qiladi).
+- ✅ PQ ratchet ko'rsatkichlari (`sorafs_orchestrator_pq_ratio`) so'ralgan bosqich uchun maqsadli chegaralardan yuqori bo'lib qoladi.
+- ✅ GAR muvofiqligi konfiguratsiyasi so'nggi tegga mos keladi (SNNet-9 katalogiga qarang).
+- ✅ Signal simulyatsiyasini pasaytirish (kollektorlarni o'chiring, 5 daqiqa ichida ogohlantirishni kuting).
+- ✅ PoW/DoS matkapi hujjatlashtirilgan yumshatish bosqichlari bilan bajarilgan.
 
-A pre-filled template is included in the onboarding kit. Operators submit the completed report to the governance helpdesk before receiving production credentials.
+Oldindan to'ldirilgan shablon bortga kirish to'plamiga kiritilgan. Operatorlar ishlab chiqarish ma'lumotlarini olishdan oldin to'ldirilgan hisobotni boshqaruv yordam xizmatiga taqdim etadilar.
 
-## Governance & reporting
+## Boshqaruv va hisobot
 
-- **Change control:** promotions require Governance Council approval recorded in the council minutes and attached to the status page.
-- **Status digest:** publish weekly updates summarising relay count, PQ ratio, brownout incidents, and outstanding action items (stored in `docs/source/status/soranet_testnet_digest.md` once the cadence starts).
-- **Rollbacks:** maintain a signed rollback plan that returns the network to the previous phase within 30 minutes, including DNS/guard cache invalidation and client communication templates.
+- **O'zgarishlarni nazorat qilish:** lavozimga ko'tarilish uchun Boshqaruv kengashining ma'qullanishi kengash bayonnomasida qayd etilgan va holat sahifasiga ilova qilingan.
+- **Status dayjesti:** o‘rni soni, PQ nisbati, ishdan chiqish hodisalari va ajoyib harakat elementlarini jamlagan haftalik yangilanishlarni nashr eting (kadans boshlanganidan keyin `docs/source/status/soranet_testnet_digest.md` da saqlanadi).
+- **Orqaga qaytarish:** 30 daqiqa ichida tarmoqni oldingi bosqichga qaytaradigan imzolangan orqaga qaytarish rejasini saqlang, jumladan DNS/qo'riqchi keshini bekor qilish va mijoz bilan aloqa shablonlari.
 
-## Supporting assets
+## Yordamchi aktivlar
 
-- `cargo xtask soranet-testnet-kit [--out <dir>]` materialises the onboarding kit from `xtask/templates/soranet_testnet/` into the target directory (defaults to `docs/examples/soranet_testnet_operator_kit/`).
-- `cargo xtask soranet-testnet-metrics --input <metrics.json> [--out <path|->]` evaluates the SNNet-10 success metrics and emits a structured pass/fail report suitable for governance reviews. A sample snapshot lives in `docs/examples/soranet_testnet_metrics_sample.json`.
-- Grafana and Alertmanager templates live under `dashboard_templates/soranet_testnet_overview.json` and `alert_templates/soranet_testnet_rules.yml`; copy them into your telemetry repository or wire them into CI lint checks.
-- The downgrade communication template for SDK/portal messaging resides in `docs/source/soranet/templates/downgrade_communication_template.md`.
-- Weekly status digests should use `docs/source/status/soranet_testnet_weekly_digest.md` as the canonical form.
+- `cargo xtask soranet-testnet-kit [--out <dir>]` ishga tushirish to'plamini `xtask/templates/soranet_testnet/` dan maqsadli katalogga o'zgartiradi (birlamchi `docs/examples/soranet_testnet_operator_kit/`).
+- `cargo xtask soranet-testnet-metrics --input <metrics.json> [--out <path|->]` SNNet-10 muvaffaqiyat ko'rsatkichlarini baholaydi va boshqaruvni tekshirish uchun mos tuzilgan o'tish/qobiliyatsiz hisobotini chiqaradi. Namuna surati `docs/examples/soranet_testnet_metrics_sample.json` da saqlanadi.
+- Grafana va Alertmanager shablonlari `dashboard_templates/soranet_testnet_overview.json` va `alert_templates/soranet_testnet_rules.yml` ostida ishlaydi; ularni telemetriya omboringizga ko'chiring yoki CI lint tekshiruvlariga o'tkazing.
+- SDK/portal xabar almashish uchun pasaytirilgan aloqa shablonlari `docs/source/soranet/templates/downgrade_communication_template.md` da joylashgan.
+- Haftalik status dayjestlari kanonik shakl sifatida `docs/source/status/soranet_testnet_weekly_digest.md` dan foydalanishi kerak.
 
-Pull requests should update this page alongside any artefact or telemetry changes so the rollout plan stays canonical.
+Chiqish soʻrovlari ushbu sahifani har qanday artefakt yoki telemetriya oʻzgarishlari bilan birga yangilashi kerak, shuning uchun tarqatish rejasi kanonik boʻlib qoladi.

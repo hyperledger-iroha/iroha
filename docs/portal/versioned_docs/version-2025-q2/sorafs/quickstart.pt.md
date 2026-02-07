@@ -6,45 +6,46 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 79a048e6061f7054e14a471004cf7da0dddd3f9bf627d9f1d20ff63803cb0979
 source_last_modified: "2026-01-04T17:06:14.405886+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SoraFS Quickstart
+# SoraFS Início rápido
 
-This hands-on guide walks through the deterministic SF-1 chunker profile,
-manifest signing, and multi-provider fetch flow that underpin the SoraFS
-storage pipeline. Pair it with the [manifest pipeline deep dive](manifest-pipeline.md)
-for design notes and CLI flag reference material.
+Este guia prático percorre o perfil determinístico do chunker SF-1,
+assinatura de manifesto e fluxo de busca de vários provedores que sustentam o SoraFS
+pipeline de armazenamento. Combine-o com o [aprofundamento do pipeline de manifesto](manifest-pipeline.md)
+para notas de design e material de referência de sinalizador CLI.
 
-## Prerequisites
+## Pré-requisitos
 
-- Rust toolchain (`rustup update`), workspace cloned locally.
-- Optional: [OpenSSL-generated Ed25519 keypair](https://github.com/hyperledger-iroha/iroha/tree/master/defaults/dev-keys#readme)
-  for signing manifests.
-- Optional: Node.js ≥ 18 if you plan to preview the Docusaurus portal.
+- Conjunto de ferramentas Rust (`rustup update`), espaço de trabalho clonado localmente.
+- Opcional: [par de chaves Ed25519 gerado por OpenSSL](https://github.com/hyperledger-iroha/iroha/tree/master/defaults/dev-keys#readme)
+  para assinar manifestos.
+- Opcional: Node.js ≥ 18 se você planeja visualizar o portal Docusaurus.
 
-Set `export RUST_LOG=info` while experimenting to surface helpful CLI messages.
+Defina `export RUST_LOG=info` enquanto faz experiências para exibir mensagens CLI úteis.
 
-## 1. Refresh the deterministic fixtures
+## 1. Atualize os equipamentos determinísticos
 
-Regenerate the canonical SF-1 chunking vectors. The command also emits signed
-manifest envelopes when `--signing-key` is supplied; use `--allow-unsigned`
-during local development only.
+Regenere os vetores canônicos de fragmentação SF-1. O comando também emite sinais assinados
+envelopes de manifesto quando `--signing-key` for fornecido; usar `--allow-unsigned`
+apenas durante o desenvolvimento local.
 
 ```bash
 cargo run -p sorafs_chunker --bin export_vectors -- --allow-unsigned
 ```
 
-Outputs:
+Saídas:
 
-- `fixtures/sorafs_chunker/sf1_profile_v1.{json,rs,ts,go}`
-- `fixtures/sorafs_chunker/manifest_blake3.json`
-- `fixtures/sorafs_chunker/manifest_signatures.json` (if signed)
-- `fuzz/sorafs_chunker/sf1_profile_v1_{input,backpressure}.json`
+-`fixtures/sorafs_chunker/sf1_profile_v1.{json,rs,ts,go}`
+-`fixtures/sorafs_chunker/manifest_blake3.json`
+- `fixtures/sorafs_chunker/manifest_signatures.json` (se assinado)
+-`fuzz/sorafs_chunker/sf1_profile_v1_{input,backpressure}.json`
 
-## 2. Chunk a payload and inspect the plan
+## 2. Divida uma carga útil e inspecione o plano
 
-Use `sorafs_chunker` to chunk an arbitrary file or archive:
+Use `sorafs_chunker` para agrupar um arquivo ou arquivo arbitrário:
 
 ```bash
 echo "SoraFS deterministic chunking" > /tmp/docs.txt
@@ -52,23 +53,23 @@ cargo run -p sorafs_chunker --bin sorafs-chunk-dump -- /tmp/docs.txt \
   > /tmp/docs.chunk-plan.json
 ```
 
-Key fields:
+Campos principais:
 
-- `profile` / `break_mask` – confirms the `sorafs.sf1@1.0.0` parameters.
-- `chunks[]` – ordered offsets, lengths, and chunk BLAKE3 digests.
+- `profile` / `break_mask` – confirma os parâmetros `sorafs.sf1@1.0.0`.
+- `chunks[]` – deslocamentos ordenados, comprimentos e resumos de pedaços BLAKE3.
 
-For larger fixtures, run the proptest-backed regression to ensure streaming and
-batch chunking stay in sync:
+Para equipamentos maiores, execute a regressão apoiada por proptest para garantir streaming e
+a fragmentação em lote permanece sincronizada:
 
 ```bash
 cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ```
 
-## 3. Build and sign a manifest
+## 3. Crie e assine um manifesto
 
-Wrap the chunk plan, aliases, and governance signatures into a manifest using
-`sorafs-manifest-stub`. The command below showcases a single-file payload; pass
-a directory path to package a tree (the CLI walks it lexicographically).
+Agrupe o plano de bloco, os aliases e as assinaturas de governança em um manifesto usando
+`sorafs-manifest-stub`. O comando abaixo mostra uma carga útil de arquivo único; passar
+um caminho de diretório para empacotar uma árvore (a CLI percorre lexicograficamente).
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
@@ -80,21 +81,21 @@ cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
   --allow-unsigned
 ```
 
-Review `/tmp/docs.report.json` for:
+Revise `/tmp/docs.report.json` para:
 
-- `chunking.chunk_digest_sha3_256` – SHA3 digest of offsets/lengths, matches the
-  chunker fixtures.
-- `manifest.manifest_blake3` – BLAKE3 digest signed in the manifest envelope.
-- `chunk_fetch_specs[]` – ordered fetch instructions for orchestrators.
+- `chunking.chunk_digest_sha3_256` – resumo SHA3 de deslocamentos/comprimentos, corresponde ao
+  luminárias chunker.
+- `manifest.manifest_blake3` – resumo BLAKE3 assinado no envelope do manifesto.
+- `chunk_fetch_specs[]` – instruções de busca ordenadas para orquestradores.
 
-When ready to supply real signatures, add `--signing-key` and `--signer`
-arguments. The command verifies every Ed25519 signature before writing the
+Quando estiver pronto para fornecer assinaturas reais, adicione `--signing-key` e `--signer`
+argumentos. O comando verifica cada assinatura Ed25519 antes de escrever o
 envelope.
 
-## 4. Simulate multi-provider retrieval
+## 4. Simule a recuperação de vários provedores
 
-Use the developer fetch CLI to replay the chunk plan against one or more
-providers. This is ideal for CI smoke tests and orchestrator prototyping.
+Use a CLI de busca do desenvolvedor para reproduzir o plano de bloco em um ou mais
+fornecedores. Isso é ideal para testes de fumaça de CI e prototipagem de orquestrador.
 
 ```bash
 cargo run -p sorafs_car --bin sorafs_fetch -- \
@@ -104,27 +105,25 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
   --json-out=/tmp/docs.fetch-report.json
 ```
 
-Assertions:
+Afirmações:
 
-- `payload_digest_hex` must match the manifest report.
-- `provider_reports[]` surfaces success/failure counts per provider.
-- Non-zero `chunk_retry_total` highlights back-pressure adjustments.
-- Pass `--max-peers=<n>` to limit the number of providers scheduled for a run
-  and keep CI simulations focused on the primary candidates.
-- `--retry-budget=<n>` overrides the default per-chunk retry count (3) so you
-  can surface orchestrator regressions faster when injecting failures.
+- `payload_digest_hex` deve corresponder ao relatório do manifesto.
+- `provider_reports[]` apresenta contagens de sucesso/falha por provedor.
+- `chunk_retry_total` diferente de zero destaca ajustes de contrapressão.
+- Passe `--max-peers=<n>` para limitar o número de provedores agendados para uma execução
+  e manter as simulações de CI focadas nos principais candidatos.
+- `--retry-budget=<n>` substitui a contagem padrão de novas tentativas por bloco (3) para que você
+  pode revelar regressões do orquestrador mais rapidamente ao injetar falhas.
 
-Add `--expect-payload-digest=<hex>` and `--expect-payload-len=<bytes>` to fail
-fast when the reconstructed payload deviates from the manifest.
+Adicione `--expect-payload-digest=<hex>` e `--expect-payload-len=<bytes>` para falhar
+rápido quando a carga reconstruída se desvia do manifesto.
 
-## 5. Next steps
-
-- **Governance integration** – pipe the manifest digest and
-  `manifest_signatures.json` into the council workflow so the Pin Registry can
-  advertise availability.
-- **Registry negotiation** – consult [`sorafs/chunker_registry.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/chunker_registry.md)
-  before registering new profiles. Automation should prefer canonical handles
-  (`namespace.name@semver`) over numeric IDs.
-- **CI automation** – add the commands above to release pipelines so docs,
-  fixtures, and artifacts publish deterministic manifests alongside signed
-  metadata.
+## 5. Próximas etapas- **Integração de governança** – canalize o resumo do manifesto e
+  `manifest_signatures.json` no fluxo de trabalho do conselho para que o Pin Registry possa
+  anuncie a disponibilidade.
+- **Negociação de cadastro** – consultar [`sorafs/chunker_registry.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/chunker_registry.md)
+  antes de registrar novos perfis. A automação deve preferir identificadores canônicos
+  (`namespace.name@semver`) sobre IDs numéricos.
+- **Automação de CI** – adicione os comandos acima para liberar pipelines, então documentos,
+  fixtures e artefatos publicam manifestos determinísticos junto com assinados
+  metadados.

@@ -7,94 +7,92 @@ generator: scripts/sync_docs_i18n.py
 source_hash: e7116d28e32d8bd77434edd6767427cc3d2ae0624f4de132b1d0cec3c7d44b86
 source_last_modified: "2025-12-29T18:16:35.938246+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Product Filing (开发备案) Template
-% Hyperledger Iroha Compliance Working Group
+% SM2/SM3/SM4 Məhsul Faylı (开发备案) Şablonu
+% Hyperledger Iroha Uyğunluq İşçi Qrupu
 % 2026-05-06
 
-# Instructions
+# Təlimat
 
-Use this template when submitting a *product development filing* to a provincial
-or municipal State Cryptography Administration (SCA) office before distributing
-SM-enabled binaries or source artefacts from within mainland China. Replace the
-placeholders with project-specific details, export the completed form as PDF if
-required, and attach the artefacts referenced in the checklist.
+Bir əyalətə *məhsul inkişafı sənədi* təqdim edərkən bu şablondan istifadə edin
+və ya bələdiyyə Dövlət Kriptoqrafiya Administrasiyasının (SCA) ofisinə müraciət etməzdən əvvəl
+SM-in effektiv ikili faylları və ya materik Çin daxilindən mənbə artefaktları. dəyişdirin
+layihəyə aid təfərrüatları olan yer tutucular, doldurulmuş formanı PDF olaraq ixrac edin
+tələb olunur və yoxlama siyahısında istinad edilən artefaktları əlavə edin.
 
-# 1. Applicant & Product Summary
+# 1. Ərizəçi və Məhsul Xülasəsi
 
-| Field | Value |
+| Sahə | Dəyər |
 |-------|-------|
-| Organisation name | {{ ORGANISATION }} |
-| Registered address | {{ ADDRESS }} |
-| Legal representative | {{ LEGAL_REP }} |
-| Primary contact (name / title / email / phone) | {{ CONTACT }} |
-| Product name | Hyperledger Iroha {{ RELEASE_NAME }} |
-| Product version / build ID | {{ VERSION }} |
-| Filing type | Product development (开发备案) |
-| Filing date | {{ YYYY-MM-DD }} |
+| Təşkilatın adı | {{ TƏŞKİLAT }} |
+| Qeydiyyat ünvanı | {{ ÜNVAN }} |
+| Qanuni nümayəndə | {{ HÜQUQİ_REP }} |
+| Əsas əlaqə (ad / başlıq / e-poçt / telefon) | {{ ƏLAQƏ }} |
+| Məhsulun adı | Hyperledger Iroha {{ RELEASE_NAME }} |
+| Məhsul versiyası / quruluş ID | {{ VERSİYA }} |
+| Sənədləşdirmə növü | Məhsul inkişafı (开发备案) |
+| Müraciət tarixi | {{ YYYY-AA-GG }} |
 
-# 2. Cryptography Usage Overview
+# 2. Kriptoqrafiyadan İstifadə Baxışı
 
-- Supported algorithms: `SM2`, `SM3`, `SM4` (provide usage matrix below).
-- Usage context:
-  | Algorithm | Component | Purpose | Deterministic safeguards |
-  |-----------|-----------|---------|--------------------------|
-  | SM2 | {{ COMPONENT }} | {{ PURPOSE }} | RFC6979 + canonical r∥s enforcement |
-  | SM3 | {{ COMPONENT }} | {{ PURPOSE }} | Deterministic hashing via `Sm3Digest` |
-  | SM4 | {{ COMPONENT }} | {{ PURPOSE }} | AEAD (GCM/CCM) with enforced nonce policy |
-- Non-SM algorithms in build: {{ OTHER_ALGORITHMS }} (for completeness).
+- Dəstəklənən alqoritmlər: `SM2`, `SM3`, `SM4` (aşağıda istifadə matrisini təqdim edin).
+- İstifadə konteksti:
+  | Alqoritm | Komponent | Məqsəd | Deterministik təminatlar |
+  |----------|-----------|---------|--------------------------|
+  | SM2 | {{ KOMPONENT }} | {{ MƏQSƏD }} | RFC6979 + kanonik r∥s tətbiqi |
+  | SM3 | {{ KOMPONENT }} | {{ MƏQSƏD }} | `Sm3Digest` | vasitəsilə deterministik hashing
+  | SM4 | {{ KOMPONENT }} | {{ MƏQSƏD }} | AEAD (GCM/CCM) tətbiq edilməmiş siyasət |
+- Quraşdırmada qeyri-SM alqoritmləri: {{ OTHER_ALGORITHMS }} (tamlıq üçün).
 
-# 3. Development & Supply Chain Controls
+# 3. İnkişaf və Təchizat Zəncirinə Nəzarət
 
-- Source code repository: {{ REPOSITORY_URL }}
-- Deterministic build instructions:
+- Mənbə kodu deposu: {{ REPOSITORY_URL }}
+- Deterministik qurma təlimatları:
   1. `git clone {{ REPOSITORY_URL }} && git checkout {{ COMMIT_SHA }}`
-  2. `cargo build --workspace --locked --release --features "sm sm-ffi-openssl"` (adjust as needed).
-  3. SBOM generated via `cargo auditable` / CycloneDX (`{{ SBOM_PATH }}`).
-- Continuous integration environment summary:
-  | Item | Value |
+  2. `cargo build --workspace --locked --release --features "sm sm-ffi-openssl"` (lazım olduqda tənzimləyin).
+  3. `cargo auditable` / CycloneDX (`{{ SBOM_PATH }}`) vasitəsilə yaradılan SBOM.
+- Davamlı inteqrasiya mühitinin xülasəsi:
+  | Maddə | Dəyər |
   |------|-------|
-  | Build OS / version | {{ BUILD_OS }} |
-  | Compiler toolchain | {{ TOOLCHAIN }} |
-  | OpenSSL / Tongsuo source | {{ OPENSSL_SOURCE }} |
-  | Reproducibility checksum | {{ CHECKSUM }} |
+  | OS / versiya qurmaq | {{ BUILD_OS }} |
+  | Kompilyator alətlər silsiləsi | {{ TALİMATLAR ZİNCİRİ }} |
+  | OpenSSL / Tongsuo mənbəyi | {{ AÇIQ_MƏNBƏ }} |
+  | Təkrarlanma qabiliyyətinə nəzarət məbləği | {{ YAXŞI CƏMİYYƏ }} |
 
-# 4. Key Management & Security
+# 4. Açar İdarəetmə və Təhlükəsizlik
 
-- Default enabled SM features: {{ DEFAULTS }} (e.g., verify-only).
-- Configuration flags required for signing: {{ CONFIG_FLAGS }}.
-- Key custody approach:
-  | Item | Details |
+- Defolt aktivləşdirilmiş SM xüsusiyyətləri: {{ DEFAULTS }} (məsələn, yalnız doğrulama üçün).
+- İmza üçün tələb olunan konfiqurasiya bayraqları: {{ CONFIG_FLAGS }}.
+- Əsas nəzarət yanaşması:
+  | Maddə | Təfərrüatlar |
   |------|---------|
-  | Key generation tool | {{ KEY_TOOL }} |
-  | Storage medium | {{ STORAGE_MEDIUM }} |
-  | Backup policy | {{ BACKUP_POLICY }} |
-  | Access controls | {{ ACCESS_CONTROLS }} |
-- Incident response contacts (24/7):
-  | Role | Name | Phone | Email |
+  | Açar yaratma vasitəsi | {{ KEY_TOOL }} |
+  | Saxlama mühiti | {{ STORAGE_ORTA }} |
+  | Yedəkləmə siyasəti | {{ YEDEK ALMA_SİYASƏTİ }} |
+  | Giriş nəzarətləri | {{ ACCESS_CONTROLS }} |
+- Hadisə ilə bağlı cavab əlaqəsi (24/7):
+  | Rol | Adı | Telefon | E-poçt |
   |------|------|-------|-------|
-  | Crypto lead | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
-  | Platform ops | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
-  | Legal liaison | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
+  | Kripto aparıcı | {{ ADI }} | {{ TELEFON }} | {{ EMAIL }} |
+  | Platforma əməliyyatları | {{ ADI }} | {{ TELEFON }} | {{ EMAIL }} |
+  | Hüquqi əlaqə | {{ ADI }} | {{ TELEFON }} | {{ EMAIL }} |
 
-# 5. Attachments Checklist
+# 5. Qoşmaların Yoxlama Siyahısı- [ ] Mənbə kodu snapshot (`{{ SOURCE_ARCHIVE }}`) və hash.
+- [ ] Deterministik quruluş skripti / təkrarlanma qeydləri.
+- [ ] SBOM (`{{ SBOM_PATH }}`) və asılılıq manifest (`Cargo.lock` barmaq izi).
+- [ ] Deterministik test transkriptləri (`scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`).
+- [ ] SM müşahidə qabiliyyətini nümayiş etdirən telemetriya tablosunun ixracı.
+- [ ] İxrac-nəzarət bəyanatı (ayrıca şablona bax).
+- [ ] Audit hesabatları və ya üçüncü tərəf qiymətləndirmələri (artıq tamamlanıbsa).
 
-- [ ] Source code snapshot (`{{ SOURCE_ARCHIVE }}`) and hash.
-- [ ] Deterministic build script / reproducibility notes.
-- [ ] SBOM (`{{ SBOM_PATH }}`) and dependency manifest (`Cargo.lock` fingerprint).
-- [ ] Deterministic test transcripts (`scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`).
-- [ ] Telemetry dashboard export demonstrating SM observability.
-- [ ] Export-control statement (see separate template).
-- [ ] Audit reports or third-party assessments (if already completed).
+№ 6. Ərizəçinin Bəyannaməsi
 
-# 6. Applicant Declaration
+> Yuxarıdakı məlumatların doğru olduğunu, açıqlandığını təsdiq edirəm
+> kriptoqrafik funksionallıq ÇXR-in müvafiq qanun və qaydalarına uyğundur,
+> və təşkilatın ən azı təqdim edilmiş artefaktları saxlayacağını
+> üç il.
 
-> I confirm that the above information is accurate, that the disclosed
-> cryptographic functionality complies with applicable PRC laws and regulations,
-> and that the organisation will maintain the submitted artefacts for at least
-> three years.
-
-- Signature (legal representative): ________________________
-- Date: ________________________
-
+- İmza (qanuni nümayəndə): ________________________
+- Tarix: ______________________

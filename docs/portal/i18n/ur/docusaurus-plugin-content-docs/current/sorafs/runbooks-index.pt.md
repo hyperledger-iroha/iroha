@@ -4,50 +4,52 @@ direction: rtl
 source: docs/portal/docs/sorafs/runbooks-index.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: runbooks-index
-title: Índice de runbooks de operadores
-sidebar_label: Índice de runbooks
-description: Ponto de entrada canônico para os runbooks de operadores do SoraFS migrados.
+ID: رن بوکس انڈیکس
+عنوان: آپریٹر رن بک انڈیکس
+سائڈبار_لیبل: رن بک انڈیکس
+تفصیل: ہجرت شدہ SoraFS آپریٹر رن بوکس کے لئے کیننیکل انٹری پوائنٹ۔
 ---
 
-> Reflete o registro de responsáveis que fica em `docs/source/sorafs/runbooks/`.
-> Cada novo guia de operações do SoraFS deve ser vinculado aqui assim que for publicado no
-> build do portal.
+> ذمہ داروں کے ریکارڈ کی عکاسی کرتا ہے ، جو `docs/source/sorafs/runbooks/` پر واقع ہے۔
+> ہر نیا SoraFS آپریشنز گائیڈ کو جیسے ہی شائع ہوتا ہے اسے یہاں لنک کرنا ضروری ہے
+> پورٹل بلڈ۔
 
-Use esta página para verificar quais runbooks concluíram a migração da árvore de docs
-alternativa para o portal. Cada entrada lista a responsabilidade, o caminho de origem canônico
-e a cópia no portal para que revisores possam ir direto ao guia desejado durante a prévia beta.
+اس صفحے کا استعمال یہ چیک کرنے کے لئے کریں کہ کون سے رن بکس نے ڈاکٹر ٹری ہجرت کو مکمل کیا ہے
+پورٹل کا متبادل۔ ہر اندراج ذمہ داری ، کیننیکل سورس راہ کی فہرست دیتا ہے
+اور پورٹل میں کاپی کریں تاکہ جائزہ لینے والے بیٹا پیش نظارہ کے دوران اپنی مطلوبہ گائیڈ میں سیدھے کود سکیں۔
 
-## Host de prévia beta
+## بیٹا پیش نظارہ میزبان
 
-A onda DocOps já promoveu o host de prévia beta aprovado pelos revisores em
-`https://docs.iroha.tech/`. Ao direcionar operadores ou revisores para um runbook migrado,
-referencie esse hostname para que usem o snapshot do portal protegido por checksum.
-Os procedimentos de publicação/rollback estão em
-[`devportal/preview-host-exposure`](../devportal/preview-host-exposure.md).
+docops لہر نے پہلے ہی جائزہ لینے والے سے منظور شدہ بیٹا پیش نظارہ میزبان کو فروغ دیا ہے
+`SoraFS`۔ جب آپریٹرز یا جائزہ نگاروں کو ہجرت شدہ رن بک کی ہدایت کرتے ہو ،
+اس میزبان نام کا حوالہ دیں تاکہ وہ چیکسم سے محفوظ پورٹل اسنیپ شاٹ کا استعمال کرسکیں۔
+شائع/رول بیک طریقہ کار میں ہیں
+[`devportal/preview-host-exposure`] (../devportal/preview-host-exposure.md)۔
 
-| Runbook | Responsável(is) | Cópia no portal | Fonte |
-|---------|-----------------|-----------------|-------|
-| Kickoff de gateway e DNS | Networking TL, Ops Automation, Docs/DevRel | [`sorafs/gateway-dns-runbook`](./gateway-dns-runbook.md) | `docs/source/sorafs_gateway_dns_design_runbook.md` |
-| Playbook de operações do SoraFS | Docs/DevRel | [`sorafs/operations-playbook`](./operations-playbook.md) | `docs/source/sorafs/operations_playbook.md` |
-| Reconciliação de capacidade | Treasury / SRE | [`sorafs/capacity-reconciliation`](./capacity-reconciliation.md) | `docs/source/sorafs/runbooks/capacity_reconciliation.md` |
-| Operações do registro de pins | Tooling WG | [`sorafs/pin-registry-ops`](./pin-registry-ops.md) | `docs/source/sorafs/pin_registry_ops.md` |
-| Checklist de operações de nó | Storage Team, SRE | [`sorafs/node-operations`](./node-operations.md) | `docs/source/sorafs/runbooks/sorafs_node_ops.md` |
-| Runbook de disputas e revogações | Governance Council | [`sorafs/dispute-revocation-runbook`](./dispute-revocation-runbook.md) | `docs/source/sorafs/dispute_revocation_runbook.md` |
-| Playbook de manifesto de staging | Docs/DevRel | [`sorafs/staging-manifest-playbook`](./staging-manifest-playbook.md) | `docs/source/sorafs/staging_manifest_playbook.md` |
-| Observabilidade da âncora Taikai | Media Platform WG / DA Program / Networking TL | [`sorafs/taikai-anchor-runbook`](./taikai-anchor-runbook.md) | `docs/source/taikai_anchor_monitoring.md` |
+| رن بک | ذمہ دار شخص (زبانیں) | پورٹل پر کاپی | ماخذ |
+| --------- | ----------------- | ------------------- | ------- |
+| گیٹ وے اور ڈی این ایس کک آف | ٹی ایل نیٹ ورکنگ ، او پی ایس آٹومیشن ، دستاویزات/ڈیوریل | [`sorafs/gateway-dns-runbook`] (./gateway-dns-runbook.md) | `docs/source/sorafs_gateway_dns_design_runbook.md` |
+| SoraFS آپریشنز پلے بک | دستاویزات/ڈیوریل | [`sorafs/operations-playbook`] (./operations-playbook.md) | `docs/source/sorafs/operations_playbook.md` |
+| صلاحیت مفاہمت | ٹریژری/سری | [`sorafs/capacity-reconciliation`] (./capacity-reconciliation.md) | `docs/source/sorafs/runbooks/capacity_reconciliation.md` |
+| پن لاگ آپریشن | ٹولنگ ڈبلیو جی | [`sorafs/pin-registry-ops`] (./pin-registry-ops.md) | `docs/source/sorafs/pin_registry_ops.md` |
+| نوڈ آپریشنز چیک لسٹ | اسٹوریج ٹیم ، SRE | [`sorafs/node-operations`] (./node-operations.md) | `docs/source/sorafs/runbooks/sorafs_node_ops.md` |
+| تنازعات اور منسوخیاں رن بک | گورننس کونسل | [`sorafs/dispute-revocation-runbook`] (./dispute-revocation-runbook.md) | `docs/source/sorafs/dispute_revocation_runbook.md` |
+| اسٹیجنگ منشور پلے بک | دستاویزات/ڈیوریل | [`sorafs/staging-manifest-playbook`] (./staging-manifest-playbook.md) | `docs/source/sorafs/staging_manifest_playbook.md` |
+| تائکائی اینکر مشاہدہ | میڈیا پلیٹ فارم WG / DA پروگرام / نیٹ ورکنگ TL | [`sorafs/taikai-anchor-runbook`] (./taikai-anchor-runbook.md) | `docs/source/taikai_anchor_monitoring.md` |
 
-## Checklist de verificação
+## توثیق چیک لسٹ
 
-- [x] A build do portal aponta para este índice (entrada na barra lateral).
-- [x] Cada runbook migrado lista o caminho de origem canônico para manter os revisores
-  alinhados durante as revisões de documentação.
-- [x] O pipeline de prévia do DocOps bloqueia merges quando um runbook listado estiver
-  ausente da saída do portal.
+- [x] پورٹل بلڈ اس انڈیکس (سائڈبار میں اندراج) کی طرف اشارہ کرتا ہے۔
+- [x] ہر ہجرت شدہ رن بک جائزہ لینے والوں کو برقرار رکھنے کے لئے کیننیکل سورس کے راستے کی فہرست بناتی ہے
+  دستاویزات کے جائزوں کے دوران منسلک۔
+- [x] جب درج شدہ رن بک ہے تو ڈوکپس پیش نظارہ پائپ لائن بلاکس مل جاتے ہیں
+  پورٹل سے باہر نکلنے سے غائب ہے۔
 
-Migrações futuras (por exemplo, novas simulações de caos ou apêndices de governança) devem
-adicionar uma linha à tabela acima e atualizar a checklist do DocOps embutida em
-`docs/examples/docs_preview_request_template.md`.
+مستقبل کی ہجرت (جیسے نئے افراتفری کے نقوش یا گورننس اپینڈیجز)
+مذکورہ ٹیبل میں ایک قطار شامل کریں اور ڈوکپس چیک لسٹ کو شامل کریں جس میں سرایت شدہ ہے
+`docs/examples/docs_preview_request_template.md`۔

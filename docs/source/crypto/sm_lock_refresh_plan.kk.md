@@ -7,48 +7,47 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 3065571b34a226a5871c4fb68063f9419e48074b20096de215f440bdf54a4e59
 source_last_modified: "2025-12-29T18:16:35.943236+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Procedure for scheduling the Cargo.lock refresh required by the SM spike.
+//! SM спике талап ететін Cargo.lock жаңартуын жоспарлау процедурасы.
 
-# SM Feature `Cargo.lock` Refresh Plan
+# SM мүмкіндігі `Cargo.lock` жаңарту жоспары
 
-The `sm` feature spike for `iroha_crypto` originally could not complete `cargo check` while `--locked` was enforced. This note records the coordination steps for a sanctioned `Cargo.lock` update and tracks the current status of that need.
+`sm` `--locked` күшіне енген кезде `iroha_crypto` үшін `sm` мүмкіндігі бастапқыда `cargo check` аяқтай алмады. Бұл жазба рұқсат етілген `Cargo.lock` жаңартуы үшін үйлестіру қадамдарын жазады және осы қажеттіліктің ағымдағы күйін бақылайды.
 
-> **2026-02-12 update:** Recent validation shows the optional `sm` feature now builds with the existing lockfile (`cargo check -p iroha_crypto --features sm --locked` succeeds in 7.9 s cold/0.23 s warm). The dependency set already contains `base64ct`, `ghash`, `opaque-debug`, `pem-rfc7468`, `pkcs8`, `polyval`, `primeorder`, `sm2`, `sm3`, `sm4`, and `sm4-gcm`, so no immediate lock refresh is required. Keep the procedure below on standby for future dependency bumps or new optional crates.
+> **2026-02-12 жаңарту:** Жақында тексеру қазір бар құлыптау файлымен құрастырылатын қосымша `sm` мүмкіндігін көрсетеді (`cargo check -p iroha_crypto --features sm --locked` 7,9 секунд суықта/0,23 секунд жылы болады). Тәуелділік жиынында `base64ct`, `ghash`, `opaque-debug`, `pem-rfc7468`, `pkcs8`, `polyval`, `Cargo.lock`, `Cargo.lock`, `sm2`, `sm3`, `sm4` және `sm4-gcm`, сондықтан дереу құлыптауды жаңарту қажет емес. Төмендегі процедураны болашақ тәуелділік кедергілері немесе жаңа қосымша жәшіктер үшін күту режимінде ұстаңыз.
 
-## Why the refresh is needed
-- Earlier iterations of the spike required adding optional crates that were missing from the lockfile. Current lock snapshots already include the RustCrypto stack (`sm2`, `sm3`, `sm4`, supporting codecs, and AES helpers).
-- Repository policy still blocks opportunistic lockfile edits; if a future dependency upgrade is necessary, the procedure below remains applicable.
-- Retain this plan so the team can execute a controlled refresh when new SM-related dependencies are introduced or existing ones need version bumps.
+## Жаңарту не үшін қажет
+- Спайктың бұрынғы итерациялары құлыптау файлында жоқ қосымша жәшіктерді қосуды талап етті. Ағымдағы құлыпты суретте RustCrypto стек (`sm2`, `sm3`, `sm4`, қолдау көрсететін кодектер және AES көмекшілері) бар.
+- Репозиторий саясаты әлі де оппортунистік құлыптау файлының өңдеулерін блоктайды; егер болашақта тәуелділікті жаңарту қажет болса, төмендегі процедура жарамды болып қалады.
+- Жаңа SM-қа қатысты тәуелділіктер енгізілгенде немесе бұрыннан барларына нұсқа қателері қажет болғанда, команда бақыланатын жаңартуды орындауы үшін осы жоспарды сақтаңыз.
 
-## Proposed coordination steps
-1. **Raise request in Crypto WG + Release Eng sync (owner: @crypto-wg lead).**
-   - Reference `docs/source/crypto/sm_program.md` and note the optional nature of the feature.
-   - Confirm there are no concurrent lockfile change windows (e.g., dependency freezes).
-2. **Prepare patch with lock diff (owner: @release-eng).**
-   - Execute `scripts/sm_lock_refresh.sh` (after approval) to update only the required crates.
-   - Capture `cargo tree -p iroha_crypto --features sm` output (script emits `target/sm_dep_tree.txt`).
-3. **Security review (owner: @security-reviews).**
-   - Verify new crates/versions match the audit register and licensing expectations.
-   - Record hashes in supply-chain tracker.
-4. **Merge window execution.**
-   - Submit PR containing only the lockfile delta, dependency tree snapshot (attached as artifact), and updated audit notes.
-   - Ensure CI runs with `cargo check -p iroha_crypto --features sm` before merge.
-5. **Follow-up tasks.**
-   - Update `docs/source/crypto/sm_program.md` action item checklist.
-   - Notify SDK team that the feature can be compiled locally with `--features sm`.
-
-## Timeline & owners
-| Step | Target | Owner | Status |
+## Ұсынылған үйлестіру қадамдары
+1. **Crypto WG + Release Eng синхрондау жүйесінде сұрауды көтеру (иесі: @crypto-wg жетекші).**
+   - `docs/source/crypto/sm_program.md` сілтемесін және мүмкіндіктің қосымша сипатын ескеріңіз.
+   - Бір мезгілде құлыптау файлын өзгерту терезелері жоқ екенін растаңыз (мысалы, тәуелділікті тоқтату).
+2. **Құлыптау айырмашылығы бар патчты дайындаңыз (иесі: @release-kaz).**
+   - Тек қажетті жәшіктерді жаңарту үшін `scripts/sm_lock_refresh.sh` (бекіткеннен кейін) орындаңыз.
+   - `cargo tree -p iroha_crypto --features sm` шығысын түсіру (скрипт `target/sm_dep_tree.txt` шығарады).
+3. **Қауіпсіздікті шолу (иесі: @security-reviews).**
+   - Жаңа жәшіктердің/нұсқалардың аудит тізіліміне және лицензиялау күтулеріне сәйкес келетінін тексеріңіз.
+   - Жеткізу тізбегі трекерінде хэштерді жазыңыз.
+4. **Біріктіру терезесінің орындалуы.**
+   - Тек құлыптау файлының дельтасын, тәуелділік тармағының суретін (артефакт ретінде тіркелген) және жаңартылған аудит жазбаларын қамтитын PR жіберіңіз.
+   - Біріктірмес бұрын CI `cargo check -p iroha_crypto --features sm` көмегімен жұмыс істейтініне көз жеткізіңіз.
+5. **Кейінгі тапсырмалар.**
+   - `docs/source/crypto/sm_program.md` әрекет элементінің бақылау тізімін жаңартыңыз.
+   - SDK тобына мүмкіндікті `--features sm` көмегімен жергілікті түрде құрастыруға болатынын хабарлаңыз.## Хронология және иелері
+| Қадам | Мақсат | Иесі | Күй |
 |------|--------|-------|--------|
-| Request agenda slot in next Crypto WG call | 2025-01-22 | Crypto WG lead | ✅ Completed (review concluded spike can proceed without refresh) |
-| Draft selective `cargo update` command + sanity diff | 2025-01-24 | Release Engineering | ⚪ On standby (reactivate if new crates appear) |
-| Security review of new crates | 2025-01-27 | Security Reviews | ⚪ On standby (reuse audit checklist when refresh resumes) |
-| Merge lockfile update PR | 2025-01-29 | Release Engineering | ⚪ On standby |
-| Update SM program doc checklist | After merge | Crypto WG lead | ✅ Addressed via `docs/source/crypto/sm_program.md` entry (2026-02-12) |
+| Келесі Crypto WG қоңырауында күн тәртібін сұраңыз 22.01.2025 | Crypto WG жетекші | ✅ Аяқталды (қарау аяқталды спик жаңартусыз жалғасуы мүмкін) |
+| Таңдамалы жоба жобасы `cargo update` пәрмені + сананың айырмашылығы | 24.01.2025 | Release Engineering | ⚪ Күту режимінде (жаңа жәшіктер пайда болған жағдайда қайта іске қосыңыз) |
+| Жаңа жәшіктердің қауіпсіздік шолуы | 27.01.2025 | Қауіпсіздік шолулары | ⚪ Күту режимінде (жаңарту жалғасқан кезде аудиттің тексеру тізімін қайта пайдаланыңыз) |
+| Біріктіру құлыптау файлын жаңарту PR | 29.01.2025 | Release Engineering | ⚪ Күту режимінде |
+| SM бағдарламасының құжатын тексеру тізімін жаңарту | Біріктірілгеннен кейін | Crypto WG жетекші | ✅ `docs/source/crypto/sm_program.md` жазбасы арқылы адрестелген (2026-02-12) |
 
-## Notes
-- Keep any future refresh restricted to the SM-related crates listed above (and supporting helpers like `rfc6979`), avoiding workspace-wide `cargo update`.
-- If any transitive dependencies introduce MSRV drift, surface it before merge.
-- Once merged, enable an ephemeral CI job to monitor build times for the `sm` feature.
+## Ескертпелер
+- Кез келген болашақ жаңартуды жоғарыда аталған SM-қа қатысты жәшіктермен (және `rfc6979` сияқты көмекшілермен) шектеліп, жұмыс кеңістігінде `cargo update` қолданбай сақтаңыз.
+- Кез келген өтпелі тәуелділіктер MSRV дрейфін енгізсе, біріктіру алдында оның бетін ашыңыз.
+- Біріктірілгеннен кейін `sm` мүмкіндігінің құрастыру уақытын бақылау үшін уақытша CI жұмысын қосыңыз.

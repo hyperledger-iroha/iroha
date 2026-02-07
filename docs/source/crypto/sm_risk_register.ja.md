@@ -6,44 +6,45 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: ba5f4fdc9221210a793fd0c2120d8cfb68487d7ddcbe67c208976798446ca5db
 source_last_modified: "2026-01-03T18:07:57.078074+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! SM program risk register for SM2/SM3/SM4 enablement.
+//! SM2/SM3/SM4 を有効にするための SM プログラム リスク レジスタ。
 
-# SM Program Risk Register
+# SMプログラムリスクレジスター
 
-Last updated: 2025-03-12.
+最終更新日: 2025-03-12。
 
-This register expands on the summary in `sm_program.md`, pairing each risk with
-ownership, monitoring triggers, and the current mitigation state. The Crypto WG
-and Core Platform leads review this register at the weekly SM cadence; changes
-are reflected both here and in the public roadmap.
+このレジスターは、`sm_program.md` の概要を拡張し、各リスクを以下と組み合わせます。
+所有権、監視トリガー、および現在の緩和状態。暗号WG
+およびコア プラットフォームのリーダーは、毎週の SM ペースでこの登録をレビューします。変化
+ここと公開ロードマップの両方に反映されています。
 
-## Risk Summary
+## リスクの概要
 
-| ID | Risk | Category | Probability | Impact | Severity | Owner | Mitigation | Status | Triggers |
-|----|------|----------|-------------|--------|----------|-------|------------|--------|----------|
-| R1 | External audit for RustCrypto SM crates not executed before validator signing GA | Supply chain | Medium | High | High | Crypto WG | Contract Trail of Bits/NCC Group, keep verify-only posture until report accepted | Mitigation in progress | Audit SOW unsigned by 2025-04-15 or audit report delayed past 2025-06-01 |
-| R2 | Deterministic nonce regressions across SDKs | Implementation | Medium | High | High | SDK Program Leads | Share fixtures across SDK CI, enforce canonical r∥s encoding, add cross-SDK tamper tests | Monitoring | Fixture drift detected in CI or SDK release without SM fixtures |
-| R3 | ISA-specific bugs in intrinsics (NEON/SIMD) | Performance | Low | Medium | Medium | Performance WG | Gate intrinsics behind feature flags, require CI coverage on ARM, maintain scalar fallback | Mitigation in progress | NEON benches fail or hardware regression uncovered in SM perf matrix |
-| R4 | Compliance ambiguity delaying SM adoption | Governance | Medium | Medium | Medium | Docs & Legal Liaison | Publish compliance brief, operator checklist, liaison with legal counsel prior to GA | Mitigation in progress | Legal review outstanding after 2025-05-01 or missing checklist updates |
-| R5 | FFI backend drift with provider updates | Integration | Medium | Medium | Medium | Platform Ops | Pin provider versions, add parity tests, keep OpenSSL/Tongsuo preview opt-in | Monitoring | Package update merged without parity run or preview enabled outside pilot scope |
+| ID |リスク |カテゴリー |確率 |影響 |重大度 |オーナー |緩和 |ステータス |トリガー |
+|----|------|----------|---------------|--------|----------|----------|---------------|----------|----------|
+| R1 | RustCrypto SM クレートの外部監査はバリデーター署名 GA 前に実行されない |サプライチェーン |中 |高 | High |暗号WG |ビッツ/NCCグループの契約トレイル、報告書が受理されるまで検証のみの姿勢を維持 | Mitigation in progress |監査 SOW が 2025 年 4 月 15 日までに署名されていない、または監査報告書が 2025 年 6 月 1 日以降に遅延 |
+| R2 | SDK 間の決定論的なノンス回帰 | Implementation |中 |高 |高 | SDK Program Leads | SDK CI 全体でフィクスチャを共有し、正規の r∥s エンコーディングを強制し、クロス SDK 改ざんテストを追加します。モニタリング | SM フィクスチャなしの CI または SDK リリースでフィクスチャ ドリフトが検出されました。
+| R3 |組み込み関数の ISA 固有のバグ (NEON/SIMD) |パフォーマンス |低い |中 |中 |パフォーマンスWG |機能フラグの背後にあるゲート組み込み、ARM 上の CI カバレッジが必要、スカラー フォールバックの維持 | Mitigation in progress | NEON ベンチが失敗するか、SM パフォーマンス マトリックスでハードウェアの回帰が判明 |
+| R4 |コンプライアンスの曖昧さが SM の採用を遅らせる | Governance |中 |中 |中 | Docs & Legal Liaison | GA 前にコンプライアンス概要、オペレータ チェックリスト、法律顧問との連絡を公開 |緩和が進行中 | 2025 年 5 月 1 日以降に法的審査が未完了、またはチェックリストの更新が不足している |
+| R5 |プロバイダーの更新による FFI バックエンドのドリフト | Integration |中 |中 |中 | Platform Ops |プロバイダーのバージョンを固定し、パリティ テストを追加し、OpenSSL/Tongsuo プレビュー オプトインを維持 | Monitoring |パイロット範囲外でパリティ実行またはプレビューを有効にせずにマージされたパッケージ更新 |
 
-## Review Cadence
+## レビューの頻度
 
-- Weekly Crypto WG sync (standing agenda item).
-- Monthly joint review with Platform Ops and Docs to confirm compliance posture.
-- Pre-release checkpoint: risk register freeze and attestation bundled with GA
+- 毎週の Crypto WG 同期 (常設の議題項目)。
+- コンプライアンスの姿勢を確認するためのプラットフォーム運用およびドキュメントとの月次共同レビュー。
+- リリース前チェックポイント: リスク登録の凍結と認証が GA にバンドルされています
   artefacts.
 
 ## Sign-off
 
-| Role | Representative | Date | Notes |
-|------|----------------|------|-------|
-| Crypto WG Lead | (signature on file) | 2025-03-12 | Approved for publication and shared with WG backlog. |
-| Core Platform Lead | (signature on file) | 2025-03-12 | Accepted mitigations and monitoring cadence. |
+|役割 |代表者 |日付 |メモ |
+|------|----------------|------|------|
+|暗号WGリーダー | (signature on file) | 2025-03-12 |公開が承認され、WG バックログと共有されました。 |
+|コアプラットフォームリード | (ファイルに署名) | 2025-03-12 |受け入れられた緩和策とモニタリングの頻度。 |
 
-For historic approvals and meeting minutes, see `docs/source/crypto/sm_program.md`
-(`Communication Plan`) and the SM agenda archive linked from the Crypto WG
-workspace.
+過去の承認と会議議事録については、`docs/source/crypto/sm_program.md` を参照してください。
+(`Communication Plan`) および暗号 WG からリンクされた SM アジェンダ アーカイブ
+ワークスペース。

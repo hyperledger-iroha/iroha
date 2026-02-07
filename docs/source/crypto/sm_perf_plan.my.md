@@ -7,68 +7,67 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 493c3c0f6a991b2a5d04f33f97b7e97bff372271c5c57751ff41f5e86d43cbc7
 source_last_modified: "2025-12-29T18:16:35.944695+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 ## SM Performance Capture & Baseline Plan
 
-Status: Drafted — 2025-05-18  
-Owners: Performance WG (lead), Infra Ops (lab scheduling), QA Guild (CI gating)  
-Related roadmap tasks: SM-4c.1a/b, SM-5a.3b, FASTPQ Stage 7 cross-device capture
+အခြေအနေ- ရေးဆွဲခဲ့သည် — 2025-05-18  
+ပိုင်ရှင်များ- Performance WG (ဦးဆောင်လမ်းပြ)၊ Infra Ops (ဓာတ်ခွဲခန်းအချိန်ဇယားဆွဲခြင်း)၊ QA Guild (CI gating)  
+ဆက်စပ်လမ်းပြမြေပုံ လုပ်ဆောင်စရာများ- SM-4c.1a/b၊ SM-5a.3b၊ FASTPQ အဆင့် 7 စက်ဖြတ်ကျော်ရိုက်ကူးခြင်း
 
-### 1. Objectives
-1. Record Neoverse medians in `sm_perf_baseline_aarch64_unknown_linux_gnu_{scalar,auto,neon_force}.json`. The current baselines are exported from the `neoverse-proxy-macos` capture under `artifacts/sm_perf/2026-03-lab/neoverse-proxy-macos/` (CPU label `neoverse-proxy-macos`) with the SM3 compare tolerance widened to 0.70 for aarch64 macOS/Linux. When bare-metal time opens, rerun `scripts/sm_perf_capture_helper.sh --matrix --cpu-label neoverse-n2-b01 --output artifacts/sm_perf/<date>/neoverse-n2-b01` on the Neoverse host and promote the aggregated medians into the baselines.  
-2. Gather matching x86_64 medians so `ci/check_sm_perf.sh` can guard both host classes.  
-3. Publish a repeatable capture procedure (commands, artefact layout, reviewers) so future perf gates do not rely on tribal knowledge.
+### 1. ရည်ရွယ်ချက်များ
+1. `sm_perf_baseline_aarch64_unknown_linux_gnu_{scalar,auto,neon_force}.json` တွင် Neoverse medians ကို မှတ်တမ်းတင်ပါ။ လက်ရှိအခြေခံလိုင်းများကို `artifacts/sm_perf/2026-03-lab/neoverse-proxy-macos/` (CPU တံဆိပ် `neoverse-proxy-macos`) အောက်တွင် `neoverse-proxy-macos` ဖမ်းယူမှုမှ SM3 နှိုင်းယှဥ်သည်းခံမှုကို aarch64 macOS/Linux အတွက် 0.70 အထိ ချဲ့ထွင်ထားခြင်းဖြင့် တင်ပို့ထားသည်။ သတ္တုမပါသောအချိန်ကိုဖွင့်သောအခါ၊ `scripts/sm_perf_capture_helper.sh --matrix --cpu-label neoverse-n2-b01 --output artifacts/sm_perf/<date>/neoverse-n2-b01` ကို Neoverse host တွင် ပြန်ဖွင့်ပြီး စုစည်းထားသော medians များကို အခြေခံလိုင်းများအဖြစ် မြှင့်တင်ပါ။  
+2. ကိုက်ညီသော x86_64 မီဒီယာများကို စုဆောင်းပါ၊ သို့မှသာ `ci/check_sm_perf.sh` သည် host class နှစ်ခုလုံးကို ကာကွယ်နိုင်သည်။  
+3. ထပ်ခါတလဲလဲ ဖမ်းယူနိုင်သော လုပ်ထုံးလုပ်နည်း (အမိန့်တော်များ၊ လက်ကွက်ပုံစံ၊ သုံးသပ်သူများ) ကိုထုတ်ဝေပါ ထို့ကြောင့် အနာဂတ် perf ဂိတ်များသည် လူမျိုးစုအသိပညာကို အားမကိုးပါ။
 
-### 2. Hardware Availability
-Only Apple Silicon (macOS arm64) hosts are reachable in the current workspace. The `neoverse-proxy-macos` capture is exported as the interim Linux baseline, but capturing bare-metal Neoverse or x86_64 medians still requires the shared lab hardware tracked under `INFRA-2751`, to be run by the Performance WG once the lab window opens. The remaining capture windows are now booked and tracked in the artefact tree:
+### 2. Hardware ရရှိနိုင်မှု
+လက်ရှိအလုပ်ခွင်တွင် Apple Silicon (macOS arm64) တန်ဆာပလာများကိုသာ ရရှိနိုင်မည်ဖြစ်သည်။ `neoverse-proxy-macos` ဖမ်းယူမှုကို ကြားဖြတ် Linux အခြေခံလိုင်းအဖြစ် တင်ပို့သော်လည်း ဓာတ်ခွဲခန်းဝင်းဒိုးဖွင့်ပြီးသည်နှင့် Performance WG မှ လုပ်ဆောင်ရန် သတ္တုဗလာ Neoverse သို့မဟုတ် x86_64 မီဒီယာများကို ရိုက်ကူးရန်အတွက် `INFRA-2751` အောက်တွင် ခြေရာခံထားသည့် မျှဝေထားသော ဓာတ်ခွဲခန်းဟာ့ဒ်ဝဲကို လိုအပ်ပါသည်။ ကျန်ရှိသော ဖမ်းယူထားသော ပြတင်းပေါက်များကို ယခု ဘွတ်ကင်လုပ်ထားပြီး အနုပညာသစ်ပင်တွင် ခြေရာခံလိုက်ပါသည်-
 
-- Neoverse N2 bare-metal (Tokyo rack B) booked for 2026-03-12. Operators will reuse the commands from Section 3 and store artefacts under `artifacts/sm_perf/2026-03-lab/neoverse-b01/`.
-- x86_64 Xeon (Zurich rack D) booked for 2026-03-19 with SMT disabled to reduce noise; artefacts will land under `artifacts/sm_perf/2026-03-lab/xeon-d01/`.
-- After both runs land, promote medians into the baseline JSONs and enable the CI gate in `ci/check_sm_perf.sh` (target switch date: 2026-03-25).
+- Neoverse N2 သတ္တုအလွတ် (Tokyo rack B) ကို 2026-03-12 တွင် ကြိုတင်စာရင်းသွင်းထားသည်။ အော်ပရေတာများသည် အပိုင်း 3 မှ ညွှန်ကြားချက်များကို ပြန်သုံးမည်ဖြစ်ပြီး `artifacts/sm_perf/2026-03-lab/neoverse-b01/` အောက်တွင် ပစ္စည်းများ သိမ်းဆည်းပါမည်။
+- x86_64 Xeon (Zurich rack D) ကို 2026-03-19 အတွက် SMT ပိတ်ထားခြင်းဖြင့် ကြိုတင်စာရင်းသွင်းထားသည်။ ပစ္စည်းများသည် `artifacts/sm_perf/2026-03-lab/xeon-d01/` အောက်တွင် ဆင်းသက်မည်ဖြစ်သည်။
+- နှစ်ခုလုံးလည်ပတ်ပြီးနောက်၊ အလယ်အလတ်များကို အခြေခံ JSON များအဖြစ်မြှင့်တင်ပြီး `ci/check_sm_perf.sh` တွင် CI ဂိတ်ကိုဖွင့်ပါ (ပစ်မှတ်ပြောင်းသည့်ရက်စွဲ- 2026-03-25)။
 
-Until those dates, only the macOS arm64 baselines can be refreshed locally.
-
-### 3. Capture Procedure
-1. **Sync toolchains**  
+ထိုရက်စွဲများအထိ၊ macOS arm64 အခြေခံလိုင်းများကိုသာ စက်တွင်းတွင် ပြန်လည်စတင်နိုင်မည်ဖြစ်သည်။### 3. Capture Procedure
+1. ** ချိန်ကိုက်ကိရိယာများ **  
    ```bash
    rustup override set $(cat rust-toolchain.toml)
    cargo fetch
    ```
-2. **Generate capture matrix** (per host)  
+2. ** ဖမ်းယူမှု မက်ထရစ်ကို ဖန်တီးပါ ** (အိမ်ရှင်တစ်ဦးစီ)  
    ```bash
    scripts/sm_perf_capture_helper.sh --matrix \
      --output artifacts/sm_perf/2025-07-lab/${HOSTNAME}
    ```
-   The helper now writes `capture_commands.sh` and `capture_plan.json` under the target directory. The script sets up `raw/*.json` capture paths per mode so lab technicians can batch the runs deterministically.
-3. **Run captures**  
-   Execute each command from `capture_commands.sh` (or run the equivalent manually), ensuring every mode emits a structured JSON blob via `--capture-json`. Always supply a host label via `--cpu-label "<model/bin>"` (or `SM_PERF_CPU_LABEL=<label>`) so the capture metadata and subsequent baselines record the exact hardware that produced the medians. The helper already supplies the appropriate path; for manual runs the pattern is:
+   အကူအညီပေးသူက ယခု `capture_commands.sh` နှင့် `capture_plan.json` ကို ပစ်မှတ်လမ်းညွှန်အောက်တွင် ရေးထားသည်။ ဇာတ်ညွှန်းသည် `raw/*.json` ကို မုဒ်တစ်ခုစီတွင် ဖမ်းယူရန် လမ်းကြောင်းများကို စနစ်ထည့်သွင်းထားသောကြောင့် ဓာတ်ခွဲခန်းပညာရှင်များသည် လုပ်ဆောင်ချက်များကို အဆုံးအဖြတ်ပေးနိုင်ပါသည်။
+3. ** ဖမ်းယူမှုများ လုပ်ဆောင်ရန် **  
+   မုဒ်တိုင်းသည် `--capture-json` မှတစ်ဆင့် ဖွဲ့စည်းတည်ဆောက်ထားသော JSON blob တစ်ခုကို ထုတ်လွှတ်ကြောင်းသေချာစေရန် `capture_commands.sh` (သို့မဟုတ် ညီမျှသော ကိုယ်တိုင်လုပ်ဆောင်ခြင်း) မှ အမိန့်တစ်ခုစီကို လုပ်ဆောင်ပါ။ `--cpu-label "<model/bin>"` (သို့မဟုတ် `SM_PERF_CPU_LABEL=<label>`) မှတစ်ဆင့် လက်ခံသူအညွှန်းကို အမြဲတမ်း ပံ့ပိုးပေးသောကြောင့် ဖမ်းယူမှု မက်တာဒေတာနှင့် နောက်ဆက်တွဲ အခြေခံအချက်များသည် မီဒီယံများကို ထုတ်လုပ်သည့် ဟာ့ဒ်ဝဲအတိအကျကို မှတ်တမ်းတင်ပါသည်။ ကူညီသူသည် သင့်လျော်သောလမ်းကြောင်းကို ပံ့ပိုးပေးနေပြီဖြစ်သည်။ Manual Run ရန်အတွက် ပုံစံသည်-
    ```bash
    SM_PERF_CAPTURE_LABEL=auto \
    scripts/sm_perf.sh --mode auto \
      --cpu-label "neoverse-n2-lab-b01" \
      --capture-json artifacts/sm_perf/2025-07-lab/${HOSTNAME}/raw/auto.json
    ```
-4. **Validate results**  
+4. **ရလဒ်များကို အတည်ပြုပါ**  
    ```bash
    scripts/sm_perf_check \
      artifacts/sm_perf/2025-07-lab/${HOSTNAME}/raw/*.json
    ```
-   Ensure variance stays within ±3% between runs. If not, rerun the affected mode and note the retry in the log.
-5. **Promote medians**  
-   Use `scripts/sm_perf_aggregate.py` to compute medians and copy them into the baseline JSON files:
+   ပြေးခြင်းကြားတွင် ကွဲလွဲမှု ±3% အတွင်း ရှိနေကြောင်း သေချာပါစေ။ မဟုတ်ပါက၊ ထိခိုက်သည့်မုဒ်ကို ပြန်ဖွင့်ပြီး မှတ်တမ်းတွင် ထပ်စမ်းကြည့်ပါ။
+5. **မီဒီယာသမားများကို မြှင့်တင်ပါ**  
+   မီဒီများကိုတွက်ချက်ပြီး အခြေခံ JSON ဖိုင်များသို့ ကူးယူရန် `scripts/sm_perf_aggregate.py` ကိုသုံးပါ-
    ```bash
    scripts/sm_perf_aggregate.py \
      artifacts/sm_perf/2025-07-lab/${HOSTNAME}/raw/*.json \
      --output artifacts/sm_perf/2025-07-lab/${HOSTNAME}/aggregated.json
    ```
-   The helper groups captures by `metadata.mode`, validates that each set shares the
-   same `{target_arch, target_os}` triple, and emits a JSON summary with one entry
-   per mode. The medians that should land in the baseline files live under
-   `modes.<mode>.benchmarks`, while the accompanying `statistics` block records
-   the full sample list, min/max, mean, and population stdev for reviewers and CI.
-   Once the aggregated file exists, you can auto-write the baseline JSONs (with
-   the standard tolerance map) via:
+   `metadata.mode` ဖြင့် ရိုက်ကူးထားသော အကူအညီပေးသည့်အဖွဲ့များသည် အစုတစ်ခုစီမှ မျှဝေထားသည်ကို အတည်ပြုသည်။
+   တူညီသော `{target_arch, target_os}` သည် သုံးဆဖြစ်ပြီး ထည့်သွင်းမှုတစ်ခုဖြင့် JSON အကျဉ်းချုပ်ကို ထုတ်လွှတ်သည်
+   mode အလိုက် အခြေခံဖိုင်များတွင် ဆင်းသက်သင့်သော မီဒီယာများသည် အောက်တွင် နေထိုင်ကြသည်။
+   `modes.<mode>.benchmarks` နှင့်ပါရှိသော `statistics` ပိတ်ဆို့မှတ်တမ်းများ
+   သုံးသပ်သူများနှင့် CI အတွက် နမူနာစာရင်းအပြည့်အစုံ၊ min/max, mean, and population stdev.
+   ပေါင်းစည်းထားသောဖိုင်ရှိသည်နှင့်၊ သင်သည် အခြေခံလိုင်း JSON များကို အလိုအလျောက်ရေးနိုင်သည် (နှင့်အတူ
+   စံသည်းခံမှုမြေပုံ) မှတဆင့်:
    ```bash
    scripts/sm_perf_promote_baseline.py \
      artifacts/sm_perf/2025-07-lab/${HOSTNAME}/aggregated.json \
@@ -76,24 +75,24 @@ Until those dates, only the macOS arm64 baselines can be refreshed locally.
      --target-os unknown_linux_gnu \
      --overwrite
    ```
-   Override `--mode` to restrict to a subset or `--cpu-label` to pin the
-   recorded CPU name when the aggregated source omits it.
-   Once both hosts per architecture finish, update:
+   အစုခွဲတစ်ခုအား ကန့်သတ်ရန် `--mode` ကို အစားထိုးရန် သို့မဟုတ် `--cpu-label` ကို ပင်ထိုးရန်
+   ပေါင်းစည်းထားသောရင်းမြစ်မှ ချန်လှပ်ထားသောအခါတွင် CPU အမည်ကို မှတ်တမ်းတင်ထားသည်။
+   တည်ဆောက်မှုတစ်ခုစီတွင် host နှစ်ခုလုံးပြီးသည်နှင့်၊ အပ်ဒိတ်လုပ်ပါ။
    - `sm_perf_baseline_aarch64_unknown_linux_gnu_{scalar,auto,neon_force}.json`
-   - `sm_perf_baseline_x86_64_unknown_linux_gnu_{scalar,auto}.json` (new)
+   - `sm_perf_baseline_x86_64_unknown_linux_gnu_{scalar,auto}.json` (အသစ်)
 
-   The `aarch64_unknown_linux_gnu_*` files now reflect the `m3-pro-native`
-   capture (cpu label and metadata notes preserved) so `scripts/sm_perf.sh` can
-   auto-detect aarch64-unknown-linux-gnu hosts without manual flags. When the
-   bare-metal lab run completes, rerun `scripts/sm_perf.sh --mode <mode>
-   --write-baseline crates/iroha_crypto/benches/sm_perf_baseline_aarch64_unknown_linux_gnu_<mode>.json`
-   with the new captures to overwrite the interim medians and stamp the real
-   host label.
+   `aarch64_unknown_linux_gnu_*` ဖိုင်များသည် ယခု `m3-pro-native` ကို ထင်ဟပ်နေသည်
+   ဖမ်းယူခြင်း (cpu အညွှန်းနှင့် metadata မှတ်စုများကို ထိန်းသိမ်းထားသည်) ထို့ကြောင့် `scripts/sm_perf.sh` လုပ်နိုင်သည်
+   လက်စွဲအလံများမပါဘဲ aarch64-unknown-linux-gnu host များကို အလိုအလျောက်ရှာဖွေပါ။ ဟို
+   bare-metal lab run ပြီးပါပြီ၊ `scripts/sm_perf.sh --mode  ကို ပြန်ဖွင့်ပါ။
+   --write-baseline crates/iroha_crypto/benches/sm_perf_baseline_aarch64_unknown_linux_gnu_.json`
+   ကြားဖြတ်မီဒီယာများကို ထပ်ရေးပြီး အစစ်အမှန်ကို ရိုက်နှိပ်ရန် ဖမ်းယူမှုအသစ်များဖြင့်
+   အိမ်ရှင်တံဆိပ်။
 
-   > Reference: the July 2025 Apple Silicon capture (CPU label `m3-pro-local`) is
-   > archived under `artifacts/sm_perf/2025-07-lab/takemiyacStudio.lan/{raw,aggregated.json}`.
-   > Mirror that layout when you publish the Neoverse/x86 artefacts so reviewers
-   > can diff the raw/aggregated outputs consistently.
+   > ကိုးကား- ဇူလိုင်လ 2025 ခုနှစ် Apple Silicon ဖမ်းယူမှု (CPU တံဆိပ် `m3-pro-local`) သည်
+   > `artifacts/sm_perf/2025-07-lab/takemiyacStudio.lan/{raw,aggregated.json}` အောက်တွင် သိမ်းဆည်းထားသည်။
+   > Neoverse/x86 artefacts များကို ဝေဖန်သုံးသပ်သူများ ထုတ်ဝေသောအခါတွင် အဆိုပါ အဆင်အပြင်ကို မှန်ကြည့်ပါ။
+   > အကြမ်း/ စုစည်းထားသော ရလဒ်များကို တသမတ်တည်း ကွဲပြားနိုင်သည်။
 
 ### 4. Artefact Layout & Sign-off
 ```
@@ -108,36 +107,32 @@ artifacts/sm_perf/
     xeon-d01/
     xeon-d02/
 ```
-- `run-log.md` records the command hash, git revision, operator, and any anomalies.
-- Aggregated JSON files feed directly into the baseline updates and are attached to the performance review in `docs/source/crypto/sm_perf_baseline_comparison.md`.
-- QA Guild reviews the artefacts before baselines change and signs off in `status.md` under the Performance section.
-
-### 5. CI Gating Timeline
-| Date | Milestone | Action |
+- `run-log.md` သည် အမိန့်ပေး hash၊ git ပြန်လည်ပြင်ဆင်မှု၊ အော်ပရေတာနှင့် ကွဲလွဲချက်များကို မှတ်တမ်းတင်သည်။
+- စုစည်းထားသော JSON ဖိုင်များသည် အခြေခံအဆင့်မွမ်းမံမှုများသို့ တိုက်ရိုက်ပေးပို့ပြီး `docs/source/crypto/sm_perf_baseline_comparison.md` တွင် စွမ်းဆောင်ရည်ပြန်လည်သုံးသပ်ခြင်းသို့ တွဲထားသည်။
+- QA Guild သည် အခြေခံလိုင်းများမပြောင်းလဲမီ စွမ်းဆောင်ရည်အပိုင်းအောက်ရှိ `status.md` တွင် လက်မှတ်မထိုးမီ အနုပညာလက်ရာများကို ပြန်လည်သုံးသပ်သည်။### 5. CI Gating Timeline
+| ရက်စွဲ | မှတ်တိုင် | အက် |
 |------|-----------|--------|
-| 2025-07-12 | Neoverse captures complete | Update `sm_perf_baseline_aarch64_*` JSON files, run `ci/check_sm_perf.sh` locally, open PR with artefacts attached. |
-| 2025-07-24 | x86_64 captures complete | Add new baseline files + gating in `ci/check_sm_perf.sh`; ensure cross-arch CI lanes consume them. |
-| 2025-07-27 | CI enforcement | Enable the `sm-perf-gate` workflow to run on both host classes; merges fail if regressions exceed configured tolerances. |
+| 2025-07-12 | Neoverse ဖမ်းယူမှု အပြီးသတ် | `sm_perf_baseline_aarch64_*` JSON ဖိုင်များကို အပ်ဒိတ်လုပ်ပါ၊ `ci/check_sm_perf.sh` ကို စက်တွင်းတွင် ဖွင့်ပါ၊ ပူးတွဲပါပစ္စည်းများဖြင့် PR ကိုဖွင့်ပါ။ |
+| 2025-07-24 | x86_64 ဖမ်းယူမှု အပြီးသတ် | အခြေခံဖိုင်အသစ်များထည့်ပါ + `ci/check_sm_perf.sh` တွင် ဝင်ခြင်း cross-arch CI လမ်းကြောင်းများက ၎င်းတို့ကို စားသုံးကြောင်း သေချာပါစေ။ |
+| 2025-07-27 | CI ပြဋ္ဌာန်း | host class နှစ်ခုလုံးတွင် အလုပ်လုပ်ရန် `sm-perf-gate` ကို ဖွင့်ပါ။ သတ်မှတ်ထားသော ခံနိုင်ရည်များထက် ဆုတ်ယုတ်မှုများသည် ပေါင်းစည်းခြင်း မအောင်မြင်ပါ။ |
 
-### 6. Dependencies & Communication
-- Coordinate lab access changes via `infra-ops@iroha.tech`.  
-- Performance WG posts daily updates in the `#perf-lab` channel while captures run.  
-- QA Guild prepares the comparison diff (`scripts/sm_perf_compare.py`) so reviewers can visualise deltas.  
-- Once baselines merge, update `roadmap.md` (SM-4c.1a/b, SM-5a.3b) and `status.md` with capture completion notes.
+### 6. မှီခိုမှုနှင့် ဆက်သွယ်ရေး
+- `infra-ops@iroha.tech` မှတစ်ဆင့် ဓာတ်ခွဲခန်းဝင်ရောက်ခွင့်ပြောင်းလဲမှုများကို ညှိနှိုင်းပါ။  
+- ဖမ်းယူမှုများလုပ်ဆောင်နေစဉ် Performance WG သည် `#perf-lab` ချန်နယ်တွင် နေ့စဉ်မွမ်းမံမှုများကို ပို့စ်တင်သည်။  
+- QA Guild သည် နှိုင်းယှဉ်မှုကွဲပြားမှု (`scripts/sm_perf_compare.py`) ကို ပြင်ဆင်ပေးသောကြောင့် သုံးသပ်သူများသည် မြစ်ဝကျွန်းပေါ်ဒေသများကို မြင်ယောင်နိုင်စေပါသည်။  
+- အခြေခံမျဥ်းများ ပေါင်းစည်းပြီးသည်နှင့် `roadmap.md` (SM-4c.1a/b၊ SM-5a.3b) နှင့် `status.md` အား ဖမ်းယူပြီးစီးမှုမှတ်စုများဖြင့် အပ်ဒိတ်လုပ်ပါ။
 
-With this plan the SM acceleration work gains reproducible medians, CI gating, and a traceable evidence trail, satisfying the “reserve lab windows & capture medians” action item.
+ဤအစီအစဥ်ဖြင့် SM အရှိန်မြှင့်ခြင်းလုပ်ငန်းသည် မျိုးပွားနိုင်သော မီဒီယံများ၊ CI ဂိတ်ပေါက်များနှင့် "အရန်သင့်ဓာတ်ခွဲခန်းပြတင်းပေါက်များနှင့် ဖမ်းယူမီဒီယံများ" လုပ်ဆောင်ချက်ကို ကျေနပ်စေသည့် လုပ်ဆောင်ချက်ကို ကျေနပ်စေမည့် ခြေရာခံနိုင်သော အထောက်အထားလမ်းကြောင်းကို ရရှိပါသည်။
 
 ### 7. CI Gate & Local Smoke
 
-- `ci/check_sm_perf.sh` is the canonical CI entrypoint. It shells out to `scripts/sm_perf.sh` for each mode in `SM_PERF_MODES` (defaults to `scalar auto neon-force`) and sets `CARGO_NET_OFFLINE=true` so benches run deterministically on the CI images.  
-- `.github/workflows/sm-neon-check.yml` now calls the gate on the macOS arm64 runner so every pull request exercises the scalar/auto/neon-force trio via the same helper used locally; the complementary Linux/Neoverse lane will hook in once the x86_64 captures land and the Neoverse proxy baselines are refreshed with the bare-metal run.  
-- Operators can override the mode list locally: `SM_PERF_MODES="scalar" bash ci/check_sm_perf.sh` trims the run to a single pass for a quick smoke test, while additional arguments (for example `--tolerance 0.20`) are forwarded directly to `scripts/sm_perf.sh`.  
-- `make check-sm-perf` now wraps the gate for developer convenience; CI jobs can invoke the script directly while macOS developers piggy-back on the make target.  
-- Once the Neoverse/x86_64 baselines land, the same script will pick up the appropriate JSON via the host auto-detection logic already present in `scripts/sm_perf.sh`, so no extra wiring is needed in the workflows beyond setting the desired mode list per host pool.
+- `ci/check_sm_perf.sh` သည် canonical CI entrypoint ဖြစ်သည်။ ၎င်းသည် `SM_PERF_MODES` တွင် မုဒ်တစ်ခုစီအတွက် `scripts/sm_perf.sh` (ပုံသေ `scalar auto neon-force`) နှင့် `CARGO_NET_OFFLINE=true` ကို သတ်မှတ်ပေးသောကြောင့် ထိုင်ခုံများသည် CI ပုံများပေါ်တွင် တိကျစွာ အလုပ်လုပ်ပါသည်။  
+- ယခု `.github/workflows/sm-neon-check.yml` သည် macOS arm64 အပြေးသမားပေါ်ရှိ ဂိတ်တံခါးကို ခေါ်ဆိုနေပြီဖြစ်သောကြောင့် ဆွဲတင်တောင်းဆိုမှုတိုင်းသည် စက်တွင်းအသုံးပြုသည့် တူညီသောအကူအညီဖြင့် scalar/auto/neon-force trio ကို လေ့ကျင့်ခန်းလုပ်သည်။ x86_64 သည် ကုန်းမြေကို ဖမ်းယူပြီး Neoverse proxy baselines များကို သတ္တုမပါသော လည်ပတ်မှုဖြင့် ပြန်လည်ဆန်းသစ်ပြီးသည်နှင့် ဖြည့်စွက် Linux/Neoverse လမ်းကြောသည် ချိတ်ပါမည်။  
+- အော်ပရေတာများသည် စက်တွင်းရှိ မုဒ်စာရင်းကို အစားထိုးနိုင်သည်- `SM_PERF_MODES="scalar" bash ci/check_sm_perf.sh` သည် အမြန်မီးခိုးစမ်းသပ်မှုတစ်ခုအတွက် ပြေးနှုန်းကို တစ်ခုတည်းသောဖြတ်သန်းမှုကို ဖြတ်တောက်ပြီး ထပ်ဆင့်ငြင်းခုံမှုများ (ဥပမာ `--tolerance 0.20`) သည် `scripts/sm_perf.sh` သို့ တိုက်ရိုက်ပေးပို့နေချိန်တွင် ဖြစ်သည်။  
+- ယခု `make check-sm-perf` သည် ဆော့ဖ်ဝဲရေးသားသူ အဆင်ပြေစေရန်အတွက် တံခါးကို ခြုံထားသည်။ CI အလုပ်များသည် macOS developer များသည် make target တွင် piggy-back လုပ်နေချိန်တွင် script ကို တိုက်ရိုက်ခေါ်နိုင်သည်။  
+- Neoverse/x86_64 အခြေခံမျဥ်းများ ဆိုက်ရောက်သည်နှင့် တပြိုင်နက် တူညီသော script သည် `scripts/sm_perf.sh` တွင်ပါရှိပြီးသား အလိုအလျောက်ထောက်လှမ်းခြင်းဆိုင်ရာ လော့ဂျစ်မှတစ်ဆင့် သင့်လျော်သော JSON ကို ကောက်ယူသွားမည်ဖြစ်ပြီး၊ ထို့ကြောင့် host pool တစ်ခုအတွက် လိုချင်သောမုဒ်စာရင်းကို သတ်မှတ်ခြင်းထက် အပိုဝါယာကြိုးများ မလိုအပ်ပါ။
 
-### 8. Quarterly refresh helper
-
-- Run `scripts/sm_perf_quarterly.sh --owner "<name>" --cpu-label "<label>" [--quarter YYYY-QN] [--output-root artifacts/sm_perf]` to mint a quarter-stamped directory such as `artifacts/sm_perf/2026-Q1/<label>/`. The helper wraps `scripts/sm_perf_capture_helper.sh --matrix` and emits `capture_commands.sh`, `capture_plan.json`, and `quarterly_plan.json` (owner + quarter metadata) so lab operators can schedule runs without hand-written plans.
-- Execute the generated `capture_commands.sh` on the target host, aggregate the raw outputs with `scripts/sm_perf_aggregate.py --output <dir>/aggregated.json`, and promote the medians into the baseline JSONs via `scripts/sm_perf_promote_baseline.py --out-dir crates/iroha_crypto/benches --overwrite`. Re-run `ci/check_sm_perf.sh` to confirm the tolerances stay green.
-- When hardware or toolchains change, refresh comparison tolerances/notes in `docs/source/crypto/sm_perf_baseline_comparison.md`, tighten `ci/check_sm_perf.sh` tolerances if the new medians stabilise, and align any dashboard/alert thresholds with the new baselines so ops alarms stay meaningful.
-- Commit `quarterly_plan.json`, `capture_plan.json`, `capture_commands.sh`, and the aggregated JSON alongside the baseline updates; attach the same artefacts to the status/roadmap updates for traceability.
+### 8. သုံးလတစ်ကြိမ် ပြန်လည်ဆန်းသစ်ရန် အကူအညီပေးသူ- `artifacts/sm_perf/2026-Q1/<label>/` ကဲ့သို့သော လေးပုံတစ်ပုံတံဆိပ်တုံးရိုက်နှိပ်ထားသော လမ်းညွှန်ကို ထုတ်ယူရန် `scripts/sm_perf_quarterly.sh --owner "<name>" --cpu-label "<label>" [--quarter YYYY-QN] [--output-root artifacts/sm_perf]` ကိုဖွင့်ပါ။ အကူအညီပေးသူက `scripts/sm_perf_capture_helper.sh --matrix` ကို ခြုံပြီး `capture_commands.sh`၊ `capture_plan.json` နှင့် `quarterly_plan.json` (ပိုင်ရှင် + လေးပုံတပုံ မက်တာဒေတာ) ကို ထုတ်လွှတ်သောကြောင့် ဓာတ်ခွဲခန်းအော်ပရေတာများသည် လက်ဖြင့်ရေးထားသော အစီအစဉ်များမပါဘဲ လည်ပတ်မှုများကို အချိန်ဇယားဆွဲနိုင်ပါသည်။
+- ပစ်မှတ်ဟို့စ်တွင် ထုတ်လုပ်ထားသော `capture_commands.sh` ကို လုပ်ဆောင်ပြီး ကုန်ကြမ်းအထွက်များကို `scripts/sm_perf_aggregate.py --output <dir>/aggregated.json` ဖြင့် စုစည်းကာ `scripts/sm_perf_promote_baseline.py --out-dir crates/iroha_crypto/benches --overwrite` မှတစ်ဆင့် အလယ်တန်း JSONs များသို့ မြှင့်တင်ပါ။ ခံနိုင်ရည်များ စိမ်းလန်းနေမည်ကို အတည်ပြုရန် `ci/check_sm_perf.sh` ကို ပြန်ဖွင့်ပါ။
+- ဟာ့ဒ်ဝဲ သို့မဟုတ် ကိရိယာကြိုးများ ပြောင်းလဲသည့်အခါ `docs/source/crypto/sm_perf_baseline_comparison.md` တွင် နှိုင်းယှဉ်မှု/မှတ်စုများကို ပြန်လည်ဆန်းသစ်ပါ၊ မီဒီယာအသစ်များသည် တည်ငြိမ်ပါက `ci/check_sm_perf.sh` သည်းခံနိုင်မှုကို တင်းကျပ်ကာ ဒက်ရှ်ဘုတ်/သတိပေးမှုအဆင့်များကို အခြေခံမျဥ်းအသစ်များနှင့် ချိန်ညှိထားပါက ops နှိုးစက်များသည် အဓိပ္ပါယ်ရှိမြဲဖြစ်သည်။
+- `quarterly_plan.json`၊ `capture_plan.json`၊ `capture_commands.sh` နှင့် စုစည်းထားသော JSON တို့ကို အခြေခံအဆင့်မွမ်းမံမှုများနှင့်အတူ ပူးတွဲလုပ်ဆောင်ပါ။ တူညီသောပစ္စည်းများကို ခြေရာခံနိုင်စေရန် အခြေအနေ/လမ်းပြမြေပုံအပ်ဒိတ်များတွင် ပူးတွဲပါရှိသည်။

@@ -6,15 +6,16 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 7fab384ae80e1993b1e54d6addc82fd3dc652fb6e3958bea6a04e057a1805b57
 source_last_modified: "2026-01-03T18:07:57.084090+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# GOST Performance Workflow
+# Рабочий процесс производительности ГОСТ
 
-This note documents how we track and enforce the performance envelope for the
-TC26 GOST signing backend.
+В этом примечании описывается, как мы отслеживаем и обеспечиваем соблюдение границ производительности для
+Серверная часть подписи ГОСТ TC26.
 
-## Running locally
+## Запуск локально
 
 ```bash
 make gost-bench                     # run benches + tolerance check
@@ -23,49 +24,49 @@ make gost-dudect                    # run the constant-time timing guard
 ./scripts/update_gost_baseline.sh   # bench + rebaseline helper
 ```
 
-Behind the scenes both targets call `scripts/gost_bench.sh`, which:
+За кулисами обе цели вызывают `scripts/gost_bench.sh`, что:
 
-1. Executes `cargo bench -p iroha_crypto --bench gost_sign --features gost -- --noplot`.
-2. Runs `gost_perf_check` against `target/criterion`, verifying medians against the
-   checked-in baseline (`crates/iroha_crypto/benches/gost_perf_baseline.json`).
-3. Injects the Markdown summary into `$GITHUB_STEP_SUMMARY` when available.
+1. Выполняется `cargo bench -p iroha_crypto --bench gost_sign --features gost -- --noplot`.
+2. Запускает `gost_perf_check` для `target/criterion`, сверяя медианы с
+   проверенный базовый уровень (`crates/iroha_crypto/benches/gost_perf_baseline.json`).
+3. Вставляет сводку Markdown в `$GITHUB_STEP_SUMMARY`, если она доступна.
 
-To refresh the baseline after approving a regression/improvement, run:
+Чтобы обновить базовый уровень после утверждения регресса/улучшения, запустите:
 
 ```bash
 make gost-bench-update
 ```
 
-or directly:
+или напрямую:
 
 ```bash
 ./scripts/gost_bench.sh --write-baseline \
   --baseline crates/iroha_crypto/benches/gost_perf_baseline.json
 ```
 
-`scripts/update_gost_baseline.sh` runs the bench + checker, overwrites the baseline JSON, and prints
-the new medians. Always commit the updated JSON alongside the decision record in
+`scripts/update_gost_baseline.sh` запускает стенд + проверку, перезаписывает базовый JSON и печатает
+новые медианы. Всегда фиксируйте обновленный JSON вместе с записью решения в
 `crates/iroha_crypto/docs/gost_backend.md`.
 
-### Current reference medians
+### Текущие эталонные медианы
 
-| Algorithm            | Median (µs) |
-|----------------------|-------------|
-| ed25519              | 69.67       |
-| gost256_paramset_a   | 1136.96     |
-| gost256_paramset_b   | 1129.05     |
-| gost256_paramset_c   | 1133.25     |
-| gost512_paramset_a   | 8944.39     |
-| gost512_paramset_b   | 8963.60     |
-| secp256k1            | 160.53      |
+| Алгоритм | Медиана (мкс) |
+|------|-------------|
+| ed25519 | 69,67 |
+| gost256_paramset_a | 1136,96 |
+| gost256_paramset_b | 1129,05 |
+| gost256_paramset_c | 1133,25 |
+| gost512_paramset_a | 8944,39 |
+| gost512_paramset_b | 8963,60 |
+| секп256к1 | 160,53 |
 
-## CI
+## КИ
 
-`.github/workflows/gost-perf.yml` uses the same script and also runs the dudect timing guard.
-CI fails when the measured median exceeds the baseline by more than the configured tolerance
-(20% by default) or when the timing guard detects a leak, so regressions are caught automatically.
+`.github/workflows/gost-perf.yml` использует тот же сценарий, а также запускает защиту синхронизации.
+CI дает сбой, когда измеренное медианное значение превышает базовый уровень более чем на настроенный допуск.
+(по умолчанию 20%) или когда защита синхронизации обнаруживает утечку, поэтому регрессии фиксируются автоматически.
 
-## Summary output
+## Итоговый вывод
 
-`gost_perf_check` prints the comparison table locally and appends the same content to
-`$GITHUB_STEP_SUMMARY`, so CI job logs and run summaries share the same numbers.
+`gost_perf_check` печатает таблицу сравнения локально и добавляет то же содержимое в
+`$GITHUB_STEP_SUMMARY`, поэтому журналы заданий CI и сводки выполнения имеют одни и те же номера.

@@ -6,49 +6,48 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 3065571b34a226a5871c4fb68063f9419e48074b20096de215f440bdf54a4e59
 source_last_modified: "2026-01-03T18:07:57.085103+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Procedure for scheduling the Cargo.lock refresh required by the SM spike.
+//! Procedimento para agendamento da atualização do Cargo.lock exigida pelo pico do SM.
 
-# SM Feature `Cargo.lock` Refresh Plan
+# Recurso SM `Cargo.lock` Plano de atualização
 
-The `sm` feature spike for `iroha_crypto` originally could not complete `cargo check` while `--locked` was enforced. This note records the coordination steps for a sanctioned `Cargo.lock` update and tracks the current status of that need.
+O pico de recurso `sm` para `iroha_crypto` originalmente não pôde ser concluído `cargo check` enquanto `--locked` foi aplicado. Esta nota registra as etapas de coordenação para uma atualização `Cargo.lock` sancionada e rastreia o status atual dessa necessidade.
 
-> **2026-02-12 update:** Recent validation shows the optional `sm` feature now builds with the existing lockfile (`cargo check -p iroha_crypto --features sm --locked` succeeds in 7.9 s cold/0.23 s warm). The dependency set already contains `base64ct`, `ghash`, `opaque-debug`, `pem-rfc7468`, `pkcs8`, `polyval`, `primeorder`, `sm2`, `sm3`, `sm4`, and `sm4-gcm`, so no immediate lock refresh is required. Keep the procedure below on standby for future dependency bumps or new optional crates.
+> **Atualização de 12/02/2026:** A validação recente mostra que o recurso `sm` opcional agora é compilado com o arquivo de bloqueio existente (`cargo check -p iroha_crypto --features sm --locked` tem sucesso em 7,9s frio/0,23s quente). O conjunto de dependências já contém `base64ct`, `ghash`, `opaque-debug`, `pem-rfc7468`, `pkcs8`, `polyval`, `primeorder`, `sm2`, `sm3`, `sm4` e `sm4-gcm`, portanto, nenhuma atualização imediata de bloqueio é necessária. Mantenha o procedimento abaixo em espera para futuros problemas de dependência ou novas caixas opcionais.
 
-## Why the refresh is needed
-- Earlier iterations of the spike required adding optional crates that were missing from the lockfile. Current lock snapshots already include the RustCrypto stack (`sm2`, `sm3`, `sm4`, supporting codecs, and AES helpers).
-- Repository policy still blocks opportunistic lockfile edits; if a future dependency upgrade is necessary, the procedure below remains applicable.
-- Retain this plan so the team can execute a controlled refresh when new SM-related dependencies are introduced or existing ones need version bumps.
+## Por que a atualização é necessária
+- As iterações anteriores do pico exigiam a adição de caixas opcionais que estavam faltando no arquivo de bloqueio. Os instantâneos de bloqueio atuais já incluem a pilha RustCrypto (`sm2`, `sm3`, `sm4`, codecs de suporte e auxiliares AES).
+- A política de repositório ainda bloqueia edições oportunistas de lockfiles; se uma futura atualização de dependência for necessária, o procedimento abaixo permanecerá aplicável.
+- Mantenha este plano para que a equipe possa executar uma atualização controlada quando novas dependências relacionadas ao SM forem introduzidas ou quando as existentes precisarem de alterações de versão.
 
-## Proposed coordination steps
-1. **Raise request in Crypto WG + Release Eng sync (owner: @crypto-wg lead).**
-   - Reference `docs/source/crypto/sm_program.md` and note the optional nature of the feature.
-   - Confirm there are no concurrent lockfile change windows (e.g., dependency freezes).
-2. **Prepare patch with lock diff (owner: @release-eng).**
-   - Execute `scripts/sm_lock_refresh.sh` (after approval) to update only the required crates.
-   - Capture `cargo tree -p iroha_crypto --features sm` output (script emits `target/sm_dep_tree.txt`).
-3. **Security review (owner: @security-reviews).**
-   - Verify new crates/versions match the audit register and licensing expectations.
-   - Record hashes in supply-chain tracker.
-4. **Merge window execution.**
-   - Submit PR containing only the lockfile delta, dependency tree snapshot (attached as artifact), and updated audit notes.
-   - Ensure CI runs with `cargo check -p iroha_crypto --features sm` before merge.
-5. **Follow-up tasks.**
-   - Update `docs/source/crypto/sm_program.md` action item checklist.
-   - Notify SDK team that the feature can be compiled locally with `--features sm`.
-
-## Timeline & owners
-| Step | Target | Owner | Status |
+## Etapas de coordenação propostas
+1. **Levantar solicitação no Crypto WG + sincronização do Release Eng (proprietário: @crypto-wg lead).**
+   - Consulte `docs/source/crypto/sm_program.md` e observe a natureza opcional do recurso.
+   - Confirme que não há janelas de alteração simultâneas de lockfile (por exemplo, congelamentos de dependências).
+2. **Prepare o patch com diferencial de bloqueio (proprietário: @release-eng).**
+   - Execute `scripts/sm_lock_refresh.sh` (após aprovação) para atualizar apenas as caixas necessárias.
+   - Capture a saída `cargo tree -p iroha_crypto --features sm` (o script emite `target/sm_dep_tree.txt`).
+3. **Revisão de segurança (proprietário: @security-reviews).**
+   - Verifique se novas caixas/versões correspondem ao registro de auditoria e às expectativas de licenciamento.
+   - Grave hashes no rastreador da cadeia de suprimentos.
+4. **Mesclar execução da janela.**
+   - Enviar PR contendo apenas o delta do lockfile, instantâneo da árvore de dependência (anexado como artefato) e notas de auditoria atualizadas.
+   - Certifique-se de que o CI seja executado com `cargo check -p iroha_crypto --features sm` antes da mesclagem.
+5. **Tarefas de acompanhamento.**
+   - Atualizar lista de verificação de itens de ação `docs/source/crypto/sm_program.md`.
+   - Notifique a equipe do SDK de que o recurso pode ser compilado localmente com `--features sm`.## Linha do tempo e proprietários
+| Etapa | Alvo | Proprietário | Estado |
 |------|--------|-------|--------|
-| Request agenda slot in next Crypto WG call | 2025-01-22 | Crypto WG lead | ✅ Completed (review concluded spike can proceed without refresh) |
-| Draft selective `cargo update` command + sanity diff | 2025-01-24 | Release Engineering | ⚪ On standby (reactivate if new crates appear) |
-| Security review of new crates | 2025-01-27 | Security Reviews | ⚪ On standby (reuse audit checklist when refresh resumes) |
-| Merge lockfile update PR | 2025-01-29 | Release Engineering | ⚪ On standby |
-| Update SM program doc checklist | After merge | Crypto WG lead | ✅ Addressed via `docs/source/crypto/sm_program.md` entry (2026-02-12) |
+| Solicitar vaga na agenda na próxima teleconferência do Crypto WG | 22/01/2025 | Líder do Crypto WG | ✅ Concluído (o pico da revisão concluída pode prosseguir sem atualização) |
+| Rascunho do comando `cargo update` seletivo + diferença de sanidade | 24/01/2025 | Engenharia de Liberação | ⚪ Em espera (reativar caso apareçam novas caixas) |
+| Revisão de segurança de novas caixas | 27/01/2025 | Avaliações de segurança | ⚪ Em espera (reutilize a lista de verificação de auditoria quando a atualização for retomada) |
+| Mesclar atualização do lockfile PR | 29/01/2025 | Engenharia de Liberação | ⚪ Em espera |
+| Atualizar lista de verificação de documentos do programa SM | Após mesclar | Líder do Crypto WG | ✅ Endereçado via entrada `docs/source/crypto/sm_program.md` (12/02/2026) |
 
-## Notes
-- Keep any future refresh restricted to the SM-related crates listed above (and supporting helpers like `rfc6979`), avoiding workspace-wide `cargo update`.
-- If any transitive dependencies introduce MSRV drift, surface it before merge.
-- Once merged, enable an ephemeral CI job to monitor build times for the `sm` feature.
+## Notas
+- Mantenha qualquer atualização futura restrita às caixas relacionadas ao SM listadas acima (e aos auxiliares de suporte como `rfc6979`), evitando `cargo update` em todo o espaço de trabalho.
+- Se alguma dependência transitiva introduzir desvio de MSRV, revele-a antes da mesclagem.
+- Depois de mesclado, habilite um trabalho de CI efêmero para monitorar os tempos de construção do recurso `sm`.

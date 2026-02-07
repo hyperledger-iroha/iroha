@@ -7,68 +7,67 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 493c3c0f6a991b2a5d04f33f97b7e97bff372271c5c57751ff41f5e86d43cbc7
 source_last_modified: "2025-12-29T18:16:35.944695+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## SM Performance Capture & Baseline Plan
+## SM өнімділігін түсіру және бастапқы жоспар
 
-Status: Drafted — 2025-05-18  
-Owners: Performance WG (lead), Infra Ops (lab scheduling), QA Guild (CI gating)  
-Related roadmap tasks: SM-4c.1a/b, SM-5a.3b, FASTPQ Stage 7 cross-device capture
+Мәртебесі: Жасалған — 2025-05-18  
+Иелері: Performance WG (жетекші), Infra Ops (зертханалық жоспарлау), QA Guild (CI қақпасы)  
+Қатысты жол картасы тапсырмалары: SM-4c.1a/b, SM-5a.3b, FASTPQ 7-кезеңде кросс-құрылғыларды түсіру
 
-### 1. Objectives
-1. Record Neoverse medians in `sm_perf_baseline_aarch64_unknown_linux_gnu_{scalar,auto,neon_force}.json`. The current baselines are exported from the `neoverse-proxy-macos` capture under `artifacts/sm_perf/2026-03-lab/neoverse-proxy-macos/` (CPU label `neoverse-proxy-macos`) with the SM3 compare tolerance widened to 0.70 for aarch64 macOS/Linux. When bare-metal time opens, rerun `scripts/sm_perf_capture_helper.sh --matrix --cpu-label neoverse-n2-b01 --output artifacts/sm_perf/<date>/neoverse-n2-b01` on the Neoverse host and promote the aggregated medians into the baselines.  
-2. Gather matching x86_64 medians so `ci/check_sm_perf.sh` can guard both host classes.  
-3. Publish a repeatable capture procedure (commands, artefact layout, reviewers) so future perf gates do not rely on tribal knowledge.
+### 1. Мақсаттар
+1. `sm_perf_baseline_aarch64_unknown_linux_gnu_{scalar,auto,neon_force}.json` ішінде Neoverse медианаларын жазыңыз. Ағымдағы негізгі сызықтар `neoverse-proxy-macos` түсірілімінен `artifacts/sm_perf/2026-03-lab/neoverse-proxy-macos/` (CPU белгісі `neoverse-proxy-macos`) астында aarch64 macOS/Linux үшін 0,70-ке кеңейтілген SM3 салыстыру рұқсатымен экспортталады. Жалаңаш металл уақыты ашылғанда, Neoverse хостында `scripts/sm_perf_capture_helper.sh --matrix --cpu-label neoverse-n2-b01 --output artifacts/sm_perf/<date>/neoverse-n2-b01` қайта іске қосыңыз және жинақталған медианаларды негізгі сызықтарға жылжытыңыз.  
+2. `ci/check_sm_perf.sh` екі хост класын да қорғай алатындай x86_64 медианаларын жинаңыз.  
+3. Қайталанатын түсіру процедурасын (пәрмендер, артефакт орналасуы, шолушылар) жариялаңыз, осылайша болашақ перф қақпалары тайпалық білімге сенбейді.
 
-### 2. Hardware Availability
-Only Apple Silicon (macOS arm64) hosts are reachable in the current workspace. The `neoverse-proxy-macos` capture is exported as the interim Linux baseline, but capturing bare-metal Neoverse or x86_64 medians still requires the shared lab hardware tracked under `INFRA-2751`, to be run by the Performance WG once the lab window opens. The remaining capture windows are now booked and tracked in the artefact tree:
+### 2. Жабдықтың қолжетімділігі
+Ағымдағы жұмыс кеңістігінде тек Apple Silicon (macOS arm64) хосттарына қол жеткізуге болады. `neoverse-proxy-macos` түсірілімі уақытша Linux базалық желісі ретінде экспортталады, бірақ жалаң металл Neoverse немесе x86_64 медианаларын түсіру әлі де `INFRA-2751` астында бақыланатын ортақ зертханалық жабдықты қажет етеді, зертханалық терезе ашылғаннан кейін Performance WG арқылы іске қосылады. Қалған түсіру терезелері енді артефакт ағашында брондалады және бақыланады:
 
-- Neoverse N2 bare-metal (Tokyo rack B) booked for 2026-03-12. Operators will reuse the commands from Section 3 and store artefacts under `artifacts/sm_perf/2026-03-lab/neoverse-b01/`.
-- x86_64 Xeon (Zurich rack D) booked for 2026-03-19 with SMT disabled to reduce noise; artefacts will land under `artifacts/sm_perf/2026-03-lab/xeon-d01/`.
-- After both runs land, promote medians into the baseline JSONs and enable the CI gate in `ci/check_sm_perf.sh` (target switch date: 2026-03-25).
+- Neoverse N2 жалаң металл (Токио сөресі B) 2026-03-12 тапсырыс берген. Операторлар 3-бөлімдегі пәрмендерді қайта пайдаланады және артефактілерді `artifacts/sm_perf/2026-03-lab/neoverse-b01/` астында сақтайды.
+- x86_64 Xeon (Цюрих сөресі D) шуды азайту үшін SMT өшірілген 2026-03-19 үшін тапсырыс берілді; артефактілер `artifacts/sm_perf/2026-03-lab/xeon-d01/` астында түседі.
+- Екі іске қосылғаннан кейін, медианаларды негізгі JSON файлдарына жылжытыңыз және `ci/check_sm_perf.sh` ішінде CI қақпасын қосыңыз (мақсатты ауыстыру күні: 2026-03-25).
 
-Until those dates, only the macOS arm64 baselines can be refreshed locally.
-
-### 3. Capture Procedure
-1. **Sync toolchains**  
+Осы күндерге дейін тек macOS arm64 базалық сызықтарын жергілікті түрде жаңартуға болады.### 3. Түсіру процедурасы
+1. **Құралдар тізбектерін синхрондау**  
    ```bash
    rustup override set $(cat rust-toolchain.toml)
    cargo fetch
    ```
-2. **Generate capture matrix** (per host)  
+2. **Түсіру матрицасын жасау** (әр хост үшін)  
    ```bash
    scripts/sm_perf_capture_helper.sh --matrix \
      --output artifacts/sm_perf/2025-07-lab/${HOSTNAME}
    ```
-   The helper now writes `capture_commands.sh` and `capture_plan.json` under the target directory. The script sets up `raw/*.json` capture paths per mode so lab technicians can batch the runs deterministically.
-3. **Run captures**  
-   Execute each command from `capture_commands.sh` (or run the equivalent manually), ensuring every mode emits a structured JSON blob via `--capture-json`. Always supply a host label via `--cpu-label "<model/bin>"` (or `SM_PERF_CPU_LABEL=<label>`) so the capture metadata and subsequent baselines record the exact hardware that produced the medians. The helper already supplies the appropriate path; for manual runs the pattern is:
+   Көмекші енді мақсатты каталогтың астына `capture_commands.sh` және `capture_plan.json` жазады. Скрипт әр режимге `raw/*.json` түсіру жолдарын орнатады, осылайша зертханалық техниктер орындалуларды детерминативті түрде жинай алады.
+3. **Түсіруді іске қосу**  
+   `capture_commands.sh` әрбір пәрменін орындаңыз (немесе баламасын қолмен іске қосыңыз), әрбір режим `--capture-json` арқылы құрылымдық JSON blob шығаратынына көз жеткізіңіз. Әрқашан хост белгісін `--cpu-label "<model/bin>"` (немесе `SM_PERF_CPU_LABEL=<label>`) арқылы жеткізіңіз, осылайша түсіру метадеректері және кейінгі негізгі сызықтар медианаларды шығарған нақты жабдықты жазады. Көмекші тиісті жолды береді; қолмен іске қосу үшін үлгі:
    ```bash
    SM_PERF_CAPTURE_LABEL=auto \
    scripts/sm_perf.sh --mode auto \
      --cpu-label "neoverse-n2-lab-b01" \
      --capture-json artifacts/sm_perf/2025-07-lab/${HOSTNAME}/raw/auto.json
    ```
-4. **Validate results**  
+4. **Нәтижелерді растау**  
    ```bash
    scripts/sm_perf_check \
      artifacts/sm_perf/2025-07-lab/${HOSTNAME}/raw/*.json
    ```
-   Ensure variance stays within ±3% between runs. If not, rerun the affected mode and note the retry in the log.
-5. **Promote medians**  
-   Use `scripts/sm_perf_aggregate.py` to compute medians and copy them into the baseline JSON files:
+   Жұмыстар арасында ауытқудың ±3% шегінде сақталуын қамтамасыз етіңіз. Олай болмаса, зардап шеккен режимді қайта іске қосыңыз және журналда қайта әрекетті ескеріңіз.
+5. **Медиандарды алға жылжытыңыз**  
+   Медиандарды есептеу және оларды негізгі JSON файлдарына көшіру үшін `scripts/sm_perf_aggregate.py` пайдаланыңыз:
    ```bash
    scripts/sm_perf_aggregate.py \
      artifacts/sm_perf/2025-07-lab/${HOSTNAME}/raw/*.json \
      --output artifacts/sm_perf/2025-07-lab/${HOSTNAME}/aggregated.json
    ```
-   The helper groups captures by `metadata.mode`, validates that each set shares the
-   same `{target_arch, target_os}` triple, and emits a JSON summary with one entry
-   per mode. The medians that should land in the baseline files live under
-   `modes.<mode>.benchmarks`, while the accompanying `statistics` block records
-   the full sample list, min/max, mean, and population stdev for reviewers and CI.
-   Once the aggregated file exists, you can auto-write the baseline JSONs (with
-   the standard tolerance map) via:
+   Көмекші топтар `metadata.mode` арқылы түсіреді, әрбір жиын ортақ бөлісетінін растайды.
+   бірдей `{target_arch, target_os}` үш есе және бір жазбамен JSON қорытындысын шығарады
+   режим бойынша. Негізгі файлдарға түсетін медианалар астында тұрады
+   `modes.<mode>.benchmarks`, ал ілеспе `statistics` блок жазбалары
+   толық үлгі тізімі, мин/макс, орташа және рецензенттер мен CI үшін жалпы stdev.
+   Жинақталған файл болғаннан кейін сіз негізгі JSON файлдарын автоматты түрде жаза аласыз (
+   стандартты төзімділік картасы) арқылы:
    ```bash
    scripts/sm_perf_promote_baseline.py \
      artifacts/sm_perf/2025-07-lab/${HOSTNAME}/aggregated.json \
@@ -76,24 +75,24 @@ Until those dates, only the macOS arm64 baselines can be refreshed locally.
      --target-os unknown_linux_gnu \
      --overwrite
    ```
-   Override `--mode` to restrict to a subset or `--cpu-label` to pin the
-   recorded CPU name when the aggregated source omits it.
-   Once both hosts per architecture finish, update:
+   Ішкі жиынмен шектеу үшін `--mode` қайта анықтау немесе бекіту үшін `--cpu-label`
+   жинақталған көз оны өткізіп жіберген кезде жазылған CPU атауы.
+   Әр архитектуралық хосттардың екеуі де аяқталғаннан кейін, жаңартыңыз:
    - `sm_perf_baseline_aarch64_unknown_linux_gnu_{scalar,auto,neon_force}.json`
-   - `sm_perf_baseline_x86_64_unknown_linux_gnu_{scalar,auto}.json` (new)
+   - `sm_perf_baseline_x86_64_unknown_linux_gnu_{scalar,auto}.json` (жаңа)
 
-   The `aarch64_unknown_linux_gnu_*` files now reflect the `m3-pro-native`
-   capture (cpu label and metadata notes preserved) so `scripts/sm_perf.sh` can
-   auto-detect aarch64-unknown-linux-gnu hosts without manual flags. When the
-   bare-metal lab run completes, rerun `scripts/sm_perf.sh --mode <mode>
-   --write-baseline crates/iroha_crypto/benches/sm_perf_baseline_aarch64_unknown_linux_gnu_<mode>.json`
-   with the new captures to overwrite the interim medians and stamp the real
-   host label.
+   `aarch64_unknown_linux_gnu_*` файлдары енді `m3-pro-native` көрсетеді
+   түсіру (процессор белгісі және метадеректер ескертпелері сақталған), сондықтан `scripts/sm_perf.sh`
+   қолмен жалаушалары жоқ aarch64-unknown-linux-gnu хосттарын автоматты түрде анықтау. Қашан
+   жалаң металл зертханасын іске қосу аяқталды, `scripts/sm_perf.sh --mode  қайта іске қосыңыз
+   --write-baseline crates/iroha_crypto/benches/sm_perf_baseline_aarch64_unknown_linux_gnu_.json`
+   аралық медианалардың үстінен жазу және нақтыға мөр қою үшін жаңа түсірулермен
+   хост белгісі.
 
-   > Reference: the July 2025 Apple Silicon capture (CPU label `m3-pro-local`) is
-   > archived under `artifacts/sm_perf/2025-07-lab/takemiyacStudio.lan/{raw,aggregated.json}`.
-   > Mirror that layout when you publish the Neoverse/x86 artefacts so reviewers
-   > can diff the raw/aggregated outputs consistently.
+   > Анықтама: 2025 жылғы шілдедегі Apple Silicon түсіру (CPU белгісі `m3-pro-local`)
+   > `artifacts/sm_perf/2025-07-lab/takemiyacStudio.lan/{raw,aggregated.json}` астында мұрағатталған.
+   > Тексерушілер үшін Neoverse/x86 артефактілерін жариялаған кезде сол орналасуды айналаңыз
+   > шикі/жиынтық нәтижелерді дәйекті түрде ажырата алады.
 
 ### 4. Artefact Layout & Sign-off
 ```
@@ -108,36 +107,32 @@ artifacts/sm_perf/
     xeon-d01/
     xeon-d02/
 ```
-- `run-log.md` records the command hash, git revision, operator, and any anomalies.
-- Aggregated JSON files feed directly into the baseline updates and are attached to the performance review in `docs/source/crypto/sm_perf_baseline_comparison.md`.
-- QA Guild reviews the artefacts before baselines change and signs off in `status.md` under the Performance section.
-
-### 5. CI Gating Timeline
-| Date | Milestone | Action |
+- `run-log.md` пәрмен хэшін, git нұсқасын, операторды және кез келген ауытқуларды жазады.
+- Жиынтық JSON файлдары тікелей негізгі жаңартуларға беріледі және `docs/source/crypto/sm_perf_baseline_comparison.md` ішіндегі өнімділікті шолуға тіркеледі.
+- QA гильдиясы Артефактілерді негізгі сызықтар өзгермес бұрын қарастырады және `status.md` ішінде "Өнімділік" бөлімінде қол қояды.### 5. CI Gating хронологиясы
+| Күні | Маңызды кезең | Әрекет |
 |------|-----------|--------|
-| 2025-07-12 | Neoverse captures complete | Update `sm_perf_baseline_aarch64_*` JSON files, run `ci/check_sm_perf.sh` locally, open PR with artefacts attached. |
-| 2025-07-24 | x86_64 captures complete | Add new baseline files + gating in `ci/check_sm_perf.sh`; ensure cross-arch CI lanes consume them. |
-| 2025-07-27 | CI enforcement | Enable the `sm-perf-gate` workflow to run on both host classes; merges fail if regressions exceed configured tolerances. |
+| 12.07.2025 | Neoverse түсіру аяқталды | `sm_perf_baseline_aarch64_*` JSON файлдарын жаңартыңыз, `ci/check_sm_perf.sh` жергілікті түрде іске қосыңыз, артефактілер тіркелген PR ашыңыз. |
+| 24.07.2025 | x86_64 толық | түсіреді `ci/check_sm_perf.sh` ішінде жаңа негізгі файлдарды + шлюзді қосыңыз; көлденең аркалы CI жолақтары оларды тұтынатынына көз жеткізіңіз. |
+| 27.07.2025 | CI орындау | Екі хост класында іске қосу үшін `sm-perf-gate` жұмыс процесін қосыңыз; регрессиялар конфигурацияланған рұқсаттардан асып кетсе, біріктіру сәтсіз болады. |
 
-### 6. Dependencies & Communication
-- Coordinate lab access changes via `infra-ops@iroha.tech`.  
-- Performance WG posts daily updates in the `#perf-lab` channel while captures run.  
-- QA Guild prepares the comparison diff (`scripts/sm_perf_compare.py`) so reviewers can visualise deltas.  
-- Once baselines merge, update `roadmap.md` (SM-4c.1a/b, SM-5a.3b) and `status.md` with capture completion notes.
+### 6. Тәуелділіктер және байланыс
+- `infra-ops@iroha.tech` арқылы зертханаға кіру өзгерістерін үйлестіріңіз.  
+- Performance WG түсірулер орындалған кезде `#perf-lab` арнасында күнделікті жаңартуларды жариялайды.  
+- QA гильдиясы салыстыру айырмашылығын (`scripts/sm_perf_compare.py`) дайындайды, осылайша шолушылар дельталарды көрнекі түрде көре алады.  
+- Негізгі сызықтар біріктірілгеннен кейін, `roadmap.md` (SM-4c.1a/b, SM-5a.3b) және `status.md` файлдарын түсіру аяқталу жазбаларымен жаңартыңыз.
 
-With this plan the SM acceleration work gains reproducible medians, CI gating, and a traceable evidence trail, satisfying the “reserve lab windows & capture medians” action item.
+Осы жоспардың көмегімен SM жеделдету жұмысы қайталанатын медианаларға, CI шлагбаумдарына және қадағаланатын дәлелдер ізіне ие болып, «зертхананың резервтік терезелері және түсіру медианалары» әрекет элементін қанағаттандырады.
 
-### 7. CI Gate & Local Smoke
+### 7. CI қақпасы және жергілікті түтін
 
-- `ci/check_sm_perf.sh` is the canonical CI entrypoint. It shells out to `scripts/sm_perf.sh` for each mode in `SM_PERF_MODES` (defaults to `scalar auto neon-force`) and sets `CARGO_NET_OFFLINE=true` so benches run deterministically on the CI images.  
-- `.github/workflows/sm-neon-check.yml` now calls the gate on the macOS arm64 runner so every pull request exercises the scalar/auto/neon-force trio via the same helper used locally; the complementary Linux/Neoverse lane will hook in once the x86_64 captures land and the Neoverse proxy baselines are refreshed with the bare-metal run.  
-- Operators can override the mode list locally: `SM_PERF_MODES="scalar" bash ci/check_sm_perf.sh` trims the run to a single pass for a quick smoke test, while additional arguments (for example `--tolerance 0.20`) are forwarded directly to `scripts/sm_perf.sh`.  
-- `make check-sm-perf` now wraps the gate for developer convenience; CI jobs can invoke the script directly while macOS developers piggy-back on the make target.  
-- Once the Neoverse/x86_64 baselines land, the same script will pick up the appropriate JSON via the host auto-detection logic already present in `scripts/sm_perf.sh`, so no extra wiring is needed in the workflows beyond setting the desired mode list per host pool.
+- `ci/check_sm_perf.sh` - канондық CI кіру нүктесі. Ол `SM_PERF_MODES` (әдепкі бойынша `scalar auto neon-force`) режиміндегі әрбір режим үшін `scripts/sm_perf.sh` деңгейіне сәйкес келеді және `CARGO_NET_OFFLINE=true` орнатады, осылайша орындықтар CI кескіндерінде детерминирлі жұмыс істейді.  
+- `.github/workflows/sm-neon-check.yml` енді macOS arm64 жүгіргішіндегі қақпаны шақырады, осылайша әрбір тарту сұрауы жергілікті қолданылатын көмекші арқылы скаляр/авто/неондық күш триосын орындайды; Қосымша Linux/Neoverse жолағы x86_64 жерді басып алғаннан кейін және Neoverse прокси базалық сызықтары жалаңаш металды іске қосумен жаңартылған кезде қосылады.  
+- Операторлар режимдер тізімін жергілікті түрде қайта анықтай алады: `SM_PERF_MODES="scalar" bash ci/check_sm_perf.sh` жылдам түтін сынағы үшін жүгіруді бір жолға қысқартады, ал қосымша аргументтер (мысалы, `--tolerance 0.20`) тікелей `scripts/sm_perf.sh` мекенжайына жіберіледі.  
+- `make check-sm-perf` енді әзірлеушіге ыңғайлы болу үшін қақпаны орады; MacOS әзірлеушілері жасау мақсатына қайтып келгенде, CI тапсырмалары сценарийді тікелей шақыра алады.  
+- Neoverse/x86_64 негізгі сызықтары түскеннен кейін, сол сценарий `scripts/sm_perf.sh` жүйесінде бұрыннан бар хостты автоматты анықтау логикасы арқылы сәйкес JSON файлын таңдайды, сондықтан әрбір хост пулына қажетті режимдер тізімін орнатудан басқа жұмыс үрдістерінде қосымша сымдар қажет емес.
 
-### 8. Quarterly refresh helper
-
-- Run `scripts/sm_perf_quarterly.sh --owner "<name>" --cpu-label "<label>" [--quarter YYYY-QN] [--output-root artifacts/sm_perf]` to mint a quarter-stamped directory such as `artifacts/sm_perf/2026-Q1/<label>/`. The helper wraps `scripts/sm_perf_capture_helper.sh --matrix` and emits `capture_commands.sh`, `capture_plan.json`, and `quarterly_plan.json` (owner + quarter metadata) so lab operators can schedule runs without hand-written plans.
-- Execute the generated `capture_commands.sh` on the target host, aggregate the raw outputs with `scripts/sm_perf_aggregate.py --output <dir>/aggregated.json`, and promote the medians into the baseline JSONs via `scripts/sm_perf_promote_baseline.py --out-dir crates/iroha_crypto/benches --overwrite`. Re-run `ci/check_sm_perf.sh` to confirm the tolerances stay green.
-- When hardware or toolchains change, refresh comparison tolerances/notes in `docs/source/crypto/sm_perf_baseline_comparison.md`, tighten `ci/check_sm_perf.sh` tolerances if the new medians stabilise, and align any dashboard/alert thresholds with the new baselines so ops alarms stay meaningful.
-- Commit `quarterly_plan.json`, `capture_plan.json`, `capture_commands.sh`, and the aggregated JSON alongside the baseline updates; attach the same artefacts to the status/roadmap updates for traceability.
+### 8. Тоқсандық жаңарту көмекшісі- `artifacts/sm_perf/2026-Q1/<label>/` сияқты ширек мөрі бар каталогты жасау үшін `scripts/sm_perf_quarterly.sh --owner "<name>" --cpu-label "<label>" [--quarter YYYY-QN] [--output-root artifacts/sm_perf]` іске қосыңыз. Көмекші `scripts/sm_perf_capture_helper.sh --matrix` орап, `capture_commands.sh`, `capture_plan.json` және `quarterly_plan.json` (иесі + тоқсан метадеректері) шығарады, осылайша зертханалық операторлар қолмен жазылған жоспарларсыз жүгірістерді жоспарлай алады.
+- Жасалған `capture_commands.sh` нысанын мақсатты хостта орындаңыз, `scripts/sm_perf_aggregate.py --output <dir>/aggregated.json` көмегімен өңделмеген шығыстарды біріктіріңіз және `scripts/sm_perf_promote_baseline.py --out-dir crates/iroha_crypto/benches --overwrite` арқылы медианаларды негізгі JSON файлдарына жылжытыңыз. Төзімділіктердің жасыл болып қалуын растау үшін `ci/check_sm_perf.sh` қайта іске қосыңыз.
+- Аппараттық құрал немесе құралдар тізбегі өзгерген кезде, `docs/source/crypto/sm_perf_baseline_comparison.md` ішіндегі салыстыру рұқсаттарын/ескертпелерін жаңартыңыз, жаңа медианалар тұрақтанса, `ci/check_sm_perf.sh` рұқсаттарын қатайтыңыз және кез келген бақылау тақтасы/ескерту шектерін жаңа базалық сызықтармен туралаңыз, осылайша операция дабылдары мәнді болып қалады.
+- `quarterly_plan.json`, `capture_plan.json`, `capture_commands.sh` және жинақталған JSON-ды базалық жаңартулармен бірге орындаңыз; бақылау мүмкіндігі үшін күй/жол картасы жаңартуларына бірдей артефактілерді тіркеңіз.

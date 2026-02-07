@@ -4,60 +4,62 @@ direction: ltr
 source: docs/portal/docs/devportal/try-it.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Try It sandbox
+# 尝试一下沙盒
 
-The developer portal ships an optional “Try it” console so you can call Torii
-endpoints without leaving the documentation. The console relays requests
-through the bundled proxy so browsers can bypass CORS limits while still
-enforcing rate limits and authentication.
+开发者门户提供了一个可选的“Try it”控制台，因此您可以调用 Torii
+端点无需离开文档。控制台转发请求
+通过捆绑代理，浏览器可以绕过 CORS 限制，同时仍然
+实施速率限制和身份验证。
 
-## Prerequisites
+## 先决条件
 
-- Node.js 18.18 or newer (matches the portal build requirements)
-- Network access to a Torii staging environment
-- A bearer token that can call the Torii routes you plan to exercise
+- Node.js 18.18 或更高版本（符合门户构建要求）
+- 对 Torii 暂存环境的网络访问
+- 不记名令牌，可以调用您计划行使的 Torii 路线
 
-All proxy configuration is done through environment variables. The table below
-lists the most important knobs:
+所有代理配置都是通过环境变量完成的。下表
+列出了最重要的旋钮：
 
-| Variable | Purpose | Default |
-| --- | --- | --- |
-| `TRYIT_PROXY_TARGET` | Base Torii URL that the proxy forwards requests to | **Required** |
-| `TRYIT_PROXY_LISTEN` | Listen address for local development (format `host:port` or `[ipv6]:port`) | `127.0.0.1:8787` |
-| `TRYIT_PROXY_ALLOWED_ORIGINS` | Comma-separated list of origins that may call the proxy | `http://localhost:3000` |
-| `TRYIT_PROXY_CLIENT_ID` | Identifier placed in `X-TryIt-Client` for every upstream request | `docs-portal` |
-| `TRYIT_PROXY_BEARER` | Default bearer token forwarded to Torii | _empty_ |
-| `TRYIT_PROXY_ALLOW_CLIENT_AUTH` | Allow end users to supply their own token via `X-TryIt-Auth` | `0` |
-| `TRYIT_PROXY_MAX_BODY` | Maximum request body size (bytes) | `1048576` |
-| `TRYIT_PROXY_TIMEOUT_MS` | Upstream timeout in milliseconds | `10000` |
-| `TRYIT_PROXY_RATE_LIMIT` | Requests allowed per rate window per client IP | `60` |
-| `TRYIT_PROXY_RATE_WINDOW_MS` | Sliding window for rate limiting (ms) | `60000` |
-| `TRYIT_PROXY_METRICS_LISTEN` | Optional listen address for the Prometheus-style metrics endpoint (`host:port` or `[ipv6]:port`) | _empty (disabled)_ |
-| `TRYIT_PROXY_METRICS_PATH` | HTTP path served by the metrics endpoint | `/metrics` |
+|变量|目的|默认 |
+| ---| ---| ---|
+| `TRYIT_PROXY_TARGET` |代理将请求转发到的基本 Torii URL | **必填** |
+| `TRYIT_PROXY_LISTEN` |本地开发监听地址（格式`host:port`或`[ipv6]:port`）| `127.0.0.1:8787` |
+| `TRYIT_PROXY_ALLOWED_ORIGINS` |可能调用代理的来源的逗号分隔列表 | `http://localhost:3000` |
+| `TRYIT_PROXY_CLIENT_ID` |每个上游请求的标识符都放置在 `X-TryIt-Client` 中 | `docs-portal` |
+| `TRYIT_PROXY_BEARER` |默认不记名令牌转发至 Torii | _空_ |
+| `TRYIT_PROXY_ALLOW_CLIENT_AUTH` |允许最终用户通过 `X-TryIt-Auth` 提供自己的代币 | `0` |
+| `TRYIT_PROXY_MAX_BODY` |最大请求正文大小（字节）| `1048576` |
+| `TRYIT_PROXY_TIMEOUT_MS` |上行超时（以毫秒为单位）| `10000` |
+| `TRYIT_PROXY_RATE_LIMIT` |每个客户端 IP 每个速率窗口允许的请求数 | `60` |
+| `TRYIT_PROXY_RATE_WINDOW_MS` |速率限制滑动窗口（毫秒）| `60000` |
+| `TRYIT_PROXY_METRICS_LISTEN` | Prometheus 样式指标端点的可选侦听地址（`host:port` 或 `[ipv6]:port`）| _空（已禁用）_ |
+| `TRYIT_PROXY_METRICS_PATH` |指标端点提供的 HTTP 路径 | `/metrics` |
 
-The proxy also exposes `GET /healthz`, returns structured JSON errors, and
-redacts bearer tokens from log output.
+该代理还公开 `GET /healthz`，返回结构化 JSON 错误，并且
+从日志输出中编辑不记名令牌。
 
-Enable `TRYIT_PROXY_ALLOW_CLIENT_AUTH=1` when exposing the proxy to docs users so the Swagger and
-RapiDoc panels can forward user-supplied bearer tokens. The proxy still enforces rate limits,
-redacts credentials, and records whether a request used the default token or a per-request override.
-Set `TRYIT_PROXY_CLIENT_ID` to the label you want sent as `X-TryIt-Client`
-(defaults to `docs-portal`). The proxy trims and validates caller-supplied
-`X-TryIt-Client` values, falling back to this default so staging gateways can
-audit provenance without correlating browser metadata.
+向文档用户公开代理时启用 `TRYIT_PROXY_ALLOW_CLIENT_AUTH=1`，以便 Swagger 和
+RapiDoc 面板可以转发用户提供的不记名令牌。代理仍然执行速率限制，
+编辑凭据，并记录请求是使用默认令牌还是每个请求覆盖。
+将 `TRYIT_PROXY_CLIENT_ID` 设置为您想要作为 `X-TryIt-Client` 发送的标签
+（默认为 `docs-portal`）。代理修剪并验证调用者提供的
+`X-TryIt-Client` 值，回退到此默认值，以便临时网关可以
+无需关联浏览器元数据即可审核来源。
 
-## Start the proxy locally
+## 本地启动代理
 
-Install dependencies the first time you set up the portal:
+首次设置门户时安装依赖项：
 
 ```bash
 cd docs/portal
 npm install
 ```
 
-Run the proxy and point it at your Torii instance:
+运行代理并将其指向您的 Torii 实例：
 
 ```bash
 export TRYIT_PROXY_TARGET="https://torii.devnet.sora.example"
@@ -67,20 +69,20 @@ export TRYIT_PROXY_BEARER="Bearer eyJhbGciOi..."
 npm run tryit-proxy
 ```
 
-The script logs the bound address and forwards requests from `/proxy/*` to the
-configured Torii origin.
+该脚本记录绑定地址并将来自 `/proxy/*` 的请求转发到
+配置 Torii 原点。
 
-Before binding the socket the script validates that
-`static/openapi/torii.json` matches the digest recorded in
-`static/openapi/manifest.json`. If the files drift, the command exits with an
-error and instructs you to run `npm run sync-openapi -- --latest`. Export
-`TRYIT_PROXY_ALLOW_STALE_SPEC=1` only for emergency overrides; the proxy will
-log a warning and continue so you can recover during maintenance windows.
+在绑定套接字之前，脚本会验证
+`static/openapi/torii.json` 与中记录的摘要匹配
+`static/openapi/manifest.json`。如果文件发生漂移，该命令将退出并显示
+错误并指示您运行 `npm run sync-openapi -- --latest`。出口
+`TRYIT_PROXY_ALLOW_STALE_SPEC=1` 仅用于紧急超越；代理将
+记录警告并继续，以便您可以在维护时段内恢复。
 
-## Wire the portal widgets
+## 连接门户小部件
 
-When you build or serve the developer portal, set the URL that the widgets
-should use for the proxy:
+当您构建或提供开发人员门户时，请设置小部件所使用的 URL
+应该用于代理：
 
 ```bash
 export TRYIT_PROXY_PUBLIC_URL="http://localhost:8787"
@@ -88,48 +90,48 @@ export TRYIT_PROXY_DEFAULT_BEARER="Bearer eyJhbGciOi..." # Optional
 npm run start
 ```
 
-The following components read these values from `docusaurus.config.js`:
+以下组件从 `docusaurus.config.js` 读取这些值：
 
-- **Swagger UI** — rendered at `/reference/torii-swagger`; pre-authorises the
-  bearer scheme when a token is present, tags requests with `X-TryIt-Client`,
-  injects `X-TryIt-Auth`, and rewrites calls through the proxy when
-  `TRYIT_PROXY_PUBLIC_URL` is set.
-- **RapiDoc** — rendered at `/reference/torii-rapidoc`; mirrors the token field,
-  reuses the same headers as the Swagger panel, and targets the proxy
-  automatically when the URL is configured.
-- **Try it console** — embedded on the API overview page; lets you send custom
-  requests, view headers, and inspect response bodies.
+- **Swagger UI** — 在 `/reference/torii-swagger` 处渲染；预授权
+  持有者方案当存在令牌时，用 `X-TryIt-Client` 标记请求，
+  注入 `X-TryIt-Auth`，并在以下情况下通过代理重写调用
+  `TRYIT_PROXY_PUBLIC_URL` 已设置。
+- **RapiDoc** — 在 `/reference/torii-rapidoc` 渲染；镜像令牌字段，
+  重用与 Swagger 面板相同的标头，并以代理为目标
+  配置 URL 时自动。
+- **尝试控制台** — 嵌入 API 概述页面；让您发送自定义
+  请求、查看标头并检查响应正文。
 
-Both panels surface a **snapshot selector** that reads
-`docs/portal/static/openapi/versions.json`. Populate that index with
-`npm run sync-openapi -- --version=<label> --mirror=current --latest` so
-reviewers can jump between historical specs, see the recorded SHA-256 digest,
-and confirm whether a release snapshot carries a signed manifest before using
-the interactive widgets.
+两个面板上都有一个**快照选择器**，内容为
+`docs/portal/static/openapi/versions.json`。将该索引填充为
+`npm run sync-openapi -- --version=<label> --mirror=current --latest`所以
+审阅者可以在历史规范之间跳转，查看记录的 SHA-256 摘要，
+并在使用前确认发布快照是否带有签名清单
+交互式小部件。
 
-Changing the token in any widget only affects the current browser session; the
-proxy never persists or logs the supplied token.
+更改任何小部件中的令牌只会影响当前浏览器会话；的
+代理永远不会保留或记录提供的令牌。
 
-## Short-lived OAuth tokens
+## 短暂的 OAuth 令牌
 
-To avoid distributing long-lived Torii tokens to reviewers, wire the Try it
-console to your OAuth server. When the environment variables below are present
-the portal renders a device-code login widget, mints short-lived bearer tokens,
-and automatically injects them into the console form.
+为了避免将长期存在的 Torii 令牌分发给审阅者，请连接 Try it
+控制台到您的 OAuth 服务器。当存在以下环境变量时
+门户呈现设备代码登录小部件，铸造短期不记名令牌，
+并自动将它们注入到控制台表单中。
 
-| Variable | Purpose | Default |
-| --- | --- | --- |
-| `DOCS_OAUTH_DEVICE_CODE_URL` | OAuth Device Authorization endpoint (`/oauth/device/code`) | _empty (disabled)_ |
-| `DOCS_OAUTH_TOKEN_URL` | Token endpoint that accepts `grant_type=urn:ietf:params:oauth:grant-type:device_code` | _empty_ |
-| `DOCS_OAUTH_CLIENT_ID` | OAuth client identifier registered for the docs preview | _empty_ |
-| `DOCS_OAUTH_SCOPE` | Space-delimited scopes requested during sign-in | `openid profile offline_access` |
-| `DOCS_OAUTH_AUDIENCE` | Optional API audience to bind the token to | _empty_ |
-| `DOCS_OAUTH_POLL_INTERVAL_MS` | Minimum poll interval when waiting for approval (ms) | `5000` (values < 5000 ms are rejected) |
-| `DOCS_OAUTH_DEVICE_CODE_TTL_SECONDS` | Fallback device-code expiration window (seconds) | `600` (must remain between 300 s and 900 s) |
-| `DOCS_OAUTH_TOKEN_TTL_SECONDS` | Fallback access-token lifetime (seconds) | `900` (must remain between 300 s and 900 s) |
-| `DOCS_OAUTH_ALLOW_INSECURE` | Set to `1` for local previews that intentionally skip OAuth enforcement | _unset_ |
+|变量|目的|默认 |
+| ---| ---| ---|
+| `DOCS_OAUTH_DEVICE_CODE_URL` | OAuth 设备授权端点 (`/oauth/device/code`) | _空（已禁用）_ |
+| `DOCS_OAUTH_TOKEN_URL` |接受 `grant_type=urn:ietf:params:oauth:grant-type:device_code` 的令牌端点 | _空_ |
+| `DOCS_OAUTH_CLIENT_ID` |为文档预览注册的 OAuth 客户端标识符 | _空_ |
+| `DOCS_OAUTH_SCOPE` |登录期间请求的以空格分隔的范围 | `openid profile offline_access` |
+| `DOCS_OAUTH_AUDIENCE` |将令牌绑定到的可选 API 受众 | _空_ |
+| `DOCS_OAUTH_POLL_INTERVAL_MS` |等待批准时的最小轮询间隔（毫秒） | `5000`（<5000ms 的值被拒绝）|
+| `DOCS_OAUTH_DEVICE_CODE_TTL_SECONDS` |后备设备代码过期窗口（秒）| `600`（必须保持在 300 到 900 之间）|
+| `DOCS_OAUTH_TOKEN_TTL_SECONDS` |后备访问令牌生命周期（秒）| `900`（必须保持在 300 到 900 之间）|
+| `DOCS_OAUTH_ALLOW_INSECURE` |设置为 `1` 用于有意跳过 OAuth 强制执行的本地预览 | _取消设置_ |
 
-Example configuration:
+配置示例：
 
 ```bash
 export DOCS_OAUTH_DEVICE_CODE_URL="https://auth.dev.sora.example/oauth/device/code"
@@ -141,60 +143,60 @@ export DOCS_OAUTH_AUDIENCE="https://torii.devnet.sora.example"
 export DOCS_OAUTH_POLL_INTERVAL_MS="6000"
 ```
 
-When you run `npm run start` or `npm run build`, the portal embeds these values
-in `docusaurus.config.js`. During local preview the Try it card shows a
-“Sign in with device code” button. Users enter the displayed code on your OAuth
-verification page; once the device flow succeeds the widget:
+当您运行 `npm run start` 或 `npm run build` 时，门户会嵌入这些值
+在 `docusaurus.config.js` 中。在本地预览期间，尝试卡会显示
+“使用设备代码登录”按钮。用户在您的 OAuth 上输入显示的代码
+验证页面；一旦设备流程成功，小部件就会：
 
-- injects the issued bearer token into the Try it console field,
-- tags requests with the existing `X-TryIt-Client` and `X-TryIt-Auth` headers,
-- displays the remaining lifetime, and
-- automatically clears the token when it expires.
+- 将颁发的不记名令牌注入 Try it 控制台字段，
+- 使用现有的 `X-TryIt-Client` 和 `X-TryIt-Auth` 标头标记请求，
+- 显示剩余寿命，以及
+- 令牌过期时自动清除。
 
-The manual Bearer input remains available—omit the OAuth variables whenever you
-want to force reviewers to paste a temporary token themselves, or export
-`DOCS_OAUTH_ALLOW_INSECURE=1` for isolated local previews where anonymous access
-is acceptable. Builds without OAuth configured now fail fast to satisfy the
-DOCS-1b roadmap gate.
+手动承载输入仍然可用 - 无论何时您都可以忽略 OAuth 变量
+想要强制审阅者自己粘贴临时令牌，或导出
+`DOCS_OAUTH_ALLOW_INSECURE=1` 用于匿名访问的隔离本地预览
+是可以接受的。未配置 OAuth 的构建现在无法快速满足
+DOCS-1b 路线图门。
 
-📌 Review the [Security hardening & pen-test checklist](./security-hardening.md)
-before exposing the portal outside the lab; it documents the threat model,
-CSP/Trusted Types profile, and the penetration-test steps that now gate DOCS-1b.
+📌 查看[安全强化和渗透测试清单](./security-hardening.md)
+在将门户暴露在实验室之外之前；它记录了威胁模型，
+CSP/可信类型配置文件，以及现在用于 DOCS-1b 的渗透测试步骤。
 
-## Norito-RPC samples
+## Norito-RPC 样本
 
-Norito-RPC requests share the same proxy and OAuth plumbing as the JSON routes,
-they simply set `Content-Type: application/x-norito` and send the
-pre-encoded Norito payload described in the NRPC specification
-(`docs/source/torii/nrpc_spec.md`).
-The repository ships canonical payloads under `fixtures/norito_rpc/` so portal
-authors, SDK owners, and reviewers can replay the exact bytes that CI uses.
+Norito-RPC 请求与 JSON 路由共享相同的代理和 OAuth 管道，
+他们只需设置 `Content-Type: application/x-norito` 并发送
+NRPC 规范中描述的预编码 Norito 有效负载
+（`docs/source/torii/nrpc_spec.md`）。
+该存储库在 `fixtures/norito_rpc/` 下提供规范的有效负载，因此门户
+作者、SDK 所有者和审阅者可以重放 CI 使用的确切字节。
 
-### Send a Norito payload from the Try It console
+### 从 Try It 控制台发送 Norito 有效负载
 
-1. Pick a fixture such as `fixtures/norito_rpc/transfer_asset.norito`. These
-   files are raw Norito envelopes; do **not** base64-encode them.
-2. In Swagger or RapiDoc, locate the NRPC endpoint (for example
-   `POST /v1/pipeline/submit`) and switch the **Content-Type** selector to
-   `application/x-norito`.
-3. Toggle the request body editor to **binary** (Swagger's "File" mode or
-   RapiDoc's "Binary/File" selector) and upload the `.norito` file. The widget
-   streams the bytes through the proxy without alteration.
-4. Submit the request. If Torii returns `X-Iroha-Error-Code: schema_mismatch`,
-   verify that you are calling an endpoint that accepts binary payloads and
-   confirm that the schema hash recorded in `fixtures/norito_rpc/schema_hashes.json`
-   matches the Torii build you are hitting.
+1. 选择一个夹具，例如 `fixtures/norito_rpc/transfer_asset.norito`。这些
+   文件是原始 Norito 信封； **不要**对它们进行 base64 编码。
+2. 在 Swagger 或 RapiDoc 中，找到 NRPC 端点（例如
+   `POST /v1/pipeline/submit`）并将 **Content-Type** 选择器切换为
+   `application/x-norito`。
+3. 将请求正文编辑器切换为 **binary**（Swagger 的“文件”模式或
+   RapiDoc 的“二进制/文件”选择器）并上传 `.norito` 文件。小部件
+   通过代理流式传输字节而不进行任何更改。
+4. 提交请求。如果 Torii 返回 `X-Iroha-Error-Code: schema_mismatch`，
+   验证您正在调用接受二进制有效负载的端点并且
+   确认 `fixtures/norito_rpc/schema_hashes.json` 中记录的模式哈希
+   与您正在使用的 Torii 版本匹配。
 
-The console keeps the most recent file in memory so you can resubmit the same
-payload while exercising different authorisation tokens or Torii hosts. Adding
-`scripts/run_norito_rpc_fixtures.sh --note "<ticket>"` to your workflow produces
-the evidence bundle referenced in the NRPC-4 adoption plan (log + JSON summary),
-which pairs nicely with screenshotting the Try It response during reviews.
+控制台将最新的文件保留在内存中，以便您可以重新提交相同的文件
+有效负载同时使用不同的授权令牌或 Torii 主机。添加
+`scripts/run_norito_rpc_fixtures.sh --note "<ticket>"` 到您的工作流程产生
+NRPC-4 采用计划中引用的证据包（日志 + JSON 摘要），
+这与在评论期间截屏“尝试一下”响应非常搭配。
 
-### CLI example (curl)
+### CLI 示例 (curl)
 
-The same fixtures can be replayed outside the portal via `curl`, which is useful
-when validating the proxy or debugging gateway responses:
+相同的赛程可以通过 `curl` 在门户外重播，这很有用
+验证代理或调试网关响应时：
 
 ```bash
 TORII="https://torii.devnet.sora.example"
@@ -206,23 +208,21 @@ curl \
   "${TORII}/v1/pipeline/submit"
 ```
 
-Swap the fixture for any entry listed in `transaction_fixtures.manifest.json`
-or encode your own payload with `cargo xtask norito-rpc-fixtures`. When Torii
-is in canary mode you can point `curl` at the try-it proxy
-(`https://docs.sora.example/proxy/v1/pipeline/submit`) to exercise the same
-infrastructure that the portal widgets use.
+将夹具替换为 `transaction_fixtures.manifest.json` 中列出的任何条目
+或者使用 `cargo xtask norito-rpc-fixtures` 编码您自己的有效负载。当 Torii
+处于金丝雀模式，您可以将 `curl` 指向 try-it 代理
+(`https://docs.sora.example/proxy/v1/pipeline/submit`) 进行同样的练习
+门户小部件使用的基础设施。
 
-## Observability & operations
+## 可观察性和操作每个请求都会记录一次，其中包括方法、路径、来源、上游状态和
+身份验证源（`override`、`default` 或 `client`）。代币从来都不是
+存储 — 承载标头和 `X-TryIt-Auth` 值均在之前经过编辑
+日志记录——这样你就可以将标准输出转发到中央收集器，而不必担心
+秘密泄露。
 
-Every request is logged once with method, path, origin, upstream status, and the
-authentication source (`override`, `default`, or `client`). Tokens are never
-stored—both bearer headers and `X-TryIt-Auth` values are redacted before
-logging—so you can forward stdout to a central collector without worrying about
-secrets leaking.
+### 健康探测和警报
 
-### Health probes & alerting
-
-Run the bundled probe during deployments or on a schedule:
+在部署期间或按计划运行捆绑探针：
 
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
@@ -231,19 +231,19 @@ TRYIT_PROXY_SAMPLE_PATH="/v1/status" \
 npm run probe:tryit-proxy
 ```
 
-Environment knobs:
+环境旋钮：
 
-- `TRYIT_PROXY_SAMPLE_PATH` — optional Torii route (without `/proxy`) to exercise.
-- `TRYIT_PROXY_SAMPLE_METHOD` — defaults to `GET`; set to `POST` for write routes.
-- `TRYIT_PROXY_PROBE_TOKEN` — injects a temporary bearer token for the sample call.
-- `TRYIT_PROXY_PROBE_TIMEOUT_MS` — overrides the default 5 s timeout.
-- `TRYIT_PROXY_PROBE_METRICS_FILE` — optional Prometheus textfile destination for `probe_success`/`probe_duration_seconds`.
-- `TRYIT_PROXY_PROBE_LABELS` — comma-separated `key=value` pairs appended to the metrics (defaults to `job=tryit-proxy` and `instance=<proxy URL>`).
-- `TRYIT_PROXY_PROBE_METRICS_URL` — optional metrics endpoint URL (for example, `http://localhost:9798/metrics`) that must respond successfully when `TRYIT_PROXY_METRICS_LISTEN` is enabled.
+- `TRYIT_PROXY_SAMPLE_PATH` — 可选的 Torii 路线（无 `/proxy`）进行锻炼。
+- `TRYIT_PROXY_SAMPLE_METHOD` — 默认为 `GET`；设置为 `POST` 用于写入路由。
+- `TRYIT_PROXY_PROBE_TOKEN` — 为示例调用注入临时承载令牌。
+- `TRYIT_PROXY_PROBE_TIMEOUT_MS` — 覆盖默认的 5 秒超时。
+- `TRYIT_PROXY_PROBE_METRICS_FILE` — `probe_success`/`probe_duration_seconds` 的可选 Prometheus 文本文件目标。
+- `TRYIT_PROXY_PROBE_LABELS` — 附加到指标的以逗号分隔的 `key=value` 对（默认为 `job=tryit-proxy` 和 `instance=<proxy URL>`）。
+- `TRYIT_PROXY_PROBE_METRICS_URL` — 启用 `TRYIT_PROXY_METRICS_LISTEN` 时必须成功响应的可选指标端点 URL（例如 `http://localhost:9798/metrics`）。
 
-Feed the results into a textfile collector by pointing the probe at a writable
-path (for example, `/var/lib/node_exporter/textfile_collector/tryit.prom`) and
-adding any custom labels:
+通过将探针指向可写的位置，将结果输入到文本文件收集器中
+路径（例如，`/var/lib/node_exporter/textfile_collector/tryit.prom`）和
+添加任何自定义标签：
 
 ```bash
 TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" \
@@ -252,17 +252,17 @@ TRYIT_PROXY_PROBE_LABELS="job=tryit-proxy,cluster=prod" \
 npm run probe:tryit-proxy
 ```
 
-The script rewrites the metrics file atomically so your collector always reads a
-complete payload.
+该脚本自动重写指标文件，以便您的收集器始终读取
+完整的有效负载。
 
-When `TRYIT_PROXY_METRICS_LISTEN` is configured, set
-`TRYIT_PROXY_PROBE_METRICS_URL` to the metrics endpoint so the probe fails fast
-if the scrape surface disappears (for example, misconfigured ingress or missing
-firewall rules). A typical production setting is
-`TRYIT_PROXY_PROBE_METRICS_URL="http://127.0.0.1:9798/metrics"`.
+配置 `TRYIT_PROXY_METRICS_LISTEN` 时，设置
+`TRYIT_PROXY_PROBE_METRICS_URL` 到指标端点，以便探测快速失败
+如果刮擦表面消失（例如，入口配置错误或缺失
+防火墙规则）。典型的生产设置是
+`TRYIT_PROXY_PROBE_METRICS_URL="http://127.0.0.1:9798/metrics"`。
 
-For lightweight alerting, wire the probe into your monitoring stack. A Prometheus
-example that pages after two consecutive failures:
+对于轻量级警报，请将探测器连接到监控堆栈。 Prometheus
+连续两次失败后进行分页的示例：
 
 ```yaml
 groups:
@@ -279,14 +279,14 @@ groups:
             The try-it proxy at {{ $labels.instance }} is not responding to probe requests.
 ```
 
-### Metrics endpoint & dashboards
+### 指标端点和仪表板
 
-Set `TRYIT_PROXY_METRICS_LISTEN=127.0.0.1:9798` (or any host/port pair) before
-starting the proxy to expose a Prometheus-formatted metrics endpoint. The path
-defaults to `/metrics` but can be overridden via
-`TRYIT_PROXY_METRICS_PATH=/custom`. Each scrape returns counters for per-method
-request totals, rate-limit rejections, upstream errors/timeouts, proxy outcomes,
-and latency summaries:
+之前设置 `TRYIT_PROXY_METRICS_LISTEN=127.0.0.1:9798`（或任何主机/端口对）
+启动代理以公开 Prometheus 格式的指标端点。路径
+默认为 `/metrics` 但可以通过以下方式覆盖
+`TRYIT_PROXY_METRICS_PATH=/custom`。每次抓取都会返回每个方法的计数器
+请求总数、速率限制拒绝、上游错误/超时、代理结果、
+和延迟摘要：
 
 ```bash
 export TRYIT_PROXY_METRICS_LISTEN="127.0.0.1:9798"
@@ -297,16 +297,16 @@ tryit_proxy_requests_total{method="GET"} 12
 tryit_proxy_rate_limited_total 1
 ```
 
-Point your Prometheus/OTLP collectors at the metrics endpoint and reuse the
-existing `dashboards/grafana/docs_portal.json` panels so SRE can observe tail
-latencies and rejection spikes without parsing logs. The proxy automatically
-publishes `tryit_proxy_start_timestamp_ms` to help operators detect restarts.
+将您的 Prometheus/OTLP 收集器指向指标端点并重用
+现有 `dashboards/grafana/docs_portal.json` 面板，以便 SRE 可以观察尾部
+在不解析日志的情况下，延迟和拒绝峰值。自动代理
+发布 `tryit_proxy_start_timestamp_ms` 以帮助操作员检测重启。
 
-### Rollback automation
+### 回滚自动化
 
-Use the management helper to update or restore the target Torii URL. The script
-stores the previous configuration in `.env.tryit-proxy.bak` so rollbacks are a
-single command.
+使用管理帮助程序更新或恢复目标 Torii URL。剧本
+将以前的配置存储在 `.env.tryit-proxy.bak` 中，因此回滚是
+单个命令。
 
 ```bash
 # Update TRYIT_PROXY_TARGET and back up the previous config.
@@ -316,5 +316,5 @@ npm run manage:tryit-proxy -- update --target https://torii.devnet.sora.example
 npm run manage:tryit-proxy -- rollback
 ```
 
-Override the env file path with `--env` or `TRYIT_PROXY_ENV` if your deployment
-stores configuration elsewhere.
+如果您的部署使用 `--env` 或 `TRYIT_PROXY_ENV` 覆盖 env 文件路径
+将配置存储在其他地方。

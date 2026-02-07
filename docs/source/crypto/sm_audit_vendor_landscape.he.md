@@ -6,100 +6,99 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 0f39199767280be0fdd582301cdc3e8929497cf372a96f9f300e718f827000a7
 source_last_modified: "2026-01-03T18:07:57.038484+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM Audit Vendor Landscape
-% Iroha Crypto Working Group
+% SM Audit ספק נוף
+% Iroha קבוצת עבודה של קריפטו
 % 2026-02-12
 
-# Overview
+# סקירה כללית
 
-The Crypto Working Group needs a standing bench of independent reviewers who
-understand both Rust cryptography and the Chinese GM/T (SM2/SM3/SM4) standards.
-This note catalogues firms with relevant references and summarises the audit
-scope we typically request so request-for-proposal (RFP) cycles stay fast and
-consistent.
+קבוצת העבודה של קריפטו זקוקה לספסל עומד של סוקרים בלתי תלויים אשר
+להבין גם קריפטוגרפיה של Rust וגם את תקני GM/T (SM2/SM3/SM4) הסיניים.
+הערה זו מקטלגת פירמות עם אסמכתאות רלוונטיות ומסכמת את הביקורת
+היקף שאנו מבקשים בדרך כלל כך שמחזורי בקשה להצעה (RFP) נשארים מהירים ו
+עקבי.
 
-# Candidate Firms
+# חברות מועמדות
 
-## Trail of Bits (CN Cryptography Practice)
+## שובל של ביטים (תרגול קריפטוגרפיה של CN)
 
-- Documented engagements: 2023 security review of Ant Group’s Tongsuo
-  (SM-enabled OpenSSL distribution) and repeated audits of Rust-based
-  blockchains such as Diem/Libra, Sui, and Aptos.
-- Strengths: dedicated Rust cryptography team, automated constant-time
-  analysis tooling, experience validating deterministic execution and hardware
-  dispatch policies.
-- Fit for Iroha: can extend the current SM audit SOW or perform independent
-  re-tests; comfortable operating with Norito fixtures and IVM syscall
-  surfaces.
+- התקשרויות מתועדות: סקירת אבטחה ב-2023 של Tongsuo של Ant Group
+  (הפצת OpenSSL התומכת ב-SM) וביקורות חוזרות ונשנות של מבוססי Rust
+  blockchains כגון Diem/Libra, Sui ו- Aptos.
+- חוזקות: צוות קריפטוגרפיה ייעודי של Rust, זמן קבוע אוטומטי
+  כלי ניתוח, ניסיון באימות ביצוע דטרמיניסטי וחומרה
+  מדיניות שיגור.
+- מתאים ל-Iroha: יכול להרחיב את ביקורת ה-SM הנוכחית או לבצע עצמאית
+  בדיקות חוזרות; הפעלה נוחה עם גופי Norito ו-IVM syscall
+  משטחים.
 
-## NCC Group (APAC Cryptography Services)
+## NCC Group (שירותי קריפטוגרפיה של APAC)
 
-- Documented engagements: gm/T (SM) code examinations for regional payment
-  networks and HSM vendors; prior Rust reviews for Parity Substrate, Polkadot,
-  and Libra components.
-- Strengths: large APAC bench with bilingual reporting, ability to combine
-  compliance-style process checks with deep code review.
-- Fit for Iroha: ideal for second-opinion assessments or governance-driven
-  validation alongside Trail of Bits findings.
+- התקשרויות מתועדות: בדיקות קוד gm/T (SM) לתשלום אזורי
+  רשתות וספקי HSM; סקירות קודמות של Rust עבור Parity Substrate, Polkadot,
+  ורכיבי מאזניים.
+- חוזקות: ספסל APAC גדול עם דיווח דו לשוני, יכולת שילוב
+  בדיקות תהליך בסגנון תאימות עם סקירת קוד עמוקה.
+- מתאים ל-Iroha: אידיאלי להערכות של דעה שנייה או מונעי ממשל
+  אימות לצד ממצאי Trail of Bits.
 
-## SECBIT Labs (Beijing)
+## SECBIT Labs (בייג'ינג)
 
-- Documented engagements: maintainers of the open-source `libsm` Rust crate
-  used by Nervos CKB and CITA; audited Guomi enablement for Nervos, Muta, and
-  FISCO BCOS Rust components with bilingual deliverables.
-- Strengths: engineers who actively ship SM primitives in Rust, strong
-  property-testing capabilities, deep familiarity with domestic compliance
-  requirements.
-- Fit for Iroha: valuable when we need reviewers who can supply comparative
-  test vectors and implementation guidance alongside findings.
+- התקשרויות מתועדות: מתחזקות של ארגז חלודה בקוד פתוח `libsm`
+  בשימוש על ידי Nervos CKB ו- CITA; בדיקת הפעלת Guomi עבור Nervos, Muta ו-
+  FISCO BCOS רכיבי חלודה עם תוצרים דו לשוניים.
+- חוזקות: מהנדסים ששולחים באופן פעיל פרימיטיבים SM ב-Rust, חזקים
+  יכולות בדיקת נכסים, היכרות מעמיקה עם תאימות מקומית
+  דרישות.
+- מתאים ל-Iroha: בעל ערך כאשר אנו זקוקים לבודקים שיכולים לספק השוואות
+  בדיקת וקטורים והנחיית יישום לצד ממצאים.
 
-## SlowMist Security (Chengdu)
+## SlowMist Security (צ'נגדו)
 
-- Documented engagements: Substrate/Polkadot Rust security reviews including
-  Guomi forks for Chinese operators; routine assessments of SM2/SM3/SM4 wallet
-  and bridge code used by exchanges.
-- Strengths: blockchain-focused audit practice, integrated incident response,
-  guidance that spans core protocol code and operator tooling.
-- Fit for Iroha: helpful for validating SDK parity and operational touchpoints
-  in addition to core crates.
+- התקשרויות מתועדות: סקירות אבטחה של מצע/פולקדות חלודה כולל
+  מזלגות גוומי למפעילים סיניים; הערכות שגרתיות של ארנק SM2/SM3/SM4
+  וקוד גישור המשמש את הבורסות.
+- חוזקות: פרקטיקת ביקורת ממוקדת בלוקצ'יין, תגובה משולבת לאירועים,
+  הדרכה המשתרעת על קוד פרוטוקול ליבה וכלי מפעיל.
+- מתאים ל-Iroha: מועיל לאימות זוגיות SDK ונקודות מגע תפעוליות
+  בנוסף לארגזי ליבה.
 
-## Chaitin Tech (QAX 404 Security Lab)
+## Chaitin Tech (מעבדת אבטחה QAX 404)- התקשרויות מתועדות: תורמים להקשחת GmSSL/Tongsuo ו-SM2/SM3/
+  הנחיות יישום SM4 למוסדות פיננסיים מקומיים; הוקמה
+  פרקטיקת ביקורת חלודה המכסה ערימות TLS וספריות קריפטוגרפיות.
+- חוזקות: רקע ניתוח קריפטי עמוק, יכולת לצמד אימות פורמלי
+  חפצים עם סקירה ידנית, יחסי רגולטור ארוכי שנים.
+- מתאים ל-Iroha: מתאים לביצוע חתימה רגולטורית או חפצי הוכחה רשמית
+  צריך ללוות את דוח סקירת הקוד הסטנדרטי.
 
-- Documented engagements: contributors to GmSSL/Tongsuo hardening and SM2/SM3/
-  SM4 implementation guidance for domestic financial institutions; established
-  Rust audit practice covering TLS stacks and cryptographic libraries.
-- Strengths: deep cryptanalysis background, ability to pair formal verification
-  artefacts with manual review, long-standing regulator relationships.
-- Fit for Iroha: suitable when regulatory sign-off or formal proof artefacts
-  need to accompany the standard code review report.
+# היקף ביקורת טיפוסי ותפוקות
 
-# Typical Audit Scope & Deliverables
+- **התאמה למפרט:** אימות חישוב SM2 ZA, חתימה
+  קנוניזציה, ריפוד/דחיסה של SM3 ולוח זמנים של מפתחות SM4 וטיפול ב-IV
+  נגד GM/T 0003-2012, GM/T 0004-2012 ו-GM/T 0002-2012.
+- **דטרמיניזם והתנהגות בזמן קבוע:** לבחון הסתעפות, חיפוש
+  טבלאות, ושערי חומרה תכונה (למשל, NEON, הוראות SM4) כדי להבטיח
+  שיגור חלודה ו-FFI נשארים דטרמיניסטיים בכל החומרה הנתמכת.
+- **שילוב FFI וספקים:** סקור את קישורי OpenSSL/Tongsuo,
+  מתאמי PKCS#11/HSM, ונתיבים להפצת שגיאות לבטיחות קונצנזוס.
+- **כיסוי בדיקה וציוד:** הערכת רתמות מעורפלות, Norito הלוך ושוב,
+  בדיקות עשן דטרמיניסטיות, וממליצים על בדיקות דיפרנציאליות היכן פערים
+  להופיע.
+- **סקירת תלות ושרשרת אספקה:** אישור מוצא, ספק
+  מדיניות תיקון, דיוק SBOM והוראות בנייה שניתנות לשחזור.
+- **תיעוד ופעולות:** אימות ספרי הפעלה של מפעילים, תאימות
+  תקצירים, ברירות מחדל של תצורה והליכי החזרה לאחור.
+- **ציפיות דיווח:** סיכום מנהלים עם דירוג סיכון, מפורט
+  ממצאים עם הפניות לקוד והנחיות לתיקון, תוכנית בדיקה חוזרת, ו
+  עדויות המכסות ערבויות דטרמיניזם.
 
-- **Specification conformance:** validate SM2 ZA calculation, signature
-  canonicalisation, SM3 padding/compression, and SM4 key schedule & IV handling
-  against GM/T 0003-2012, GM/T 0004-2012, and GM/T 0002-2012.
-- **Determinism and constant-time behaviour:** examine branching, lookup
-  tables, and hardware feature gates (e.g., NEON, SM4 instructions) to ensure
-  Rust and FFI dispatch remain deterministic across supported hardware.
-- **FFI and provider integration:** review OpenSSL/Tongsuo bindings,
-  PKCS#11/HSM adapters, and error propagation paths for consensus safety.
-- **Test and fixture coverage:** assess fuzz harnesses, Norito round-trips,
-  deterministic smoke tests, and recommend differential testing where gaps
-  appear.
-- **Dependency and supply-chain review:** confirm build provenance, vendor
-  patch policies, SBOM accuracy, and reproducible build instructions.
-- **Documentation and operations:** validate operator runbooks, compliance
-  briefs, configuration defaults, and rollback procedures.
-- **Reporting expectations:** executive summary with risk rating, detailed
-  findings with code references & remediation guidance, retest plan, and
-  attestations covering determinism guarantees.
+# השלבים הבאים
 
-# Next Steps
-
-- Use this vendor roster during RFQ cycles; adjust the scope checklist above to
-  match the active SM milestone before issuing an RFP.
-- Record engagement outcomes in `docs/source/crypto/sm_audit_brief.md` and
-  surface status updates in `status.md` once contracts are executed.
+- השתמש בסגל הספקים הזה במהלך מחזורי RFQ; התאם את רשימת הבדיקה של ההיקף שלמעלה ל
+  להתאים את אבן הדרך SM הפעילה לפני הנפקת RFP.
+- שיא תוצאות מעורבות ב-`docs/source/crypto/sm_audit_brief.md` ו
+  עדכוני מצב פני השטח ב-`status.md` לאחר ביצוע חוזים.

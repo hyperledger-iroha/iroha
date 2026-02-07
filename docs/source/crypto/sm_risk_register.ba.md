@@ -7,43 +7,44 @@ generator: scripts/sync_docs_i18n.py
 source_hash: ba5f4fdc9221210a793fd0c2120d8cfb68487d7ddcbe67c208976798446ca5db
 source_last_modified: "2025-12-29T18:16:35.945760+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! SM program risk register for SM2/SM3/SM4 enablement.
+//! SM программаһы хәүеф өсөн реестр SM2/SM3/SM4 өҫтәү.
 
-# SM Program Risk Register
+# SM программаһы хәүеф реестры
 
-Last updated: 2025-03-12.
+Һуңғы яңыртылған: 2025-03-12.
 
-This register expands on the summary in `sm_program.md`, pairing each risk with
-ownership, monitoring triggers, and the current mitigation state. The Crypto WG
-and Core Platform leads review this register at the weekly SM cadence; changes
-are reflected both here and in the public roadmap.
+Был реестр `sm_program.md`-тағы резюме буйынса киңәйә, һәр хәүеф менән парлашып,
+милек, мониторинг триггерҙары, һәм ағымдағы йомшартыу хәле. Крипто В.Г.
+һәм Core платформаһында был регистрҙы аҙна һайын СМ каденцияһында тикшерергә етәкселек итә; үҙгәрә
+бында ла, йәмәғәт юл картаһында ла сағыла.
 
-## Risk Summary
+## Хәүеф Йыйынтыҡ
 
-| ID | Risk | Category | Probability | Impact | Severity | Owner | Mitigation | Status | Triggers |
-|----|------|----------|-------------|--------|----------|-------|------------|--------|----------|
-| R1 | External audit for RustCrypto SM crates not executed before validator signing GA | Supply chain | Medium | High | High | Crypto WG | Contract Trail of Bits/NCC Group, keep verify-only posture until report accepted | Mitigation in progress | Audit SOW unsigned by 2025-04-15 or audit report delayed past 2025-06-01 |
-| R2 | Deterministic nonce regressions across SDKs | Implementation | Medium | High | High | SDK Program Leads | Share fixtures across SDK CI, enforce canonical r∥s encoding, add cross-SDK tamper tests | Monitoring | Fixture drift detected in CI or SDK release without SM fixtures |
-| R3 | ISA-specific bugs in intrinsics (NEON/SIMD) | Performance | Low | Medium | Medium | Performance WG | Gate intrinsics behind feature flags, require CI coverage on ARM, maintain scalar fallback | Mitigation in progress | NEON benches fail or hardware regression uncovered in SM perf matrix |
-| R4 | Compliance ambiguity delaying SM adoption | Governance | Medium | Medium | Medium | Docs & Legal Liaison | Publish compliance brief, operator checklist, liaison with legal counsel prior to GA | Mitigation in progress | Legal review outstanding after 2025-05-01 or missing checklist updates |
-| R5 | FFI backend drift with provider updates | Integration | Medium | Medium | Medium | Platform Ops | Pin provider versions, add parity tests, keep OpenSSL/Tongsuo preview opt-in | Monitoring | Package update merged without parity run or preview enabled outside pilot scope |
+| ID | Хәүеф | Категория | Ихтималлыҡ | Һөҙөмтә | Ауырлыҡ | Хужа | Йомшартыу | Статус | Триггер |
+|---|------------------------------------------------------------ент--------------------|---------------------|
+| R1 | Тышҡы аудит өсөн RustCrypto SM йәшниктәр башҡарылмаған алдынан валитатор ҡул ҡуйыу GA | Тәьмин итеү селтәре | Урта | Юғары | Юғары | Крипто WG | Килешеп эҙе биттар/NCC төркөмө, раҫлауҙы һаҡлау-тик поза тиклем отчет ҡабул | Йыйылыш дауам итә | 2025-04-15 йәки аудит отчеты үткән 2025-06-01 тотҡарланған аудит SOW аудиторы |
+| R2 | Детерминистик булмаған ce регрессиялар буйынса SDKs | Ғәмәлгә ашырыу | Урта | Юғары | Юғары | SDK Программа етәксеһе | SDK CI буйынса өлөштәр менән бүлешергә, канонлы r∥s кодлауын үтәргә, SDK кросс-SDK tamper һынауҙарын өҫтәгеҙ | Мониторинг | CI йәки SDK сығарыуҙа асыҡланған дрейф стационар Дрейф SM ҡорамалдарһыҙ |
+| R3 | ISA-специфик хаталар эскелектә (NEON/SIMD) | Сығыш | Түбән | Урта | Урта | Һөҙөмтәлелек WG | Ҡапҡалар эскелеге артында функция флагтары, талап CI ҡаплау АРМ, һаҡлау скаляр fallback | Йыйылыш дауам итә | NEON эскәмйәләр етешһеҙлектәр йәки аппарат регрессияһы асылған SM перф матрицаһы |
+| R4 | Ҡабул итеү ике аңлашылмаусанлыҡ тотҡарлау СМ ҡабул итеү | Идара итеү | Урта | Урта | Урта | Доктар & Юридик бәйләнеш | Баҫма үтәү ҡыҫҡаса, оператор тикшерелгән исемлек, юридик консультация менән бәйләнеш алдынан GA | Йыйылыш дауам итә | Юридик тикшерелгәндән һуң 2025-05-01 йәки юғалған тикшерелгән исемлек яңыртыуҙары |
+| R5 | FFI бэкэнд дрейф менән провайдер яңыртыуҙар | Интеграция | Урта | Урта | Урта | Платформа Ops | Pin провайдеры версиялары, паритет һынауҙары өҫтәү, OpenSSL/Тонгсуо алдан ҡарау оп-ин | Мониторинг | Пакет яңыртыу берләшкән паритет йүгерә йәки алдан ҡарау мөмкинлеге тыш пилот даирәһе |
 
-## Review Cadence
+## Ҡабатлау каденцияһы
 
-- Weekly Crypto WG sync (standing agenda item).
-- Monthly joint review with Platform Ops and Docs to confirm compliance posture.
-- Pre-release checkpoint: risk register freeze and attestation bundled with GA
-  artefacts.
+- Аҙналыҡ крипто WG синхронизацияһы (көн тәртибе пункты).
+- Айлыҡ берлектәге тикшерелеү менән платформа Ops һәм Docs раҫлау өсөн үтәү поза.
+- Алдан сығарыу тикшерелгән пункт: хәүеф регистры туңдырыу һәм аттестация менән йыйылған GA
+  артефакттары.
 
-## Sign-off
+##
 
-| Role | Representative | Date | Notes |
-|------|----------------|------|-------|
-| Crypto WG Lead | (signature on file) | 2025-03-12 | Approved for publication and shared with WG backlog. |
-| Core Platform Lead | (signature on file) | 2025-03-12 | Accepted mitigations and monitoring cadence. |
+| Роль | Вәкил | Дата | Иҫкәрмәләр |
+|-----|----------------|-------|------ |
+| Крипто WG ҡурғаш | (файлда ҡултамға) | 2025-03-12 | Баҫма өсөн раҫланған һәм WG артта ҡалыуы менән бүлешкән. |
+| Ядро платформаһы етәксеһе | (файлда ҡултамға) | 2025-03-12 | Ҡабул ителгән йомшартыуҙар һәм мониторинг каденцияһы. |
 
-For historic approvals and meeting minutes, see `docs/source/crypto/sm_program.md`
-(`Communication Plan`) and the SM agenda archive linked from the Crypto WG
-workspace.
+Тарихи раҫлау һәм осрашыу минуттары өсөн, ҡарағыҙ `docs/source/crypto/sm_program.md`
+(`Communication Plan`) һәм СМ көн тәртибе архивы Крипто WG-нан бәйләнгән.
+эш урыны.
