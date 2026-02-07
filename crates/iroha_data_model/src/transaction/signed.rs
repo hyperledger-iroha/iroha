@@ -1871,12 +1871,12 @@ mod norito_rpc_fixture_tests {
                 "{name}: nonce mismatch"
             );
 
-            let signed_payload_bytes = norito::codec::encode_adaptive(signed_tx.payload());
+            let signed_payload_bytes = signed_tx.payload().encode();
             assert_eq!(
                 signed_payload_bytes, payload_bytes,
                 "{name}: payload_base64 mismatch vs signed payload"
             );
-            let signed_reencoded = norito::codec::encode_adaptive(&signed_tx);
+            let signed_reencoded = signed_tx.encode();
             assert_eq!(
                 signed_reencoded, signed_bytes,
                 "{name}: signed bytes mismatch after re-encode"

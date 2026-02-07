@@ -2204,7 +2204,7 @@ mod run {
                 buffer: BytesMut::with_capacity(capacity),
                 decrypted: Vec::with_capacity(decrypt_capacity),
                 pending: VecDeque::new(),
-                framed_schema: M::schema_hash(),
+                framed_schema: <M as ncore::NoritoSerialize>::schema_hash(),
                 framed_padding,
                 max_frame_bytes,
             }
@@ -2411,7 +2411,7 @@ mod run {
                     // Control traffic should not be delayed behind other high batches.
                     if class == HighBatchClass::Control {
                         self.flush_plain_high()?;
-                        self.enqueue_encrypted(&self.buffer, Priority::High)?;
+                        self.enqueue_current_buffer(Priority::High)?;
                         return Ok(());
                     }
 
@@ -2430,7 +2430,7 @@ mod run {
 
                     // If the single message exceeds the high cap, still send it as its own frame.
                     if self.plain_high.is_empty() && msg_len > cap {
-                        self.enqueue_encrypted(&self.buffer, Priority::High)?;
+                        self.enqueue_current_buffer(Priority::High)?;
                         return Ok(());
                     }
 
@@ -2447,7 +2447,7 @@ mod run {
                     }
 
                     if self.plain_low.is_empty() && msg_len > cap {
-                        self.enqueue_encrypted(&self.buffer, Priority::Low)?;
+                        self.enqueue_current_buffer(Priority::Low)?;
                         return Ok(());
                     }
 
@@ -2500,8 +2500,18 @@ mod run {
             if self.plain_high.is_empty() {
                 return Ok(());
             }
-            self.enqueue_encrypted(&self.plain_high, Priority::High)?;
-            self.plain_high.clear();
+            let plaintext = core::mem::take(&mut self.plain_high);
+            match self.enqueue_encrypted(&plaintext, Priority::High) {
+                Ok(()) => {
+                    let mut plaintext = plaintext;
+                    plaintext.clear();
+                    self.plain_high = plaintext;
+                }
+                Err(err) => {
+                    self.plain_high = plaintext;
+                    return Err(err);
+                }
+            }
             self.plain_high_msgs = 0;
             self.plain_high_class = None;
             Ok(())
@@ -2511,10 +2521,39 @@ mod run {
             if self.plain_low.is_empty() {
                 return Ok(());
             }
-            self.enqueue_encrypted(&self.plain_low, Priority::Low)?;
-            self.plain_low.clear();
+            let plaintext = core::mem::take(&mut self.plain_low);
+            match self.enqueue_encrypted(&plaintext, Priority::Low) {
+                Ok(()) => {
+                    let mut plaintext = plaintext;
+                    plaintext.clear();
+                    self.plain_low = plaintext;
+                }
+                Err(err) => {
+                    self.plain_low = plaintext;
+                    return Err(err);
+                }
+            }
             self.plain_low_msgs = 0;
             Ok(())
+        }
+
+        /// Enqueue currently encoded message bytes from `self.buffer`.
+        ///
+        /// Keeps the original bytes intact when encryption/framing fails.
+        fn enqueue_current_buffer(&mut self, priority: Priority) -> Result<(), Error> {
+            let plaintext = core::mem::take(&mut self.buffer);
+            match self.enqueue_encrypted(&plaintext, priority) {
+                Ok(()) => {
+                    let mut plaintext = plaintext;
+                    plaintext.clear();
+                    self.buffer = plaintext;
+                    Ok(())
+                }
+                Err(err) => {
+                    self.buffer = plaintext;
+                    Err(err)
+                }
+            }
         }
 
         fn enqueue_encrypted(&mut self, plaintext: &[u8], priority: Priority) -> Result<(), Error> {
