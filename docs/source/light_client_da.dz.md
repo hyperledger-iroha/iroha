@@ -7,27 +7,28 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 6561551b6f00fb37b8e41fc5ade61206d7bd9323ab8e089f3dd5d5cfdfc0fd53
 source_last_modified: "2025-12-29T18:16:35.975661+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Light Client Data Availability Sampling
+# འོད་འབོར་གྱི་གནད་སྡུད་འཐོབ་ཚུགས་པའི་དཔེ་ཚད་ཚུ།
 
-The Light Client Sampling API allows authenticated operators to retrieve
-Merkle-authenticated RBC chunk samples for an in-flight block. Light clients
-can issue random sampling requests, verify the returned proofs against the
-advertised chunk root, and build confidence that data is available without
-fetching the entire payload.
+འོད་ཀྱི་མཁོ་སྤྲོད་དཔེ་ཚད་ཨེ་པི་ཨའི་གིས་ བདེན་བཤད་འབད་ཡོད་པའི་བཀོལ་སྤྱོད་པ་ཚུ་ལུ་ ལོག་ཐོབ་བཅུགཔ་ཨིན།
+Merkle-authentateratated RBC གི་དཔེ་ཚད་འདི་ འཕུར་འགྲུལ་གྱི་ནང་ལུ་ བཀག་ཆ་ཅིག་གི་དོན་ལུ་ཨིན། འོད་འཚེར་བའི་ཚོང་མགྲོན་པ།
+གང་བྱུང་དཔེ་ཚད་ཀྱི་ཞུ་བ་ཚུ་སྟོན་ཚུགས།
+ཁྱབ་བསྒྲགས་འབད་ཡོད་པའི་ ཅངཀ་རྩ་དང་ གནས་སྡུད་འདི་ མེད་པར་ཐོབ་ཚུགས་པའི་ ཡིད་ཆེས་བཟོ་ནི།
+པེ་ལོཌི་ཆ་མཉམ་ལེན་ནི།
 
-## Endpoint
+## མཐའ་མཚམས།
 
 ```
 POST /v1/sumeragi/rbc/sample
 ```
 
-The endpoint requires an `X-API-Token` header matching one of the configured
-Torii API tokens. Requests are additionally rate-limited and subject to a daily
-per-caller byte budget; exceeding either returns HTTP 429.
+མཇུག་བསྡུའི་ས་ཚིགས་འདི་ རིམ་སྒྲིག་འབད་ཡོད་པའི་ `X-API-Token` མགོ་ཡིག་ཅིག་དགོཔ་ཨིན།
+Torii API ཊོ་ཀེན་ཚུ། ཞུ་བ་ཚུ་ ཁ་སྐོང་སྦེ་ གནས་ཚད་ཚད་འཛིན་དང་ ཉིན་བསྟར་བཞིན་དུ་ བཀལ་དགོཔ་ཨིན།
+རེ་རེ་བཞིན་གྱི་ འཆར་དངུལ་ ; ལས་ལྷག་སྟེ་ ལོག་འོང་མི་ HTTP 429.
 
-### Request Body
+### ཞུ་བ་ལུ་ཞུ་ནི།
 
 ```json
 {
@@ -39,12 +40,12 @@ per-caller byte budget; exceeding either returns HTTP 429.
 }
 ```
 
-* `block_hash` – target block hash in hex.
-* `height`, `view` – identifying tuple for the RBC session.
-* `count` – desired number of samples (defaults to 1, capped by configuration).
-* `seed` – optional deterministic RNG seed for reproducible sampling.
+* `block_hash` – དམིགས་གཏད་བཀག་ཆ་ཧེགསི་ནང་ དམིགས་གཏད་བཀག་ཆ་ཧེགསི་ནང་།
+* `height`, `view` – RBC ལཱ་ཡུན་གྱི་དོན་ལུ་ ཊུ་པལ་ངོས་འཛིན་འབད་ནི།
+* `count` – རེ་འདུན་ཅན་གྱི་དཔེ་ཚད་ཀྱི་ཨང་གྲངས་ (སྔོན་སྒྲིག་ཚུ་ ༡ ལས་ རིམ་སྒྲིག་གིས་ ཀེར་འབད་ཡོདཔ་ཨིན།)
+* `seed` – བསྐྱར་བཟོ་འབད་བཏུབ་པའི་དཔེ་ཚད་ཀྱི་དོན་ལུ་ གདམ་ཁ་ཅན་གྱི་གཏན་འབེབས་ RNG གི་སོན་རིམ།
 
-### Response Body
+### ལན་འདེབས་ལུས་པོ།
 
 ```json
 {
@@ -69,29 +70,29 @@ per-caller byte budget; exceeding either returns HTTP 429.
 }
 ```
 
-Each sample entry contains the chunk index, payload bytes (hex), SHA-256 leaf
-digest, and a Merkle inclusion proof (with optional siblings encoded as hex
-strings). Clients can verify proofs using the `chunk_root` field.
+དཔེ་ཚད་ཐོ་བཀོད་རེ་རེ་ནང་ ཅངཀ་ཟུར་ཐོ་ པེ་ལོཌི་བཱའིཊི་ (hex) དང་ SHA-256 འདབ་མ་ཚུ་ཡོདཔ་ཨིན།
+བཅུད་ལྡན་དང་ Merkle གི་བདེན་དཔང་ (གདམ་ཁ་ཅན་གྱི་སྤུན་ཆ་ཚུ་ ཧེགསི་སྦེ་ བཀོད་སྒྲིག་འབད་ཡོདཔ་ཨིན།
+ཡིག་རྒྱུན་ཚུ་)། མཁོ་སྤྲོད་འབད་མི་ཚུ་གིས་ `chunk_root` ས་སྒོ་ལག་ལེན་འཐབ་སྟེ་ བདེན་ཁུངས་ཚུ་བདེན་དཔྱད་འབད་ཚུགས།
 
-## Limits and Budgets
+## དང་འདྲ་བར།
 
-* **Max samples per request** – configurable via `torii.rbc_sampling.max_samples_per_request`.
-* **Max bytes per request** – enforced using `torii.rbc_sampling.max_bytes_per_request`.
-* **Daily byte budget** – tracked per caller through `torii.rbc_sampling.daily_byte_budget`.
-* **Rate limiting** – enforced using a dedicated token bucket (`torii.rbc_sampling.rate_per_minute`).
+**ཞུ་བ་རེ་ལུ་དཔེ་ཚད་**** – `torii.rbc_sampling.max_samples_per_request` བརྒྱུད་དེ་ རིམ་སྒྲིག་འབད་བཏུབ།
+**ཞུ་བ་རེ་ལུ་ མེགསི་བཱའིཊིསི་** – `torii.rbc_sampling.max_bytes_per_request` ལག་ལེན་འཐབ་སྟེ་ བསྟར་སྤྱོད་འབད་ཡོདཔ།
+**ཉིན་བསྟར་གྱི་བཱའིཊི་འཆར་དངུལ་** – ཁ་པར་རེ་ལུ་ `torii.rbc_sampling.daily_byte_budget` བརྒྱུད་དེ་ འབོད་བརྡ་གཏང་ཡོདཔ།
+**ཚད་གཞི་ཚད་འཛིན་** – བློ་གཏད་ཅན་གྱི་ཊོ་ཀེན་བཱ་ཀེཊི་ (`torii.rbc_sampling.rate_per_minute`) ལག་ལེན་འཐབ་སྟེ་ བསྟར་སྤྱོད་འབད་ཡོདཔ་ཨིན།
 
-Requests exceeding any limit return HTTP 429 (CapacityLimit). When the chunk
-store is unavailable or the session is missing payload bytes the endpoint
-returns HTTP 404.
+ཚད་འཛིན་ལོག་ལོག་ལས་ལྷག་པའི་ ཞུ་བ་ HTTP 429 (CapacityLimit). ཆང་གི་སྐབས།
+ཚོང་ཁང་འདི་མེདཔ་ཨིན་ ཡང་ན་ ལཱ་ཡུན་འདི་ པེ་ལོསིཊི་མེདཔ་ཨིན་ མཐའ་ཐིག་འདི་བཱའིཊི་ཚུ་ མེདཔ་ཨིན་པས།
+སླར་ལོག་ HTTP 404.
 
-## SDK Integration
+## ཨེསི་ཌི་ཀེ་ མཉམ་བསྡོམས།
 
-### JavaScript
+### ཇ་བ་སི་ཀིརིཔ།
 
-`@iroha/iroha-js` exposes the `ToriiClient.sampleRbcChunks` helper so data
-availability verifiers can call the endpoint without rolling their own fetch
-logic. The helper validates the hex payloads, normalises integers, and returns
-typed objects that mirror the response schema above:
+`@iroha/iroha-js` `ToriiClient.sampleRbcChunks` གྲོགས་རམ་པ་ ཕྱིར་བཏོན་འབདཝ་ལས་ གནད་སྡུད་ གནད་སྡུད་ཀྱིས་ གསལ་སྟོན་འབདཝ་ཨིན།
+འཐོབ་ཚུགས་པའི་བདེན་བཤད་ཚུ་གིས་ ཁོང་རའི་ ཕེཆ་མ་བསྐོར་བར་ མཇུག་སྣོད་ལུ་ འབོ་ཚུགས།
+ཚད་མ་ནི། གྲོགས་རམ་པ་གིས་ ཧེགསི་པེ་ལོཌི་ཚུ་དང་ སྤྱིར་བཏང་ཧྲིལ་གྲངས་ཚུ་ དེ་ལས་ ལོག་ཚུ་ བདེན་དཔྱད་འབདཝ་ཨིན།
+གོང་འཁོད་ཀྱི་ལན་འདེབས་ལས་རིམ་འདི་ མེ་ལོང་ནང་ཡོད་པའི་དངོས་པོ་ཚུ་:
 
 ```js
 import { ToriiClient } from "@iroha/iroha-js";
@@ -117,8 +118,8 @@ for (const { digestHex, proof } of sample.samples) {
 }
 ```
 
-The helper throws when the server returns malformed data, helping JS-04 parity
-tests detect regressions alongside the Rust and Python SDKs. Rust
-(`iroha_client::ToriiClient::sample_rbc_chunks`) and Python
-(`IrohaToriiClient.sample_rbc_chunks`) ship equivalent helpers; use whichever
-matches your sampling harness.
+སར་བར་འདི་གིས་ གནད་སྡུད་ནོར་འཁྲུལ་ཅན་སླར་ལོག་འབད་བའི་སྐབས་ གྲོགས་རམ་པ་འདི་གིས་ ཇེ་ཨེསི་-༠༤ ཆ་སྙོམས་ལུ་གྲོགས་རམ་འབདཝ་ཨིན།
+བརྟག་དཔྱད་ཚུ་གིས་ Rust དང་ Python SDKs གི་མཉམ་དུ་ འགྱུར་ལྡོག་ཚུ་ བརྟག་དཔྱད་འབདཝ་ཨིན། འུང་འབབ།
+(`iroha_client::ToriiClient::sample_rbc_chunks`) དང་པའེ་ཐན།
+(`IrohaToriiClient.sample_rbc_chunks`) གྲུ་གཟིངས་འདྲ་མཉམ་གྱི་རོགས་སྐྱོར། གང་ལྟར་ཡང་ལག་ལེན་འཐབ།
+ཁྱོད་ཀྱི་དཔེ་ཚད་ཀྱི་ ཧར་ནིས་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན།

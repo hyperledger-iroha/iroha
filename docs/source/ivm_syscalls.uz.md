@@ -7,108 +7,104 @@ generator: scripts/sync_docs_i18n.py
 source_hash: bcf280df1e00065199d386e07b9fd67d8f94c4046d73cfa3b63d1eec18228cd8
 source_last_modified: "2026-01-22T16:26:46.570453+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 # IVM Syscall ABI
 
-This document defines the IVM syscall numbers, pointer-ABI calling conventions, reserved number ranges, and the canonical table of contract-facing syscalls used by Kotodama lowering. It complements `ivm.md` (architecture) and `kotodama_grammar.md` (language).
+Ushbu hujjat IVM tizim qo'ng'iroqlari raqamlarini, ko'rsatgich-ABI chaqiruv konventsiyalarini, zaxiralangan raqamlar diapazonlarini va Kotodama tushirishda foydalaniladigan kontraktga asoslangan tizimli chaqiruvlarning kanonik jadvalini belgilaydi. U `ivm.md` (arxitektura) va `kotodama_grammar.md` (til) ni toʻldiradi.
 
-Versioning
-- The set of recognized syscalls depends on the bytecode header `abi_version` field. The first release accepts only `abi_version = 1`; other values are rejected at admission. Unknown numbers for the active `abi_version` deterministically trap with `E_SCALL_UNKNOWN`.
-- Runtime upgrades keep `abi_version = 1` and do not expand syscall or pointer‑ABI surfaces.
-- Syscall gas costs are part of the versioned gas schedule bound to the bytecode header version. See `ivm.md` (Gas policy).
+Versiyalash
+- Tan olingan tizim chaqiruvlari to'plami `abi_version` bayt-kod sarlavhasiga bog'liq. Birinchi nashr faqat `abi_version = 1` ni qabul qiladi; boshqa qiymatlar qabul paytida rad etiladi. Faol `abi_version` uchun noma'lum raqamlar `E_SCALL_UNKNOWN` bilan aniq tuzoqqa tushadi.
+- Ish vaqti yangilanishi `abi_version = 1` ni saqlab qoladi va tizim chaqiruvi yoki ko'rsatgich-ABI sirtlarini kengaytirmaydi.
+- Syscall gaz xarajatlari bayt-kod sarlavhasi versiyasiga bog'langan versiyalashtirilgan gaz jadvalining bir qismidir. `ivm.md` (Gaz siyosati) ga qarang.
 
-Numbering ranges
-- `0x00..=0x1F`: VM core/utility (debug/exit helpers are available under `CoreHost`; remaining dev helpers are mock-host only).
-- `0x20..=0x5F`: Iroha core ISI bridge (stable in ABI v1).
-- `0x60..=0x7F`: extension ISIs gated by protocol features (still part of ABI v1 when enabled).
-- `0x80..=0xFF`: host/crypto helpers and reserved slots; only numbers present in the ABI v1 allowlist are accepted.
+Raqamlash diapazonlari
+- `0x00..=0x1F`: VM yadrosi/yordamchi dasturi (disklarni tuzatish/chiqish yordamchilari `CoreHost` ostida mavjud; qolgan ishlab chiquvchilar yordamchilari faqat soxta xost).
+- `0x20..=0x5F`: Iroha yadroli ISI ko'prigi (ABI v1 da barqaror).
+- `0x60..=0x7F`: protokol xususiyatlari bilan himoyalangan ISI kengaytmalari (yoqilganda ham ABI v1 ning bir qismi).
+- `0x80..=0xFF`: xost/kripto yordamchilari va ajratilgan slotlar; faqat ABI v1 ruxsat etilgan ro'yxatda mavjud raqamlar qabul qilinadi.
 
-Durable helpers (ABI v1)
-- The durable state helper syscalls (0x50–0x5A: STATE_{GET,SET,DEL}, ENCODE/DECODE_INT, BUILD_PATH_*, JSON/SCHEMA encode/decode) are part of the V1 ABI and included in `abi_hash` computation.
-- CoreHost wires STATE_{GET,SET,DEL} to WSV-backed durable smart-contract state; dev/test hosts may persist locally but must preserve identical syscall semantics.
+Bardoshli yordamchilar (ABI v1)
+- Bardoshli holat yordamchi tizim chaqiruvlari (0x50–0x5A: STATE_{GET,SET,DEL}, ENCODE/DECODE_INT, BUILD_PATH_*, JSON/SCHEMA encode/decode) V1 ABI qismidir va `abi_hash` hisoblashiga kiritilgan.
+- CoreHost simlari STATE_{GET,SET,DEL} - WSV tomonidan qo'llab-quvvatlanadigan mustahkam smart-kontrakt holatiga; Dev/sinov xostlari mahalliy darajada saqlanib qolishi mumkin, lekin bir xil tizimli semantikani saqlab qolishi kerak.
 
-Pointer‑ABI calling convention (smart‑contract syscalls)
-- Arguments are placed in registers `r10+` as raw `u64` values or as pointers into the INPUT region to immutable Norito TLV envelopes (e.g., `AccountId`, `AssetDefinitionId`, `Name`, `Json`, `NftId`).
-- Scalar return values are the `u64` returned from the host. Pointer results are written by the host into `r10`.
+Pointer-ABI chaqiruv konventsiyasi (aqlli-kontrakt tizimi)
+- Argumentlar `r10+` registrlariga xom `u64` qiymatlari sifatida yoki oʻzgarmas Norito TLV konvertlariga INPUT hududiga koʻrsatgich sifatida joylashtiriladi (masalan, `AccountId`0, `AccountId`0, `AccountId`01 `Name`, `Json`, `NftId`).
+- Skalar qaytish qiymatlari xostdan qaytarilgan `u64`. Pointer natijalari xost tomonidan `r10` ga yoziladi.
 
-Canonical syscall table (subset)
+Kanonik tizimli qo'ng'iroqlar jadvali (quyi to'plam)| Hex | Ism | Argumentlar (`r10+` da) | Qaytadi | Gaz (tayanch + o'zgaruvchan) | Eslatmalar |
+|------|--------------------------------------|------------------------------------------------------------------------|-------------|------------------------------|-------|
+| 0x1A | SET_ACCOUNT_DETAIL | `&AccountId`, `&Name`, `&Json` | `u64=0` | `G_set_detail + bytes(val)` | Hisob uchun batafsil ma'lumot yozadi |
+| 0x22 | MINT_ASSET | `&AccountId`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)` | `u64=0` | `G_mint` | Hisobga aktivning `amount` pul pullari |
+| 0x23 | BURN_ASSET | `&AccountId`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)` | `u64=0` | `G_burn` | Hisobdan `amount` kuyadi |
+| 0x24 | TRANSFER_ASSET | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)` | `u64=0` | `G_transfer` | Hisoblar o'rtasida `amount` o'tkazmalari |
+| 0x29 | TRANSFER_V1_BATCH_BEGIN | – | `u64=0` | `G_transfer` | FASTPQ uzatish to'plami hajmini boshlang |
+| 0x2A | TRANSFER_V1_BATCH_END | – | `u64=0` | `G_transfer` | Flush to'plangan FASTPQ uzatish to'plami |
+| 0x2B | TRANSFER_V1_BATCH_Qo'llash | `r10=&NoritoBytes(TransferAssetBatch)` | `u64=0` | `G_transfer` | Norito kodlangan to'plamni bitta tizim chaqiruvida qo'llash |
+| 0x25 | NFT_MINT_ASSET | `&NftId`, `&AccountId(owner)` | `u64=0` | `G_nft_mint_asset` | Yangi NFT | ro'yxatdan o'tkazadi
+| 0x26 | NFT_TRANSFER_ASSET | `&AccountId(from)`, `&NftId`, `&AccountId(to)` | `u64=0` | `G_nft_transfer_asset` | NFT egalik huquqini o'tkazadi |
+| 0x27 | NFT_SET_METADATA | `&NftId`, `&Json` | `u64=0` | `G_nft_set_metadata` | NFT metama'lumotlarini yangilaydi |
+| 0x28 | NFT_BURN_ASSET | `&NftId` | `u64=0` | `G_nft_burn_asset` | NFT |ni yoqadi (yo'q qiladi).
+| 0xA1 | SMARTCONTRACT_EXECUTE_QUERY| `r10=&NoritoBytes(QueryRequest)` | `r10=ptr (&NoritoBytes(QueryResponse))` | `G_scq + per_item*items + per_byte*bytes(resp)` | Takrorlanadigan so'rovlar vaqtincha ishlaydi; `QueryRequest::Continue` rad etildi |
+| 0xA2 | HAMMA_FOYDALANUVCHILAR_UCHUN_NFTS_YARASH | – | `u64=count` | `G_create_nfts_for_all` | yordamchi; xususiyatli || 0xA3 | SET_SMARTCONTRACT_EXECUTION_DEPTH | `depth:u64` | `u64=prev` | `G_set_depth` | Admin; xususiyatli |
+| 0xA4 | GET_AUTHORITY | – (mezbon natijani yozadi) | `&AccountId`| `G_get_auth` | Xost joriy vakolatga ko'rsatgichni `r10` | ga yozadi
+| 0xF7 | GET_MERKLE_PATH | `addr:u64`, `out_ptr:u64`, ixtiyoriy `root_out:u64` | `u64=len` | `G_mpath + len` | Yo'lni (barg→root) va ixtiyoriy ildiz baytlarini |
+| 0xFA | GET_MERKLE_COMPACT | `addr:u64`, `out_ptr:u64`, ixtiyoriy `depth_cap:u64`, ixtiyoriy `root_out:u64` | `u64=depth` | `G_mpath + depth` | `[u8 depth][u32 dirs_le][u32 count][count*32 siblings]` |
+| 0xFF | GET_REGISTER_MERKLE_COMPACT| `reg_index:u64`, `out_ptr:u64`, ixtiyoriy `depth_cap:u64`, ixtiyoriy `root_out:u64` | `u64=depth` | `G_mpath + depth` | Ro'yxatga olish majburiyati uchun bir xil ixcham tartib |
 
-| Hex  | Name                       | Arguments (in `r10+`)                                                   | Returns     | Gas (base + variable)        | Notes |
-|------|----------------------------|-------------------------------------------------------------------------|-------------|------------------------------|-------|
-| 0x1A | SET_ACCOUNT_DETAIL         | `&AccountId`, `&Name`, `&Json`                                          | `u64=0`     | `G_set_detail + bytes(val)`  | Writes a detail for the account |
-| 0x22 | MINT_ASSET                 | `&AccountId`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)`             | `u64=0`     | `G_mint`                     | Mints `amount` of asset to account |
-| 0x23 | BURN_ASSET                 | `&AccountId`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)`             | `u64=0`     | `G_burn`                     | Burns `amount` from account |
-| 0x24 | TRANSFER_ASSET             | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)` | `u64=0`     | `G_transfer`                 | Transfers `amount` between accounts |
-| 0x29 | TRANSFER_V1_BATCH_BEGIN    | –                                                                       | `u64=0`     | `G_transfer`                 | Begin FASTPQ transfer batch scope |
-| 0x2A | TRANSFER_V1_BATCH_END      | –                                                                       | `u64=0`     | `G_transfer`                 | Flush accumulated FASTPQ transfer batch |
-| 0x2B | TRANSFER_V1_BATCH_APPLY    | `r10=&NoritoBytes(TransferAssetBatch)`                                  | `u64=0`     | `G_transfer`                 | Apply a Norito-encoded batch in a single syscall |
-| 0x25 | NFT_MINT_ASSET             | `&NftId`, `&AccountId(owner)`                                           | `u64=0`     | `G_nft_mint_asset`           | Registers a new NFT |
-| 0x26 | NFT_TRANSFER_ASSET         | `&AccountId(from)`, `&NftId`, `&AccountId(to)`                          | `u64=0`     | `G_nft_transfer_asset`       | Transfers ownership of NFT |
-| 0x27 | NFT_SET_METADATA           | `&NftId`, `&Json`                                                       | `u64=0`     | `G_nft_set_metadata`         | Updates NFT metadata |
-| 0x28 | NFT_BURN_ASSET             | `&NftId`                                                                | `u64=0`     | `G_nft_burn_asset`           | Burns (destroys) an NFT |
-| 0xA1 | SMARTCONTRACT_EXECUTE_QUERY| `r10=&NoritoBytes(QueryRequest)`                                        | `r10=ptr (&NoritoBytes(QueryResponse))` | `G_scq + per_item*items + per_byte*bytes(resp)` | Iterable queries run ephemerally; `QueryRequest::Continue` rejected |
-| 0xA2 | CREATE_NFTS_FOR_ALL_USERS  | –                                                                       | `u64=count` | `G_create_nfts_for_all`      | Helper; feature‑gated |
-| 0xA3 | SET_SMARTCONTRACT_EXECUTION_DEPTH | `depth:u64`                                                         | `u64=prev`  | `G_set_depth`                | Admin; feature‑gated |
-| 0xA4 | GET_AUTHORITY              | – (host writes result)                                                  | `&AccountId`| `G_get_auth`                 | Host writes pointer to current authority into `r10` |
-| 0xF7 | GET_MERKLE_PATH            | `addr:u64`, `out_ptr:u64`, optional `root_out:u64`                      | `u64=len`   | `G_mpath + len`             | Writes path (leaf→root) and optional root bytes |
-| 0xFA | GET_MERKLE_COMPACT         | `addr:u64`, `out_ptr:u64`, optional `depth_cap:u64`, optional `root_out:u64` | `u64=depth` | `G_mpath + depth`           | `[u8 depth][u32 dirs_le][u32 count][count*32 siblings]` |
-| 0xFF | GET_REGISTER_MERKLE_COMPACT| `reg_index:u64`, `out_ptr:u64`, optional `depth_cap:u64`, optional `root_out:u64` | `u64=depth` | `G_mpath + depth`           | Same compact layout for register commitment |
+Gazga rioya qilish
+- CoreHost mahalliy ISI jadvalidan foydalangan holda ISI tizimlari uchun qo'shimcha gaz to'laydi; FASTPQ ommaviy o'tkazmalari har bir kirish uchun to'lanadi.
+- ZK_VERIFY syscalls maxfiy tekshirish gaz jadvalini qayta ishlatadi (asosiy + isbot hajmi).
+- SMARTCONTRACT_EXECUTE_QUERY to'lovi baza + har bir element + bayt uchun; saralash har bir ob'ekt narxini ko'paytiradi va saralanmagan ofsetlar har bir element uchun jarima qo'shadi.
 
-Gas enforcement
-- CoreHost charges extra gas for ISI syscalls using the native ISI schedule; FASTPQ batch transfers are charged per entry.
-- ZK_VERIFY syscalls reuse the confidential verification gas schedule (base + proof size).
-- SMARTCONTRACT_EXECUTE_QUERY charges base + per-item + per-byte; sorting multiplies per-item cost and unsorted offsets add a per-item penalty.
+Eslatmalar
+- Barcha ko'rsatkich argumentlari INPUT hududidagi Norito TLV konvertlariga havola qiladi va birinchi murojaatda tasdiqlanadi (`E_NORITO_INVALID` xatolik).
+- Barcha mutatsiyalar bevosita VM tomonidan emas, Iroha standart ijrochisi (`CoreHost` orqali) orqali qo'llaniladi.
+- aniq gaz konstantalari (`G_*`) faol gaz jadvali bilan aniqlanadi; qarang: `ivm.md`.
 
-Notes
-- All pointer arguments reference Norito TLV envelopes in the INPUT region and are validated on first dereference (`E_NORITO_INVALID` on error).
-- All mutations are applied via Iroha’s standard executor (through `CoreHost`), not directly by the VM.
-- Exact gas constants (`G_*`) are defined by the active gas schedule; see `ivm.md`.
+Xatolar
+- `E_SCALL_UNKNOWN`: tizim qo'ng'irog'i raqami faol `abi_version` uchun tan olinmadi.
+- Kirishni tekshirish xatolar VM tuzoqlari sifatida tarqaladi (masalan, noto'g'ri tuzilgan TLVlar uchun `E_NORITO_INVALID`).
 
-Errors
-- `E_SCALL_UNKNOWN`: syscall number not recognized for the active `abi_version`.
-- Input validation errors propagate as VM traps (e.g., `E_NORITO_INVALID` for malformed TLVs).
+Oʻzaro havolalar
+- Arxitektura va VM semantikasi: `ivm.md`
+- Til va ichki xaritalash: `docs/source/kotodama_grammar.md`
 
-Cross‑references
-- Architecture and VM semantics: `ivm.md`
-- Language and builtin mapping: `docs/source/kotodama_grammar.md`
+Avlod eslatmasi
+- Tizim konstantalarining to'liq ro'yxati quyidagi manbalardan yaratilishi mumkin:
+  - `make docs-syscalls` → yozadi `docs/source/ivm_syscalls_generated.md`
+  - `make check-docs` → yaratilgan jadvalning yangilanganligini tasdiqlaydi (CI da foydali)
+- Yuqoridagi kichik to'plam kontrakt bilan bog'liq tizimlar uchun tuzatilgan, barqaror jadval bo'lib qoladi.
 
-Generation note
-- A complete list of syscall constants can be generated from source with:
-  - `make docs-syscalls` → writes `docs/source/ivm_syscalls_generated.md`
-  - `make check-docs` → verifies the generated table is up to date (useful in CI)
-- The subset above remains a curated, stable table for contract-facing syscalls.
+## Administrator/rol TLV misollari (soxta xost)
 
-## Admin/Role TLV Examples (Mock Host)
-
-This section documents the TLV shapes and minimal JSON payloads accepted by the mock WSV host for admin‑style syscalls used in tests. All pointer arguments follow the pointer‑ABI (Norito TLV envelopes placed in INPUT). Production hosts may use richer schemas; these examples aim to clarify types and basic shapes.
-
-- REGISTER_PEER / UNREGISTER_PEER
+Ushbu bo'lim testlarda ishlatiladigan administrator uslubidagi tizim qo'ng'iroqlari uchun soxta WSV xosti tomonidan qabul qilingan TLV shakllari va minimal JSON yuklamalarini hujjatlashtiradi. Barcha ko‘rsatkich argumentlari ko‘rsatgich-ABI (INPUT ichiga joylashtirilgan Norito TLV konvertlari) ga amal qiladi. Ishlab chiqarish xostlari yanada boy sxemalardan foydalanishi mumkin; bu misollar turlar va asosiy shakllarni aniqlashtirishga qaratilgan.- REGISTER_PEER / UNREGISTER_PEER
   - Args: `r10=&Json`
-  - Example JSON: `{ "peer": "peer-id-or-info" }`
-  - CoreHost note: `REGISTER_PEER` expects a `RegisterPeerWithPop` JSON object with `peer` + `pop` bytes (optional `activation_at`, `expiry_at`, `hsm`); `UNREGISTER_PEER` accepts a peer-id string or `{ "peer": "..." }`.
+  - Misol JSON: `{ "peer": "peer-id-or-info" }`
+  - CoreHost note: `REGISTER_PEER` expects a `RegisterPeerWithPop` JSON object with `peer` + `pop` bytes (optional `activation_at`, `expiry_at`, `hsm`); `UNREGISTER_PEER` peer-id qatorini yoki `{ "peer": "..." }`ni qabul qiladi.
 
 - CREATE_TRIGGER / REMOVE_TRIGGER / SET_TRIGGER_ENABLED
   - CREATE_TRIGGER:
     - Args: `r10=&Json`
-    - Minimal JSON: `{ "name": "t1" }` (additional fields ignored by the mock)
+    - Minimal JSON: `{ "name": "t1" }` (qo'shimcha maydonlar soxta tomonidan e'tiborga olinmaydi)
   - REMOVE_TRIGGER:
-    - Args: `r10=&Name` (trigger name)
+    - Args: `r10=&Name` (tetik nomi)
   - SET_TRIGGER_ENABLED:
-    - Args: `r10=&Name`, `r11=enabled:u64` (0 = disabled, non‑zero = enabled)
-  - CoreHost note: `CREATE_TRIGGER` expects a full trigger spec (base64 Norito `Trigger` string or
-    `{ "id": "<trigger_id>", "action": ... }` with `action` as a base64 Norito `Action` string or
-    a JSON object), and `SET_TRIGGER_ENABLED` toggles the trigger metadata key `__enabled` (missing
-    defaults to enabled).
+    - Args: `r10=&Name`, `r11=enabled:u64` (0 = o'chirilgan, noldan tashqari = yoqilgan)
+  - CoreHost eslatmasi: `CREATE_TRIGGER` to'liq trigger spetsifikatsiyasini kutmoqda (base64 Norito `Trigger` qatori yoki
+    `{ "id": "<trigger_id>", "action": ... }` `action` asos sifatida64 Norito `Action` qatori yoki
+    JSON ob'ekti) va `SET_TRIGGER_ENABLED` ishga tushiruvchi metama'lumotlar kaliti `__enabled` (yo'q)
+    sukut bo'yicha yoqilgan).
 
-- Roles: CREATE_ROLE / DELETE_ROLE / GRANT_ROLE / REVOKE_ROLE
+- Rollar: CREATE_ROLE / DELETE_ROLE / GRANT_ROLE / REVOKE_ROLE
   - CREATE_ROLE:
-    - Args: `r10=&Name` (role name), `r11=&Json` (permissions set)
-    - JSON accepts either key `"perms"` or `"permissions"`, each a string array of permission names.
-    - Examples:
+    - Args: `r10=&Name` (rol nomi), `r11=&Json` (ruxsatnomalar toʻplami)
+    - JSON `"perms"` yoki `"permissions"` kalitlarini qabul qiladi, ularning har biri ruxsat nomlari qatori.
+    - Misollar:
       - `{ "perms": [ "mint_asset:rose#wonder" ] }`
       - `{ "permissions": [ "read_assets:ih58...", "transfer_asset:rose#wonder" ] }`
-    - Supported permission name prefixes in the mock:
+    - Soxtada qo'llab-quvvatlanadigan ruxsat nomi prefikslari:
       - `register_domain`, `register_account`, `register_asset_definition`
       - `read_assets:<account_id>`
       - `mint_asset:<asset_definition_id>`
@@ -116,15 +112,15 @@ This section documents the TLV shapes and minimal JSON payloads accepted by the 
       - `transfer_asset:<asset_definition_id>`
   - DELETE_ROLE:
     - Args: `r10=&Name`
-    - Fails if any account is still assigned this role.
+    - Agar biron bir hisob hali ham ushbu rolga ega bo'lsa, muvaffaqiyatsiz bo'ladi.
   - GRANT_ROLE / REVOKE_ROLE:
-    - Args: `r10=&AccountId` (subject), `r11=&Name` (role name)
-  - CoreHost note: permission JSON may be a full `Permission` object (`{ "name": "...", "payload": ... }`) or a string (payload defaults to `null`); `GRANT_PERMISSION`/`REVOKE_PERMISSION` accept `&Name` or `&Json(Permission)`.
+    - Args: `r10=&AccountId` (mavzu), `r11=&Name` (rol nomi)
+  - CoreHost eslatmasi: ruxsat JSON to'liq `Permission` ob'ekti (`{ "name": "...", "payload": ... }`) yoki satr bo'lishi mumkin (foydali yuk birlamchi `null` uchun); `GRANT_PERMISSION`/`REVOKE_PERMISSION` qabul qilinadi `&Name` yoki `&Json(Permission)`.
 
-- Unregister ops (domain/account/asset): invariants (mock)
-  - UNREGISTER_DOMAIN (`r10=&DomainId`) fails if accounts or asset definitions exist in the domain.
-  - UNREGISTER_ACCOUNT (`r10=&AccountId`) fails if the account has non‑zero balances or owns NFTs.
-  - UNREGISTER_ASSET (`r10=&AssetDefinitionId`) fails if any balances exist for the asset.
+- Operatsiyalarni ro'yxatdan o'tkazish (domen/hisob/aktiv): o'zgarmas (soxta)
+  - Agar domenda hisoblar yoki aktiv taʼriflari mavjud boʻlsa, UNREGISTER_DOMAIN (`r10=&DomainId`) bajarilmaydi.
+  - UNREGISTER_ACCOUNT (`r10=&AccountId`) agar hisob nol boʻlmagan balansga ega boʻlsa yoki NFTga ega boʻlsa, muvaffaqiyatsiz tugadi.
+  - Agar aktiv uchun balans mavjud bo'lsa, UNREGISTER_ASSET (`r10=&AssetDefinitionId`) bajarilmaydi.
 
-Notes
-- These examples reflect the mock WSV host used in tests; real node hosts may expose richer admin schemas or require additional validation. The pointer‑ABI rules still apply: TLVs must be in INPUT, version=1, type IDs must match, and payload hashes must validate.
+Eslatmalar
+- Ushbu misollar testlarda ishlatiladigan soxta WSV xostini aks ettiradi; haqiqiy tugun xostlari boyroq boshqaruv sxemalarini ochishi yoki qo'shimcha tekshirishni talab qilishi mumkin. Pointer-ABI qoidalari hali ham amal qiladi: TLV’lar INPUT’da bo‘lishi kerak, versiya=1, turdagi identifikatorlar mos kelishi va foydali yuk xeshlari tekshirilishi kerak.

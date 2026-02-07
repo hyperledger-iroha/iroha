@@ -10,6 +10,7 @@ translation_last_reviewed: 2026-02-07
 title: Ministry Transparency Report — 2026 Q3 (Template)
 summary: Scaffold for the MINFO-8 quarterly transparency packet; replace all tokens before publication.
 quarter: 2026-Q3
+translator: machine-google-reviewed
 ---
 
 <!--
@@ -19,126 +20,124 @@ quarter: 2026-Q3
     3. Attach supporting artefacts (data appendix, CSVs, manifest, Grafana export) under artifacts/ministry/transparency/<YYYY-Q>/.
 -->
 
-# Executive Summary
+# Қорытынды
 
-> Provide a one-paragraph summary of moderation accuracy, appeal outcomes, denylist churn, and treasury highlights. Mention whether release met the T+14 deadline.
+> Модерация дәлдігі, апелляция нәтижелері, бас тарту тізімі және қазынашылық маңызды сәттердің бір абзацтық қысқаша мазмұнын беріңіз. Шығарылымның T+14 мерзіміне сәйкес келетінін көрсетіңіз.
 
-## Quarter in Review
+## Тоқсан шолуда
 
-### Highlights
+### Ерекшеліктер
 - {{HIGHLIGHT_1}}
 - {{HIGHLIGHT_2}}
 - {{HIGHLIGHT_3}}
 
-### Risks & Mitigations
+### Тәуекелдер және азайту шаралары
 
-| Risk | Impact | Mitigation | Owner | Status |
+| Тәуекел | Әсері | Жеңілдету | Иесі | Күй |
 |------|--------|------------|-------|--------|
-| {{RISK_1}} | {{Impact}} | {{Mitigation}} | {{Owner}} | {{Status}} |
-| {{RISK_2}} | {{Impact}} | {{Mitigation}} | {{Owner}} | {{Status}} |
+| {{RISK_1}} | {{Әсер}} | {{Жеңілдету}} | {{Иесі}} | {{Күйі}} |
+| {{RISK_2}} | {{Әсер}} | {{Жеңілдету}} | {{Иесі}} | {{Күйі}} |
 
-## Metrics Overview
+## Көрсеткіштерге шолу
 
-All metrics originate from `ministry_transparency_builder` (Norito bundle) after the DP sanitizer runs. Attach corresponding CSV slices referenced below.
+Барлық көрсеткіштер `ministry_transparency_builder` (Norito бумасы) DP санитаризаторы іске қосылғаннан кейін алынады. Төменде сілтеме жасалған сәйкес CSV кесінділерін тіркеңіз.
 
-### AI Moderation Accuracy
+### AI модерациясының дәлдігі
 
-| Model Profile | Region | FP Rate (Target) | FN Rate (Target) | Drift vs Calibration | Sample Size | Notes |
-|---------------|--------|------------------|------------------|----------------------|-------------|-------|
-| {{profile}} | {{region}} | {{fp_rate}} ({{fp_target}}) | {{fn_rate}} ({{fn_target}}) | {{drift}} | {{samples}} | {{notes}} |
+| Үлгі профилі | Аймақ | FP мөлшерлемесі (мақсатты) | FN мөлшерлемесі (мақсатты) | Drift vs Calibration | Үлгі өлшемі | Ескертпелер |
+|-------------|--------|------------------|------------------|----------------------|-------------|-------|
+| {{профиль}} | {{аймақ}} | {{fp_rate}} ({{fp_target}}) | {{fn_rate}} ({{fn_target}}) | {{drift}} | {{үлгілер}} | {{жазбалар}} |
 
-### Appeals & Panel Activity
+### Апелляциялар және панель қызметі
 
-| Metric | Value | SLA Target | Trend vs Q-1 | Notes |
+| метрикалық | Мән | SLA мақсаты | Тренд пен Q-1 | Ескертпелер |
 |--------|-------|------------|--------------|-------|
-| Appeals received | {{appeals_received}} | {{sla}} | {{delta}} | {{notes}} |
-| Median resolution time | {{median_resolution}} | {{sla}} | {{delta}} | {{notes}} |
-| Reversal rate | {{reversal_rate}} | {{target}} | {{delta}} | {{notes}} |
-| Panel utilization | {{panel_utilization}} | {{target}} | {{delta}} | {{notes}} |
+| Қабылданған өтініштер | {{өтініштер_қабылданды}} | {{sla}} | {{дельта}} | {{жазбалар}} |
+| Орташа ажыратымдылық уақыты | {{орташа_разряд}} | {{sla}} | {{дельта}} | {{жазбалар}} |
+| Қайтару жылдамдығы | {{қайтару_бағасы}} | {{мақсат}} | {{дельта}} | {{жазбалар}} |
+| Панельді пайдалану | {{panel_utilization}} | {{мақсат}} | {{дельта}} | {{жазбалар}} |
 
-### Denylist & Emergency Canon
+### Бас тарту тізімі және төтенше жағдай Canon
 
-| Metric | Count | DP Noise (ε) | Emergency Flags | TTL Compliance | Notes |
+| метрикалық | Санау | DP шуы (ε) | Төтенше жалаулар | TTL сәйкестігі | Ескертпелер |
 |--------|-------|--------------|-----------------|----------------|-------|
-| Hash additions | {{additions}} | {{epsilon_counts}} | {{flags}} | {{ttl_status}} | {{notes}} |
-| Hash removals | {{removals}} | {{epsilon_counts}} | {{flags}} | {{ttl_status}} | {{notes}} |
-| Canon invocations | {{canon_invocations}} | n/a | {{flags}} | {{ttl_status}} | {{notes}} |
+| Хэш толықтырулары | {{қосымшалар}} | {{epsilon_counts}} | {{жалаулар}} | {{ttl_status}} | {{жазбалар}} |
+| Хэштерді жою | {{жою}} | {{epsilon_counts}} | {{жалаулар}} | {{ttl_status}} | {{жазбалар}} |
+| Canon шақырулары | {{canon_invocations}} | жоқ | {{жалаулар}} | {{ttl_status}} | {{жазбалар}} |
 
-### Treasury Movements
+### Қазынашылық қозғалысы
 
-| Flow | Amount (MINFO) | Source Reference | Notes |
+| Ағын | Сома (MINFO) | Дереккөзге сілтеме | Ескертпелер |
 |------|----------------|------------------|-------|
-| Appeal deposits | {{amount}} | {{tx_ref}} | {{notes}} |
-| Panel rewards | {{amount}} | {{tx_ref}} | {{notes}} |
-| Operational spend | {{amount}} | {{tx_ref}} | {{notes}} |
+| Апелляциялық депозиттер | {{сома}} | {{tx_ref}} | {{жазбалар}} |
+| Панельдік марапаттар | {{сома}} | {{tx_ref}} | {{жазбалар}} |
+| Операциялық шығындар | {{сома}} | {{tx_ref}} | {{жазбалар}} |
 
-### Volunteer & Outreach Signals
+### Еріктілер және аутрич сигналдары
 
-| Metric | Value | Target | Notes |
+| метрикалық | Мән | Мақсат | Ескертпелер |
 |--------|-------|--------|-------|
-| Volunteer briefs published | {{value}} | {{target}} | {{notes}} |
-| Languages covered | {{value}} | {{target}} | {{notes}} |
-| Governance workshops hosted | {{value}} | {{target}} | {{notes}} |
+| Еріктілердің брифингтері жарияланды | {{құн}} | {{мақсат}} | {{жазбалар}} |
+| Қамтылған тілдер | {{құн}} | {{мақсат}} | {{жазбалар}} |
+| Басқару семинарлары өтті | {{құн}} | {{мақсат}} | {{жазбалар}} |
 
-## Differential Privacy & Sanitization
+## Дифференциалды құпиялылық және санитарлық тазалау
 
-Summarise the sanitizer run and include the RNG commitment.
+Дезинфекциялау құралының жұмысын қорытындылаңыз және RNG міндеттемесін қосыңыз.
 
-- Sanitizer job: `{{CI_JOB_URL}}`
-- DP parameters: ε = {{epsilon_total}}, δ = {{delta_total}}
-- RNG commitment: `{{blake3_seed_commitment}}`
-- Buckets suppressed: {{suppressed_buckets}}
-- QA reviewer: {{reviewer}}
+- Санитизатор жұмысы: `{{CI_JOB_URL}}`
+- DP параметрлері: ε={{epsilon_total}}, δ={{delta_total}}
+- RNG міндеттемесі: `{{blake3_seed_commitment}}`
+- Шелектер басылды: {{suppressed_buckets}}
+- QA шолушы: {{рецензиялаушы}}
 
-Attach `artifacts/ministry/transparency/{{Quarter}}/dp_report.json` and note any manual interventions.
+`artifacts/ministry/transparency/{{Quarter}}/dp_report.json` тіркеңіз және кез келген қолмен араласуды ескеріңіз.## Деректер тіркемелері
 
-## Data Attachments
-
-| Artefact | Path | SHA-256 | Uploaded to SoraFS? | Notes |
+| Артефакт | Жол | SHA-256 | SoraFS файлына жүктеп салынған ба? | Ескертпелер |
 |----------|------|---------|---------------------|-------|
-| Summary PDF | `artifacts/ministry/transparency/{{Quarter}}/summary.pdf` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Norito data appendix | `artifacts/ministry/transparency/{{Quarter}}/data/appendix.norito` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Metrics CSV bundle | `artifacts/ministry/transparency/{{Quarter}}/data/csv/` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Grafana export | `dashboards/grafana/ministry_transparency_overview.json` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Alert rules | `dashboards/alerts/ministry_transparency_rules.yml` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Provenance manifest | `artifacts/ministry/transparency/{{Quarter}}/manifest.json` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Manifest signature | `artifacts/ministry/transparency/{{Quarter}}/manifest.json.sig` | {{hash}} | {{Yes/No}} | {{notes}} |
+| Қысқаша PDF | `artifacts/ministry/transparency/{{Quarter}}/summary.pdf` | {{хэш}} | {{Иә/Жоқ}} | {{жазбалар}} |
+| Norito деректер қосымшасы | `artifacts/ministry/transparency/{{Quarter}}/data/appendix.norito` | {{хэш}} | {{Иә/Жоқ}} | {{жазбалар}} |
+| Metrics CSV жинағы | `artifacts/ministry/transparency/{{Quarter}}/data/csv/` | {{хэш}} | {{Иә/Жоқ}} | {{жазбалар}} |
+| Grafana экспорттау | `dashboards/grafana/ministry_transparency_overview.json` | {{хэш}} | {{Иә/Жоқ}} | {{жазбалар}} |
+| Ескерту ережелері | `dashboards/alerts/ministry_transparency_rules.yml` | {{хэш}} | {{Иә/Жоқ}} | {{жазбалар}} |
+| Шығу манифесті | `artifacts/ministry/transparency/{{Quarter}}/manifest.json` | {{хэш}} | {{Иә/Жоқ}} | {{жазбалар}} |
+| Манифест қолтаңбасы | `artifacts/ministry/transparency/{{Quarter}}/manifest.json.sig` | {{хэш}} | {{Иә/Жоқ}} | {{жазбалар}} |
 
-## Publication Metadata
+## Жарияланым метадеректері
 
-| Field | Value |
+| Өріс | Мән |
 |-------|-------|
-| Release quarter | {{Quarter}} |
-| Release timestamp (UTC) | {{timestamp}} |
+| Шығарылым тоқсаны | {{Тоқсан}} |
+| Шығарылым уақыт белгісі (UTC) | {{уақыт белгісі}} |
 | SoraFS CID | `{{cid}}` |
-| Governance vote ID | {{vote_id}} |
-| Manifest digest (`blake2b`) | `{{manifest_digest}}` |
-| Git commit / tag | `{{git_rev}}` |
-| Release owner | {{owner}} |
+| Басқару дауыс идентификаторы | {{vote_id}} |
+| Манифест дайджест (`blake2b`) | `{{manifest_digest}}` |
+| Git commit / тег | `{{git_rev}}` |
+| Шығарушы иесі | {{иеленуші}} |
 
-## Approvals
+## Бекітулер
 
-| Role | Name | Decision | Timestamp | Notes |
+| Рөл | Аты | Шешім | Уақыт белгісі | Ескертпелер |
 |------|------|----------|-----------|-------|
-| Ministry Observability TL | {{name}} | ✅/⚠️ | {{timestamp}} | {{notes}} |
-| Governance Council Liaison | {{name}} | ✅/⚠️ | {{timestamp}} | {{notes}} |
-| Docs/Comms Lead | {{name}} | ✅/⚠️ | {{timestamp}} | {{notes}} |
+| Министрліктің бақылау мүмкіндігі TL | {{name}} | ✅/⚠️ | {{уақыт белгісі}} | {{жазбалар}} |
+| Басқару кеңесімен байланыс | {{name}} | ✅/⚠️ | {{уақыт белгісі}} | {{жазбалар}} |
+| Docs/Comms Lead | {{name}} | ✅/⚠️ | {{уақыт белгісі}} | {{жазбалар}} |
 
-## Changelog & Follow-Ups
+## Өзгерістер журналы және бақылаулар
 
 - {{CHANGELOG_ITEM_1}}
 - {{CHANGELOG_ITEM_2}}
 
-### Open Action Items
+### Әрекет элементтерін ашыңыз
 
-| Item | Owner | Due | Status | Notes |
+| Элемент | Иесі | Мерзімі | Күй | Ескертпелер |
 |------|-------|-----|--------|-------|
-| {{Action}} | {{Owner}} | {{Due}} | {{Status}} | {{Notes}} |
+| {{Әрекет}} | {{Иесі}} | {{ Мерзімі}} | {{Күйі}} | {{Ескертулер}} |
 
-### Contact
+### Байланыс
 
-- Primary contact: {{contact_name}} (`{{chat_handle}}`)
-- Escalation path: {{escalation_details}}
-- Distribution list: {{mailing_list}}
+- Негізгі контакт: {{contact_name}} (`{{chat_handle}}`)
+- Эскалация жолы: {{escalation_details}}
+- Тарату тізімі: {{mailing_list}}
 
-_Template version: 2026-03-25. Update the revision date when making structural changes._
+_Үлгі нұсқасы: 2026-03-25. Құрылымдық өзгерістерді енгізу кезінде қайта қарау күнін жаңартыңыз._

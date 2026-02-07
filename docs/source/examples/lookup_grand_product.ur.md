@@ -6,29 +6,30 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 6f6421d420a704c5c4af335741e309adf641702ddb8c291dce94ea5581557a66
 source_last_modified: "2026-01-03T18:08:00.673232+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Lookup Grand-Product Example
+# تلاش عظیم مصنوعات کی مثال
 
-This example expands the FASTPQ permission lookup argument mentioned in
-`fastpq_plan.md`.  In the Stage 2 pipeline the prover evaluates the selector
-(`s_perm`) and witness (`perm_hash`) columns on the low-degree extension (LDE)
-domain, updates a running grand product `Z_i`, and finally commits the entire
-sequence with Poseidon.  The hashed accumulator is appended to the transcript
-under the `fastpq:v1:lookup:product` domain, while the final `Z_i` still matches
-the committed permission table product `T`.
+اس مثال سے فاسٹ پی کیو کی اجازت کی تلاش کی دلیل میں اضافہ ہوتا ہے جس میں ذکر کیا گیا ہے
+`fastpq_plan.md`۔  مرحلے 2 میں پائپ لائن میں پروور سلیکٹر کا جائزہ لیتا ہے
+(`s_perm`) اور گواہ (`perm_hash`) کم ڈگری توسیع پر کالم (LDE)
+ڈومین ، چل رہا گرینڈ پروڈکٹ `Z_i` کو اپ ڈیٹ کرتا ہے ، اور آخر کار پوری کا ارتکاب کرتا ہے
+پوسیڈن کے ساتھ ترتیب۔  ہیشڈ جمع کرنے والا ٹرانسکرپٹ میں شامل کیا جاتا ہے
+`fastpq:v1:lookup:product` ڈومین کے تحت ، جبکہ حتمی `Z_i` اب بھی میچ کرتا ہے
+پرعزم اجازت ٹیبل پروڈکٹ `T`۔
 
-We consider a tiny batch with the following selector values:
+ہم مندرجہ ذیل سلیکٹر اقدار کے ساتھ ایک چھوٹے سے بیچ پر غور کرتے ہیں:
 
-| row | `s_perm` | `perm_hash`                                   |
-| --- | -------- | ---------------------------------------------- |
-| 0   | 1        | `0x019a...` (grant role = auditor, perm = transfer_asset) |
-| 1   | 0        | `0xabcd...` (no permission change)                |
-| 2   | 1        | `0x42ff...` (revoke role = auditor, perm = burn_asset) |
+| قطار | `s_perm` | `perm_hash` |
+| --- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------
+| 0 | 1 | `0x019a...` (گرانٹ رول = آڈیٹر ، پرم = ٹرانسفر_اسیٹ) |
+| 1 | 0 | `0xabcd...` (کوئی اجازت تبدیل نہیں) |
+| 2 | 1 | `0x42ff...` (رولک رول = آڈیٹر ، پرم = برن_اسیٹ) |
 
-Let `gamma = 0xdead...` be the Fiat-Shamir lookup challenge derived from the
-transcript.  The prover initialises `Z_0 = 1` and folds each row:
+`gamma = 0xdead...` سے حاصل کردہ فیاٹ-شمیر لوک اپ چیلنج ہونے دیں
+نقل  پروور `Z_0 = 1` کی ابتدا کرتا ہے اور ہر صف کو جوڑتا ہے:
 
 ```
 Z_0 = 1
@@ -37,27 +38,27 @@ Z_2 = Z_1 * (perm_hash_1 + gamma)^(s_perm_1) = Z_1 (selector is zero)
 Z_3 = Z_2 * (perm_hash_2 + gamma)^(s_perm_2)
 ```
 
-Rows where `s_perm = 0` do not alter the accumulator.  After processing the
-trace, the prover Poseidon-hashes the sequence `[Z_1, Z_2, ...]` for the transcript
-yet also publishes `Z_final = Z_3` (the final running product) to match the table
-boundary condition.
+قطاریں جہاں `s_perm = 0` جمع کرنے والے کو تبدیل نہیں کرتے ہیں۔  پروسیسنگ کے بعد
+ٹریس ، پروور نے ٹرانسکرپٹ کے لئے ترتیب `[Z_1, Z_2, ...]` کو ترتیب دیا
+پھر بھی ٹیبل سے ملنے کے لئے `Z_final = Z_3` (حتمی چلانے والی مصنوعات) کو بھی شائع کرتا ہے
+حد کی حالت
 
-On the table side, the committed permission Merkle tree encodes the deterministic
-set of active permissions for the slot.  The verifier (or the prover during
-witness generation) computes
+ٹیبل کی طرف ، پرعزم اجازت مرکلے کے درخت نے عزم کو انکوڈ کیا ہے
+سلاٹ کے لئے فعال اجازتوں کا سیٹ۔  تصدیق کنندہ (یا اس کے دوران پروور
+گواہ جنریشن) کمپیوٹس
 
 ```
 T = product over entries: (entry.hash + gamma)
 ```
 
-The protocol enforces the boundary constraint `Z_final / T = 1`.  If the trace
-introduced a permission that is not present in the table (or omitted one that
-is), the grand product ratio diverges from 1 and the verifier rejects.  Because
-both sides multiply by `(value + gamma)` inside the Goldilocks field, the ratio
-remains stable across CPU/GPU backends.
+پروٹوکول باؤنڈری رکاوٹ `Z_final / T = 1` کو نافذ کرتا ہے۔  اگر ٹریس
+ایک ایسی اجازت متعارف کرائی جو ٹیبل میں موجود نہیں ہے (یا اسے چھوڑ دیا گیا ہے
+آئی ایس) ، گرینڈ پروڈکٹ کا تناسب 1 اور تصدیق کنندہ کو مسترد کرتا ہے۔  کیونکہ
+دونوں فریقوں نے گولڈیلکس فیلڈ کے اندر `(value + gamma)` کے ذریعہ ضرب لگائی ، تناسب
+سی پی یو/جی پی یو بیک اینڈ میں مستحکم رہتا ہے۔
 
-To serialise the example as Norito JSON for fixtures, record the tuple of
-`perm_hash`, selector, and accumulator after each row, for example:
+فکسچر کے لئے Norito JSON کے طور پر مثال کے طور پر ، ٹیوپل کو ریکارڈ کریں
+`perm_hash` ، سلیکٹر ، اور ہر قطار کے بعد جمع کرنے والا ، مثال کے طور پر:
 
 ```json
 {
@@ -71,7 +72,7 @@ To serialise the example as Norito JSON for fixtures, record the tuple of
 }
 ```
 
-The hexadecimal placeholders (`0x...`) can be replaced with concrete Goldilocks
-field elements when generating automated tests.  Stage 2 fixtures additionally
-record the Poseidon hash of the running accumulator but keep the same JSON shape,
-so the example can double as a template for future test vectors.
+ہیکساڈیسیمل پلیس ہولڈرز (`0x...`) کو کنکریٹ گولڈیلاکس کے ساتھ تبدیل کیا جاسکتا ہے
+خودکار ٹیسٹ تیار کرتے وقت فیلڈ عناصر۔  اسٹیج 2 فکسچر اضافی طور پر
+چلانے والے جمع کرنے والے کے پوسیڈن ہیش کو ریکارڈ کریں لیکن وہی JSON شکل رکھیں ،
+لہذا مثال مستقبل کے ٹیسٹ ویکٹروں کے ٹیمپلیٹ کے طور پر دوگنا ہوسکتی ہے۔

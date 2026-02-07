@@ -11,188 +11,187 @@
 #+TITLE: On selecting versions as LTS candidates
 #+AUTHOR: Aleksandr Petrosyan
 #+DATE: 12-08-2023
-* About
+#+TRANSLATOR: machine-google-reviewed
 
-In the interest of preserving the engineering resources, it is in our
-interests to limit the scope of post-release support. If one has
-several versions of Iroha running in parallel, they might need to
-replicate the support work as many times as there are parallel
-versions.
+#+TITLE: On selecting versions as LTS candidates
+#+AUTHOR: Aleksandr Petrosyan
+#+DATE: 12-08-2023
+* Haqida
 
-Instead of attempting to support multiple versions badly, we try to
-cater to 80% of use cases with 20% of the effort and reach a
-compromise between supporting every released version equally and only
-supporting the latest stable version.
+Muhandislik resurslarini saqlab qolish manfaatlaridan kelib chiqib, bu bizda
+nashrdan keyingi qo'llab-quvvatlash doirasini cheklash manfaatlari. Agar bor bo'lsa
+Iroha ning bir nechta versiyalari parallel ravishda ishlaydi, ular kerak bo'lishi mumkin
+qo'llab-quvvatlash ishini parallel ravishda ko'p marta takrorlang
+versiyalari.
 
-Specifically, we support the latest =stable= release. Often this
-release is either not as well-tested, well-documented, or
-well-supported by the SDKs, in addition to often changing in terms of
-thus have a monthly release cadence and one release per year is chosen
-to be the target of long-term support and development.
+Bir nechta versiyalarni yomon qo'llab-quvvatlashga harakat qilish o'rniga, biz harakat qilamiz
+20% sa'y-harakatlar bilan foydalanish holatlarining 80% ni qondirish va a ga erishish
+har bir chiqarilgan versiyani teng va faqat qo'llab-quvvatlash o'rtasida murosaga kelish
+so'nggi barqaror versiyasini qo'llab-quvvatlash.
 
-* LTS selection criteria
+Xususan, biz so'nggi =stable= versiyasini qo'llab-quvvatlaymiz. Ko'pincha bu
+chiqarish yo yaxshi sinovdan o'tmagan, yaxshi hujjatlashtirilgan yoki
+nuqtai nazaridan tez-tez o'zgarib turishdan tashqari, SDK tomonidan yaxshi qo'llab-quvvatlanadi
+Shunday qilib, oylik reliz kadansiga ega va yiliga bitta reliz tanlanadi
+uzoq muddatli qo'llab-quvvatlash va rivojlanish maqsadi bo'lish.
 
-The following is a non-exhaustive list of recommended considerations
-for selecting a particular version as an LTS candidate
+* LTS tanlash mezonlari
 
-1. The release should be /unlikely/ to contain major /known/ issues which
-   would preclude it from being useful.
+Quyida tavsiya etilgan fikrlarning to'liq bo'lmagan ro'yxati keltirilgan
+LTS nomzodi sifatida ma'lum bir versiyani tanlash uchun
 
-   More specifically, the release should have a good coverage of a
-   basic use-case, for example, (Pre-)RC-6[fn:1] was the last release which
-   contained the old consensus engine. Given that the actor-based
-   consensus had a maximum stable throughput of 10 TPS, (Pre-)RC-6 was
-   not labelled as an LTS, despite being used as one.
+1. Relizda asosiy /ma'lum/muammolar bo'lmasligi kerak
+   foydali bo'lishiga to'sqinlik qiladi.
 
-   RC-9 contained all the necessary features for running an Iroha node
-   on the new consensus, some changes to the structure of the
-   configuration and a few fixes to the =p2p= subsystem. It could have
-   filled all the possible niches of any projects based on Iroha, and
-   as such it was labelled as an LTS release despite being less-well
-   tested.
+   Aniqroq qilib aytganda, reliz a ni yaxshi qamrab olishi kerak
+   asosiy foydalanish holati, masalan, (Pre-)RC-6[fn:1] oxirgi nashr edi.
+   eski konsensus dvigatelini o'z ichiga olgan. Aktyorga asoslanganligini hisobga olsak
+   konsensus maksimal barqaror o'tkazish qobiliyatiga ega edi 10 TPS, (Pre-)RC-6 edi
+   LTS sifatida ishlatilishiga qaramay, LTS sifatida belgilanmagan.
 
-   Releases RC8, RC12, RC13 and RC17 were disqualified based on this
-   criterion.
+   RC-9 Iroha tugunini ishga tushirish uchun barcha kerakli xususiyatlarni o'z ichiga olgan.
+   yangi konsensusga ko'ra, tuzilmadagi ba'zi o'zgarishlar
+   konfiguratsiya va =p2p= quyi tizimiga bir nechta tuzatishlar kiritildi. Bo'lishi mumkin edi
+   Iroha asosida har qanday loyihaning barcha mumkin bo'lgan bo'shliqlarini to'ldirdi va
+   shuning uchun unchalik yaxshi bo'lmaganiga qaramay, u LTS versiyasi sifatida belgilangan
+   sinovdan o'tgan.
 
-2. If there is a large feature that entails an API breakage, the
-   release that has the most stable version of the "old way of doing
-   things" should be prioritised as an LTS candidate.
+   RC8, RC12, RC13 va RC17 relizlari bunga asoslanib diskvalifikatsiya qilindi.
+   mezon.
 
-   For example, RC12 and RC13, were the last versions of Iroha that
-   still used a hard-coded permission validator. Them being labelled
-   as an LTS candidate was precluded by the major known issues,
-   particularly with stability, poor coverage, and because releasing
-   an LTS after RC9 would have split the development resources off
-   from fixing the issue of rigid un-modifiable permission validators.
+2. API sinishiga olib keladigan katta xususiyat mavjud bo'lsa,
+   "eski usul" ning eng barqaror versiyasiga ega bo'lgan versiya
+   narsalar" LTS nomzodi sifatida ustuvor bo'lishi kerak.
 
-   RC14 and RC15 on the other hand, were in the process of a slow
-   migration of features. As such, the latter versions would be
-   considered direct upgrades over the previous one, having more
-   optimisations and better feature coverage.
+   Masalan, RC12 va RC13 Iroha ning oxirgi versiyalari edi.
+   hali ham qattiq kodlangan ruxsat tekshirgichidan foydalanilgan. Ular etiketlanmoqda
+   LTS nomzodiga asosiy ma'lum muammolar to'sqinlik qilganligi sababli,
+   ayniqsa barqarorlik bilan, yomon qamrovi, va chunki ozod
+   RC9 dan keyin LTS ishlab chiqish resurslarini ajratgan bo'lardi
+   qattiq o'zgartirilmaydigan ruxsat tekshirgichlari muammosini hal qilishdan.
 
-3. The release must be feature complete for a use-case.
+   Boshqa tomondan, RC14 va RC15 sekinlashuv jarayonida edi
+   xususiyatlarning migratsiyasi. Shunday qilib, oxirgi versiyalar bo'ladi
+   oldingisiga nisbatan to'g'ridan-to'g'ri yangilanishlar ko'rib chiqildi, ko'proq
+   optimallashtirish va xususiyatlarni yaxshiroq qamrab olish.
 
-   This is different to point 1, because while RC10 and RC13 were free
-   from major problems, they did not offer sufficiently full coverage
-   of the features required for the major project stakeholders.
+3. Chiqarish foydalanish uchun to'liq xususiyatga ega bo'lishi kerak.Bu 1-banddan farq qiladi, chunki RC10 va RC13 bepul edi
+   katta muammolardan, ular etarlicha to'liq qamrovni taklif qilmadilar
+   asosiy loyiha manfaatdor tomonlari uchun zarur bo'lgan xususiyatlar.
 
-4. The release must be supported by all SDKs.
+4. Chiqarish barcha SDKlar tomonidan qo'llab-quvvatlanishi kerak.
 
-   While the support in Iroha Python is largely confined to LTS
-   candidates, creating a catch 22 situation, it is an exception. The
-   two other major SDKs, namely Kotlin, and TypeScript must support
-   the LTS candidate. If the SDK cannot be made to support the
-   candidate, the candidate release is disqualified.
+   Iroha Python-da qo'llab-quvvatlash asosan LTS bilan cheklangan bo'lsa-da
+   nomzodlar, catch 22 vaziyatni yaratish, u istisno hisoblanadi. The
+   yana ikkita asosiy SDK, ya'ni Kotlin va TypeScript qo'llab-quvvatlashi kerak
+   LTS nomzodi. Agar SDK-ni qo'llab-quvvatlab bo'lmasa
+   nomzod, nomzodning ozod etilishi diskvalifikatsiya qilinadi.
 
-5. The release must be well-tested.
+5. Chiqarish yaxshi sinovdan o'tgan bo'lishi kerak.
 
-   This point supplements point 1, in that lack of known features
-   coupled with bad test coverage does not, in fact, mean freedom from
-   major problems.
+   Bu nuqta 1-bandni to'ldiradi, chunki ma'lum xususiyatlar yo'q
+   yomon sinov qamrovi bilan birlashganda, aslida, erkinlik degani emas
+   asosiy muammolar.
 
-   This generally applies to all releases after RC6 and until RC17, as
-   the development team was told of a way of restructuring the
-   integration tests, but the process only ended with RC17 and the
-   introduction of the =pytest= framework.
+   Bu odatda RC6 dan keyin va RC17 ga qadar barcha relizlar uchun amal qiladi
+   ishlab chiqish guruhiga ni qayta qurish yo'li aytildi
+   integratsiya testlari, lekin jarayon faqat RC17 va
+   =pytest= ramkasini joriy etish.
 
-   While passing integration tests is necessary it is not sufficient,
-   the following minimal testing is required to qualify a release as
-   an LTS candidate
+   Integratsiya testlaridan o'tish zarur bo'lsa-da, bu etarli emas,
+   deb tasniflash uchun quyidagi minimal test talab qilinadi
+   LTS nomzodi
 
-   1. Unit and Integration testing. One must take care to run all
-      integration tests, including the long and flaky ones. If tests
-      are unusually flaky that is indicative of a problem, and the
-      release should be disqualified (see [[../../flakyness.org]]).
+   1. Birlik va Integratsiya testi. Hammasini ishlatish uchun g'amxo'rlik qilish kerak
+      integratsiya testlari, shu jumladan uzoq va maydalangan testlar. Sinovlar bo'lsa
+      g'ayrioddiy xiralashgan, bu muammoni ko'rsatadi va
+      chiqarish diskvalifikatsiya qilinishi kerak (qarang: [[../../flakyness.org]]).
 
-   2. =pytest= tests, which technically qualify as integration
-      tests.
+   2. Texnik jihatdan integratsiya sifatida baholanadigan =pytest= testlari
+      testlar.
 
-   3. Longevity testing. The candidate must be tested for at least two
-      weeks to qualify. If the candidate is accepted as an LTS, the
-      longevity testing should be conducted for at least four weeks.
+   3. Uzoq umr ko'rish testi. Nomzod kamida ikkita testdan o'tishi kerak
+      saralash uchun haftalar. Agar nomzod LTS sifatida qabul qilinsa,
+      uzoq umr ko'rish testi kamida to'rt hafta davomida o'tkazilishi kerak.
 
-   4. Load testing. The LTS candidate must satisfy all of the criteria
-      set out by the QA team as operational and developmental
-      requirements under load (also known as extra-functional, and
-      mistakenly as non-functional). Failure to produce blocks in a
-      timely fashion is an automatic disqualification. Other
-      disqualifying criteria are left up to the discretion of the QA
-      team.
+   4. Yuklash sinovi. LTS nomzodi barcha mezonlarga javob berishi kerak
+      QA jamoasi tomonidan operatsion va ishlab chiqish sifatida belgilangan
+      yuk ostidagi talablar (shuningdek, qo'shimcha funktsional deb ham ataladi va
+      noto'g'ri ishlamaydi). a ichida bloklarni ishlab chiqarmaslik
+      o'z vaqtida moda avtomatik diskvalifikatsiya hisoblanadi. Boshqa
+      diskvalifikatsiya mezonlari QA ixtiyorida qoldiriladi
+      jamoa.
 
-   5. It must be deployed as a =development= container in at least one
-      project for at least two weeks, with no major problems. RC9 did
-      not pass this test and would have been disqualified with the
-      updated criteria listed in the present document.
+   5. U kamida bittasida =development= konteyner sifatida joylashtirilishi kerak
+      loyiha kamida ikki hafta davomida, katta muammolarsiz. RC9 qildi
+      bu testdan o'tmagan va diskvalifikatsiya qilingan bo'lar edi
+      ushbu hujjatda keltirilgan yangilangan mezonlar.
 
-6. The release must be well-documented.
+6. Chiqarish yaxshi hujjatlashtirilgan bo'lishi kerak.
 
-   It should not contain multiple new features that lack
-   documentation. Any shortfall in terms of documentation coverage
-   must be fixable within the time-frame of at most the release window
-   for the candidate. Failure to do so is an automatic disqualification.
+   Unda etishmayotgan bir nechta yangi xususiyatlar bo'lmasligi kerak
+   hujjatlar. Hujjatlarni qoplash bo'yicha har qanday kamchiliklar
+   ko'pi bilan chiqish oynasi vaqt oralig'ida tuzatilishi kerak
+   nomzod uchun. Buni qilmaslik avtomatik ravishda diskvalifikatsiya hisoblanadi.
 
-In addition to the regular release procedure outlined in
-[[release_procedure.org]], the LTS must adhere to the following additional
-steps.
+Muntazam chiqarish tartibiga qo'shimcha ravishda
+[[release_procedure.org]], LTS quyidagi qo'shimchaga rioya qilishi kerak
+qadamlar.Muntazam relizni amalga oshirish uchun /qo'shimcha/ bilan alohida PR
+sarlavha =[release]: <semver> LTS= bu erda =<semver>= semantik
+ishlab chiqish bo'limidan kodning versiyasi yaratilishi kerak. The
+muntazam nazorat ro'yxatidan voz kechish kerak va buning o'rniga Pull So'rovidan voz kechish kerak
+ko'rib chiqqan va tasdiqlagan xodimlar tomonidan ko'rib chiqilishi kerak
+=stable= versiyasi. Hammasini ta'minlash uchun kamida ikkita ko'rib chiqish kerak
+o'zgarishlar to'g'ri tartibda amalga oshiriladi va bu yo'q
+hujjatsiz muammolar o'tib ketdi.
 
-In /addition/ to performing a regular release, a separate PR with the
-title =[release]: <semver> LTS= where =<semver>= is the semantic
-version of the code from the development branch must be created. The
-regular checklist must be eschewed, and instead the Pull Request must
-be reviewed by the same personnel that reviewed and approved the
-=stable= release. At most two reviews are needed, to ensure that all
-the changes will take place in the correct order and that no
-undocumented issues slipped through.
+LTS versiyasi chiqarilgandan so'ng, CI docker konteynerini ishlab chiqaradi
+Alpine Linux platformasida va Ubuntu Linuxda LTS versiyasi bilan,
+=glibc= platformasining mahalliy versiyasidan foydalanish. CI ham ishlab chiqarishi kerak
+barcha qo'llab-quvvatlanadigan paketlarni o'rnating va ularni o'zlariga e'lon qiling
+omborlar. Bu, masalan, AUR to'plami yangilanganligini anglatadi
+tortish so'rovi birlashtirilgandan so'ng va to'g'ri paketni ishlab chiqaradi. The
+GitHub nashr sahifasi alohida nashr bilan to'ldirilishi kerak
+LTS va bitta faylli =AppImage=. Ushbu nashrlar kerak
+bilan birga o'rnatib bo'lmaydigan deb belgilangan alohida paketlar sifatida keladi
+barqaror versiya.
 
-Once the LTS release is made, the CI will produce a docker container
-with the LTS release on the Alpine Linux platform and on Ubuntu Linux,
-using the platform-native version of =glibc=. The CI must also produce
-all of the supported packages, and publish them to their respective
-repositories. This means, for example, that the AUR package is updated
-after the pull request is merged and produces the correct package. The
-GitHub release page must be populated with a separate release entitled
-LTS and containing the single-file =AppImage=. These releases must
-come as separate packages that are marked as not installable alongside the
-stable version.
+* Orqaga ko'chirish siyosati
 
-* Back-porting policy
+Odatda, LTS ga qayta ulanish tavsiya etilmaydi. Quyidagilar
+orqaga o'tish sabablari maqbul deb hisoblanadi:
+1. Iroha API bilan bogʻlanmagan qoʻshimchalar, masalan. general
+   yordamchi vosita va/yoki hujjatlar.
+2. Katta xavfsizlik zaifligini tuzatish.
+3. Katta xatoni tuzatish.
+4. Foydalanishga to'sqinlik qiladigan asosiy dizayn nazoratini tuzatish, agar shunday bo'lsa
+   joriy LTSning asosiy manfaatdor tomonlari/foydalanuvchilari og'zaki ravishda
+   backport afzal yechim ekanligi tasdiqlangan.
 
-Generally, back-porting into the LTS is discouraged. The following
-back-porting reasons are considered acceptable:
-1. Addition that is not tied to the Iroha API, like e.g. a general
-   helper tool and/or documentation.
-2. Fixing a major security vulnerability.
-3. Fixing a major bug.
-4. Fixing a major design oversight that precludes usage, provided that
-   the key stakeholders/users of the current LTS have verbally
-   certified that a backport is a preferable solution.
+Orqa portlar reliz kabi bir xil kanallar orqali e'lon qilinishi kerak
+o'zi. Kerakli o'zgarishlar ikkala faylda backported sifatida belgilanishi kerak
+ular tuzatilgan yuqori oqim relizi va qaysi versiya
+ular orqaga qaytarilgan.
 
-Back-ports must be announced through the same channels, as the release
-itself. Required changes must be labelled as backported in both the
-upstream release in which they were fixed and the version into which
-they have been back-ported.
+E'lon tushuntirishi kerak
+1. Nima uchun orqa port tanlangan (yuqoridagi sabablarga qarang)
+2. Orqa portning ta'siri qanday bo'lishi kerak
+3. Funktsional, integratsiya va hozirgi holati qanday
+   yuk/uzoqlik sinovi.
 
-The announcement must explain
-1. Why the backport was chosen (see above reasons)
-2. What the impact of the backport must be
-3. What is the current status of functional, integration and
-   load/longevity testing.
+* Qo'llanilishi
 
-* Applicability
+LTS/barqaror chiqarish siyosati birinchisi bilanoq qayta ko'rib chiqilishi kerak
+Iroha ning to'liq xususiyatli versiyasi e'lon qilindi (v2.0.0). Boshqa berilmagan
+faol rivojlanish, asosiy rivojlanish jamoasi qodir (va kerak).
+ajraladigan versiyalarni qo'llab-quvvatlashga ko'proq e'tibor qaratish.
 
-The LTS/stable release policy should be revised as soon as the first
-feature-complete version of Iroha is announced (v2.0.0). Given no more
-active development, the core development team can (and should) be able
-to focus more on the support of the diverging versions.
-
-* Footnotes
-
-[fn:1] The naming convention was stabilised long before any plan to
-release a version of Iroha was made.  As such calling any version of
-Iroha a release candidate has some implications.  Calling them pre
-release candidates is a similar type of misnomer, but less egregious,
-because rather than a misapplication of an existing term, this is an
-invention of a term that /could/ have subtle differences from a
-release candidate.  In reality these should have been called
-*development snapshots*.  But in order not to break continuity too
-much with the existing SDKs a compromise was chosen.
+* Izohlar[fn:1] Nomlash konventsiyasi har qanday rejadan ancha oldin barqarorlashgan
+Iroha versiyasi chiqarildi.  Shunday qilib, har qanday versiyasini chaqirish
+Iroha relizga nomzod ba'zi oqibatlarga olib keladi.  Ularni oldindan chaqirish
+nomzodlarni ozod qilish - bu noto'g'ri nomning o'xshash turi, ammo unchalik dahshatli emas,
+chunki mavjud atamaning noto'g'ri qo'llanilishidan ko'ra, bu an
+a dan nozik farqlarga ega bo'lishi mumkin bo'lgan atama ixtirosi
+nomzodni ozod qilish.  Aslida bularni chaqirish kerak edi
+*ishlab chiqish lavhalari*.  Ammo davomiylikni buzmaslik uchun
+mavjud SDKlar bilan ko'p jihatdan murosaga erishildi.

@@ -7,47 +7,48 @@ generator: scripts/sync_docs_i18n.py
 source_hash: f2dd292b7d15b449f3cec1b79343387a8c23beef3a163367bd5fa8ced8593aae
 source_last_modified: "2025-12-29T18:16:35.986892+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# MOCHI Bundle Tooling
+# MOCHI փաթեթային գործիքավորում
 
-MOCHI ships with a lightweight packaging workflow so developers can produce a
-portable desktop bundle without wiring bespoke CI scripts. The `xtask`
-subcommand handles compilation, layout, hashing, and (optionally) archive
-creation in one shot.
+MOCHI-ն առաքվում է թեթև փաթեթավորման աշխատանքային հոսքով, որպեսզի մշակողները կարողանան արտադրել ա
+դյուրակիր աշխատասեղանի փաթեթ՝ առանց հաղորդալարերի հատուկ CI սկրիպտների: `xtask`
+ենթահրամանները կարգավորում են կոմպիլյացիան, դասավորությունը, հեշավորումը և (ըստ ցանկության) արխիվացումը
+ստեղծումը մեկ կադրով.
 
-## Generating a bundle
+## Փաթեթի ստեղծում
 
 ```bash
 cargo xtask mochi-bundle
 ```
 
-By default the command builds release binaries, assembles the bundle under
-`target/mochi-bundle/`, and emits a `mochi-<os>-<arch>-release.tar.gz` archive
-alongside a deterministic `manifest.json`. The manifest lists every file with
-its size and SHA-256 hash so CI pipelines can re-run verification or publish
-attestations. The helper ensures both the `mochi` desktop shell and the
-workspace `kagami` binary are present so genesis generation works out of the
-box.
+Լռելյայնորեն հրամանը ստեղծում է թողարկման երկուականներ, հավաքում է փաթեթը տակ
+`target/mochi-bundle/` և թողարկում է `mochi-<os>-<arch>-release.tar.gz` արխիվ
+դետերմինիստական `manifest.json`-ի կողքին: Մանիֆեստը թվարկում է յուրաքանչյուր ֆայլ, որի հետ
+դրա չափը և SHA-256 հեշը, որպեսզի CI խողովակաշարերը կարողանան վերագործարկել ստուգումը կամ հրապարակել
+ատեստավորումներ. Օգնականն ապահովում է ինչպես `mochi` աշխատասեղանի կեղևը, այնպես էլ
+աշխատանքային տարածք `kagami` երկուական գոյություն ունեն, այնպես որ գենեզի սերունդը աշխատում է
+տուփ.
 
-### Flags
+### Դրոշներ
 
-| Flag                | Description                                                                 |
-|---------------------|-----------------------------------------------------------------------------|
-| `--out <dir>`       | Override the output directory (defaults to `target/mochi-bundle`).         |
-| `--profile <name>`  | Build with a specific Cargo profile (e.g., `debug` for tests).              |
-| `--no-archive`      | Skip the `.tar.gz` archive, leaving only the prepared folder.               |
-| `--kagami <path>`   | Use an explicit `kagami` binary instead of building `iroha_kagami`.         |
-| `--matrix <path>`   | Append bundle metadata to a JSON matrix for CI provenance tracking.         |
-| `--smoke`           | Run `mochi --help` from the packaged bundle as a basic execution gate.      |
-| `--stage <dir>`     | Copy the finished bundle (and archive, when present) into a staging folder. |
+| Դրոշ | Նկարագրություն |
+|----------------------------------------------------------------------------------------------------------
+| `--out <dir>` | Անտեսել ելքային գրացուցակը (կանխադրված է `target/mochi-bundle`):         |
+| `--profile <name>` | Կառուցեք հատուկ բեռների պրոֆիլով (օրինակ՝ `debug` թեստերի համար):              |
+| `--no-archive` | Բաց թողեք `.tar.gz` արխիվը՝ թողնելով միայն պատրաստված թղթապանակը։               |
+| `--kagami <path>` | `iroha_kagami` կառուցելու փոխարեն օգտագործեք բացահայտ `kagami` երկուական:         |
+| `--matrix <path>` | Կցեք փաթեթի մետատվյալները JSON մատրիցին՝ CI ծագման հետագծման համար:         |
+| `--smoke` | Գործարկեք `mochi --help`-ը փաթեթավորված փաթեթից որպես հիմնական կատարման դարպաս:      |
+| `--stage <dir>` | Պատճենեք պատրաստի փաթեթը (և արխիվը, երբ առկա է) բեմադրության թղթապանակում: |
 
-`--stage` is intended for CI pipelines where each build agent uploads its
-artefacts to a shared location. The helper recreates the bundle directory and
-copies the generated archive into the staging directory so publish jobs can
-collect platform-specific outputs without shell scripting.
+`--stage`-ը նախատեսված է CI խողովակաշարերի համար, որտեղ յուրաքանչյուր շինարարական գործակալ վերբեռնում է իր
+արտեֆակտներ ընդհանուր վայրում: Օգնականը վերստեղծում է փաթեթի գրացուցակը և
+պատճենում է ստեղծված արխիվը բեմադրության գրացուցակում, որպեսզի աշխատատեղերը հրապարակվեն
+հավաքել պլատֆորմին հատուկ ելքեր՝ առանց shell scripting-ի:
 
-The layout inside the bundle is intentionally simple:
+Փաթեթի ներսում դասավորությունը միտումնավոր պարզ է.
 
 ```
 bin/mochi              # egui desktop executable
@@ -60,9 +61,9 @@ manifest.json          # generated file manifest with SHA-256 digests
 
 ### Runtime overrides
 
-The packaged `mochi` executable accepts command-line overrides for the most
-common supervisor settings. Use these flags instead of editing
-`config/local.toml` when experimenting:
+Փաթեթավորված `mochi` գործարկվողն առավելագույնս ընդունում է հրամանի տողի վերափոխումները
+ընդհանուր ղեկավարի կարգավորումները: Օգտագործեք այս դրոշները խմբագրելու փոխարեն
+`config/local.toml` փորձարկելիս.
 
 ```
 ./bin/mochi --data-root ./data --profile four-peer-bft \
@@ -70,16 +71,16 @@ common supervisor settings. Use these flags instead of editing
     --irohad /path/to/irohad --kagami /path/to/kagami
 ```
 
-Any CLI value takes precedence over `config/local.toml` entries and environment
-variables.
+Ցանկացած CLI արժեք գերակայում է `config/local.toml` մուտքերի և միջավայրի նկատմամբ
+փոփոխականներ.
 
-## Snapshot automation
+## Snapshot ավտոմատացում
 
-`manifest.json` records the generation timestamp, target triple, Cargo profile,
-and the complete file inventory. Pipelines can diff the manifest to detect when
-new artefacts appear, upload the JSON alongside release assets, or audit the
-hashes before promoting a bundle to operators.
+`manifest.json`-ը գրանցում է սերնդի ժամանակի դրոշմակնիքը, թիրախային եռակի, բեռների պրոֆիլը,
+և ֆայլի ամբողջական գույքագրումը: Խողովակաշարերը կարող են տարբերել մանիֆեստը՝ հայտնաբերելու, թե երբ
+հայտնվում են նոր արտեֆակտներ, վերբեռնում են JSON-ը թողարկման ակտիվների հետ մեկտեղ կամ ստուգում են
+հեշեր՝ նախքան փաթեթը օպերատորներին գովազդելը:
 
-The helper is idempotent: re-running the command updates the manifest and
-overwrites the previous archive, keeping `target/mochi-bundle/` as the single
-source of truth for the latest bundle on the current machine.
+Օգնականը անիմաստ է. հրամանի վերագործարկումը թարմացնում է մանիֆեստը և
+վերագրանցում է նախորդ արխիվը՝ պահելով `target/mochi-bundle/` որպես սինգլ
+ճշմարտության աղբյուր ընթացիկ մեքենայի վերջին փաթեթի համար:

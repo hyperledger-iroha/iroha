@@ -7,62 +7,63 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 44f1c681730f1c94d9d00e8f829a0134374ce6cb29f21727a27685e096f0da40
 source_last_modified: "2026-01-17T06:10:29.077000+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Merge Ledger Design — Lane Finality and Global Reduction
+# Ledger дизайнын біріктіру - жолды аяқтау және жаһандық қысқарту
 
-This note finalises the merge-ledger design for Milestone 5. It explains the
-non-empty block policy, cross-lane QC merge semantics, and the finality workflow
-that binds lane-level execution to the global world state commitment.
+Бұл жазба Milestone 5 үшін біріктіру журналының дизайнын аяқтайды. Ол түсіндіреді
+бос емес блок саясаты, көлденең жолақты QC біріктіру семантикасы және соңғы жұмыс процесі
+бұл жаһандық әлемдік мемлекеттік міндеттемеге жолақ деңгейінде орындауды байланыстырады.
 
-The design extends the Nexus architecture described in `nexus.md`. Terms such as
-"lane block", "lane QC", "merge hint", and "merge ledger" inherit their
-definition from that document; this note focuses on behavioural rules and
-implementation guidance that must be enforced by the runtime, storage, and WSV
-layers.
+Дизайн `nexus.md` ішінде сипатталған Nexus архитектурасын кеңейтеді. сияқты терминдер
+"жолақ блогы", "жолақты QC", "біріктіру туралы кеңес" және "біріктіру журналы" олардың мұрагері болады.
+осы құжаттың анықтамасы; бұл жазба мінез-құлық ережелеріне және
+орындау уақыты, сақтау және WSV арқылы орындалуы тиіс орындау нұсқаулығы
+қабаттар.
 
-## 1. Non-Empty Block Policy
+## 1. Бос емес блок саясаты
 
-**Rule (MUST):** A lane proposer issues a block only when the block contains at
-least one executed transaction fragment, time-based trigger, or deterministic
-artifact update (e.g., DA artifact roll-up). Empty blocks are forbidden.
+**Ереже (МЕРІС):** Жолды ұсынушы блоктың құрамында at болған кезде ғана блок шығарады
+кем дегенде бір орындалған транзакция фрагменті, уақытқа негізделген триггер немесе детерминист
+артефакті жаңарту (мысалы, DA артефакті жинағы). Бос блоктарға тыйым салынады.
 
-**Implications:**
+**салдары:**
 
-- Slot keep-alive: when no transaction meets its deterministic commit window,
-the lane emits no block and simply advances to the next slot. The merge ledger
-remains on the previous tip for that lane.
-- Trigger batching: background triggers that produce no state transition (e.g.,
-cron that reaffirms invariants) are considered empty and MUST be skipped or
-bundled with other work before producing a block.
-- Telemetry: `pipeline_detached_merged` and follow-up metrics treat skipped
-slots explicitly—operators can distinguish "no work" from "pipeline stalled".
-- Replay: block storage does not insert synthetic empty placeholders. The Kura
-replay loop simply observes the same parent hash for consecutive slots if no
-block was emitted.
+- Слотты сақтау: ешбір транзакция оның детерминирленген орындау терезесіне сәйкес келмесе,
+жолақ блокты шығармайды және жай ғана келесі ұяшыққа өтеді. Біріктіру кітабы
+сол жолақтың алдыңғы ұшында қалады.
+- Триггер топтамасы: күйге ауысуды тудырмайтын фондық триггерлер (мысалы,
+инварианттарды растайтын cron) бос болып саналады және ҚАТЫСТЫ өткізіп жіберу керек немесе
+блокты шығарар алдында басқа жұмыстармен біріктірілген.
+- Телеметрия: `pipeline_detached_merged` және кейінгі көрсеткіштер өткізіп жіберілді
+слоттар анық—операторлар «жұмыс жоқ» мен «құбыр тоқтап қалды» дегенді ажырата алады.
+- Қайталау: блок қоймасы синтетикалық бос толтырғыштарды кірістірмейді. Кура
+қайта ойнату циклі, егер жоқ болса, дәйекті слоттар үшін бірдей тектік хэшті ғана бақылайды
+блок шығарылды.
 
-**Canonical Check:** During block proposal and validation, `ValidBlock::commit`
-asserts that the associated `StateBlock` carries at least one committed overlay
-(delta, artifact, trigger). This aligns with the `StateBlock::is_empty` guard
-that already ensures no-op writes are elided. Enforcement happens before
-signatures are requested so committees never vote on empty payloads.
+**Канондық тексеру:** Блокты ұсыну және тексеру кезінде `ValidBlock::commit`
+байланысты `StateBlock` кем дегенде бір бекітілген қабаттасуды қамтамасыз етеді
+(дельта, артефакт, триггер). Бұл `StateBlock::is_empty` қорғаушысына сәйкес келеді
+бұл операциясыз жазулардың жойылуын қамтамасыз етеді. Орындау бұрын орындалады
+Комитеттер бос жүктемелерге ешқашан дауыс бермеу үшін қол қою сұралады.
 
-## 2. Cross-Lane QC Merge Semantics
+## 2. Cross-Line QC Merge семантикасы
 
-Each lane block `B_i` finalised by its committee produces:
+Оның комитеті дайындаған әрбір `B_i` жол блогы мыналарды шығарады:
 
-- `lane_state_root_i`: Poseidon2-SMT commitment over per-DS state roots touched
-in the block.
-- `merge_hint_root_i`: rolling candidate for the merge ledger (`tag =
-"iroha:merge:candidate:v1\0"`).
-- `lane_qc_i`: aggregated signatures from the lane committee over the
-  execution-vote preimage (block hash, `parent_state_root`,
-  `post_state_root`, height/view/epoch, chain_id, and mode tag).
+- `lane_state_root_i`: Poseidon2-SMT міндеттемесі әр DS күйінің түбірлеріне қатысты.
+блокта.
+- `merge_hint_root_i`: біріктіру кітапшасына үміткер (`тег =
+"iroha:біріктіру:кандидат:v1\0"`).
+- `lane_qc_i`: жолақ комитетінен жинақталған қолдар
+  орындау-дауыс алдын ала бейнелеу (блок хэш, `parent_state_root`,
+  `post_state_root`, биіктік/көрініс/дәуір, тізбек_идентификаторы және режим тегі).
 
-Merge nodes collect the latest tips `{(B_i, lane_qc_i, merge_hint_root_i)}` for
-all lanes `i ∈ [0, K)`.
+Біріктіру түйіндері `{(B_i, lane_qc_i, merge_hint_root_i)}` үшін соңғы кеңестерді жинайды
+барлық жолақтар `i ∈ [0, K)`.
 
-**Merge Entry (MUST):**
+**Біріктіру жазбасы (МІНДЕТТІ):**
 
 ```
 MergeLedgerEntry {
@@ -72,23 +73,21 @@ MergeLedgerEntry {
     global_state_root: Hash32,
     merge_qc: QuorumCertificate,
 }
-```
+```- `lane_tips[i]` - жолақ блогының хэші, жолақ үшін біріктірілген кіру пломбалары
+  `i`. Алдыңғы біріктіру жазбасынан бері жолақ блокты шығармаса, бұл мән болады
+  қайталанды.
+- `merge_hint_root[i]` - сәйкес жолақтағы `merge_hint_root`
+  блок. `lane_tips[i]` қайталағанда ол қайталанады.
+- `global_state_root` тең `ReduceMergeHints(merge_hint_root[0..K-1])`, a
+  Доменді бөлу тегі бар Poseidon2 бүктеледі
+  `"iroha:merge:reduce:v1\0"`. Қысқарту детерминирленген және МІНДЕТТІ
+  теңдестері арасында бірдей мәнді қайта құру.
+- `merge_qc` - біріктіру комитетінен алынған BFT кворум сертификаты
+  серияланған жазба.
 
-- `lane_tips[i]` is the hash of the lane block the merge entry seals for lane
-  `i`. If a lane emitted no block since the previous merge entry, this value is
-  repeated.
-- `merge_hint_root[i]` is the `merge_hint_root` from the corresponding lane
-  block. It is repeated when `lane_tips[i]` repeats.
-- `global_state_root` equals `ReduceMergeHints(merge_hint_root[0..K-1])`, a
-  Poseidon2 fold with domain separation tag
-  `"iroha:merge:reduce:v1\0"`. The reduction is deterministic and MUST
-  reconstruct the same value across peers.
-- `merge_qc` is a BFT quorum certificate from the merge committee over the
-  serialized entry.
+**QC пайдалы жүктемесін біріктіру (МІНДЕТТІ):**
 
-**Merge QC Payload (MUST):**
-
-Merge committee members sign a deterministic digest:
+Біріктіру комитетінің мүшелері детерминистік дайджестке қол қояды:
 
 ```
 merge_qc_digest = blake2b32(
@@ -104,110 +103,106 @@ merge_qc_digest = blake2b32(
 )
 ```
 
-- `view` is the merge-committee view derived from the lane tips (max
-  `view_change_index` across the lane headers sealed by the entry).
-- `chain_id` is the configured chain identifier string (UTF-8 bytes).
-- The payload uses Norito encoding with the field order shown above.
+- `view` - жолақ кеңестерінен алынған біріктіру комитетінің көрінісі (макс.
+  `view_change_index` жазбамен мөрленген жолақ тақырыптары бойынша).
+- `chain_id` конфигурацияланған тізбек идентификатор жолы (UTF-8 байт).
+- Пайдалы жүктеме жоғарыда көрсетілген өріс ретімен Norito кодтауын пайдаланады.
 
-The resulting digest is stored in `merge_qc.message_digest` and is the message
-verified by BLS signatures.
+Алынған дайджест `merge_qc.message_digest` ішінде сақталады және хабарлама болып табылады
+BLS қолтаңбаларымен расталған.
 
-**Merge QC Construction (MUST):**
+**QC құрылысын біріктіру (МІНДЕТТІ):**
 
-- The merge committee roster is the current commit-topology validator set.
-- Required quorum = `commit_quorum_from_len(roster_len)`.
-- `merge_qc.signers_bitmap` encodes participating validator indices (LSB-first)
-  in commit-topology order.
-- `merge_qc.aggregate_signature` is the BLS-normal aggregate for the digest
-  above.
+- Біріктіру комитетінің тізімі ағымдағы комиссия-топология валидатор жинағы болып табылады.
+- Міндетті кворум = `commit_quorum_from_len(roster_len)`.
+- `merge_qc.signers_bitmap` қатысушы валидатор индекстерін кодтайды (LSB-бірінші)
+  commit-топология тәртібімен.
+- `merge_qc.aggregate_signature` - дайджестке арналған BLS-қалыпты агрегат
+  жоғарыда.
 
-**Validation (MUST):**
+**Валидация (МІНДЕТТІ):**
 
-1. Verify each `lane_qc_i` against `lane_tips[i]` and confirm the block headers
-   include the matching `merge_hint_root_i`.
-2. Ensure no `lane_qc_i` points to an `Invalid` or unexecuted block. The
-   non-empty policy above ensures the header includes state overlays.
-3. Recompute `ReduceMergeHints` and compare with `global_state_root`.
-4. Recompute the merge QC digest and verify the signer bitmap, quorum threshold,
-   and aggregate signature against the commit-topology roster.
+1. Әрбір `lane_qc_i` нұсқасын `lane_tips[i]` нұсқасымен салыстырып, блок тақырыптарын растаңыз
+   сәйкес `merge_hint_root_i` қамтиды.
+2. `Invalid` немесе орындалмаған блокқа `lane_qc_i` нүктелерінің жоқтығына көз жеткізіңіз. The
+   жоғарыдағы бос емес саясат тақырыптың күй қабаттарын қамтитынын қамтамасыз етеді.
+3. `ReduceMergeHints` қайта есептеңіз және `global_state_root` салыстырыңыз.
+4. Біріктіру QC дайджестін қайта есептеңіз және қол қоюшының нүктелік кескінін, кворум шегін,
+   және топология тізіміне қарсы жиынтық қол қою.
 
-**Observability:** Merge nodes emit Prometheus counters for
-`merge_entry_lane_repeats_total{i}` to highlight lanes that skipped slots for
-operational visibility.
+**Байқау мүмкіндігі:** Біріктіру түйіндері Prometheus есептегіштерін шығарады
+Слоттарды өткізіп жіберген жолдарды бөлектеу үшін `merge_entry_lane_repeats_total{i}`
+операциялық көріну.
 
-## 3. Finality Workflow
+## 3. Соңғы жұмыс процесі
 
-### 3.1 Lane-Level Finality
+### 3.1 Жолақ деңгейіндегі қорытынды
 
-1. Transactions are scheduled per lane in deterministic slots.
-2. The executor applies overlays into `StateBlock`, producing deltas and
-artifacts.
-3. Upon validation, the lane committee signs the execution-vote preimage that
-   binds the block hash, state roots, and height/view/epoch. The tuple
-   `(block_hash, lane_qc_i, merge_hint_root_i)` is considered lane-final.
-4. Light clients MAY treat the lane tip as final for DS-limited proofs, but
-must record the associated `merge_hint_root` to reconcile with the merge ledger
-later.
+1. Транзакциялар детерминирленген ұяшықтарда әр жолға жоспарланған.
+2. Орындаушы `StateBlock` ішіне қабаттасуды қолданады, дельталар мен
+артефактілер.
+3. Валидациядан кейін жолақ комиссиясы дауыс беру туралы алдын ала құжатқа қол қояды.
+   блок хэшін, күй түбірлерін және биіктік/көрініс/дәуірді байланыстырады. Кортеж
+   `(block_hash, lane_qc_i, merge_hint_root_i)` соңғы жолақ болып саналады.
+4. Жеңіл клиенттер жолақ ұшын DS шектелген дәлелдер үшін соңғы ретінде қарастыруы мүмкін, бірақ
+біріктіру кітабымен салыстыру үшін байланысты `merge_hint_root` жазуы керек
+кейінірек.Жолдық комитеттер әр деректер кеңістігі болып табылады және жаһандық міндеттемені алмастырмайды
+топология. Комитет мөлшері `3f+1` деңгейінде бекітілген, мұнда `f`
+деректер кеңістігінің каталогы (`fault_tolerance`). Валидатор пулы деректер кеңістігі болып табылады
+валидаторлар (әкімші басқаратын жолақтарға арналған жолақты басқару манифесттері немесе жалпыға қолжетімді жолақтар
+ставка бойынша таңдалған жолақтар үшін стокинг жазбалары). Комитет мүшесі болып табылады
+байланыстырылған VRF дәуірінің тұқымын пайдаланып, әр дәуірде бір рет детерминирленген іріктеледі
+`dataspace_id` және `lane_id`. Егер бассейн `3f+1` мәнінен кіші болса, жолдың соңғылығы
+кворум қалпына келгенше үзіліс жасайды (төтенше қалпына келтіру бөлек өңделеді).
 
-Lane committees are per-dataspace and do not replace the global commit
-topology. Committee size is fixed at `3f+1`, where `f` comes from the
-dataspace catalog (`fault_tolerance`). The validator pool is the dataspace's
-validators (lane governance manifests for admin-managed lanes, or public-lane
-staking records for stake-elected lanes). Committee membership is
-deterministically sampled once per epoch using the VRF epoch seed bound with
-`dataspace_id` and `lane_id`. If the pool is smaller than `3f+1`, lane finality
-pauses until quorum is restored (emergency recovery is handled separately).
+### 3.2 Біріктіру кітабының аяқталуы
 
-### 3.2 Merge-Ledger Finality
+1. Біріктіру комитеті соңғы жолақ кеңестерін жинайды, әрбір `lane_qc_i` тексереді және
+жоғарыда анықталғандай `MergeLedgerEntry` құрастырады.
+2. Детерминирленген қысқартуды тексергеннен кейін біріктіру комиссиясы қол қояды
+жазба (`merge_qc`).
+3. Түйіндер жазбаны біріктіру журналының журналына қосады және онымен қатар сақтайды
+жолақты блок сілтемелері.
+4. `global_state_root` беделді әлемдік мемлекеттік міндеттемеге айналады.
+дәуір/слот. Толық түйіндер мұны көрсету үшін WSV бақылау нүктесі метадеректерін жаңартады
+құндылық; детерминирленген қайталау бірдей қысқартуды қайта шығаруы керек.
 
-1. Merge committee collects the latest lane tips, verifies each `lane_qc_i`, and
-constructs the `MergeLedgerEntry` as defined above.
-2. After verifying the deterministic reduction, the merge committee signs the
-entry (`merge_qc`).
-3. Nodes append the entry to the merge ledger log and persist it alongside the
-lane block references.
-4. `global_state_root` becomes the authoritative world state commitment for the
-epoch/slot. Full nodes update their WSV checkpoint metadata to mirror this
-value; deterministic replay must reproduce the same reduction.
+### 3.3 WSV және сақтауды біріктіру
 
-### 3.3 WSV and Storage Integration
+- `State::commit_merge_entry` әр жолақ күйінің түбірлерін және
+  соңғы `global_state_root`, жолақты орындауды жаһандық бақылау сомасымен біріктіреді.
+- Kura `MergeLedgerEntry` жолақ блогының артефактілеріне жақын жерде сақталады, сондықтан
+  қайта ойнату жолақ деңгейінде де, жаһандық соңғы реттіліктерді де қайта құра алады.
+- Жолақ ұяшықты өткізіп жібергенде, сақтау алдыңғы ұшын ғана сақтайды; жоқ
+  толтырғышты біріктіру жазбалары кем дегенде бір жолақ жаңа жолды жасағанша жасалады
+  блок.
+- API беттері (Torii, телеметрия) екі жолақ кеңестерін де, соңғы біріктіруді де көрсетеді
+  операторлар мен клиенттер әр жолақты және жаһандық көріністерді салыстыра алатындай енгізу.
 
-- `State::commit_merge_entry` records the per-lane state roots and the
-  final `global_state_root`, bridging lane execution with the global checksum.
-- Kura persists `MergeLedgerEntry` adjacent to the lane block artifacts so a
-  replay can reconstruct both lane-level and global finality sequences.
-- When a lane skips a slot, storage simply retains the previous tip; no
-  placeholder merge entries are created until at least one lane produces a new
-  block.
-- API surfaces (Torii, telemetry) expose both lane tips and the latest merge
-  entry so operators and clients can reconcile per-lane and global views.
-
-## 4. Implementation Notes
-
-- `crates/iroha_core/src/state.rs`: `State::commit_merge_entry` validates the
-  reduction and wires the lane/global metadata into the world state so queries
-  and observers can access the merge hints and the authoritative global hash.
-- `crates/iroha_core/src/kura.rs`: `Kura::store_block_with_merge_entry` enqueues
-  the block and persists the associated merge entry in one step, rolling back
-  the in-memory block when the append fails so storage never records a block
-  without its sealing metadata. The merge-ledger log is pruned in lock-step
-  with the validated block height during startup recovery, and cached in memory
-  with a bounded window (`kura.merge_ledger_cache_capacity`, default 256) to
-  avoid unbounded growth on long-running nodes. Recovery truncates partial or
-  oversized merge-ledger tail entries, and append rejects entries above the
-  maximum payload size guard to cap allocations.
-- `crates/iroha_core/src/block.rs`: block validation rejects blocks without
-  entrypoints (external transactions or time triggers) and without deterministic
-  artifacts such as DA bundles (`BlockValidationError::EmptyBlock`), ensuring
-  the non-empty policy is enforced before signatures are requested and carried
-  into the merge ledger.
-- Deterministic reduction helper lives in the merge service: `reduce_merge_hint_roots`
-  (`crates/iroha_core/src/merge.rs`) implements the Poseidon2 fold described above.
-  Hardware acceleration hooks remain future work, but the scalar path now enforces
-  the canonical reduction deterministically.
-- Telemetry integration: exposing per-lane merge repeats and the
-  `global_state_root` gauge remains tracked in the observability backlog so the
-  dashboard work can ship alongside the merge service rollout.
-- Cross-component tests: golden replay coverage for the merge reduction is
-  tracked with the integration-test backlog to ensure future changes to
-  `reduce_merge_hint_roots` keep the recorded roots stable.
+## 4. Іске асыру туралы ескертпелер- `crates/iroha_core/src/state.rs`: `State::commit_merge_entry` растайды
+  қысқарту және жолақты/жаһандық метадеректерді әлемдік күйге қосады, осылайша сұрайды
+  және бақылаушылар біріктіру туралы кеңестерге және беделді жаһандық хэшке қол жеткізе алады.
+- `crates/iroha_core/src/kura.rs`: `Kura::store_block_with_merge_entry` кезектері
+  блоктау және байланысты біріктіру жазбасын бір қадаммен кері айналдыру арқылы сақтайды
+  қосымша сәтсіз болғанда жадтағы блок, сондықтан жад ешқашан блокты жазбайды
+  оның пломбалау метадеректерінсіз. Біріктіру журналының журналы құлыптау қадамымен кесіледі
+  іске қосуды қалпына келтіру кезінде расталған блок биіктігімен және жадта кэштелген
+  шектелген тереземен (`kura.merge_ledger_cache_capacity`, әдепкі 256)
+  ұзаққа созылатын түйіндерде шектелмеген өсуді болдырмаңыз. Қалпына келтіру жартылай немесе қысқарады
+  габаритті біріктіру журналының соңғы жазбалары және қосымшаның үстіндегі жазбаларды қабылдамайды
+  максималды пайдалы жүк өлшемін бөлуге дейін қорғау.
+- `crates/iroha_core/src/block.rs`: блокты тексеру блоктарды онсыз қабылдамайды
+  кіру нүктелері (сыртқы транзакциялар немесе уақыт триггерлері) және детерминациясыз
+  DA бумалары (`BlockValidationError::EmptyBlock`) сияқты артефактілер,
+  бос емес саясат қолдар сұралғанға және өткізілмей тұрып орындалады
+  біріктіру кітабына.
+- Детерминистік азайту көмекшісі біріктіру қызметінде тұрады: `reduce_merge_hint_roots`
+  (`crates/iroha_core/src/merge.rs`) жоғарыда сипатталған Poseidon2 қатпарын жүзеге асырады.
+  Аппараттық жеделдету ілмектері болашақ жұмыс болып қала береді, бірақ скалярлық жол енді күшіне енеді
+  канондық қысқарту детерминирленген.
+- Телеметриялық интеграция: әр жолақты біріктірудің қайталануын және
+  `global_state_root` көрсеткіші бақылау мүмкіндігінің артта қалуында қадағаланады, сондықтан
+  бақылау тақтасының жұмысы біріктіру қызметінің шығарылымымен бірге жеткізілуі мүмкін.
+- Компонентаралық сынақтар: біріктіруді қысқартуға арналған алтын қайталау қамтуы
+  болашақ өзгерістерді қамтамасыз ету үшін интеграциялық сынақтың артта қалуымен бақыланады
+  `reduce_merge_hint_roots` жазылған түбірлерді тұрақты сақтайды.

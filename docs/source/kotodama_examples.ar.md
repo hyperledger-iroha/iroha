@@ -6,19 +6,20 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 168513edcb6624ab76275b01aaaf6ab9dee310b9d6f5a2960504a9545801c511
 source_last_modified: "2026-01-28T15:34:14.183250+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Kotodama Examples Overview
+# نظرة عامة على أمثلة Kotodama
 
-This page shows concise Kotodama examples and how they map to IVM syscalls and pointer‑ABI arguments. See also:
-- `examples/` for runnable sources
-- `docs/source/ivm_syscalls.md` for the canonical syscall ABI
-- `kotodama_grammar.md` for the full language specification
+تعرض هذه الصفحة أمثلة موجزة عن Kotodama وكيفية تعيينها لاستدعاءات النظام IVM ووسائط المؤشر-ABI. أنظر أيضا:
+- `examples/` للمصادر القابلة للتشغيل
+- `docs/source/ivm_syscalls.md` لـ syscall ABI الأساسي
+- `kotodama_grammar.md` للحصول على مواصفات اللغة الكاملة
 
-## Hello + Account Detail
+## مرحبا + تفاصيل الحساب
 
-Source: `examples/hello/hello.ko`
+المصدر: `examples/hello/hello.ko`
 
 ```
 seiyaku Hello {
@@ -34,13 +35,13 @@ seiyaku Hello {
 }
 ```
 
-Mapping (pointer‑ABI):
-- `authority()` → `SCALL 0xA4` (host writes `&AccountId` into `r10`)
-- `set_account_detail(a, k, v)` → move `r10=&AccountId`, `r11=&Name`, `r12=&Json`, then `SCALL 0x1A`
+رسم الخرائط (المؤشر-ABI):
+- `authority()` → `SCALL 0xA4` (يكتب المضيف `&AccountId` في `r10`)
+- `set_account_detail(a, k, v)` → انقل `r10=&AccountId`، `r11=&Name`، `r12=&Json`، ثم `SCALL 0x1A`
 
-## Asset Transfer
+## نقل الأصول
 
-Source: `examples/transfer/transfer.ko`
+المصدر: `examples/transfer/transfer.ko`
 
 ```
 seiyaku TransferDemo {
@@ -55,12 +56,12 @@ seiyaku TransferDemo {
 }
 ```
 
-Mapping (pointer‑ABI):
-- `transfer_asset(from, to, def, amt)` → `r10=&AccountId(from)`, `r11=&AccountId(to)`, `r12=&AssetDefinitionId(def)`, `r13=amount`, then `SCALL 0x24`
+رسم الخرائط (المؤشر-ABI):
+- `transfer_asset(from, to, def, amt)` → `r10=&AccountId(from)`، `r11=&AccountId(to)`، `r12=&AssetDefinitionId(def)`، `r13=amount`، ثم `SCALL 0x24`
 
-## NFT Create + Transfer
+## إنشاء + نقل NFT
 
-Source: `examples/nft/nft.ko`
+المصدر: `examples/nft/nft.ko`
 
 ```
 seiyaku NftDemo {
@@ -79,16 +80,16 @@ seiyaku NftDemo {
 }
 ```
 
-Mapping (pointer‑ABI):
-- `nft_mint_asset(id, owner)` → `r10=&NftId`, `r11=&AccountId(owner)`, `SCALL 0x25`
-- `nft_transfer_asset(from, id, to)` → `r10=&AccountId(from)`, `r11=&NftId`, `r12=&AccountId(to)`, `SCALL 0x26`
+رسم الخرائط (المؤشر-ABI):
+- `nft_mint_asset(id, owner)` → `r10=&NftId`، `r11=&AccountId(owner)`، `SCALL 0x25`
+- `nft_transfer_asset(from, id, to)` → `r10=&AccountId(from)`، `r11=&NftId`، `r12=&AccountId(to)`، `SCALL 0x26`
 
-## Pointer Norito Helpers
+## المؤشر Norito المساعدين
 
-Pointer-valued durable state requires converting typed TLVs to and from the
-`NoritoBytes` envelope that hosts persist. Kotodama now wires these helpers
-directly through the compiler so builders can use pointer defaults and map
-lookups without manual FFI glue:
+تتطلب الحالة الدائمة ذات قيمة المؤشر تحويل TLVs المكتوبة من وإلى ملف
+`NoritoBytes` المغلف الذي يستمر المضيفين. يقوم Kotodama الآن بتوصيل هؤلاء المساعدين
+مباشرة من خلال المترجم حتى يتمكن المنشئون من استخدام الإعدادات الافتراضية للمؤشر والخريطة
+عمليات البحث بدون غراء FFI اليدوي:
 
 ```
 seiyaku PointerDemo {
@@ -107,21 +108,21 @@ seiyaku PointerDemo {
 }
 ```
 
-Lowering:
+خفض:
 
-- Pointer defaults emit `POINTER_TO_NORITO` after publishing the typed TLV, so
-  the host receives a canonical `NoritoBytes` payload for storage.
-- Reads perform the reverse operation with `POINTER_FROM_NORITO`, supplying the
-  expected pointer type id in `r11`.
-- Both paths automatically publish literal TLVs into the INPUT region, allowing
-  contracts to mix string literals and runtime pointers transparently.
+- تصدر الإعدادات الافتراضية للمؤشر `POINTER_TO_NORITO` بعد نشر TLV المكتوب، لذلك
+  يتلقى المضيف حمولة `NoritoBytes` الأساسية للتخزين.
+- تقوم القراءات بإجراء العملية العكسية باستخدام `POINTER_FROM_NORITO`، مما يوفر
+  معرف نوع المؤشر المتوقع في `r11`.
+- يقوم كلا المسارين تلقائيًا بنشر TLVs الحرفية في منطقة INPUT، مما يسمح بذلك
+  عقود لخلط سلسلة حرفية ومؤشرات وقت التشغيل بشفافية.
 
-See `crates/ivm/tests/kotodama_pointer_args.rs` for a runtime regression that
-exercises the round-trip against the `MockWorldStateView`.
+راجع `crates/ivm/tests/kotodama_pointer_args.rs` للتعرف على انحدار وقت التشغيل
+يمارس رحلة الذهاب والإياب ضد `MockWorldStateView`.
 
-## Deterministic Map Iteration (design)
+## تكرار الخريطة الحتمية (التصميم)
 
-Deterministic map for‑each requires a bound. Multi-entry iteration requires a state map; the compiler accepts `.take(n)` or a declared maximum length.
+خريطة حتمية لكل منها تتطلب حدودًا. يتطلب التكرار متعدد الإدخال خريطة الحالة؛ يقبل المترجم `.take(n)` أو الحد الأقصى للطول المعلن.
 
 ```
 // design example (iteration requires bounds and state storage)
@@ -136,21 +137,21 @@ fn sum_first_two() -> int {
 }
 ```
 
-Semantics:
-- Iteration set is a snapshot at loop entry; order is lexicographic by Norito bytes of the key.
-- Structural mutations to `M` in the loop trap with `E_ITER_MUTATION`.
-- Without a bound the compiler emits `E_UNBOUNDED_ITERATION`.
+دلالات:
+- مجموعة التكرار هي لقطة عند إدخال الحلقة؛ يتم ترتيب المعجم بواسطة Norito بايت من المفتاح.
+- الطفرات الهيكلية إلى `M` في مصيدة الحلقة مع `E_ITER_MUTATION`.
+- بدون حدود يصدر المترجم `E_UNBOUNDED_ITERATION`.
 
-## Compiler/host internals (Rust, not Kotodama source)
+## الأجزاء الداخلية للمترجم/المضيف (Rust، وليس مصدر Kotodama)
 
-The snippets below live on the Rust side of the toolchain. They illustrate compiler helpers and VM lowering mechanics and are **not** valid Kotodama `.ko` source.
+المقتطفات أدناه موجودة على الجانب الصدأ من سلسلة الأدوات. إنها توضح مساعدي برنامج التحويل البرمجي وآليات خفض VM وهي **ليست** صالحة مصدر Kotodama `.ko`.
 
-## Wide Opcode Chunked Frame Updates
+## تحديثات الإطار المقسم لكود التشغيل على نطاق واسع
 
-Kotodama’s wide opcode helpers target the 8-bit operand layout used by the IVM
-wide encoding. Loads and stores that move 128-bit values reuse the third operand
-slot for the high register, so the base register must already hold the final
-address. Adjust the base with an `ADDI` before issuing the load/store:
+تستهدف مساعدات كود التشغيل الواسعة لـ Kotodama تخطيط المعامل 8 بت الذي يستخدمه IVM
+ترميز واسع. الأحمال والمخازن التي تنقل قيم 128 بت تعيد استخدام المعامل الثالث
+فتحة للسجل العالي، لذلك يجب أن يحتوي السجل الأساسي بالفعل على السجل النهائي
+عنوان. اضبط القاعدة باستخدام `ADDI` قبل إصدار التحميل/التخزين:
 
 ```
 use ivm::kotodama::wide::{encode_addi_checked, encode_load128, encode_store128};
@@ -160,40 +161,38 @@ fn emit_store_pair(base: u8, lo: u8, hi: u8) -> [u32; 2] {
     let store = encode_store128(base, lo, hi);
     [adjust, store]
 }
-```
+```تعمل تحديثات الإطار المقسم على تطوير القاعدة بخطوات 16 بايت، مما يضمن التسجيل
+الزوج الملتزم به `STORE128` يهبط على حدود المحاذاة المطلوبة. نفس الشيء
+ينطبق النمط على `LOAD128`؛ إصدار `ADDI` بالخطوة المطلوبة من قبل
+يحافظ كل حمل على سجل الوجهة العالية مرتبطًا بفتحة المعامل الثالثة.
+تتناسب العناوين المنحرفة مع `VMError::MisalignedAccess`، مما يتوافق مع الجهاز الظاهري
+السلوك الذي تمارسه في `crates/ivm/tests/wide_memory128.rs`.
 
-Chunked frame updates advance the base in 16-byte steps, ensuring the register
-pair committed by `STORE128` lands on the required alignment boundary. The same
-pattern applies to `LOAD128`; issuing an `ADDI` with the desired stride before
-each load keeps the high destination register bound to the third operand slot.
-Misaligned addresses trap with `VMError::MisalignedAccess`, matching the VM
-behaviour exercised in `crates/ivm/tests/wide_memory128.rs`.
+يجب على البرامج التي تُصدر هذه البرامج المساعدة ذات 128 بت أن تعلن عن قدرة المتجهات.
+يقوم المترجم Kotodama بتمكين بت وضع `VECTOR` تلقائيًا كلما
+يظهر `LOAD128`/`STORE128`؛ مصائد VM مع
+`VMError::VectorExtensionDisabled` إذا حاول أحد البرامج تنفيذها
+دون أن مجموعة قليلا.
 
-Programs that emit these 128-bit helpers must advertise vector capability.
-The Kotodama compiler enables the `VECTOR` mode bit automatically whenever
-`LOAD128`/`STORE128` appear; the VM traps with
-`VMError::VectorExtensionDisabled` if a program attempts to execute them
-without that bit set.
+## خفض فرع مشروط على نطاق واسع
 
-## Wide Conditional Branch Lowering
+عندما يقوم Kotodama بخفض `if`/`else` أو فرع ثلاثي إلى كود ثانوي عريض فإنه يصدر
+تسلسل `BNE cond, zero, +2` ثابت متبوعًا بزوج من تعليمات `JAL`:
 
-When Kotodama lowers an `if`/`else` or ternary branch to wide bytecode it emits a
-fixed `BNE cond, zero, +2` sequence followed by a pair of `JAL` instructions:
+1. يحافظ `BNE` القصير على الفرع الشرطي ضمن المسار المباشر 8 بت
+   من خلال القفز فوق السقوط `JAL`.
+2. يستهدف `JAL` الأول الكتلة `else` (يتم تنفيذها عندما يكون الشرط
+   كاذبة).
+3. ينتقل `JAL` الثاني إلى الكتلة `then` (يتم التقاطه عندما يكون الشرط
+   صحيح).
 
-1. The short `BNE` keeps the conditional branch within the 8-bit immediate lane
-   by jumping over the fallthrough `JAL`.
-2. The first `JAL` targets the `else` block (executed when the condition is
-   false).
-3. The second `JAL` jumps to the `then` block (taken when the condition is
-   true).
+يضمن هذا النمط أن فحص الحالة لن يحتاج أبدًا إلى تشفير إزاحات أكبر
+أكثر من ±127 كلمة مع الاستمرار في دعم الأجسام الكبيرة بشكل تعسفي لـ `then`
+وكتل `else` عبر مساعد `JAL` الواسع. انظر
+`crates/ivm/tests/kotodama.rs::branch_lowering_uses_short_bne_and_dual_jal` ل
+اختبار الانحدار الذي يقفل التسلسل.
 
-This pattern guarantees the condition check never needs to encode offsets larger
-than ±127 words while still supporting arbitrarily large bodies for the `then`
-and `else` blocks via the wide `JAL` helper. See
-`crates/ivm/tests/kotodama.rs::branch_lowering_uses_short_bne_and_dual_jal` for
-the regression test that locks in the sequence.
-
-### Example Lowering
+### مثال للتخفيض
 
 ```
 fn branch(b: bool) -> int {
@@ -201,8 +200,8 @@ fn branch(b: bool) -> int {
 }
 ```
 
-Compiles to the following wide instruction skeleton (register numbers and
-absolute offsets depend on the enclosing function):
+يتم تجميعه إلى الهيكل العظمي للتعليمات العريضة التالية (تسجيل الأرقام و
+تعتمد الإزاحات المطلقة على الوظيفة المرفقة):
 
 ```
 BNE cond_reg, x0, +2    # skip the fallthrough jump when the condition is true
@@ -210,6 +209,6 @@ JAL x0, else_offset     # execute when the condition is false
 JAL x0, then_offset     # execute when the condition is true
 ```
 
-Subsequent instructions materialise the constants and write the return value.
-Because the `BNE` jumps over the first `JAL`, the conditional offset is always
-`+2` words, keeping the branch within range even when the block bodies expand.
+التعليمات اللاحقة تتحقق من الثوابت وتكتب القيمة المرجعة.
+نظرًا لأن `BNE` يقفز فوق `JAL` الأول، تكون الإزاحة الشرطية دائمًا
+كلمات `+2`، مما يحافظ على الفرع ضمن النطاق حتى عندما تتوسع أجسام الكتلة.

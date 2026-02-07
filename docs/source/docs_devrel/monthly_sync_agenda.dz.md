@@ -7,102 +7,101 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a2f89131efc0c79ddf63d71a25c04029014ba58393fb6336e676181322bc5066
 source_last_modified: "2025-12-29T18:16:35.952009+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Docs/DevRel Monthly Sync Agenda
+# Docs/DevRel ཟླ་རེའི་མཉམ་འབྱུང་ལས་སྣ།
 
-This agenda formalizes the monthly Docs/DevRel sync that is referenced across
-`roadmap.md` (see “Add localization staffing review to monthly Docs/DevRel
-sync”) and the Android AND5 i18n plan. Use it as the canonical checklist, and
-update it whenever roadmap deliverables add or retire agenda items.
+གྲོས་གཞི་འདི་གིས་ ཟླཝ་རེ་ནང་ ཡིག་ཆ་/ཌི་ཝི་རེལ་མཉམ་འབྱུང་འདི་ ནང་ན་ལུ་གཞི་བསྟུན་འབད་ཡོད་པའི་ སྒྲིག་གཞི་བཟོཝ་ཨིན།
+`roadmap.md` ( “ཟླ་རེའི་ Docs/DevRel ལུ་ ས་གནས་ཀྱི་ལས་བྱེདཔ་བསྐྱར་ཞིབ་ཁ་སྐོང་འབད།
+མཉམ་མཐུད་”) དང་ Android AND5 i18n འཆར་གཞི་།
+ལམ་སྟོན་གྱི་ བཀྲམ་སྤེལ་ཚུ་ ག་དེམ་ཅིག་སྦེ་ དུས་མཐུན་བཟོ་ནི་དང་ ཡང་ན་ དགོངས་ཞུ་འབད་ནིའི་ གྲོས་གཞི་ཚུ་ དུས་མཐུན་བཟོ་དགོ།
 
-## Cadence & Logistics
+## ཁེ་ཌེན་དང་ བཅའ་སྒྲུབ།
 
-- **Frequency:** monthly (typically the second Thursday, 16:00 UTC)
-- **Duration:** 45 minutes + optional 15 minute hang-back for deep dives
-- **Location:** Zoom (`https://meet.sora.dev/docs-devrel-sync`) with shared
-  notes in HackMD or `docs/source/docs_devrel/minutes/<yyyy-mm>.md`
-- **Audience:** Docs/DevRel manager (chair), Docs engineers, localization
-  program manager, SDK DX TLs (Android, Swift, JS), Product Docs, Release
-  Engineering delegate, Support/QA observers
-- **Facilitator:** Docs/DevRel manager; appoint a rotating scribe who will
-  commit the minutes into the repo within 24 hours
+- **བསྐྱར་འབྱུང་:** ཟླ་རིམ་ (སྤྱིར་བཏང་ལུ་ གཟའ་ཕུར་བུ་ ༡༦:༠༠UTC)
+- **དུས་ཡུན་:** སྐར་མ་༤༥ + གདམ་ཁ་ཅན་གྱི་སྐར་མ་ ༡༥ གཏིང་ཟབ་པའི་མཆོངས་ནིའི་དོན་ལུ་ རྒྱབ་ལོག་བཀག་ཆ།
+- **ས་གནས་:** བརྗེ་སོར་འབད་ཡོད་པའི་ ཟུམ་ (`https://meet.sora.dev/docs-devrel-sync`) དང་མཉམ་དུ།
+  དྲན་འཛིན་ཚུ་ ཧེཀ་ཨེམ་ཌི་ ཡང་ན་ `docs/source/docs_devrel/minutes/<yyyy-mm>.md` ནང་།
+- **ལེགས་སྦྱར་བ་:** ཡིག་ཆ་/ཌི་ཝི་ཨར་འཛིན་སྐྱོང་ (ཁྲི་འཛིན་), ཡིག་ཆ་བཟོ་རིག་པ་ཚུ་, ས་གནས་འཛིན་མི།
+  ལས་རིམ་འཛིན་སྐྱོང་པ།, ཨེསི་ཌི་ཀེ་ཌི་ཨེགསི་ཊི་ཨེལ་ཚུ་ (ཨེན་ཌོའིཌ་, སུའིཕཊི་ ཇེ་ཨེསི་), ཐོན་སྐྱེད་ཡིག་ཆ་, བཏོན་གཏང་།
+  བཟོ་རིག་སྐུ་ཚབ་ རྒྱབ་སྐྱོར།/QA བལྟ་རྟོག་པ།
+- **མཐུན་རྐྱེན་འཕྲུལ་ཆས་:** ཡིག་ཆ་/ཌི་ཝི་རེལ་འཛིན་སྐྱོང་པ། བསྒྱིར་བའི་ཡིག་མཁན་ཅིག་བསྐོ་བཞག་འབད།
+  ཆུ་ཚོད་༢༤ གི་ནང་འཁོད་ལུ་ རི་པོ་ནང་ལུ་ སྐར་མ་ཚུ་ བཞག།
 
-## Pre-Work Checklist
+## སྔོན་གྱི་ལས་ཀའི་དཔྱད་གཞི།
 
-| Owner | Task | Artefact |
-|-------|------|----------|
-| Scribe | Create the month’s notes file (`docs/source/docs_devrel/minutes/<yyyy-mm>.md`) using the template below. | Notes file |
-| Localization PM | Refresh `docs/source/sdk/android/i18n_plan.md#translation-status` and the staffing log; pre-fill proposed decisions. | i18n plan |
-| DX TLs | Run `ci/check_android_docs_i18n.sh` or `scripts/sync_docs_i18n.py --dry-run` and attach digests for discussion. | CI artefacts |
-| Docs tooling | Export `docs/i18n/manifest.json` digests + outstanding ticket list from `docs/source/sdk/android/i18n_requests/`. | Manifest & ticket summary |
-| Support/Release | Gather any escalations that require Docs/DevRel action (e.g., pending preview invites, blocking reviewer feedback). | Status.md or escalation doc |
+| ཇོ་བདག་ | ལས་ཀ་ | ཅ་ཆས། |
+|---------|---------------------------------
+| ཡིག་ཆ། | འོག་གི་ཊེམ་པེལེཊི་ལག་ལེན་འཐབ་སྟེ་ ཟླཝ་གི་དྲན་འཛིན་ཡིག་སྣོད་ (`docs/source/docs_devrel/minutes/<yyyy-mm>.md`) གསར་བསྐྲུན་འབད། | དྲན་འཛིན་ཡིག་སྣོད་ |
+| ས་གནས་ཀྱི་ PM | `docs/source/sdk/android/i18n_plan.md#translation-status` དང་ལས་བྱེད་དྲན་ཐོ་འདི་གསར་བསྐྲུན་འབད། གྲོས་འཆར་གྱི་གྲོས་ཐག་ཚུ་ སྔོན་སྒྲིག་འབད་ནི། | i18n འཆར་གཞི་ |
+| DX TLs | `ci/check_android_docs_i18n.sh` ཡང་ན་ `scripts/sync_docs_i18n.py --dry-run` གཡོག་བཀོལ་ཞིནམ་ལས་ གྲོས་བསྟུན་གྱི་དོན་ལུ་ བཞུ་ནི་ཚུ་ མཉམ་སྦྲགས་འབད། | CI ཅ་རྙིང་། |
+| ཡིག་ཆ་ཚུ་ ལག་ཆས་བཟོ་ནི། | ཕྱིར་ཚོང་ `docs/i18n/manifest.json` བཞུ་ནི་ + ཁྱད་འཕགས་ཅན་གྱི་ཤོག་བྱང་ཐོ་ཡིག་ `docs/source/sdk/android/i18n_requests/` ལས་. | མ་ཕེསཊ་དང་ ཤོག་འཛིན་བཅུད་བསྡུས། |
+| རྒྱབ་སྐྱོར།/ གསར་བཏོན་འབད་ནི། | ཌོཀསི་/ཌི་ཝི་རེལ་བྱ་བ་དགོ་པའི་ ཡར་འཕར་གང་རུང་ཚུ་ བསྡུ་ལེན་འབད། ༼དཔེར་ན་ སྔོན་ལྟ་མགྲོན་བརྡ་ཚུ་ མ་སྤྲོད་པར་ བསྐྱར་ཞིབ་པ་གི་བསམ་འཆར་བཀག་ཆ་འབད་ནི།༽ | Status.md ཡང་ན་ ཡར་འཕར་གྱི་ཡིག་ཆ་ |
 
-## Agenda Blocks
-
-1. **Roll call & objectives (5 min)**
-   - Confirm quorum, scribe, and logistics.
-   - Highlight any urgent incidents (docs preview outage, localization block).
-2. **Localization staffing review (15 min)**
-   - Review the staffing decision log in
+## གྲོས་གཞི།1. **རོལ་འབོད་དང་དམིགས་ཡུལ་ (5min)**
+   - འདྲེན་བྱེད་དང་ཡིག་གཟུགས་ དེ་ལས་ བཅའ་སྒྲིག་ཚུ་ ངེས་གཏན་བཟོ།
+   - འཕྲལ་མཁོའི་བྱུང་རྐྱེན་གང་རུང་ (docs སྔོན་ལྟ་མེདཔ་བཟོ་ནི་ ས་གནས་ཀྱི་སྡེབ་ཚན་) ལུ་འོད་རྟགས་བཀལ།
+2. **ས་གནས་ཀྱི་ལས་བྱེདཔ་བསྐྱར་ཞིབ་ (15min)**
+   - ལས་བྱེདཔ་གི་གྲོས་ཐག་དྲན་ཐོ་ནང་ བསྐྱར་ཞིབ་འབད།
      `docs/source/sdk/android/i18n_plan.md#staffing-decision-log`.
-   - Confirm status of open POs (`DOCS-L10N-*`) and interim coverage.
-   - Compare CI freshness output vs. the translation status table; call out any
-     doc whose locale SLA (>5 business days) will be breached before the next
-     sync.
-   - Decide whether escalation is required (Product Ops, Finance, contractor
-     management). Record the decision in both the staffing log and the monthly
-     minutes, including owner + due date.
-   - If staffing is healthy, document the confirmation so the roadmap action can
-     move back to 🈺/🈴 with evidence.
-3. **Docs/roadmap updates (10 min)**
-   - Status of DOCS-SORA portal work, Try-It proxy, and SoraFS publication
-     readiness.
-   - Highlight doc debt or reviewers needed for current release trains.
-4. **SDK highlights (10 min)**
-   - Android AND5/AND7 doc readiness, Swift IOS5 parity, JS GA progress.
-   - Capture shared fixtures or schema diffs that will affect docs.
-5. **Action review & parking lot (5 min)**
-   - Revisit open items from the previous sync; confirm closures.
-   - Record new actions in the notes file with explicit owners and deadlines.
+   - ཁ་ཕྱེ་ཡོད་པའི་ POs (`DOCS-L10N-*`) དང་ བར་མཚམས་ཁྱབ་ཁོངས།
+   - སི་ཨའི་ གསརཔ་ཨའུཊི་པུཊི་ དང་ སྐད་སྒྱུར་གནས་ཚད་ཐིག་ཁྲམ་ཚུ་ ག་བསྡུར་རྐྱབ། གང་རུང་ཅིག་ལུ་འབོད་བཀུག་འབད།
+     doc གི་ས་གནས་ SLA (>༥ ཚོང་འབྲེལ་ཉིནམ་) འདི་ ཤུལ་མམ་གྱི་ཧེ་མ་གི་ཧེ་མ་ བརྡལ་བཤིག་གཏང་འོང་།
+     མཉམ་སྦྱོར།
+   - ཡར་སེང་འབད་དགོཔ་ཨིན་ན་མེན་ན་ ཐག་བཅད་ནི།(ཐོན་སྐྱེད་ཡར་སེང་ དངུལ་འབྲེལ་ ཁག་འབགཔ་ ཁག་འབགཔ་།
+     འཛིན་སྐྱོང)། ལས་བྱེདཔ་གི་དྲན་ཐོ་དང་ ཟླཝ་རེ་ནང་ གྲོས་ཐག་འདི་ཐོ་བཀོད་འབད།
+     mise, ཇོ་བདག་ + དུས་ཚོད་ཀྱི་ཚེས་གྲངས་.
+   - ལས་བྱེདཔ་ཚུ་ གསོ་བའི་གནས་སྟངས་ལེགས་ཤོམ་ཡོད་པ་ཅིན་ བདེན་དཔྱད་འདི་ ཡིག་ཐོག་ལུ་བཀོད་དགོ།
+     🈺/🈴 སྒྲུབ་བྱེད་དང་བཅས།
+3. **ཡིག་ཆ་/ལམ་སབ་ཁྲ་དུས་མཐུན་ཚུ་ (10min)**
+   - ཌི་ཨོ་སི་-I1NT0000001X དྲྭ་ཚིགས་ལས་ཀའི་གནས་སྟངས།
+     གྲ་སྒྲིག་ནི།
+   - ད་ལྟོའི་གསར་བཏོན་མེ་འཁོར་ཚུ་གི་དོན་ལུ་དགོ་པའི་ ཌོཀ་བུ་ལོན་ཡང་ན་ བསྐྱར་ཞིབ་འབད་མི་ཚུ་ གསལ་སྟོན་འབད།
+༤ **SDK འོད་རྟགས་ (༡༠min)**
+   - Android AND5/AND7 doc གྲ་སྒྲིག་, Swift IOS5 parity, JS GA ཡར་རྒྱས་.
+   - ཡིག་ཆ་ཚུ་ལུ་གནོད་པ་བརྐྱབ་མི་ སྒྲིག་བཀོད་ཡང་ན་ ལས་རིམ་གྱི་ཁྱད་པར་ཚུ་ བརྗེ་སོར་འབད་ནི།
+5. **བྱ་བ་བསྐྱར་ཞིབ་དང་སྣུམ་འཁོར་བཞག་སའི་ས་ཆ། (5min)**
+   - ཧེ་མའི་མཉམ་འབྱུང་ལས་ ཁ་ཕྱེ་བའི་རྣམ་གྲངས་ཚུ་ ལོག་བལྟ་ནི། ཁ་བསྡམས་ཡོདཔ་ངེས་གཏན་བཟོ།
+   - གསལ་རི་རི་ ཇོ་བདག་དང་ དུས་ཚོད་ཚུ་དང་གཅིག་ཁར་ དྲན་འཛིན་ཡིག་སྣོད་ནང་ བྱ་བ་གསརཔ་ཚུ་ ཐོ་བཀོད་འབད།
 
-## Localization Staffing Review Template
+## ས་གནས་བཟོ་ནིའི་ ལས་བྱེད་བསྐྱར་ཞིབ།
 
-Include the following table in each month’s minutes:
+ཟླཝ་རེ་གི་སྐར་མ་རེ་རེ་ནང་ འོག་གི་ཐིག་ཁྲམ་འདི་བཙུགས།
 
-| Locale | Capacity (FTE) | Commitments & POs | Risks / Escalations | Decision & Owner |
+| ས་གནས་ | ལྕོགས་གྲུབ་ (FTE) | ཁས་བླངས་དང་ POs | ཉེན་ཁ། / ཡར་འཕར་ | ཐག་གཅོད་དང་ཇོ་བདག་ |
 |--------|----------------|-------------------|---------------------|------------------|
-| JP | e.g., 0.5 contractor + 0.1 Docs backup | PO `DOCS-L10N-4901` (awaiting signature) | “Contract not signed by 2026-03-04” | “Escalate to Product Ops — @docs-devrel, due 2026-03-02” |
-| HE | e.g., 0.1 Docs engineer | Rotation enters PTO 2026-03-18 | “Need backup reviewer” | “@docs-lead to identify backup by 2026-03-05” |
+| ཇེ་པི་ | དཔེར་ན་, ༠.༥ ཁག་འབགཔ་ + ༠.༡ ཡིག་ཆ་རྒྱབ་ཐག་ | PO `DOCS-L10N-4901` (མཚན་རྟགས་ཤེས་ཡོན) | “ཁག་འབགཔ་ ༢༠༢༦-༠༣-༠༤” | “ཐོན་སྐྱེད་ Ops ལུ་ཡར་འཕར་ — @docs-devrel, tain 2026-03-02” |
+| ཨེཆ་ཨི་ | དཔེར་ན་ ༠.༡ ཡིག་ཆ་བཟོ་རིག་པ། | བསྐོར་འཁོར་ནང་ PTO ༢༠༢༦-༠༣-༡༨ | “དགོས་མཁོ་རྒྱབ་ཐག་བསྐྱར་ཞིབ་པ།” | “@docs-lead-རྒྱབ་ཐག་ངོས་འཛིན་འབད་ནི་ལུ་ ༢༠༢༦-༠༣-༠༥” |
 
-Also log a short narrative covering:
+དེ་མ་ཚད་ ལོ་རྒྱུས་ཐུང་ཀུ་ཅིག་ བཀབ་དགོ།
 
-- **SLA outlook:** Any doc expected to miss the five-business-day SLA and the
-  mitigation (swap priority, enlist backup vendor, etc.).
-- **Ticket & asset health:** Outstanding entries in
-  `docs/source/sdk/android/i18n_requests/` and whether screenshots/assets are
-  ready for translators.
+- **SLA གི་མཐོང་ཚུལ།** ཚོང་ལས་ལྔ་གི་ཉིནམ་ཨེསི་ཨེལ་ཨེ་དང་ གཉིས་འདི་ བརྗེད་ཚུགས་པའི་རེ་བ་ཡོདཔ་ཨིན།
+  མར་ཕབ་ (བརྗེ་སོར་གྱི་གཙོ་རིམ་དང་ རྒྱབ་ཐག་ཚོང་པ་ལ་སོགས་པ་ཚུ་) ཚུ་ཨིན།
+- **Ticket & Test གསོ་བ།:* ཁྱད་འཕགས་ཐོ་ཡིག།
+  `docs/source/sdk/android/i18n_requests/` དང་ གསལ་གཞི་པར་ཆས་/རྒྱུ་དངོས་ཚུ་ ཨིན་ན་མེན་ན།
+  སྐད་སྒྱུར་པ་ཚུ་གི་དོན་ལུ་ གྲ་སྒྲིག་ཡོད།
 
-### Localization Staffing Review Logging
+### གནས་ས་གནས་ བསྐྱར་ཞི བ་ ནང་བསྐྱོད་འབད་ནི།
 
-- **Minutes:** Copy the staffing table + narrative into
-  `docs/source/docs_devrel/minutes/<yyyy-mm>.md` (all locales mirror the
-  English minutes via localized files under the same directory). Link the entry
-  back to the agenda (`docs/source/docs_devrel/monthly_sync_agenda.md`) so
-  governance can trace evidence.
-- **i18n plan:** Update the staffing decision log and translation status table
-  in `docs/source/sdk/android/i18n_plan.md` immediately after the meeting.
-- **Status:** When staffing decisions affect roadmap gates, add a short entry in
-  `status.md` (Docs/DevRel section) referencing the minute file and i18n plan
-  update.
+- **Minutes:** ལས་བྱེདཔ་གི་ཐིག་ཁྲམ་+ ལོ་རྒྱུས་འདི་ འདྲ་བཤུས་རྐྱབས།
+  `docs/source/docs_devrel/minutes/<yyyy-mm>.md` (ས་གནས་ཚང་མའི་ནང་དུ་མེ་པར།
+  སྣོད་ཐོ་གཅིག་པའི་འོག་ལུ་ ས་གནས་ཀྱི་ཡིག་སྣོད་ཚུ་བརྒྱུད་དེ་ ཨིང་སྐད་ཀྱི་སྐར་མ་ཚུ། ཐོ་བཀོད་འདི་ འབྲེལ་མཐུད་འབད།
+  ལོག་ གྲོས་གཞི་ (`docs/source/docs_devrel/monthly_sync_agenda.md`) དེ་འབདཝ་ལས་ཨིན།
+  གཞུང་སྐྱོང་གིས་ སྒྲུབ་བྱེད་ཚུ་ འཚོལ་ཚུགས།
+- **i18n འཆར་གཞི་:** ལས་བྱེདཔ་གི་གྲོས་ཐག་དྲན་ཐོ་དང་སྐད་སྒྱུར་གནས་ཚད་ཐིག་ཁྲམ་འདི་དུས་མཐུན་བཟོ།
+  ནང་ `docs/source/sdk/android/i18n_plan.md` ནང་ ཞལ་འཛོམས་འདི་གི་ཤུལ་ལས་ དེ་འཕྲོ་ལས་
+- **Status:** ལས་བྱེདཔ་ཚུ་གི་གྲོས་ཐག་ཚུ་གིས་ ལམ་སྟོན་གྱི་སྒོ་ར་ཚུ་ལུ་གནོད་པ་བརྐྱབ་པའི་སྐབས་ ༢༠༠༨ ལུ་ འཛུལ་ཞུགས་ཐུང་ཀུ་ཅིག་ཁ་སྐོང་འབད།
+  `status.md` (Docs/DevRel དབྱེ་ཚན་) གིས་ སྐར་མའི་ཡིག་སྣོད་དང་ i18n འཆར་གཞི་ལུ་གཞི་བསྟུན་འབདཝ་ཨིན།
+  དུས༌མཐུན༌བཟོ༌ནི།
 
-## Minutes Template
+## སྐར་མའི་དཔེ་ཚད།
 
-Copy this skeleton into `docs/source/docs_devrel/minutes/<yyyy-mm>.md`:
+ཀེང་རུས་འདི་ `docs/source/docs_devrel/minutes/<yyyy-mm>.md` ནང་ལུ་འདྲ་བཤུས་རྐྱབས།
 
 ```markdown
 <!-- SPDX-License-Identifier: Apache-2.0 -->
@@ -125,22 +124,20 @@ Copy this skeleton into `docs/source/docs_devrel/minutes/<yyyy-mm>.md`:
 | Item | Owner | Due | Notes |
 |------|-------|-----|-------|
 | JP contractor PO follow-up | @docs-devrel-manager | 2026-03-02 | Example entry |
-```
+```ཞལ་འཛོམས་འདི་གི་ཤུལ་ལས་ མགྱོགས་པ་རང་ PR བརྒྱུད་དེ་ དྲན་འཛིན་ཚུ་ དཔར་བསྐྲུན་འབད་དེ་ `status.md` ལས་ འབྲེལ་མཐུད་འབད།
+ཉེན་ཁ་དང་ ཡང་ན་ ལས་བྱེདཔ་གི་གྲོས་ཐག་ཚུ་ གཞི་བསྟུན་འབད་བའི་སྐབས།
 
-Publish the notes via PR soon after the meeting and link them from `status.md`
-when referencing risk or staffing decisions.
+## རྗེས་འཇུག་-ཨཔ་ རེ་བ་ཚུ།
 
-## Follow-Up Expectations
+༡ **སྐར་མ་ཚུ་གིས་ ཆུ་ཚོད་༢༤ གི་ནང་འཁོད་ལུ་ (`docs/source/docs_devrel/minutes/`) གི་ནང་འཁོད་འབད་ཡོདཔ་ཨིན།
+2. **i18n འཆར་གཞི་དུས་མཐུན་བཟོ་ཡོདཔ།:** ལས་བྱེདཔ་གི་དྲན་ཐོ་དང་སྐད་སྒྱུར་ཐིག་ཁྲམ་འདི་ ༡ ལུ་བདེ་སྒྲིག་འབད།
+   ཁས་བླངས་གསརཔ་ཡང་ན་ ཡར་འཕར་ཚུ་ བསྟན་དགོ།
+3. **Status.md འཛུལ་ཞུགས་:** ཉེན་ཁ་ཆེ་བའི་ཐག་གཅོད་གང་རུང་ཅིག་ བསྡུ་སྒྲིག་འབདཝ་ཨིན།
+   མཉམ་འབྱུང་ནང་།
+4. **Escalations fines:** བསྐྱར་ཞིབ་འདི་གིས་ ཡར་འཕར་འབད་དགོ་པའི་འབོད་བརྡ་འབད་བའི་སྐབས་ གསར་བསྐྲུན་/གསར་བསྐྲུན་འབདཝ་ཨིན།
+   འབྲེལ་ཡོད་ཀྱི་ ཤོག་འཛིན་ (དཔེར་ན་ ཐོན་སྐྱེད་ཨོཔ་ དངུལ་རྩིས་ཀྱི་གནང་བ་ ཚོང་པ་ཚུ་ བཀྲམ་སྤེལ་འབད་ནི།)
+   དེ་ལས་ སྐར་མ་དང་ i18n འཆར་གཞི་གཉིས་ཆ་རའི་ནང་ལུ་ གཞི་བསྟུན་འབད།
 
-1. **Minutes committed:** within 24 hours (`docs/source/docs_devrel/minutes/`).
-2. **i18n plan updated:** adjust the staffing log and translation table to
-   reflect new commitments or escalations.
-3. **Status.md entry:** summarize any high-risk decisions to keep the roadmap
-   in sync.
-4. **Escalations filed:** when the review calls for escalation, create/refresh
-   the relevant ticket (e.g., Product Ops, Finance approval, vendor onboarding)
-   and reference it in both the minutes and the i18n plan.
-
-By following this agenda, the roadmap requirement to include localization
-staffing reviews in the Docs/DevRel monthly sync stays auditable, and downstream
-teams always know where to find the evidence.
+གྲོས་གཞི་འདི་ལུ་གཞི་བཞག་སྟེ་ ས་ཁྲ་དགོས་མཁོ་འདི་ ས་གནས་ནང་བཙུགས་དགོཔ་ཨིན།
+ཡིག་ཆ་/DevRel ཟླ་རིམ་མཉམ་འབྱུང་ནང་ ལས་བྱེད་བསྐྱར་ཞིབ་ཚུ་ རྩིས་ཞིབ་འབད་བཏུབ་དང་ མར་ཁར།
+སྡེ་ཚན་ཚུ་གིས་ རྟག་བུ་རང་ སྒྲུབ་བྱེད་ཚུ་ ག་ཏེ་ལས་འཚོལ་དགོཔ་ཨིན་ན་ ཤེས་ཚུགས།

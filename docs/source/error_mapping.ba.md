@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: cba8780bcec4ebf562dc9c5725f328b0ea2d9009517efa5b5a504e2fb6be81fe
 source_last_modified: "2026-01-11T04:52:11.136647+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Error Mapping Guide
+# Хата картаһы буйынса ҡулланма
 
-Last updated: 2025-08-21
+Һуңғы яңыртылған: 2025-08-21.
 
-This guide maps common failure modes in Iroha to stable error categories surfaced by the data model. Use it to design tests and to make client error handling predictable.
+Был етәкселек Iroha-та дөйөм етешһеҙлек режимдарын карталар, мәғлүмәттәр моделе тарафынан өҫкә сыҡҡан тотороҡло хата категорияларына. Уны ҡулланып, һынауҙар проектлау һәм клиент хаталарҙы эшкәртергә күҙаллана.
 
-Principles
-- Instruction and query paths emit structured enums. Avoid panics; report a specific category wherever possible.
-- Categories are stable, messages may evolve. Clients should match on categories, not on free‑form strings.
+Принциптар
+- Инструкция һәм эҙләү юлдары структуралы enums сығара. Паниканан ҡасығыҙ; мөмкин булған урында аныҡ категория тураһында хәбәр итә.
+- Категориялар тотороҡло, хәбәрҙәр үҫешергә мөмкин. Клиенттар категорияларға тап килергә тейеш, ә бушлай формалы ҡылдар буйынса түгел.
 
-Categories
-- InstructionExecutionError::Find: Entity missing (asset, account, domain, NFT, role, trigger, permission, public key, block, transaction). Example: removing a non‑existent metadata key yields Find(MetadataKey).
-- InstructionExecutionError::Repetition: Duplicate registration or conflicting ID. Contains the instruction type and the repeated IdBox.
-- InstructionExecutionError::Mintability: Mintability invariant violated (`Once` exhausted twice, `Limited(n)` overdrawn, or attempts to disable `Infinitely`). Examples: minting an asset defined as `Once` twice yields `Mintability(MintUnmintable)`; configuring `Limited(0)` yields `Mintability(InvalidMintabilityTokens)`.
-- InstructionExecutionError::Math: Numeric domain errors (overflow, divide‑by‑zero, negative value, not enough quantity). Example: burning more than available amount yields Math(NotEnoughQuantity).
-- InstructionExecutionError::InvalidParameter: Invalid instruction parameter or configuration (e.g., time trigger in the past). Use for malformed contract payloads.
-- InstructionExecutionError::Evaluate: DSL/spec mismatch for instruction shape or types. Example: wrong numeric spec for an asset value yields Evaluate(Type(AssetNumericSpec(..))).
-- InstructionExecutionError::InvariantViolation: Violation of a system invariant that cannot be expressed in other categories. Example: attempting to remove the last signatory.
-- InstructionExecutionError::Query: Wrapping of QueryExecutionFail when a query fails during instruction execution.
+Категориялар
+- Инструкция ExecutionERror::Тигеҙ: Фонд юҡ (актив, иҫәп, домен, НФТ, роль, триггер, рөхсәт, асыҡ асҡыс, блок, транзакция). Миҫал: юҡ итеү өсөн булмаған метамағлүмәттәр асҡысы бирә Fine(MetadataKey).
+- Инструкция Эксекуциялауы::Ҡабатлау: дубликаты теркәү йәки ҡапма-ҡаршылыҡлы идентификатор. Инструкция тибы һәм ҡабатланған IdBox составында.
+- Инструкция Эксекуция Эрророр:: Иҫәплек: Минтабильность инвариант боҙолған (`Once` ике тапҡыр арыған, `Limited(n)` overdrawn, йәки `Infinitely` өҙөргә тырышыу). Миҫалдар: `Once` тип билдәләнгән активты һуғыу ике тапҡыр `Mintability(MintUnmintable)` бирә; конфигурациялау `Limited(0)` бирә `Mintability(InvalidMintabilityTokens)`.
+- Инструкция ExecutionERror::Математика: Һанлы домен хаталары (өҫкә ағым, нуль буйынса бүленеш, кире ҡиммәт, етерлек күләмдә түгел). Миҫал: яндырыу күберәк булған сумманы бирә Математика(NotEnowQuantity).
+- Инструкция ExecutionERror::InvalidParate: Дөрөҫ булмаған инструкция параметры йәки конфигурацияһы (мәҫәлән, үткәндә ваҡыт триггеры). Ҡулланыу өсөн дөрөҫ формалаштырылған контракт файҙалы йөкләмәләр.
+- Инструкция ExecutionERreror::ДСЛ/спек тап килмәүе өсөн инструкция формаһы йәки төрҙәре. Миҫал: дөрөҫ булмаған һанлы спец өсөн актив ҡиммәте бирә Баһалау(Тип(АссетНумерикСпек(.))).
+- Инструкция ExecutionERror::InvariantVolay: Башҡа категорияларҙа белдереп булмаған система инвариантын боҙоу. Миҫал: һуңғы ҡул ҡуйыусыны алып ташларға тырышыу.
+- Инструкция ЭксекуляцияҺуңы:: Һорау: QueryExecution Fail уратып, ҡасан эҙләү инструкция башҡарыу ваҡытында уңышһыҙлыҡҡа осрай.
 
-QueryExecutionFail
-- Find: Missing entity in query context.
-- Conversion: Wrong type expected by a query.
-- NotFound: Missing live query cursor.
-- CursorMismatch / CursorDone: Cursor protocol errors.
-- FetchSizeTooBig: Server‑enforced limit exceeded.
-- GasBudgetExceeded: Query execution exceeded the gas/materialization budget.
-- InvalidSingularParameters: Unsupported parameters for singular queries.
-- CapacityLimit: Live query store capacity reached.
+Query Execution Fail
+- Тап: эҙләү контексында юғалған субъект.
+- Конверсия: Һорау буйынса көтөлгән тип яңылыш.
+- Not Found: Тере эҙләү курсоры юҡ.
+- CursorMishatch / CursorDone: Курсор протоколы хаталары.
+- FetchSizeTooBig: Сервер тәртибе сикләнгән.
+- GasBudgetEed: Һорау башҡарыу газ/материализация бюджетынан артып китте.
+- InvalidSingularParames: Яңғыҙ һорауҙар өсөн ярҙам ителмәгән параметрҙар.
+- Ҡоролма Limit: Тере эҙләү магазин ҡәҙере еткән.
 
-Testing Tips
-- Prefer unit tests close to the origin of an error. For example, asset numeric spec mismatch can be generated in data‑model tests.
-- Integration tests should cover end‑to‑end mapping for representative cases (e.g., duplicate register, missing key on remove, transfer without ownership).
-- Keep assertions resilient by matching enum variants instead of message substrings.
+Кәңәштәр һынау
+- Хатаның килеп сығышына яҡын берәмек һынауҙарын өҫтөн ҡуйыу. Мәҫәлән, активтар һанлы спец тап килмәүе мәғлүмәттәрҙең модель һынауҙарында генерацияларға мөмкин.
+- Интеграция һынауҙары репрезентатив осраҡтар өсөн аҙаҡҡы‐осонда картаға төшөрөүҙе ҡапларға тейеш (мәҫәлән, дубликаты регистры, алыу буйынса асҡыс юҡ, милекһеҙ тапшырыу).
+- Ҡаршылыҡтарҙы ныҡлы тотоу өсөн тап килтереп, enum варианттары урынына хәбәр подстрандар.

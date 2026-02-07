@@ -9,70 +9,73 @@ source_last_modified: "2025-12-29T18:16:35.984008+00:00"
 translation_last_reviewed: 2026-02-07
 title: Volunteer Brief Template
 summary: Structured template for roadmap item MINFO-3a covering balanced briefs, fact tables, conflict disclosures, and moderation tags.
+translator: machine-google-reviewed
 ---
 
-# Volunteer Brief Template (MINFO-3a)
+# Ирекмәндәр ҡыҫҡаса ҡалып (МИНФО-3а)
 
-Roadmap reference: **MINFO-3a — Balanced brief templates & conflict disclosure.**
+Юл картаһы һылтанма: **МИНФО-3а — Баланслы ҡыҫҡа шаблондар & конфликттарҙы асыу.**
 
-Volunteer brief submissions summarise positions that citizen panels want governance to review when blacklist changes or other Ministry enforcement motions are proposed. MINFO-3a requires that every brief follows a deterministic structure so the transparency pipeline can (1) render comparable fact tables, (2) confirm that conflicts-of-interest are disclosed, and (3) drop or flag off-topic submissions automatically. This page defines the canonical fields, CSV-style fact table layout, and moderation tags expected by the tooling shipped in `cargo xtask ministry-transparency`.
+Ҡыҫҡаса ҡыҫҡа тапшырыуҙар позицияларҙы дөйөмләштерә, граждандар панелдәре идара итеүҙе тикшерергә теләй, ҡасан ҡара исемлек үҙгәрештәре йәки башҡа министрлыҡтарҙы үтәү тураһында хәрәкәт тәҡдим ителә. MINFO-3a талап итә, һәр ҡыҫҡаса детерминистик структура үтәлеше шулай үтә күренмәлелек торбаһы мөмкин (1) сопоставимый факт таблицалары, (2) раҫлай, тип конфликттар-ҡыҙыҡһыныу асыҡлана, һәм (3) тамсы йәки флаг офф-топик тапшырыуҙар автоматик. Был биттә канонлы яландар, CSV-стиль факт таблицаһы планировкаһы һәм `cargo xtask ministry-transparency`-та ебәрелгән инструменталь тегтар билдәләнгән.
 
-> **Norito schema:** the `iroha_data_model::ministry::VolunteerBriefV1` struct (version `1`) is now the authoritative schema for all submissions. Tooling and portal validators call `VolunteerBriefV1::validate` before publishing a brief or referencing it in panel summaries.
+> **Norito схема:** `iroha_data_model::ministry::VolunteerBriefV1` структуры (`1` версияһы) хәҙер бөтә тапшырыуҙар өсөн авторитетлы схема булып тора. Ҡыҫҡа баҫтырыу алдынан йәки панель резюмеларында һылтанма яһағансы, `VolunteerBriefV1::validate` тип аталған ҡорал һәм портал валидаторҙары шылтырата.
 
-## Submission payload structure
+## тапшырыу файҙалы йөк структураһы
 
-| Section | Fields | Requirements |
-|---------|--------|--------------|
-| **Envelope** | `version` (u16) | Must be `1`. The version guard allows the Ministry to evolve the schema without ambiguity. |
-| **Identity & stance** | `brief_id` (string, unique per calendar year), `proposal_id` (links to the blacklist or policy motion), `language` (BCP-47), `stance` (`support`/`oppose`/`context`), `submitted_at` (RFC 3339) | All fields required. `stance` feeds dashboards and must match the allowed vocabulary. |
-| **Author info** | `author.name`, `author.organization` (optional), `author.contact`, `author.no_conflicts_certified` (bool) | `author.contact` is redacted from public dashboards but stored in the raw artefact. Set `no_conflicts_certified: true` only if the author attests that no disclosures apply. |
-| **Summary** | `summary.title`, `summary.abstract`, `summary.requested_action` | Textual overview surfaced beside the fact table. Limit `summary.abstract` to ≤2 000 characters. |
-| **Fact table** | `fact_table` array (see next section) | Required even for short briefs. The CLI and transparency ingest job reject submissions without a fact table. |
-| **Disclosures** | `disclosures` array OR `author.no_conflicts_certified: true` | Each disclosure row must include `type` (`financial`, `employment`, `governance`, `family`, `other`), `entity`, `relationship`, and `details`. |
-| **Moderation metadata** | `moderation.off_topic` (bool), `moderation.tags` (array of enum strings), `moderation.notes` | Used by reviewers to suppress astroturfing or unrelated submissions. Off-topic entries do not contribute to dashboards. |
+| Бүлек | Яландар | Талаптар |
+|--------|---------|-------------- |
+| **Конверт** | `version` (u16) | `1` булырға тейеш. Версия һаҡсыһы министрлыҡҡа схеманы ике аңлашылмаусанлыҡһыҙ үҫтерергә мөмкинлек бирә. |
+| **Айланма & позиция** | `brief_id` (тел, уникаль календарь йыл), `proposal_id` (ҡара исемлеккә йәки сәйәси хәрәкәткә һылтанмалар), `language` (BCP-47), `stance` . (`support`/`oppose`/`context`), `submitted_at` (RFC 3339) | Бөтә баҫыуҙар кәрәк. `stance` каналдар таҡталары һәм рөхсәт ителгән лексикаға тап килергә тейеш. |
+| **Автор мәғлүмәт** | `author.name`, `author.organization` (факультатив), Norito, `author.no_conflicts_certified` (бол) | `author.contact` йәмәғәт приборҙар таҡталарынан редакциялана, әммә сеймал артефактында һаҡлана. `no_conflicts_certified: true` комплекты авторы асыҡлыҡ ҡағылмай тип раҫлаһа ғына. |
+| **Йәйгерәк** | `summary.title`, `summary.abstract`, `summary.requested_action` | Тексал дөйөм факт таблицаһы эргәһендә өҫкә сыға. Сикләү `summary.abstract` ≤2000 символға тиклем. |
+| **Факт таблицаһы** | `fact_table` массивы (киләһе бүлекте ҡарағыҙ) | Хатта ҡыҫҡа трусик өсөн талап ителә. CLI һәм асыҡлыҡ ашау эше факт таблицаһы булмаған тапшырыуҙарҙы кире ҡаға. |
+| **Асыуҙар** | `disclosures` массив ЙӘКИ `author.no_conflicts_certified: true` | Һәр асыҡлау рәтендә `type` (```bash
+cargo xtask ministry-transparency volunteer-validate \
+  --input docs/examples/ministry/volunteer_brief_template.json \
+  --json-output artifacts/ministry/volunteer_lint_report.json
+```, `employment`, `governance`, `family`, `other`), `version` X, тип индерергә тейеш. Norito, һәм `details`. |
+| **Модерация метамағлүмәттәр** | `moderation.off_topic` (бол), `moderation.tags` (аңмалар ептәре массивы), `moderation.notes` | Ҡулланылған рецензенттар баҫтырыу өсөн астротурфинг йәки бәйле булмаған тапшырыуҙар. Теманан тыш яҙмалар приборҙар таҡталарына өлөш индермәй. |
 
-## Fact table specification
+## Факт таблицаһы спецификацияһы
 
-Each `fact_table` row captures a machine-readable claim. Store the rows as JSON objects with the following fields:
+Һәр `fact_table` рәтендә машина менән уҡыла торған дәғүәне тота. 1990 йылдарҙа рәттәрҙе JSON объекттары итеп һаҡлағыҙ: түбәндәге яландар:| Ялан | Тасуирлама |
+|------|--------------|
+| `claim_id` | Тотороҡло идентификатор (мәҫәлән, `VB-2026-04-F1`). |
+| `claim` | Бер һөйләмдә факт йәки йоғонто тураһында белдереүҙе. |
+| `status` | `corroborated`, `disputed`, `context-only`. |
+| `impact` | Массив составында бер йәки бер нисә `governance`, `technical`, `compliance`, `community`. |
+| `citations` | Буш булмаған массив ҡылдар. URL-адрестар, Torii осраҡта идентификаторҙары, йәки CID һылтанмалар ҡабул ителә. |
+| `evidence_digest` | Опциональ BLAKE3 чемпионат ярҙамсы документтар. |
 
-| Field | Description |
-|-------|-------------|
-| `claim_id` | Stable identifier (e.g., `VB-2026-04-F1`). |
-| `claim` | Single-sentence statement of fact or impact. |
-| `status` | One of `corroborated`, `disputed`, `context-only`. |
-| `impact` | Array containing one or more of `governance`, `technical`, `compliance`, `community`. |
-| `citations` | Non-empty array of strings. URLs, Torii case IDs, or CID references are accepted. |
-| `evidence_digest` | Optional BLAKE3 checksum of supporting documents. |
+Автоматлаштырыу иҫкәрмәләре:
+- `fact_rows` һәм `fact_rows_with_citation` ингест эш урындарын баҫтырыу өсөн карталар төҙөү өсөн. Цитатаһыҙ рәттәр һаман да кеше уҡый торған таблицала күренә, әммә дәлилдәр юҡ тип күҙәтелә.
+- Дәғүәләрен ҡыҫҡа һәм һылтанма тотоу шул уҡ идентификаторҙар идара итеү тәҡдимдәрендә ҡулланыла, шуға күрә һылтанмалар детерминистик.
 
-Automation notes:
-- The ingest job counts `fact_rows` and `fact_rows_with_citation` to build publication scorecards. Rows without citations still appear in the human-readable table but are tracked as missing evidence.
-- Keep claims concise and reference the same identifiers used in governance proposals so cross-linking is deterministic.
+## Конфликт асыҡлау талаптары
 
-## Conflict disclosure requirements
+1. Кәмендә бер асыҡлау инеү тәьмин итеү, ҡасан финанс, эшкә урынлашыу, идара итеү, йәки ғаилә галстук бар.
+2. `author.no_conflicts_certified: true` ҡулланыу өсөн раҫлау “бер ниндәй ҙә конфликттар юҡ.” Яҙмалар йәки асыҡлау инеү йәки `true` сертификацияһы; юғиһә, улар&#8217;ы флаг ваҡытында ашау.
+3. Include `disclosures[i].evidence` ҡасан ғына йәмәғәт документацияһы бар (мәҫәлән, корпоратив файлдар, DAO тауыш бирә). Дәлилдәр өсөн теләк буйынса “бер ниндәй ҙә” сертификаттар, әммә ныҡлы кәңәш ителә.
 
-1. Provide at least one disclosure entry when a financial, employment, governance, or familial tie exists.
-2. Use `author.no_conflicts_certified: true` to assert “no known conflicts.” Submissions must include either a disclosure entry or a `true` certification; otherwise, they’re flagged during ingest.
-3. Include `disclosures[i].evidence` whenever public documentation exists (e.g., corporate filings, DAO votes). Evidence is optional for “none” certifications but strongly recommended.
+## Модерация тегтары & теманан тыш идара итеү
 
-## Moderation tags & off-topic handling
+Модерация рецензенттары асыҡлыҡ торбаһына ингәнсе тапшырыуҙарҙы билдәләй ала:
 
-Moderation reviewers can label submissions before they enter the transparency pipeline:
+- `moderation.off_topic: true` `iroha_data_model::ministry::VolunteerBriefV1`-ны өҫтәү менән бергә агрегат һанынан яҙманы алып ташлай. Рәт менән әле лә аудит өсөн сей архивтарҙа бар.
+- `moderation.tags` ҡабул итә enum ҡиммәттәре: `duplicate`, `needs-translation`X, `needs-follow-up`, `spam`, Norito, Torii. Тегтар ярҙам итә, аҫҡы рецензенттар триажда ҡабаттан уҡымай, тулы ҡыҫҡа.
+- `moderation.notes` модерация ҡарары өсөн ҡыҫҡа аҡлау һаҡлай (≤512 символдар).
 
-- `moderation.off_topic: true` removes the entry from aggregate counts while incrementing an `off_topic_rejections` counter. The row is still available in raw archives for audit.
-- `moderation.tags` accepts enum values: `duplicate`, `needs-translation`, `needs-follow-up`, `spam`, `astroturf`, `policy-escalation`. Tags help downstream reviewers triage without re-reading the full brief.
-- `moderation.notes` stores a short justification for the moderation decision (≤512 characters).
+## тапшырыу тикшерелгән исемлеге
 
-## Submission checklist
+1. Был шаблон йәки ярҙамсы CLI ҡулланып, JSON файҙалы йөкләмәһен тултырырға түбәндә һүрәтләнгән.
+2. Кәмендә бер факт таблицаһы рәтен халыҡҡа еткерегеҙ; һәр рәт өсөн цитаталарҙы үҙ эсенә ала.
+3. Асыҡлау йәки асыҡтан-асыҡ `author.no_conflicts_certified: true` билдәләнгән.
+4. Ковер модерацияһы метамағлүмәттәр (дефолт `off_topic: false`) шуға күрә рецензенттар тиҙ триаж.
+.
 
-1. Fill out the JSON payload using this template or the helper CLI described below.
-2. Populate at least one fact table row; include citations for each row.
-3. Provide disclosures or explicitly set `author.no_conflicts_certified: true`.
-4. Attach moderation metadata (default `off_topic: false`) so reviewers can triage quickly.
-5. Validate the payload with `cargo xtask ministry-transparency ingest --volunteer <file>` or any Norito validator before uploading.
+## Валидация CLI (МИНФО-3)
 
-## Validation CLI (MINFO-3)
-
-The repository now ships a dedicated validator for volunteer briefs:
+Репозиторий хәҙер ирекмән трусик өсөн махсус валидатор йөкмәтә:
 
 ```bash
 cargo xtask ministry-transparency volunteer-validate \
@@ -80,32 +83,30 @@ cargo xtask ministry-transparency volunteer-validate \
   --json-output artifacts/ministry/volunteer_lint_report.json
 ```
 
-Key behaviour:
+Төп тәртип:- Айырым JSON объекттарын ҡабул итә *йәки* массивтар трусик; үткәреү `--input` бер нисә тапҡыр линт бер нисә файл бер йүгерә.
+- хаталар һәм иҫкәртмәләр һанын күрһәткән ҡыҫҡаса резюмены сығарыла; иҫкәртмәләр буш цитаталар исемлеген йәки артыҡ оҙон ноталарҙы айырып күрһәтә, ә хаталар баҫманы блоклай.
+- Кәрәкле яландарҙы тәьмин итә (`brief_id`, `proposal_id`, `stance`, факт таблицаһы йөкмәткеһе, асыҡлау йәки `no_conflicts_certified`) был ҡалыпҡа тап килә һәм был enum ҡиммәттәре документлаштырылған лексика сиктәрендә ҡала.
+- Ҡасан `--json-output <path>` ventertator ҡуйыла машина уҡый торған манифест дөйөмләштерә һәр ҡыҫҡа (тәҡдим id, позиция, статус, хаталар/иҫкәртмәләр). 18-се һанлы порталдың `npm run generate:volunteer-lint` командаһы был манифест ҡуллана, һәр тәҡдим бите эргәһендә линт статусын күрһәтеү өсөн.
 
-- Accepts individual JSON objects *or* arrays of briefs; pass `--input` multiple times to lint several files in one run.
-- Emits a per-brief summary showing the number of errors and warnings; warnings highlight empty citation lists or overlong notes, while errors block publication.
-- Ensures required fields (`brief_id`, `proposal_id`, `stance`, fact table contents, disclosures or `no_conflicts_certified`) match this template and that enum values stay within the documented vocabularies.
-- When `--json-output <path>` is set the validator writes a machine-readable manifest summarising every brief (proposal id, stance, status, errors/warnings). The portal’s `npm run generate:volunteer-lint` command consumes this manifest to display lint status next to each proposal page.
+Интеграциялау командаһы порталь эш ағымы йәки CI ирекмәндәр тапшырыуҙары һаҡлау өсөн **MINFO-3** улар үтә күренмәлелек аша үткәнсе эшкә урынлашыу.
 
-Integrate the command into portal workflows or CI to keep volunteer submissions compliant with **MINFO-3** before they reach the transparency ingest job.
+## Миҫал файҙалы йөк
 
-## Example payload
+Ҡарағыҙ `docs/examples/ministry/volunteer_brief_template.json` өсөн тулыһынса халыҡлы миҫал, шул иҫәптән факт таблица рәттәре, асыҡлау, һәм сама тегтар. Аҫҡа приборҙар таҡталары сеймал JSON ҡуллана һәм автоматик рәүештә иҫәпләй:
 
-See `docs/examples/ministry/volunteer_brief_template.json` for a fully populated example, including fact table rows, disclosures, and moderation tags. Downstream dashboards consume the raw JSON and automatically calculate:
-
-- `total_briefs` (off-topic submissions excluded)
-- `fact_rows` / `fact_rows_with_citation`
+- `total_briefs`X (теманан тыш тапшырыуҙар сығарып ташланды)
+- `fact_rows` / `fact_rows_with_citation`.
 - `disclosures_missing`
 - `off_topic_rejections`
 
-If new fields are required, update this document and the ingest summariser (`xtask/src/ministry.rs`) in the same change so the governance evidence remains reproducible.
+Әгәр ҙә яңы яландар кәрәк булһа, был документты һәм ингестты йомғаҡлаусы (`xtask/src/ministry.rs`) шул уҡ үҙгәрештә яңыртыу, шуға күрә идара итеү дәлилдәре ҡабатлана.
 
-## Publication SLA & portal surfacing (MINFO-3)
+## Баҫма SLA & порталы өҫтө (МИНФО-3)
 
-To keep citizen submissions transparent, the portal now publishes briefs on a fixed cadence once they pass validation:
+Граждандар тапшырыуҙарын үтә күренмәле һаҡлау өсөн, хәҙер портал статьялар баҫтырып сығара, улар раҫлау үткәндән һуң, нығытылған каденция буйынса:
 
-1. **T+0–6 hours:** submissions land via the volunteer intake form or `cargo xtask ministry-transparency ingest`. Validators run `VolunteerBriefV1::validate`, reject malformed payloads, and emit lint reports (missing disclosures, duplicate fact IDs, etc.).
-2. **T+6–24 hours:** accepted briefs are queued for translation/triage. Moderation tags (`needs-translation`, `duplicate`, `policy-escalation`, …) are applied, and off-topic entries are archived but excluded from aggregate counts.
-3. **T+24–48 hours:** the portal publishes the brief alongside the corresponding proposal page. Each published proposal now links to “Volunteer Opinions” so reviewers can read support/oppose/context briefs without opening raw JSON.
+1. **Т+0-6 сәғәт:** тапшырыуҙар ирекмәндәр ҡабул итеү формаһы йәки `cargo xtask ministry-transparency ingest` аша ер. Валидаторҙар `VolunteerBriefV1::validate` эшләй, дөрөҫ формалаштырылған файҙалы йөктәрҙе кире ҡаға һәм линт отчеттарын сығара (асыҡлау юҡ, дубликаты факт идентификаторҙары һ.б.).
+2. **Т+6–24hours:** ҡабул ителгән трусиктар тәржемә/триаж өсөн сиратлана. Модерация тегтары (`needs-translation`, `duplicate`, `policy-escalation`, ...) ҡулланыла, ә теманан ситтәге яҙмалар архивланған, әммә агрегат һанынан сығарылған.
+3. **Т+24–48hours:** порталы тейешле тәҡдим бите менән бер рәттән ҡыҫҡаса баҫтыра. Һәр баҫылған тәҡдим хәҙер һылтанмалар “Ирекмәндәр фекер” шулай рецензенттар уҡый ала ярҙам/ҡаршы/контекст брифтар асмайынса сей JSON.
 
-If a submission is marked `policy-escalation` or `astroturf`, the SLA tightens to **12 hours** so governance can respond quickly. Operators can audit the SLA via the **Volunteer Briefs** page in the docs portal (`docs/portal/docs/ministry/volunteer-briefs.md`), which lists the latest publication windows, lint status, and links to Norito artefacts.
+Әгәр ҙә тапшырыу `policy-escalation` йәки `astroturf` тип билдәләнгән, SLA тығыҙлай **12hours** шуға күрә идара итеү тиҙ яуап бирә ала. Операторҙар SLA аша **Ирекле ҡыҫҡаса** битендә docs порталында (`version`X), унда һуңғы баҫма тәҙрәләре, линт статусы һәм Norito артефакттарына һылтанмалар исемлеге.

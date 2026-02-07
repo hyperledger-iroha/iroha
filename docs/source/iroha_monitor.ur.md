@@ -6,46 +6,47 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 05149d624d680d04433be41a4525538c97bd103ae7f80dda2613a6adb181a93d
 source_last_modified: "2026-01-03T18:07:57.206662+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Iroha Monitor
+# Iroha مانیٹر
 
-The refactored Iroha monitor pairs a lightweight terminal UI with animated
-festival ASCII art and the traditional Etenraku theme.  It focuses on two
-simple workflows:
+ریفیکٹرڈ Iroha مانیٹر جوڑے کے ساتھ ہلکا پھلکا ٹرمینل UI
+فیسٹیول ASCII آرٹ اور روایتی Etenraku تھیم۔  اس کی توجہ دو پر ہے
+سادہ ورک فلو:
 
-- **Spawn-lite mode** – start ephemeral status/metrics stubs that mimic peers.
-- **Attach mode** – point the monitor at existing Torii HTTP endpoints.
+۔
+- ** منسلک موڈ ** - موجودہ Torii HTTP اختتامی مقامات پر مانیٹر کی نشاندہی کریں۔
 
-The UI renders three regions on every refresh:
+UI ہر ریفریش پر تین خطوں کو پیش کرتا ہے:
 
-1. **Torii skyline header** – animated torii gate, Mt. Fuji, koi waves, and star
-   field that scroll in sync with the refresh cadence.
-2. **Summary strip** – aggregated blocks/transactions/gas plus refresh timing.
-3. **Peer table & festival whispers** – peer rows on the left, rotating event
-   log on the right that captures warnings (timeouts, oversized payloads, etc.).
-4. **Optional gas trend** – enable `--show-gas-trend` to append a sparkline
-   summarising total gas usage across all peers.
+1.
+   فیلڈ جو ریفریش کیڈینس کے ساتھ ہم آہنگی میں سکرول کرتے ہیں۔
+2. ** خلاصہ پٹی ** - مجموعی بلاکس/لین دین/گیس کے علاوہ ریفریش ٹائمنگ۔
+3.
+   اس دائیں طرف لاگ ان کریں جو انتباہات (ٹائم آؤٹ ، بڑے پے لوڈز وغیرہ) پر قبضہ کرتا ہے۔
+4. ** اختیاری گیس کا رجحان ** - `--show-gas-trend` کو ایک چنگاری کو شامل کرنے کے لئے فعال کریں
+   تمام ساتھیوں میں گیس کے کل استعمال کا خلاصہ پیش کرنا۔
 
-New in this refactor:
+اس ریفیکٹر میں نیا:
 
-- Animated Japanese-style ASCII scene with koi, torii, and lanterns.
-- Simplified command surface (`--spawn-lite`, `--attach`, `--interval`).
-- Intro banner with optional audio playback of the gagaku theme (external MIDI
-  player or the built-in soft synth when the platform/audio stack supports it).
-- `--no-theme` / `--no-audio` flags for CI or fast smoke runs.
-- Per-peer “mood” column showing the latest warning, commit time, or uptime.
+- KOI ، Torii اور لالٹینوں کے ساتھ متحرک جاپانی طرز ASCII منظر۔
+- آسان کمانڈ سطح (`--spawn-lite` ، `--attach` ، `--interval`)۔
+- گاگاکو تھیم (بیرونی مڈی) کے اختیاری آڈیو پلے بیک کے ساتھ انٹرو بینر
+  جب پلیٹ فارم/آڈیو اسٹیک اس کی حمایت کرتا ہے تو پلیئر یا بلٹ ان نرم ترکیب)۔
+- `--no-theme` / `--no-audio` CI کے لئے جھنڈے یا تیز دھواں رنز۔
+- فی پیر "موڈ" کالم تازہ ترین انتباہ ، کمٹ ٹائم ، یا اپ ٹائم دکھا رہا ہے۔
 
-## Quickstart
+## کوئیک اسٹارٹ
 
-Build the monitor and run it against the stubbed peers:
+مانیٹر بنائیں اور اسے ضائع کرنے والے ساتھیوں کے خلاف چلائیں:
 
 ```bash
 cargo run -p iroha_monitor -- --spawn-lite --peers 3
 ```
 
-Attach to existing Torii endpoints:
+موجودہ Torii اختتامی نکات سے منسلک:
 
 ```bash
 cargo run -p iroha_monitor -- \
@@ -53,13 +54,13 @@ cargo run -p iroha_monitor -- \
   --interval 500
 ```
 
-CI-friendly invocation (skip intro animation and audio):
+سی-دوستانہ درخواست (انٹرو انیمیشن اور آڈیو کو چھوڑیں):
 
 ```bash
 cargo run -p iroha_monitor -- --spawn-lite --no-theme --no-audio
 ```
 
-### CLI flags
+### CLI جھنڈے
 
 ```
 --spawn-lite         start local status/metrics stubs (default if no --attach)
@@ -77,56 +78,54 @@ cargo run -p iroha_monitor -- --spawn-lite --no-theme --no-audio
                      cap headless fallback to N frames (0 = unlimited)
 ```
 
-## Theme intro
+## تھیم انٹرو
 
-By default, startup plays a short ASCII animation while the Etenraku score
-begins.  Audio selection order:
+پہلے سے طے شدہ طور پر ، اسٹارٹ اپ ایک مختصر ASCII حرکت پذیری کھیلتا ہے جبکہ ایٹینراکو اسکور ہوتا ہے
+شروع ہوتا ہے۔  آڈیو سلیکشن آرڈر:
 
-1. If `--midi-player` is provided, generate the demo MIDI (or use `--midi-file`)
-   and spawn the command.
-2. Otherwise, on macOS/Windows (or Linux with `--features iroha_monitor/linux-builtin-synth`)
-   render the score with the built-in gagaku soft synth (no external audio
-   assets required).
-3. If audio is disabled or initialization fails, the intro still prints the
-   animation and immediately enters the TUI.
+1. اگر `--midi-player` فراہم کیا گیا ہے تو ، ڈیمو MIDI تیار کریں (یا `--midi-file` استعمال کریں)
+   اور کمانڈ کو فروغ دیں۔
+2. دوسری صورت میں ، میکوس/ونڈوز پر (یا `--features iroha_monitor/linux-builtin-synth` کے ساتھ لینکس)
+   اسکور کو بلٹ میں گاگاکو نرم سنتھ (کوئی بیرونی آڈیو نہیں) کے ساتھ پیش کریں
+   اثاثوں کی ضرورت ہے)۔
+3. اگر آڈیو غیر فعال ہے یا ابتدا میں ناکام ہوجاتا ہے تو ، تعارف اب بھی پرنٹ کرتا ہے
+   حرکت پذیری اور فوری طور پر TUI میں داخل ہوتا ہے۔
 
-The CPAL-powered synth auto-enables on macOS and Windows. On Linux it is
-opt-in to avoid missing ALSA/Pulse headers during workspace builds; enable it
-with `--features iroha_monitor/linux-builtin-synth` if your system provides a
-working audio stack.
+سی پی اے ایل سے چلنے والا سنتھ آٹو انبلز میکوس اور ونڈوز پر۔ لینکس پر یہ ہے
+ورک اسپیس بلڈز کے دوران ALSA/نبض کے ہیڈر سے محروم ہونے سے بچنے کے لئے آپٹ ان ؛ اسے فعال کریں
+`--features iroha_monitor/linux-builtin-synth` کے ساتھ اگر آپ کا سسٹم ایک فراہم کرتا ہے
+ورکنگ آڈیو اسٹیک۔
 
-Use `--no-theme` or `--no-audio` when running in CI or headless shells.
+جب CI یا ہیڈ لیس گولوں میں چل رہا ہو تو `--no-theme` یا `--no-audio` استعمال کریں۔
 
-The soft synth now follows the arrangement captured in *MIDI synth design in
-Rust.pdf*: hichiriki and ryūteki share a heterophonic melody while the shō
-provides the aitake pads described in the document.  The timed note data lives
-in `etenraku.rs`; it powers both the CPAL callback and the generated demo MIDI.
-When audio output is unavailable the monitor skips playback but still renders
-the ASCII animation.
+نرم سنتھ اب *مڈی سنتھ ڈیزائن میں پکڑے گئے انتظامات کی پیروی کرتا ہے
+رسٹ ڈاٹ پی ڈی ایف*: ہائچیرکی اور رائٹکی ایک ہیٹروفونک راگ کا اشتراک کرتے ہیں جبکہ شی
+دستاویز میں بیان کردہ آئٹیک پیڈ فراہم کرتا ہے۔  وقت کا نوٹ ڈیٹا رہتا ہے
+`etenraku.rs` میں ؛ یہ سی پی اے ایل کال بیک اور پیدا شدہ ڈیمو مڈی دونوں کو طاقت دیتا ہے۔
+جب آڈیو آؤٹ پٹ دستیاب نہیں ہے تو مانیٹر پلے بیک کو چھوڑ دیتا ہے لیکن پھر بھی پیش کرتا ہے
+ASCII حرکت پذیری۔
 
-## UI overview
+## UI جائزہ- ** ہیڈر آرٹ ** - `AsciiAnimator` کے ذریعہ ہر فریم تیار کیا ؛ کوئی ، توری لالٹینز ،
+  اور مسلسل حرکت دینے کے لئے لہریں بہتی ہیں۔
+- ** خلاصہ پٹی ** - آن لائن ساتھیوں کو ظاہر کرتا ہے ، ہم مرتبہ کی گنتی کی اطلاع ، بلاک کل ،
+  غیر خالی بلاک کل ، TX منظوری/رد jections ن ، گیس کا استعمال ، اور ریفریش ریٹ۔
+- ** پیر ٹیبل ** - عرف/اختتامی نقطہ ، بلاکس ، لین دین ، ​​قطار کا سائز کے کالم ،
+  گیس کا استعمال ، تاخیر ، اور "موڈ" اشارہ (انتباہ ، کمٹ ٹائم ، اپ ٹائم)۔
+- ** میلے کی وسوسے ** - انتباہات کا رولنگ لاگ (کنکشن کی غلطیاں ، پے لوڈ
+  خلاف ورزیوں کو محدود کریں ، سست اختتامی نکات)۔  پیغامات الٹ ہیں (سب سے تازہ ترین)
 
-- **Header art** – generated each frame by `AsciiAnimator`; koi, torii lanterns,
-  and waves drift to give continuous motion.
-- **Summary strip** – shows online peers, reported peer count, block totals,
-  non-empty block totals, tx approvals/rejections, gas usage, and refresh rate.
-- **Peer table** – columns for alias/endpoint, blocks, transactions, queue size,
-  gas usage, latency, and a “mood” hint (warnings, commit time, uptime).
-- **Festival whispers** – rolling log of warnings (connection errors, payload
-  limit breaches, slow endpoints).  Messages are reversed (latest on top).
+کی بورڈ شارٹ کٹ:
 
-Keyboard shortcuts:
+- `n` / دائیں / نیچے - اگلے ہم مرتبہ پر توجہ مرکوز کریں۔
+- `p` / بائیں / اوپر - پچھلے ہم مرتبہ کی توجہ مرکوز کریں۔
+- `q` / ESC / CTRL-C- ٹرمینل سے باہر نکلیں اور بحال کریں۔
 
-- `n` / Right / Down – move focus to the next peer.
-- `p` / Left / Up – move focus to the previous peer.
-- `q` / Esc / Ctrl-C – exit and restore the terminal.
+مانیٹر ایک متبادل اسکرین بفر کے ساتھ کراس ٹرم + رتاتوئی کا استعمال کرتا ہے۔ اس سے باہر نکلیں
+کرسر کو بحال کرتا ہے اور اسکرین کو صاف کرتا ہے۔
 
-The monitor uses crossterm + ratatui with an alternate-screen buffer; on exit it
-restores the cursor and clears the screen.
+## دھواں ٹیسٹ
 
-## Smoke tests
-
-The crate ships integration tests that exercise both modes and the HTTP limits:
+کریٹ جہاز انضمام کے ٹیسٹ جو دونوں طریقوں اور HTTP کی حدود کو استعمال کرتے ہیں:
 
 - `spawn_lite_smoke_renders_frames`
 - `attach_mode_with_stubs_runs_cleanly`
@@ -134,46 +133,46 @@ The crate ships integration tests that exercise both modes and the HTTP limits:
 - `status_limit_warning_is_rendered`
 - `attach_mode_with_slow_peer_renders_multiple_frames`
 
-Run just the monitor tests:
+صرف مانیٹر ٹیسٹ چلائیں:
 
 ```bash
 cargo test -p iroha_monitor -- --nocapture
 ```
 
-The workspace has heavier integration tests (`cargo test --workspace`). Running
-the monitor tests separately is still useful for quick validation when you do
-not need the full suite.
+ورک اسپیس میں بھاری انضمام ٹیسٹ (`cargo test --workspace`) ہیں۔ چل رہا ہے
+جب آپ کرتے ہیں تو مانیٹر ٹیسٹ الگ الگ فوری توثیق کے لئے مفید ہے
+مکمل سویٹ کی ضرورت نہیں ہے۔
 
-## Updating screenshots
+## اسکرین شاٹس کو اپ ڈیٹ کرنا
 
-The docs demo now focuses on the torii skyline and peer table.  To refresh the
-assets, run:
+دستاویزات ڈیمو اب توری اسکائی لائن اور پیر ٹیبل پر مرکوز ہیں۔  تازہ دم کرنے کے لئے
+اثاثے ، چلائیں:
 
 ```bash
 make monitor-screenshots
 ```
 
-This wraps `scripts/iroha_monitor_demo.sh` (spawn-lite mode, fixed seed/viewport,
-no intro/audio, dawn palette, art-speed 1, headless cap 24) and writes the
-SVG/ANSI frames plus `manifest.json` and `checksums.json` into
-`docs/source/images/iroha_monitor_demo/`. `make check-iroha-monitor-docs`
-wraps both CI guards (`ci/check_iroha_monitor_assets.sh` and
-`ci/check_iroha_monitor_screenshots.sh`) so generator hashes, manifest fields,
-and checksums stay in sync; the screenshot check also ships as
-`python3 scripts/check_iroha_monitor_screenshots.py`. Pass `--no-fallback` to
-the demo script if you want the capture to fail instead of falling back to the
-baked frames when the monitor output is empty; when fallback is used the raw
-`.ans` files are rewritten with the baked frames so the manifest/checksums stay
-deterministic.
+اس سے `scripts/iroha_monitor_demo.sh` (اسپان-لائٹ موڈ ، فکسڈ بیج/ویو پورٹ ،
+کوئی انٹرو/آڈیو ، ڈان پیلیٹ ، آرٹ اسپیڈ 1 ، ہیڈ لیس ٹوپی 24) اور لکھتا ہے
+SVG/ANSI فریم پلس `manifest.json` اور `checksums.json` IN
+`docs/source/images/iroha_monitor_demo/`۔ `make check-iroha-monitor-docs`
+دونوں سی آئی گارڈز (`ci/check_iroha_monitor_assets.sh` اور کو لپیٹتے ہیں
+`ci/check_iroha_monitor_screenshots.sh`) تو جنریٹر ہیشس ، منشور فیلڈز ،
+اور چیکمس ہم آہنگی میں رہتے ہیں۔ اسکرین شاٹ چیک بھی جہازوں کے طور پر
+`python3 scripts/check_iroha_monitor_screenshots.py`۔ `--no-fallback` کو پاس کریں
+ڈیمو اسکرپٹ اگر آپ چاہتے ہیں کہ کیپچر واپس گرنے کے بجائے ناکام ہوجائے
+بیکڈ فریم جب مانیٹر آؤٹ پٹ خالی ہو۔ جب فال بیک کا استعمال کیا جاتا ہے
+`.ans` فائلوں کو بیکڈ فریموں کے ساتھ دوبارہ لکھا جاتا ہے تاکہ مینی فیسٹ/چیکسم قیام کریں
+تعصب پسند
 
-## Deterministic screenshots
+## عین مطابق اسکرین شاٹس
 
-The shipped snapshots live in `docs/source/images/iroha_monitor_demo/`:
+بھیجے گئے اسنیپ شاٹس `docs/source/images/iroha_monitor_demo/` میں رہتے ہیں:
 
-![monitor overview](images/iroha_monitor_demo/iroha_monitor_demo_overview.svg)
-![monitor pipeline](images/iroha_monitor_demo/iroha_monitor_demo_pipeline.svg)
+! [نگرانی کا جائزہ] (images/iroha_monitor_demo/iroha_monitor_demo_overview.svg)
+! [پائپ لائن کی نگرانی کریں] (images/iroha_monitor_demo/iroha_monitor_demo_pipeline.svg)
 
-Reproduce them with a fixed viewport/seed:
+انہیں ایک مقررہ ویوپورٹ/بیج کے ساتھ دوبارہ پیش کریں:
 
 ```bash
 scripts/iroha_monitor_demo.sh \
@@ -182,26 +181,24 @@ scripts/iroha_monitor_demo.sh \
   --seed iroha-monitor-demo
 ```
 
-The capture helper fixes `LANG`/`LC_ALL`/`TERM`, forwards
-`IROHA_MONITOR_DEMO_SEED`, mutes audio, and pins the art theme/speed so the
-frames render identically across platforms. It writes `manifest.json` (generator
-hashes + sizes) and `checksums.json` (SHA-256 digests) under
-`docs/source/images/iroha_monitor_demo/`; CI runs
-`ci/check_iroha_monitor_assets.sh` and `ci/check_iroha_monitor_screenshots.sh`
-to fail when the assets drift from the recorded manifests.
+کیپچر ہیلپر نے `LANG`/`LC_ALL`/`TERM` ، فارورڈز کو ٹھیک کیا ہے
+`IROHA_MONITOR_DEMO_SEED` ، آڈیو کو خاموش کرتا ہے ، اور آرٹ تھیم/اسپیڈ کو پن کرتا ہے
+فریموں نے پلیٹ فارمز میں یکساں طور پر رینڈر کیا۔ یہ `manifest.json` (جنریٹر لکھتا ہے
+ہیشس + سائز) اور `checksums.json` (SHA-256 ڈائجسٹس) کے تحت
+`docs/source/images/iroha_monitor_demo/` ؛ CI چلتا ہے
+`ci/check_iroha_monitor_assets.sh` اور `ci/check_iroha_monitor_screenshots.sh`
+ناکام ہونے کے لئے جب اثاثے ریکارڈ شدہ ظاہر ہوتے ہیں۔
 
-## Troubleshooting
+## خرابیوں کا سراغ لگانا- ** کوئی آڈیو آؤٹ پٹ ** - مانیٹر خاموش پلے بیک پر واپس آتا ہے اور جاری رہتا ہے۔
+- ** ہیڈ لیس فال بیک جلدی سے باہر نکل جاتا ہے ** - مانیٹر کیپس ہیڈ لیس جوڑے کے پاس چلتی ہے
+  جب یہ سوئچ نہیں کرسکتا ہے تو درجن فریم (پہلے سے طے شدہ وقفے پر تقریبا 12 سیکنڈ)
+  خام وضع میں ٹرمینل ؛ اسے چلانے کے ل I `--headless-max-frames 0` پاس کریں
+  غیر معینہ مدت کے لئے.
+- ** بڑے اسٹیٹس پے لوڈز ** - ہم مرتبہ کے موڈ کالم اور فیسٹیول لاگ
+  تشکیل شدہ حد (`128 KiB`) کے ساتھ `body exceeds …` دکھائیں۔
+- ** سست ساتھی ** - ایونٹ لاگ ریکارڈز ٹائم آؤٹ وارننگز ؛ اس ہم مرتبہ پر توجہ دیں
+  قطار کو اجاگر کریں۔
 
-- **No audio output** – the monitor falls back to muted playback and continues.
-- **Headless fallback exits early** – the monitor caps headless runs to a couple
-  dozen frames (about 12 seconds at the default interval) when it cannot switch
-  the terminal into raw mode; pass `--headless-max-frames 0` to keep it running
-  indefinitely.
-- **Oversized status payloads** – the peer’s mood column and the festival log
-  show `body exceeds …` with the configured limit (`128 KiB`).
-- **Slow peers** – the event log records timeout warnings; focus that peer to
-  highlight the row.
-
-Enjoy the festival skyline!  Contributions for additional ASCII motifs or
-metrics panels are welcome—keep them deterministic so clusters render the same
-frame-by-frame regardless of terminal.
+میلہ اسکائی لائن سے لطف اٹھائیں!  اضافی ASCII شکلوں کے لئے شراکت یا
+میٹرکس پینلز کا خیرمقدم کیا جاتا ہے - ان کا تعی .ن رکھیں لہذا کلسٹر ایک ہی ریل کرتے ہیں
+ٹرمینل سے قطع نظر فریم بہ فریم۔

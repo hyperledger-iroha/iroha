@@ -9,82 +9,79 @@ source_last_modified: "2026-01-05T09:28:12.023255+00:00"
 translation_last_reviewed: 2026-02-07
 title: MOCHI Architecture Plan
 description: High-level design for the MOCHI local-network GUI supervisor.
+translator: machine-google-reviewed
 ---
 
-# MOCHI Architecture Plan
+# MOCHI ճարտարապետական պլան
 
 
-## Goals
+## Գոլեր
 
-- Bootstrap single-peer or multi-peer (four-node BFT) local networks quickly.
-- Wrap `kagami`, `irohad`, and supporting binaries in a friendly GUI workflow.
-- Surface live block, event, and state data through Torii HTTP/WebSocket endpoints.
-- Provide structured builders for transactions and Iroha Special Instructions (ISI), with local signing and submission.
-- Manage snapshots, re-genesis flows, and configuration tweaks without editing files manually.
-- Ship as a single cross-platform Rust binary with no webview or Docker dependency.
+- Արագորեն բեռնաթափեք մեկ հասակակից կամ բազմակողմանի (չորս հանգույց BFT) տեղական ցանցերը:
+- Փաթեթավորեք `kagami`, `irohad` և աջակցող երկուականները բարեկամական GUI աշխատանքային հոսքի մեջ:
+- Մակերեւութային կենդանի բլոկ, իրադարձություն և վիճակի տվյալները Torii HTTP/WebSocket վերջնակետերի միջոցով:
+- Տրամադրել կառուցվածքային շինարարներ գործարքների և Iroha Հատուկ հրահանգների (ISI) համար՝ տեղական ստորագրությամբ և ներկայացմամբ:
+- Կառավարեք նկարները, վերարտադրման հոսքերը և կազմաձևման փոփոխությունները՝ առանց ֆայլերը ձեռքով խմբագրելու:
+- Առաքեք որպես մեկ խաչաձեւ հարթակ Rust երկուական առանց վեբ դիտման կամ Docker կախվածության:
 
-## Architecture Overview
+## Ճարտարապետության ակնարկ
 
-MOCHI is split into two primary crates housed in a new `/mochi` directory (see the
-[MOCHI Quickstart](mochi/quickstart.md) for build and usage instructions):
+MOCHI-ն բաժանված է երկու հիմնական տուփերի, որոնք տեղակայված են նոր `/mochi` գրացուցակում (տես՝
+[MOCHI Quickstart] (mochi/quickstart.md) կառուցման և օգտագործման հրահանգների համար.
 
-1. `mochi-core`: a headless library responsible for configuration templating, key and genesis material generation, supervising child processes, driving Torii clients, and managing filesystem state.
-2. `mochi-ui-egui`: a desktop application built on `egui`/`eframe` that renders the user interface and delegates all orchestration through the `mochi-core` API.
+1. `mochi-core`. անգլուխ գրադարան, որը պատասխանատու է կազմաձևման ձևանմուշների, հիմնական և ծագման նյութերի ստեղծման, երեխայի գործընթացները վերահսկելու, Torii հաճախորդներ վարելու և ֆայլային համակարգի վիճակի կառավարման համար:
+2. `mochi-ui-egui`. `egui`/`eframe`-ի վրա կառուցված աշխատասեղանի հավելված, որը մատուցում է օգտատիրոջ միջերեսը և պատվիրակում է ամբողջ նվագախումբը `mochi-core` API-ի միջոցով:
 
-Additional front ends (for example a Tauri shell) can hook into `mochi-core` later without reworking the supervisor logic.
+Լրացուցիչ առջևի ծայրերը (օրինակ՝ Tauri կեղևը) կարող են ավելի ուշ միացնել `mochi-core`-ին՝ առանց վերամշակելու վերահսկիչի տրամաբանությունը:
 
-## Process Model
+## Գործընթացի մոդել
 
-- Peer nodes run as separate `irohad` child processes. MOCHI never links the peer as a library, avoiding unstable internal APIs and matching production deployment topologies.
-- Genesis and key material are created through `kagami` invocations with user provided inputs (chain ID, initial accounts, assets).
-- Configuration files are generated from TOML templates, filling in Torii and P2P ports, storage paths, snapshot settings, and trusted peer lists. Generated configs are stored beneath a per-network workspace directory.
-- The supervisor tracks process lifecycles, streams stdout/stderr for log surfaces, and polls `/status`, `/metrics`, and `/configuration` endpoints for health.
-- A thin Torii client layer wraps HTTP and WebSocket calls, leaning on the Iroha Rust client crates where possible to avoid reimplementing SCALE encoding/decoding.
+- Գործընկերների հանգույցներն աշխատում են որպես առանձին `irohad` երեխա գործընթացներ: MOCHI-ն երբեք չի կապում գործընկերներին որպես գրադարան՝ խուսափելով անկայուն ներքին API-ներից և արտադրության տեղակայման համապատասխան տոպոլոգիաներից:
+- Ծննդոցը և հիմնական նյութը ստեղծվում են `kagami` կանչերի միջոցով՝ օգտագործողի կողմից տրամադրված մուտքերով (շղթայի ID, սկզբնական հաշիվներ, ակտիվներ):
+- Կազմաձևման ֆայլերը ստեղծվում են TOML ձևանմուշներից՝ լրացնելով Torii և P2P նավահանգիստները, պահեստավորման ուղիները, պատկերի կարգավորումները և վստահելի գործընկերների ցուցակները: Ստեղծված կազմաձևերը պահվում են յուրաքանչյուր ցանցի աշխատանքային տարածքի գրացուցակի տակ:
+- Վերահսկիչը հետևում է գործընթացի կյանքի ցիկլերին, հոսում է stdout/stderr լոգերի մակերեսների համար և հարցումներ է կատարում `/status`, `/metrics` և `/configuration` վերջնական կետերը առողջության համար:
+- Torii հաճախորդի բարակ շերտը պարուրում է HTTP և WebSocket զանգերը՝ հենվելով Iroha Rust հաճախորդի արկղերի վրա, որտեղ հնարավոր է, խուսափելու SCALE կոդավորման/վերծանումից վերագործարկումից:
 
-## User Flows Backed by `mochi-core`
+## Օգտատերերի հոսքեր՝ ապահովված `mochi-core`-ի կողմից- **Ցանցի ստեղծման հրաշագործ**. ընտրեք մեկ կամ չորս հասակակից պրոֆիլ, ընտրեք դիրեկտորիաներ և զանգահարեք `kagami`՝ ինքնությունը գումարած գենեզիզ ստեղծելու համար:
+- **Կյանքի ցիկլի վերահսկում**. սկսել, դադարեցնել, վերագործարկել հասակակիցները; մակերեսային կենդանի չափումներ; բացահայտել գերանների պոչերը; միացնել գործարկման ժամանակի կազմաձևման վերջնակետերը (օրինակ՝ գրանցամատյանների մակարդակները):
+- **Արգելափակել և իրադարձությունների հոսքերը**. բաժանորդագրվել `/block/stream` և `/events`-ներին՝ պահպանելով հիշողության մեջ շարժվող բուֆեր միջերեսի վահանակների համար:
+- **State Explorer**. գործարկեք Norito-ով ապահովված `/query` զանգեր՝ թվարկելու տիրույթները, հաշիվները, ակտիվները և ակտիվների սահմանումները էջագրման օգնականների և մետատվյալների ամփոփագրերի միջոցով:
+- **Գործարքի կոմպոզիտոր**. բեմադրել դրամահատարանի/փոխանցման հրահանգների նախագծերը, դրանք խմբավորել ստորագրված գործարքների մեջ, նախադիտել Norito օգտակար բեռը, ներկայացնել `/transaction`-ի միջոցով և հետևել արդյունքում ստացվող իրադարձություններին. պահոցների ստորագրման կեռիկները մնում են ապագա կրկնություն:
+- **Պատկերներ և Re-Genesis**. կազմակերպել Kura-ի լուսանկարի արտահանում/ներմուծում, ջնջել պահեստները և վերականգնել ծագման նյութը արագ վերակայման համար:
 
-- **Network Creation Wizard**: choose single or four-peer profile, pick directories, and call `kagami` to generate identities plus genesis.
-- **Lifecycle Controls**: start, stop, restart peers; surface live metrics; expose log tails; toggle runtime configuration endpoints (e.g., log levels).
-- **Block and Event Streams**: subscribe to `/block/stream` and `/events`, storing an in-memory rolling buffer for UI panels.
-- **State Explorer**: run Norito-backed `/query` calls to list domains, accounts, assets, and asset definitions with pagination helpers and metadata summaries.
-- **Transaction Composer**: stage mint/transfer instruction drafts, batch them into signed transactions, preview the Norito payload, submit via `/transaction`, and monitor the resulting events; vault signing hooks remain a future iteration.
-- **Snapshots and Re-Genesis**: orchestrate Kura snapshot export/import, wipe stores, and regenerate genesis material for quick resets.
+## UI շերտ (`mochi-ui-egui`)
 
-## UI Layer (`mochi-ui-egui`)
+- Օգտագործում է `egui`/`eframe`՝ առանց արտաքին գործարկման մեկ հիմնական գործարկիչ ուղարկելու համար:
+- Դասավորությունը ներառում է.
+  - **Ցանցային վահանակ** գործընկերների քարտերով, առողջության ցուցանիշներով և արագ գործողություններով:
+  - **Բլոկներ** վահանակը հոսում է վերջին պարտավորությունները և թույլ է տալիս բարձրության որոնումը:
+  - **Իրադարձություններ** վահանակի զտիչ գործարքների կարգավիճակները ըստ հեշի կամ հաշվի:
+  - **State Explorer** ներդիրները տիրույթների, հաշիվների, ակտիվների և ակտիվների սահմանումների համար՝ էջանշված Norito արդյունքներով և ստուգման համար չմշակված աղբավայրեր:
+- **Կոմպոզիտոր** ձևը փաթեթավորվող անանուխի/փոխանցման գունապնակներով, հերթերի կառավարմամբ (ավելացնել/հեռացնել/ջնջել), չմշակված Norito նախադիտում և ներկայացման հետադարձ կապ՝ ապահովված ստորագրողների պահոցով, որպեսզի օպերատորները կարողանան փոխանակել մշակողի և իրական հեղինակությունների միջև:
+- ** Genesis & Snapshots ** կառավարման տեսք:
+- **Կարգավորումներ** գործարկման ժամանակի անջատիչների և տվյալների գրացուցակի դյուրանցումների համար:
+- UI-ն բաժանորդագրվում է `mochi-core`-ի ասինխրոն թարմացումներին ալիքների միջոցով; միջուկը բացահայտում է `SupervisorHandle`-ը, որը հեռարձակում է կառուցվածքային իրադարձություններ (հասակակիցների կարգավիճակ, բլոկի վերնագրեր, գործարքների թարմացումներ):
 
-- Uses `egui`/`eframe` to ship a single native executable without external runtimes.
-- Layout includes:
-  - **Network Dashboard** with peer cards, health indicators, and quick actions.
-  - **Blocks** panel streaming recent commits and allowing height search.
-  - **Events** panel filtering transaction statuses by hash or account.
-  - **State Explorer** tabs for domains, accounts, assets, and asset definitions with paginated Norito results plus raw dumps for inspection.
-- **Composer** form with batchable mint/transfer palettes, queue management (add/remove/clear), raw Norito preview, and submission feedback backed by the signer vault so operators can swap between dev and real authorities.
-- **Genesis & Snapshots** management view.
-- **Settings** for runtime toggles and data directory shortcuts.
-- UI subscribes to asynchronous updates from `mochi-core` via channels; the core exposes a `SupervisorHandle` that streams structured events (peer status, block headers, transaction updates).
+## Տեղական զարգացման նշումներ
 
-## Local Development Notes
+- Աշխատանքային տարածքի կազմաձևը սահմանում է `ZSTD_SYS_USE_PKG_CONFIG=1`, այնպես որ `zstd-sys` կապվում է `libzstd` հյուրընկալողի հետ՝ վաճառվող արխիվները բեռնելու փոխարեն: Սա թույլ է տալիս pqcrypto-ից կախված շինությունները (և MOCHI թեստերը) գործարկել անցանց կամ ավազապատ միջավայրերում:
 
-- The workspace config sets `ZSTD_SYS_USE_PKG_CONFIG=1` so `zstd-sys` links against the host `libzstd` instead of fetching vendored archives. This keeps pqcrypto-dependent builds (and MOCHI tests) running inside offline or sandboxed environments.
+## Փաթեթավորում և բաշխում
 
-## Packaging and Distribution
+- MOCHI փաթեթները (կամ հայտնաբերում են `PATH`-ում) `irohad`, `iroha_cli` և `kagami` երկուականները:
+- Օգտագործում է `rustls` ելքային HTTPS-ի համար՝ OpenSSL-ի կախվածությունից խուսափելու համար:
+- Պահպանում է ստեղծված բոլոր արտեֆակտները հատուկ հավելվածի տվյալների արմատում (օրինակ՝ `~/.local/share/mochi` կամ հարթակի համարժեք)՝ յուրաքանչյուր ցանցի ենթագրքերով: GUI-ն ապահովում է «բացահայտում Finder/Explorer-ում» օգնականներ:
+- Ավտոմատ կերպով հայտնաբերում և պահում է Torii (8080+) և P2P (1337+) նավահանգիստները մինչև հասակակիցների գործարկումը՝ կոնֆլիկտները կանխելու համար:
 
-- MOCHI bundles (or discovers on `PATH`) the `irohad`, `iroha_cli`, and `kagami` binaries.
-- Uses `rustls` for outbound HTTPS to avoid OpenSSL dependencies.
-- Stores all generated artifacts in a dedicated application data root (e.g., `~/.local/share/mochi` or platform equivalent) with per-network subdirectories. GUI provides “reveal in Finder/Explorer” helpers.
-- Auto-detects and reserves Torii (8080+) and P2P (1337+) ports before launching peers to prevent conflicts.
+## Ապագա ընդլայնումներ (MVP-ի շրջանակից դուրս)- Այլընտրանքային առջևի ծայրեր (Tauri, CLI առանց գլխի ռեժիմ) կիսելով `mochi-core`:
+- Բաշխված թեստային կլաստերների համար բազմահյուրընկալ նվագախումբ:
+- Վիզուալիզատորներ կոնսենսուսի ներքին գործերի համար (Sumeragi կլոր վիճակներ, բամբասանքի ժամանակներ):
+- Ինտեգրում CI խողովակաշարերի հետ՝ ավտոմատացված ժամանակավոր ցանցի նկարահանումների համար:
+- Plug-in համակարգ հատուկ վահանակների կամ տիրույթի հատուկ տեսուչների համար:
 
-## Future Extensions (Out of Scope for MVP)
+## Հղումներ
 
-- Alternate front ends (Tauri, CLI headless mode) sharing `mochi-core`.
-- Multi-host orchestration for distributed testing clusters.
-- Visualizers for consensus internals (Sumeragi round states, gossip timings).
-- Integration with CI pipelines for automated ephemeral network snapshots.
-- Plug-in system for custom dashboards or domain-specific inspectors.
-
-## References
-
-- [Torii Endpoints](https://docs.iroha.tech/reference/torii-endpoints.html)
-- [Peer Configuration Parameters](https://docs.iroha.tech/reference/peer-config/params.html)
-- [`kagami` repository documentation](https://github.com/hyperledger-iroha/iroha)
-- [Iroha Special Instructions](https://iroha-test.readthedocs.io/en/iroha2-dev/references/isi/)
+- [Torii վերջնակետեր] (https://docs.iroha.tech/reference/torii-endpoints.html)
+- [Peer Configuration Parameters] (https://docs.iroha.tech/reference/peer-config/params.html)
+- [`kagami` պահեստային փաստաթղթեր] (https://github.com/hyperledger-iroha/iroha)
+- [Iroha Հատուկ հրահանգներ] (https://iroha-test.readthedocs.io/en/iroha2-dev/references/isi/)

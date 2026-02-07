@@ -7,19 +7,20 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5e0e4f16000f6a578fe9c9d6e204c01087e987ac3b46d70537a15b072df48a13
 source_last_modified: "2025-12-29T18:16:35.974178+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Kotodama Compiler Error Codes
+# Kotodama Կազմողի սխալի կոդերը
 
-The Kotodama compiler emits stable error codes so that tooling and CLI users can
-quickly understand the cause of a failure. Use `koto_compile --explain <code>`
-to print the corresponding hint.
+Kotodama կոմպիլյատորը թողարկում է կայուն սխալի կոդեր, որպեսզի գործիքավորումը և CLI օգտագործողները կարողանան
+արագ հասկանալ ձախողման պատճառը. Օգտագործեք `koto_compile --explain <code>`
+համապատասխան հուշում տպելու համար։
 
-| Code  | Description | Typical Fix |
+| Կոդ | Նկարագրություն | Տիպիկ ուղղում |
 |-------|-------------|-------------|
-| `E0001` | Branch target is out of range for the IVM jump encoding. | Split very large functions or reduce inlining so basic block distances stay within ±1 MiB. |
-| `E0002` | Call sites reference a function that was never defined. | Check for typos, visibility modifiers, or feature flags that removed the callee. |
-| `E0003` | Durable state syscalls were emitted without ABI v1 enabled. | Set `CompilerOptions::abi_version = 1` or add `meta { abi_version: 1 }` inside the `seiyaku` contract. |
-| `E0004` | Asset-related syscalls received non-literal pointers. | Use `account_id(...)`, `asset_definition(...)`, etc., or pass 0 sentinels for host defaults. |
-| `E0005` | `for`-loop initializer is more complex than supported today. | Move complex setup before the loop; only simple `let`/expression initialisers are currently accepted. |
-| `E0006` | `for`-loop step clause is more complex than supported today. | Update the loop counter with a simple expression (e.g. `i = i + 1`). |
+| `E0001` | Մասնաճյուղի թիրախը IVM jump կոդավորման շրջանակից դուրս է: | Բաժանեք շատ մեծ գործառույթները կամ նվազեցրեք ներդիրները, որպեսզի հիմնական բլոկի հեռավորությունները մնան ±1ՄԲ-ի սահմաններում: |
+| `E0002` | Զանգերի կայքերը հղում են կատարում մի ֆունկցիայի, որը երբեք չի սահմանվել: | Ստուգեք տառասխալների, տեսանելիության փոփոխիչների կամ դրոշակների առկայության մասին, որոնք հեռացրել են զանգահարողը: |
+| `E0003` | Երկարատև վիճակի համակարգերը թողարկվել են առանց ABI v1-ի միացման: | Սահմանեք `CompilerOptions::abi_version = 1` կամ ավելացրեք `meta { abi_version: 1 }` `seiyaku` պայմանագրի ներսում: |
+| `E0004` | Ակտիվների հետ կապված syscals-ները ստացել են ոչ բառացի ցուցիչներ: | Օգտագործեք `account_id(...)`, `asset_definition(...)` և այլն, կամ փոխանցեք 0 պահակ՝ հյուրընկալող լռելյայնների համար: |
+| `E0005` | `for` հանգույցի սկզբնավորիչն ավելի բարդ է, քան այսօր աջակցվում է: | Տեղափոխել բարդ կարգավորումը հանգույցից առաջ; ներկայումս ընդունված են միայն պարզ `let`/արտահայտման սկզբնավորիչներ: |
+| `E0006` | `for`-loop քայլ դրույթն ավելի բարդ է, քան այսօր աջակցվում է: | Թարմացրեք հանգույցի հաշվիչը պարզ արտահայտությամբ (օրինակ՝ `i = i + 1`): |

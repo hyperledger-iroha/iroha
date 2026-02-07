@@ -8,25 +8,26 @@ source_hash: a8209e602132efb6c29962bf09aea8cd74f972fa956ea8a7a1dbac08a7f6f00f
 source_last_modified: "2026-01-05T09:28:12.006380+00:00"
 translation_last_reviewed: 2026-02-07
 title: "SoraFS Manifest CLI End-to-End Example"
+translator: machine-google-reviewed
 ---
 
-# SoraFS Manifest CLI End-to-End Example
+# SoraFS CLI manifestining oxirigacha namunasi
 
-This example walks through publishing a documentation build to SoraFS using the
-`sorafs_manifest_stub` CLI together with the deterministic chunking fixtures
-described in the SoraFS Architecture RFC. The flow covers manifest generation,
-expectation checks, fetch-plan validation, and proof-of-retrieval rehearsal so
-teams can embed the same steps in CI.
+Ushbu misol yordamida SoraFS ga o'rnatilgan hujjatlarni nashr etish orqali o'tadi.
+`sorafs_manifest_stub` CLI deterministik bo'linish moslamalari bilan birga
+SoraFS Arxitektura RFC da tasvirlangan. Oqim manifest avlodni qamrab oladi,
+kutish tekshiruvlari, olib kelish rejasini tekshirish va izlanishni isbotlash mashqlari
+jamoalar bir xil qadamlarni CIga kiritishlari mumkin.
 
-## Prerequisites
+## Old shartlar
 
-- Workspace cloned and toolchain ready (`cargo`, `rustc`).
-- Fixtures from `fixtures/sorafs_chunker` available so expectation values can be
-  derived (for production runs, pull the values from the migration ledger entry
-  associated with the artifact).
-- Sample payload directory to publish (this example uses `docs/book`).
+- Ish maydoni klonlangan va asboblar zanjiri tayyor (`cargo`, `rustc`).
+- `fixtures/sorafs_chunker` moslamalari mavjud, shuning uchun kutilgan qiymatlar bo'lishi mumkin
+  olingan (ishlab chiqarish ishlari uchun, migratsiya kitobi yozuvidan qiymatlarni oling
+  artefakt bilan bog'liq).
+- Nashr qilish uchun namunaviy yuk katalogi (bu misolda `docs/book` ishlatiladi).
 
-## Step 1 — Generate manifest, CAR, signatures, and fetch plan
+## 1-qadam - Manifest, CAR, imzolar va olish rejasini yarating
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
@@ -41,15 +42,15 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
   --chunker-profile=sorafs.sf1@1.0.0
 ```
 
-The command:
+Buyruq:
 
-- Streams the payload through `ChunkProfile::DEFAULT`.
-- Emits a CARv2 archive plus chunk-fetch plan.
-- Builds a `ManifestV1` record, verifies manifest signatures (if provided), and
-  writes the envelope.
-- Enforces expectation flags so the run fails if bytes drift.
+- `ChunkProfile::DEFAULT` orqali foydali yukni uzatadi.
+- CARv2 arxivini va chunk-fatch rejasini chiqaradi.
+- `ManifestV1` yozuvini yaratadi, manifest imzolarni tasdiqlaydi (agar mavjud bo'lsa) va
+  konvertni yozadi.
+- Agar baytlar o'zgarib ketsa, ishga tushirish muvaffaqiyatsiz bo'lishi uchun kutish bayroqlarini qo'llaydi.
 
-## Step 2 — Verify outputs with chunk store + PoR rehearsal
+## 2-qadam - Chiqarishlarni parchalar do'koni + PoR repetisiyasi bilan tekshiring
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
@@ -59,11 +60,11 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   --por-json-out target/sorafs/docs.por.json
 ```
 
-This replays the CAR through the deterministic chunk store, derives the
-Proof-of-Retrievability sampling tree, and emits a manifest report suitable for
-governance review.
+Bu deterministik chunk do'koni orqali CAR-ni takrorlaydi, hosil qiladi
+Qayta olish mumkinligini isbotlovchi namuna olish daraxti va unga mos keladigan manifest hisobotini chiqaradi
+boshqaruvni tekshirish.
 
-## Step 3 — Simulate multi-provider retrieval
+## 3-qadam - Ko'p provayderni qidirishni taqlid qiling
 
 ```bash
 cargo run -p sorafs_car --bin sorafs_fetch -- \
@@ -73,21 +74,21 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
   --json-out=target/sorafs/docs.fetch_report.json
 ```
 
-For CI environments, provide separate payload paths per provider (e.g., mounted
-fixtures) to exercise range scheduling and failure handling.
+CI muhitlari uchun har bir provayder uchun alohida foydali yuk yoʻllarini taqdim eting (masalan, oʻrnatilgan
+armatura) mashqlar oralig'ini rejalashtirish va nosozliklarni bartaraf etish uchun.
 
-## Step 4 — Record ledger entry
+## 4-qadam - Buxgalteriya daftaridagi yozuvni yozib oling
 
-Log the publication in `docs/source/sorafs/migration_ledger.md`, capturing:
+Nashrni `docs/source/sorafs/migration_ledger.md` da yozib oling, yozib oling:
 
-- Manifest CID, CAR digest, and council signature hash.
-- Status (`Draft`, `Staging`, `Pinned`).
-- Links to CI runs or governance tickets.
+- Manifest CID, CAR dayjesti va kengash imzosi xesh.
+- Holat (`Draft`, `Staging`, `Pinned`).
+- CI yugurishlari yoki boshqaruv chiptalariga havolalar.
 
-## Step 5 — Pin via governance tooling (when registry is live)
+## 5-qadam - Boshqaruv vositalari orqali pin qilish (ro'yxatga olish kitobi jonli bo'lganda)
 
-Once the Pin Registry is deployed (Milestone M2 in the migration roadmap),
-submit the manifest through the CLI:
+Pin registri o'rnatilgandan so'ng (migratsiya yo'l xaritasida Milestone M2),
+manifestni CLI orqali yuboring:
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
@@ -102,11 +103,11 @@ cargo run -p sorafs_cli --bin sorafs_pin -- propose \
   --manifest-signatures target/sorafs/docs.manifest_signatures.json
 ```
 
-The proposal identifier and subsequent approval transaction hashes should be
-captured in the migration ledger entry for auditability.
+Taklif identifikatori va keyingi tasdiqlash tranzaksiya xeshlari bo'lishi kerak
+tekshirilishi mumkinligi uchun migratsiya kitobi yozuvida qayd etilgan.
 
-## Cleanup
+## Tozalash
 
-Artifacts under `target/sorafs/` can be archived or uploaded to staging nodes.
-Keep the manifest, signatures, CAR, and fetch plan together so downstream
-operators and SDK teams can validate the deployment deterministically.
+`target/sorafs/` ostidagi artefaktlar arxivlanishi yoki bosqichma-bosqich tugunlarga yuklanishi mumkin.
+Manifest, imzolar, CAR va olib kelish rejasini shunday quyida birga saqlang
+operatorlar va SDK guruhlari joylashtirishni aniq tasdiqlashi mumkin.

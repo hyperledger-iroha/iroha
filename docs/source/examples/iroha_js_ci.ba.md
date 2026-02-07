@@ -7,6 +7,7 @@ generator: scripts/sync_docs_i18n.py
 source_hash: d21afd33da5ee459b1f6ffb6ac7c42adc0852ed7929e69993f81914637b5e6b5
 source_last_modified: "2025-12-29T18:16:35.953373+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
@@ -14,35 +15,35 @@ translation_last_reviewed: 2026-02-07
   This document provides guidance for running @iroha/iroha-js in CI systems.
 -->
 
-# Iroha JS CI Reference
+# Iroha JS CI Һылтанма
 
-The `@iroha/iroha-js` package bundles native bindings via `iroha_js_host`. Any
-CI pipeline that executes tests or builds must provide both a Node.js runtime
-and the Rust toolchain so the native bundle can be compiled before the tests
-run.
+`@iroha/iroha-js` пакет өйөмдәре туған бәйләүҙәр аша `iroha_js_host`. Теләһә ниндәй
+CI торба үткәргес, тип һынауҙар йәки төҙөүҙәр башҡарыла тейеш, тип тәьмин итеү өсөн Node.js эшләү ваҡыты .
+һәм Rust инструменттар слет шулай тыуған өйөмө һынауҙар алдынан төҙөргә мөмкин
+йүгерергә.
 
-## Recommended Steps
+## Тәҡдим ителгән аҙымдар
 
-1. Use a Node LTS release (18 or 20) via `actions/setup-node` or your CI
-   equivalent.
-2. Install the Rust toolchain listed in `rust-toolchain.toml`. We recommend
-   `dtolnay/rust-toolchain@v1` in GitHub Actions.
-3. Cache the cargo registry/git indexes and the `target/` directory to avoid
-   rebuilding the native addon in every job.
-4. Run `npm install`, then `npm run lint:test`. The combined script enforces
-   ESLint with zero warnings, builds the native addon, and runs the Node test
-   suite so CI matches the release gating workflow.
-5. Optionally run `node --test` as a fast smoke step once `npm run build:native`
-   has produced the addon (for example, presubmit quick-check lanes that reuse
-   cached artifacts).
-6. Layer any additional linting or formatting checks from your consumer
-   project on top of `npm run lint:test` when stricter policies are required.
-7. When sharing configuration across services, load `iroha_config` and pass the
-   parsed document to `resolveToriiClientConfig({ config })` so Node clients
-   reuse the same timeout/retry/token policy as the rest of the deployment (see
-   `docs/source/sdk/js/quickstart.md` for a full example).
+1. Ҡулланыу Node LTS релиз (18 йәки 20) аша `actions/setup-node` йәки һеҙҙең CI .
+   тиңдәш.
+. Беҙ кәңәш итәбеҙ
+   GitHub ғәмәлдәрендә `dtolnay/rust-toolchain@v1`.
+3. Кэш йөк реестры/гит индекстары һәм `target/` каталогы ҡотолоу өсөн
+   һәр эштә тыуған аддонды яңынан төҙөү.
+4. Run `npm install`, һуңынан `npm run lint:test`. Берләштерелгән сценарий үтәй
+   ESLint нуль иҫкәртмәләр менән, тыуған addon төҙөй, һәм Node һынау үткәрә
+   люкс шулай CI тап килә релиз ҡапҡа эш ағымы.
+.
+   addon етештергән (мәҫәлән, тиҙ тикшерелгән һыҙаттарҙы ҡабаттан ҡулланыу тип фаразлана
+   кэш артефакттары).
+6. Ҡатлам ниндәй ҙә булһа өҫтәмә линт йәки форматлау тикшерелгән һеҙҙең ҡулланыусы
+   проекты өҫтөндә `npm run lint:test` ҡатыраҡ сәйәсәт талап ителә.
+7. Хеҙмәттәр буйынса конфигурация менән бүлешкәндә, `iroha_config` йөк һәм тапшырыу
+   анализланған документ `resolveToriiClientConfig({ config })` шулай Node клиенттары
+   ҡабаттан ҡулланыу шул уҡ тайм-аут/ҡабатлау/жетон сәйәсәте ҡалған таратыу (ҡара
+   Тулы миҫал өсөн `docs/source/sdk/js/quickstart.md`).
 
-## GitHub Actions Template
+## GitHub ғәмәлдәре ҡалыптары
 
 ```yaml
 name: iroha-js-ci
@@ -86,11 +87,11 @@ jobs:
       - run: npm run lint:test
 ```
 
-## Fast Smoke Job (Optional)
+## Тиҙ төтөн эш (Һоралы)
 
-For pull requests that only touch documentation or TypeScript definitions, a
-minimal job can reuse cached artifacts, rebuild the native module, and run the
-Node test runner directly:
+тартыу өсөн запростар, тип тик сенсор документация йәки TypeScript билдәләмәләре, а
+минималь эш кэшланған артефакттарҙы ҡабаттан ҡуллана ала, тыуған модулде яңынан төҙөй һәм йүгерә ала
+Төйөн һынау йүгерсеһе туранан-тура:
 
 ```yaml
 jobs:
@@ -109,9 +110,9 @@ jobs:
       - run: node --test
 ```
 
-This job completes quickly while still verifying that the native addon compiles
-and that the Node test suite passes.
+Был эш тиҙ тамамлана, шул уҡ ваҡытта тикшерергә, тип туған addon компиляция
+һәм Node тест люксы үтә тип.
 
-> **Reference implementation:** the repository includes
-> `.github/workflows/javascript-sdk.yml`, which wires the steps above into a
-> Node 18/20 matrix with cargo caching.
+> **Һылтанма тормошҡа ашырыу:** һаҡлағыс инә.
+> `.github/workflows/javascript-sdk.yml`, был өҫтәге аҙымдарҙы сымдар а
+> Йөк кэшлауы менән 18/20 матрицаһы.

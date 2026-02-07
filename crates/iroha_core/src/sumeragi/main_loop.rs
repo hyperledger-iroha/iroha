@@ -1871,7 +1871,8 @@ pub(crate) fn validate_block_sync_qc(
     prf_seed: Option<[u8; 32]>,
     aggregate_ok: Option<bool>,
 ) -> Result<(BTreeSet<crate::sumeragi::consensus::ValidatorIndex>, usize), QcValidationError> {
-    let canonical_roster = roster::canonicalize_roster(topology.as_ref().to_vec());
+    let canonical_roster =
+        roster::canonicalize_roster_for_mode(topology.as_ref().to_vec(), consensus_mode);
     let canonical_topology = super::network_topology::Topology::new(canonical_roster);
     let signature_topology =
         topology_for_view(&canonical_topology, qc.height, qc.view, mode_tag, prf_seed);
@@ -2224,7 +2225,8 @@ fn validate_qc_against_votes(
     prf_seed: Option<[u8; 32]>,
     aggregate_ok: Option<bool>,
 ) -> Result<QcValidationOutcome, QcValidationError> {
-    let canonical_roster = roster::canonicalize_roster(topology.as_ref().to_vec());
+    let canonical_roster =
+        roster::canonicalize_roster_for_mode(topology.as_ref().to_vec(), consensus_mode);
     let canonical_topology = super::network_topology::Topology::new(canonical_roster);
     let signature_topology =
         topology_for_view(&canonical_topology, qc.height, qc.view, mode_tag, prf_seed);
@@ -2365,7 +2367,13 @@ fn fallback_qc_tally_from_bitmap(
     mode_tag: &str,
     prf_seed: Option<[u8; 32]>,
 ) -> Option<QcSignerTally> {
-    let canonical_roster = roster::canonicalize_roster(topology.as_ref().to_vec());
+    let consensus_mode = if mode_tag == NPOS_TAG {
+        ConsensusMode::Npos
+    } else {
+        ConsensusMode::Permissioned
+    };
+    let canonical_roster =
+        roster::canonicalize_roster_for_mode(topology.as_ref().to_vec(), consensus_mode);
     let canonical_topology = super::network_topology::Topology::new(canonical_roster);
     let _signature_topology =
         topology_for_view(&canonical_topology, qc.height, qc.view, mode_tag, prf_seed);

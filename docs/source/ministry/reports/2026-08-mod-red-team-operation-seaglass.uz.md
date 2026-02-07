@@ -9,67 +9,65 @@ source_last_modified: "2025-12-29T18:16:35.981105+00:00"
 translation_last_reviewed: 2026-02-07
 title: Red-Team Drill — Operation SeaGlass
 summary: Evidence and remediation log for the Operation SeaGlass moderation drill (gateway smuggling, governance replay, alert brownout).
+translator: machine-google-reviewed
 ---
 
 # Red-Team Drill — Operation SeaGlass
 
-- **Drill ID:** `20260818-operation-seaglass`
-- **Date & window:** `2026-08-18 09:00Z – 11:00Z`
-- **Scenario class:** `smuggling`
-- **Operators:** `Miyu Sato, Liam O'Connor`
-- **Dashboards frozen from commit:** `364f9573b`
-- **Evidence bundle:** `artifacts/ministry/red-team/2026-08/operation-seaglass/`
-- **SoraFS CID (optional):** `not pinned (local bundle only)`
-- **Related roadmap items:** `MINFO-9`, plus linked follow-ups `MINFO-RT-17` / `MINFO-RT-18`.
+- **Matkap ID:** `20260818-operation-seaglass`
+- **Sana va oyna:** `2026-08-18 09:00Z – 11:00Z`
+- **Ssenariy sinfi:** `smuggling`
+- **Operatorlar:** `Miyu Sato, Liam O'Connor`
+- **Boshqaruv panellari topshirilgandan muzlatilgan:** `364f9573b`
+- **Dalillar to'plami:** `artifacts/ministry/red-team/2026-08/operation-seaglass/`
+- **SoraFS CID (ixtiyoriy):** `not pinned (local bundle only)`
+- **Tegishli yoʻl xaritasi elementlari:** `MINFO-9`, shuningdek bogʻlangan kuzatuvlar `MINFO-RT-17` / `MINFO-RT-18`.
 
-## 1. Objectives & Entry Conditions
+## 1. Maqsadlar va kirish shartlari
 
-- **Primary objectives**
-  - Validate denylist TTL enforcement and gateway quarantine during a smuggling attempt while load-shedding alerts.
-  - Confirm governance replay detection and alert brownout handling in the moderation runbook.
-- **Prerequisites confirmed**
-  - `emergency_canon_policy.md` version `v2026-08-seaglass`.
+- **Asosiy maqsadlar**
+  - Kontrabandaga urinish paytida yuk to'g'risida ogohlantirishlar paytida rad etilgan TTL ijrosini va shlyuz karantinini tasdiqlang.
+  - Boshqaruvni takrorlashni aniqlashni tasdiqlang va moderatsiya ish kitobida ogoh bo'ling.
+- **Tasdiqlangan shartlar**
+  - `emergency_canon_policy.md` versiyasi `v2026-08-seaglass`.
   - `dashboards/grafana/ministry_moderation_overview.json` digest `sha256:ef5210b5b08d219242119ec4ceb61cb68ee4e42ce2eea8a67991fbff95501cc8`.
-  - Override authority on-call: `Kenji Ito (GovOps pager)`.
+  - Qo'ng'iroq paytida vakolatni bekor qilish: `Kenji Ito (GovOps pager)`.
 
-## 2. Execution Timeline
+## 2. Bajarish xronologiyasi
 
-| Timestamp (UTC) | Actor | Action / Command | Result / Notes |
-|-----------------|-------|------------------|----------------|
-| 09:00:12 | Miyu Sato | Froze dashboards/alerts at `364f9573b` via `scripts/ministry/export_red_team_evidence.py --freeze-only` | Baseline captured and stored under `dashboards/` |
-| 09:07:44 | Liam O'Connor | Published denylist snapshot + GAR override to staging with `sorafs_cli ... gateway update-denylist --policy-tier emergency` | Snapshot accepted; override window recorded in Alertmanager |
-| 09:17:03 | Miyu Sato | Injected smuggling payload + governance replay using `moderation_payload_tool.py --scenario seaglass` | Alert fired after 3m12s; governance replay flagged |
-| 09:31:47 | Liam O'Connor | Ran evidence export and sealed manifest `seaglass_evidence_manifest.json` | Evidence bundle plus hashes stored under `manifests/` |
+| Vaqt tamg'asi (UTC) | Aktyor | Harakat / Buyruq | Natija / Eslatmalar |
+|----------------|-------|------------------|----------------|
+| 09:00:12 | Miyu Sato | `364f9573b` da `scripts/ministry/export_red_team_evidence.py --freeze-only` orqali muzlatilgan asboblar paneli/ogohlantirishlar | Asosiy chiziq `dashboards/` | ostida saqlanadi va saqlanadi
+| 09:07:44 | Liam O'Konnor | Eʼlon qilingan rad etish roʻyxatining surati + `sorafs_cli ... gateway update-denylist --policy-tier emergency` bilan sahnalashtirish uchun GAR bekor qilish | Surat qabul qilindi; Alertmanager | da qayd qilingan oynani bekor qilish
+| 09:17:03 | Miyu Sato | AOK qilingan kontrabanda yuki + `moderation_payload_tool.py --scenario seaglass` yordamida boshqaruvni takrorlash | Ogohlantirish 3m12 soniyadan so'ng paydo bo'ldi; boshqaruv takrori belgilandi |
+| 09:31:47 | Liam O'Konnor | Dalillarni eksport qilish va muhrlangan manifest `seaglass_evidence_manifest.json` | Dalillar toʻplami va `manifests/` | ostida saqlangan xeshlar
 
-## 3. Observations & Metrics
+## 3. Kuzatishlar va ko'rsatkichlar
 
-| Metric | Target | Observed | Pass/Fail | Notes |
+| Metrik | Maqsad | Kuzatilgan | O'tdi/qobiliyatsiz | Eslatmalar |
 |--------|--------|----------|-----------|-------|
-| Alert response latency | <= 5 min | 3.2 min | ✅ | Alert runbook executed without paging churn |
-| Moderation detection rate | >= 0.98 | 0.992 | ✅ | Detected both smuggling and replay payloads |
-| Gateway anomaly detection | Alert fired | Alert fired + automatic quarantine | ✅ | Quarantine applied before retry budget exhausted |
+| Ogohlantirish javobining kechikishi | = 0,98 | 0,992 | ✅ | Kontrabanda va takroriy yuklar aniqlandi |
+| Gateway anomaliyasini aniqlash | Ogohlantirish ishga tushirildi | Ogohlantirish o'chirildi + avtomatik karantin | ✅ | Budjet tugashidan oldin karantin qo‘llaniladi |
 
 - `Grafana export:` `artifacts/ministry/red-team/2026-08/operation-seaglass/dashboards/ministry_moderation_overview.json`
 - `Alert bundle:` `artifacts/ministry/red-team/2026-08/operation-seaglass/alerts/ministry_moderation_rules.yml`
 - `Norito manifests:` `artifacts/ministry/red-team/2026-08/operation-seaglass/manifests/seaglass_evidence_manifest.json`
 
-## 4. Findings & Remediation
+## 4. Topilmalar va tuzatish
 
-| Severity | Finding | Owner | Target Date | Status / Link |
+| Jiddiylik | Topish | Egasi | Maqsadli sana | Holat / Havola |
 |----------|---------|-------|-------------|---------------|
-| High | Governance replay alert fired, but SoraFS seal was delayed by 2m when the waitlist failover triggered | Governance Ops (Liam O'Connor) | 2026-09-05 | `MINFO-RT-17` open — add replay seal automation to the failover path |
-| Medium | Dashboard freeze not pinned to SoraFS; operators relied on local bundle | Observability (Miyu Sato) | 2026-08-25 | `MINFO-RT-18` open — pin `dashboards/*` to SoraFS with signed CID before next drill |
-| Low | CLI logbook omitted Norito manifest hash in first pass | Ministry Ops (Kenji Ito) | 2026-08-22 | Fixed during drill; template updated in logbook |
+| Yuqori | Boshqaruv qayta o'ynash ogohlantirishi ishga tushirildi, lekin kutish ro'yxatini o'zgartirish ishga tushirilganda SoraFS muhri 2 m ga kechiktirildi | Governance Ops (Liam O'Connor) | 2026-09-05 | `MINFO-RT-17` ochiq — uzilish yoʻliga replay muhri avtomatizatsiyasini qoʻshing |
+| O'rta | Boshqaruv panelini muzlatish SoraFS ga mahkamlanmagan; operatorlar mahalliy to'plamga tayangan | Kuzatish qobiliyati (Miyu Sato) | 2026-08-25 | `MINFO-RT-18` ochiq — keyingi mashqdan oldin imzolangan CID bilan `dashboards/*` dan SoraFS gacha pin |
+| Past | CLI jurnali birinchi o'tishda Norito manifest xeshini o'tkazib yubordi | Vazirlik operatsiyalari (Kenji Ito) | 2026-08-22 | Matkap paytida o'rnatiladi; jurnal jurnalida yangilangan andoza |Kalibrlash qanday namoyon boʻlishini hujjatlashtiring, rad etish qoidalari yoki SDK/asboblar oʻzgarishi kerak. GitHub/Jira muammolariga havola va bloklangan/bloklanmagan holatlarni qayd qiling.
 
-Document how calibration manifests, denylist policies, or SDK/tooling must change. Link to GitHub/Jira issues and note blocked/unblocked states.
+## 5. Boshqaruv va tasdiqlash
 
-## 5. Governance & Approvals
+- **Hodisa komandirining imzosi:** `Miyu Sato @ 2026-08-18T11:22Z`
+- **Boshqaruv kengashining ko'rib chiqish sanasi:** `GovOps-2026-08-22`
+- **Kuzatuv roʻyxati:** `[x] status.md updated`, `[x] roadmap row updated`, `[x] transparency packet annotated`
 
-- **Incident commander sign-off:** `Miyu Sato @ 2026-08-18T11:22Z`
-- **Governance council review date:** `GovOps-2026-08-22`
-- **Follow-up checklist:** `[x] status.md updated`, `[x] roadmap row updated`, `[x] transparency packet annotated`
-
-## 6. Attachments
+## 6. Qo'shimchalar
 
 - `[x] CLI logbook (logs/operation_seaglass.log)`
 - `[x] Dashboard JSON export`
@@ -77,8 +75,8 @@ Document how calibration manifests, denylist policies, or SDK/tooling must chang
 - `[x] SoraFS manifest / CAR`
 - `[ ] Override audit log`
 
-Mark each attachment with `[x]` once uploaded to the evidence bundle and SoraFS snapshot.
+Dalillar toʻplamiga va SoraFS suratiga yuklangandan soʻng har bir biriktirmani `[x]` bilan belgilang.
 
 ---
 
-_Last updated: 2026-08-18_
+_Oxirgi yangilangan: 2026-08-18_

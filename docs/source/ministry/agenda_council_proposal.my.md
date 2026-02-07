@@ -7,73 +7,72 @@ generator: scripts/sync_docs_i18n.py
 source_hash: d2a7a47fdf0c80d189c912baafa5d6ce81a17a4c90f2b1797e532989a56f5060
 source_last_modified: "2025-12-29T18:16:35.977493+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 # Agenda Council Proposal Schema (MINFO-2a)
 
-Roadmap reference: **MINFO-2a — Proposal format validator.**
+လမ်းပြမြေပုံအကိုးအကား- **MINFO-2a — အဆိုပြုချက်ဖော်မတ်အတည်ပြုပေးသူ။**
 
-The Agenda Council workflow batches citizen-submitted blacklist and policy change
-proposals before the governance panels review them. This document defines the
-canonical payload schema, evidence requirements, and duplication detection rules
-consumed by the new validator (`cargo xtask ministry-agenda validate`) so
-proposers can lint JSON submissions locally before uploading them to the portal.
+Agenda Council လုပ်ငန်းအစီအစဥ်သည် နိုင်ငံသားမှတင်သွင်းထားသော အမည်ပျက်စာရင်းနှင့် မူဝါဒအပြောင်းအလဲများကို အစုလိုက်ပြုလုပ်ပါသည်။
+အုပ်ချုပ်ရေးအဖွဲ့များ မစစ်ဆေးမီ အဆိုပြုချက်များ။ ဤစာတမ်းက သတ်မှတ်သည်။
+canonical payload schema၊ အထောက်အထားလိုအပ်ချက်များနှင့် ပွားမှုရှာဖွေခြင်းစည်းမျဉ်းများ
+အသစ်သော validator (`cargo xtask ministry-agenda validate`) ကလောင်တယ်။
+အဆိုပြုသူများသည် ၎င်းတို့ကို ပေါ်တယ်သို့မတင်မီ ပြည်တွင်းတွင် JSON တင်သွင်းမှုများကို အလင်းပြန်ပေးနိုင်သည်။
 
-## Payload overview
+## Payload ခြုံငုံသုံးသပ်ချက်
 
-Agenda proposals use the `AgendaProposalV1` Norito schema
-(`iroha_data_model::ministry::AgendaProposalV1`). Fields are encoded as JSON when
-submitting through CLI/portal surfaces.
+အစီအစဉ် အဆိုပြုချက်များသည် `AgendaProposalV1` Norito အစီအစဉ်ကို အသုံးပြုသည်
+(`iroha_data_model::ministry::AgendaProposalV1`)။ အကွက်များကို JSON အဖြစ် ကုဒ်လုပ်သည့်အခါ
+CLI/portal မျက်နှာပြင်များမှတဆင့် တင်ပြခြင်း။
 
-| Field | Type | Requirements |
-|-------|------|--------------|
-| `version` | `1` (u16) | Must equal `AGENDA_PROPOSAL_VERSION_V1`. |
-| `proposal_id` | string (`AC-YYYY-###`) | Stable identifier; enforced during validation. |
-| `submitted_at_unix_ms` | u64 | Milliseconds since Unix epoch. |
-| `language` | string | BCP‑47 tag (`"en"`, `"ja-JP"`, etc.). |
-| `action` | enum (`add-to-denylist`, `remove-from-denylist`, `amend-policy`) | Requested Ministry action. |
-| `summary.title` | string | ≤256 chars recommended. |
-| `summary.motivation` | string | Why the action is required. |
-| `summary.expected_impact` | string | Outcomes if the action is accepted. |
-| `tags[]` | lowercase strings | Optional triage labels. Allowed values: `csam`, `malware`, `fraud`, `harassment`, `impersonation`, `policy-escalation`, `terrorism`, `spam`. |
-| `targets[]` | objects | One or more hash family entries (see below). |
-| `evidence[]` | objects | One or more evidence attachments (see below). |
-| `submitter.name` | string | Display name or organization. |
-| `submitter.contact` | string | Email, Matrix handle, or phone; redacted from public dashboards. |
-| `submitter.organization` | string (optional) | Visible in reviewer UI. |
-| `submitter.pgp_fingerprint` | string (optional) | 40-hex uppercase fingerprint. |
-| `duplicates[]` | strings | Optional references to previously submitted proposal IDs. |
+| လယ် | ရိုက် | လိုအပ်ချက်များ |
+|---------|------|--------------|
+| `version` | `1` (u16) | `AGENDA_PROPOSAL_VERSION_V1` နှင့် ညီရပါမည်။ |
+| `proposal_id` | string (`AC-YYYY-###`) | တည်ငြိမ်သောသတ်မှတ်စနစ်၊ အတည်ပြုစဉ်အတွင်း ပြဋ္ဌာန်းခဲ့သည်။ |
+| `submitted_at_unix_ms` | u64 | Unix ခေတ်ကတည်းက မီလီစက္ကန့်။ |
+| `language` | string | BCP‑47 တက်ဂ် (`"en"`၊ `"ja-JP"` စသည်ဖြင့်)။ |
+| `action` | enum (`add-to-denylist`, `remove-from-denylist`, `amend-policy`) | ဝန်ကြီးဌာနက အရေးယူပေးဖို့ တောင်းဆိုတယ်။ |
+| `summary.title` | string | ≤256 စာလုံးများကို အကြံပြုထားသည်။ |
+| `summary.motivation` | string | အရေးယူဖို့ ဘာကြောင့် လိုအပ်တာလဲ။ |
+| `summary.expected_impact` | string | လုပ်ဆောင်ချက်ကို လက်ခံပါက ရလဒ်များ။ |
+| `tags[]` | စာလုံးသေးစာကြောင်းများ | ရွေးချယ်နိုင်သော triage တံဆိပ်များ။ ခွင့်ပြုတန်ဖိုးများ- `csam`, `malware`, `fraud`, `harassment`, `impersonation`, `policy-escalation`, Norito. |
+| `targets[]` | အရာဝတ္ထု | တစ်ခု သို့မဟုတ် တစ်ခုထက်ပိုသော hash မိသားစုထည့်သွင်းမှုများ (အောက်တွင်ကြည့်ပါ)။ |
+| `evidence[]` | အရာဝတ္ထု | တစ်ခု သို့မဟုတ် တစ်ခုထက်ပိုသော အထောက်အထား ပူးတွဲပါဖိုင်များ (အောက်တွင် ကြည့်ပါ)။ |
+| `submitter.name` | string | အမည် သို့မဟုတ် အဖွဲ့အစည်းကို ပြသပါ။ |
+| `submitter.contact` | string | အီးမေးလ်၊ Matrix လက်ကိုင် သို့မဟုတ် ဖုန်း၊ အများသူငှာ ဒက်ရှ်ဘုတ်များမှ ပြန်လည်ပြင်ဆင်ထားသည်။ |
+| `submitter.organization` | string (optional) | သုံးသပ်သူ UI တွင် မြင်နိုင်သည်။ |
+| `submitter.pgp_fingerprint` | string (optional) | 40-hex အကြီးစား လက်ဗွေ။ |
+| `duplicates[]` | ကြိုးတန်း | ယခင်တင်သွင်းထားသော အဆိုပြုချက် ID များအတွက် ရွေးချယ်နိုင်သော ကိုးကားချက်များ။ |
 
-### Target entries (`targets[]`)
+### ပစ်မှတ်များ (`targets[]`)
 
-Each target represents a hash family digest referenced by the proposal.
+ပစ်မှတ်တစ်ခုစီသည် အဆိုပြုချက်ဖြင့် ကိုးကားထားသော hash မိသားစုအချေအတင်ကို ကိုယ်စားပြုသည်။
 
-| Field | Description | Validation |
-|-------|-------------|------------|
-| `label` | Friendly name for reviewer context. | Non-empty. |
-| `hash_family` | Hash identifier (`blake3-256`, `sha256`, etc.). | ASCII letters/digits/`-_.`, ≤48 chars. |
-| `hash_hex` | Digest encoded in lowercase hex. | ≥16 bytes (32 hex chars) and must be valid hex. |
-| `reason` | Short description of why the digest should be actioned. | Non-empty. |
+| လယ် | ဖော်ပြချက် | အတည်ပြုချက် |
+|---------|----------------|------------------|
+| `label` | ဝေဖန်သုံးသပ်သူ အကြောင်းအရာအတွက် အဆင်ပြေသော အမည်။ | အချည်းနှီးမဟုတ်။ |
+| `hash_family` | Hash အမှတ်အသား (`blake3-256`၊ `sha256` စသည်ဖြင့်)။ | ASCII စာလုံး/ဂဏန်းများ/`-_.`၊ ≤48 စာလုံးများ။ |
+| `hash_hex` | Digest ကို စာလုံးသေး hex ဖြင့် ကုဒ်လုပ်ထားသည်။ | ≥16 bytes (32 hex စာလုံးများ) နှင့် တရားဝင် hex ဖြစ်ရမည်။ |
+| `reason` | အဘယ်ကြောင့် အကျဉ်းချုံးကို လုပ်ဆောင်သင့်သည်ဟူသော အတိုချုံးဖော်ပြချက်။ | အချည်းနှီးမဟုတ်။ |
 
-The validator rejects duplicate `hash_family:hash_hex` pairs within the same
-proposal and reports conflicts when the same fingerprint already exists in the
-duplicate registry (see below).
+အတည်ပြုသူသည် တူညီသောအတွင်း ထပ်နေသော `hash_family:hash_hex` အတွဲများကို ငြင်းပယ်သည်
+တူညီသောလက်ဗွေရှိပြီးသား အဆိုပြုချက်နှင့် အစီရင်ခံစာများသည် ကွဲလွဲနေပါသည်။
+registry ပွားခြင်း (အောက်တွင်ကြည့်ပါ)။
 
-### Evidence attachments (`evidence[]`)
+### အထောက်အထား ပူးတွဲပါဖိုင်များ (`evidence[]`)
 
-Evidence entries document where reviewers can fetch supporting context.
+ဝေဖန်သုံးသပ်သူများသည် ပံ့ပိုးပေးသည့်အကြောင်းအရာကို ရယူနိုင်သည့် အထောက်အထားထည့်သွင်းမှုများ စာရွက်စာတမ်း။| လယ် | ရိုက် | မှတ်စုများ |
+|---------|------|-------|
+| `kind` | enum (`url`, `torii-case`, `sorafs-cid`, `attachment`) | လိုအပ်ချက်များကို အဆုံးအဖြတ်ပေးသည်။ |
+| `uri` | string | HTTP(S) URL၊ Torii case ID သို့မဟုတ် SoraFS URI။ |
+| `digest_blake3_hex` | string | `sorafs-cid` နှင့် `attachment` အမျိုးအစားများအတွက် လိုအပ်သည် အခြားသူများအတွက် ရွေးချယ်ခွင့် |
+| `description` | string | ဝေဖန်သုံးသပ်သူများအတွက် ရွေးချယ်နိုင်သော အခမဲ့ပုံစံစာသား။ |
 
-| Field | Type | Notes |
-|-------|------|-------|
-| `kind` | enum (`url`, `torii-case`, `sorafs-cid`, `attachment`) | Determines digest requirements. |
-| `uri` | string | HTTP(S) URL, Torii case ID, or SoraFS URI. |
-| `digest_blake3_hex` | string | Required for `sorafs-cid` and `attachment` kinds; optional for others. |
-| `description` | string | Optional free-form text for reviewers. |
+### မှတ်ပုံတင်ခြင်းကို ပွားပါ။
 
-### Duplicate registry
-
-Operators can maintain a registry of existing fingerprints to prevent duplicate
-cases. The validator accepts a JSON file shaped as:
+အော်ပရေတာများသည် မိတ္တူပွားခြင်းကို ကာကွယ်ရန် ရှိပြီးသား လက်ဗွေများကို မှတ်ပုံတင်ထားနိုင်သည်။
+အမှုတွဲများ။ တရားဝင်သူသည် JSON ဖိုင်ကို လက်ခံသည်-
 
 ```json
 {
@@ -88,15 +87,15 @@ cases. The validator accepts a JSON file shaped as:
 }
 ```
 
-When a proposal target matches an entry, the validator aborts unless
-`--allow-registry-conflicts` is specified (warnings are still emitted).
-Use [`cargo xtask ministry-agenda impact`](impact_assessment_tooling.md) to
-generate the referendum-ready summary that cross-references the duplicate
-registry and policy snapshots.
+အဆိုပြုချက်ပစ်မှတ်သည် ဝင်ခွင့်တစ်ခုနှင့် ကိုက်ညီသောအခါ၊ အတည်ပြုသူသည် ပျက်ပြယ်သွားမည်ဖြစ်သည်။
+`--allow-registry-conflicts` ကို သတ်မှတ်ထားသည် (သတိပေးချက်များ ထုတ်နေဆဲဖြစ်သည်)။
+[`cargo xtask ministry-agenda impact`](impact_assessment_tooling.md) ကိုသုံးပါ
+မိတ္တူပွားခြင်းကို ကိုးကားသော ဆန္ဒခံယူပွဲ-အဆင်သင့်အကျဉ်းချုပ်ကို ထုတ်ပါ။
+မှတ်ပုံတင်ခြင်းနှင့် မူဝါဒ လျှပ်တစ်ပြက်များ။
 
-## CLI usage
+## CLI အသုံးပြုမှု
 
-Lint a single proposal and check it against a duplicate registry:
+အဆိုပြုချက်တစ်ခုတည်းကို ဖြတ်တောက်ပြီး မိတ္တူပွားနေသော မှတ်ပုံတင်ခြင်းကို စစ်ဆေးပါ-
 
 ```bash
 cargo xtask ministry-agenda validate \
@@ -104,19 +103,19 @@ cargo xtask ministry-agenda validate \
   --registry docs/examples/ministry/agenda_duplicate_registry.json
 ```
 
-Pass `--allow-registry-conflicts` to downgrade duplicate hits to warnings when
-performing historical audits.
+ထပ်နေသော hit များကို သတိပေးချက်များသို့ အဆင့်နှိမ့်ရန် `--allow-registry-conflicts` ကို ကျော်ဖြတ်ပါ။
+သမိုင်းဆိုင်ရာစစ်ဆေးမှုများလုပ်ဆောင်ခြင်း။
 
-The CLI relies on the same Norito schema and validation helpers shipped in
-`iroha_data_model`, so SDKs/portals can reuse the `AgendaProposalV1::validate`
-method for consistent behaviour.
+CLI သည် ပေးပို့ထားသော တူညီသော Norito schema နှင့် validation helpers ပေါ်တွင် အားကိုးသည်
+`iroha_data_model`၊ ထို့ကြောင့် SDKs/portals များသည် `AgendaProposalV1::validate` ကို ပြန်သုံးနိုင်သည်
+တသမတ်တည်း အပြုအမူအတွက် နည်းလမ်း။
 
-## Sortition CLI (MINFO-2b)
+## အမျိုးအစားခွဲ CLI (MINFO-2b)
 
-Roadmap reference: **MINFO-2b — Multi-slot sortition & audit log.**
+လမ်းပြမြေပုံရည်ညွှန်း- **MINFO-2b — Multi-slot အမျိုးအစားခွဲခြင်းနှင့် စာရင်းစစ်မှတ်တမ်း။**
 
-The Agenda Council roster is now managed via deterministic sortition so citizens
-can independently audit every draw. Use the new command:
+Agenda Council မှ တန်းစီဇယားကို ယခုအခါ နိုင်ငံသားများအား အဆုံးအဖြတ်ပေးသည့် နည်းလမ်းဖြင့် စီမံခန့်ခွဲထားပါသည်။
+ဆွဲတိုင်းကို လွတ်လပ်စွာ စာရင်းစစ်နိုင်ပါတယ်။ အမိန့်အသစ်ကိုသုံးပါ
 
 ```bash
 cargo xtask ministry-agenda sortition \
@@ -126,7 +125,7 @@ cargo xtask ministry-agenda sortition \
   --out artifacts/ministry/agenda_sortition_2026Q1.json
 ```
 
-- `--roster` — JSON file describing every eligible member:
+- `--roster` — အရည်အချင်းပြည့်မီသော အဖွဲ့ဝင်တိုင်းကို ဖော်ပြသည့် JSON ဖိုင်-
 
   ```json
   {
@@ -148,74 +147,70 @@ cargo xtask ministry-agenda sortition \
   }
   ```
 
-  The example file lives at
-  `docs/examples/ministry/agenda_council_roster.json`. Optional fields (role,
-  organization, contact, metadata) are captured in the Merkle leaf so auditors
-  can prove the roster that fed the draw.
+  နမူနာဖိုင်မှာ နေထိုင်ပါသည်။
+  `docs/examples/ministry/agenda_council_roster.json`။ ရွေးချယ်နိုင်သောနယ်ပယ်များ (အခန်းကဏ္ဍ၊
+  အဖွဲ့အစည်း၊ အဆက်အသွယ်၊ မက်တာဒေတာ) ကို Merkle အရွက်တွင် ဖမ်းယူထားသောကြောင့် စာရင်းစစ်များ
+  မဲစာရင်းကို သက်သေပြနိုင်ပါတယ်။
 
-- `--slots` — number of council seats to fill.
-- `--seed` — 32-byte BLAKE3 seed (64 lowercase hex characters) recorded in the
-  governance minutes for the draw.
-- `--out` — optional output path. When omitted, the JSON summary is printed to
-  stdout.
+- `--slots` — ဖြည့်စွက်ရန် ကောင်စီထိုင်ခုံအရေအတွက်။
+- `--seed` — တွင်မှတ်တမ်းတင်ထားသော 32-byte BLAKE3 မျိုးစေ့ (64 စာလုံးသေး hex စာလုံး)
+  မဲဆွဲမှုအတွက် အုပ်ချုပ်မှုမိနစ်။
+- `--out` — ရွေးချယ်နိုင်သော အထွက်လမ်းကြောင်း။ ချန်လှပ်ထားသောအခါ၊ JSON အနှစ်ချုပ်ကို ရိုက်နှိပ်ထားသည်။
+  stdout။
 
-### Output summary
+### Output အနှစ်ချုပ်
 
-The command emits a `SortitionSummary` JSON blob. Sample output is stored at
-`docs/examples/ministry/agenda_sortition_summary_example.json`. Key fields:
+အမိန့်သည် `SortitionSummary` JSON blob ကို ထုတ်လွှတ်သည်။ နမူနာအထွက်ကို သိမ်းဆည်းထားသည်။
+`docs/examples/ministry/agenda_sortition_summary_example.json`။ အဓိကနယ်ပယ်များ-
 
-| Field | Description |
-|-------|-------------|
-| `algorithm` | Sortition label (`agenda-sortition-blake3-v1`). |
-| `roster_digest` | BLAKE3 + SHA-256 digests of the roster file (used to confirm audits operate over the same member list). |
-| `seed_hex` / `slots` | Echo the CLI inputs so auditors can reproduce the draw. |
-| `merkle_root_hex` | Root of the roster Merkle tree (`hash_node`/`hash_leaf` helpers in `xtask/src/ministry_agenda.rs`). |
-| `selected[]` | Entries for each slot, including the canonical member metadata, eligible index, original roster index, deterministic draw entropy, leaf hash, and Merkle proof siblings. |
+| လယ် | ဖော်ပြချက် |
+|--------|-------------|
+| `algorithm` | အမျိုးအစားခွဲခြင်းတံဆိပ် (`agenda-sortition-blake3-v1`)။ |
+| `roster_digest` | BLAKE3 + SHA-256 စာရင်းဇယားဖိုင်၏ အချေအတင်များ (တူညီသောအဖွဲ့ဝင်စာရင်းတွင် စာရင်းစစ်များ လုပ်ဆောင်ကြောင်း အတည်ပြုရန် အသုံးပြုသည်)။ |
+| `seed_hex` / `slots` | စာရင်းစစ်များသည် ဆွဲခြင်းကို ပြန်လည်ထုတ်လုပ်နိုင်စေရန် CLI သွင်းအားများကို သံယောင်လိုက်ခြင်း။ |
+| `merkle_root_hex` | စာရင်းဇယား Merkle သစ်ပင်၏အမြစ် (`hash_node`/`hash_leaf` အကူအညီပေးသူများ `xtask/src/ministry_agenda.rs`)။ |
+| `selected[]` | Canonical အဖွဲ့ဝင် မက်တာဒေတာ၊ သတ်မှတ်ချက်ပြည့်မီသော အညွှန်း၊ မူရင်းစာရင်းဇယား အညွှန်း၊ အဆုံးအဖြတ်ပေးသော ဆွဲအင်ရိုပီ၊ အရွက် hash နှင့် Merkle အထောက်အထား မောင်နှမများ အပါအဝင် slot တစ်ခုစီအတွက် ထည့်သွင်းမှုများ။ |
 
-### Verifying a draw
+### မဲနှိုက်စိစစ်ခြင်း။1. `roster_path` မှကိုးကားထားသောစာရင်းကိုယူကာ ၎င်း၏ BLAKE3/SHA-256 ကိုစစ်ဆေးပါ။
+   အနှစ်ချုပ်သည် အနှစ်ချုပ်နှင့် ကိုက်ညီသည်။
+2. တူညီသောမျိုးစေ့/အကွက်များ/စာရင်းဇယားဖြင့် CLI ကို ပြန်လည်လုပ်ဆောင်ပါ။ ရလာတဲ့ `selected[].member_id`
+   အမှာစာသည် ထုတ်ပြန်ထားသော အနှစ်ချုပ်နှင့် ကိုက်ညီရမည်။
+3. သီးခြားအဖွဲ့ဝင်တစ်ဦးအတွက်၊ နံပါတ်စဉ်တပ်ထားသော အဖွဲ့ဝင် JSON ကို အသုံးပြု၍ Merkle အရွက်ကို တွက်ချက်ပါ။
+   (`norito::json::to_vec(&sortition_member)`) နှင့် အထောက်အထား hash တစ်ခုစီတွင် ခေါက်ပါ။ နောက်ဆုံး
+   digest သည် `merkle_root_hex` နှင့် ညီရပါမည်။ ဥပမာအကျဉ်းချုပ်တွင် အထောက်အကူပေးသူက ဖော်ပြသည်။
+   `eligible_index`၊ `leaf_hash_hex` နှင့် `merkle_proof[]` ပေါင်းစပ်နည်း။
 
-1. Fetch the roster referenced by `roster_path` and verify its BLAKE3/SHA-256
-   digests match the summary.
-2. Re-run the CLI with the same seed/slots/roster; the resulting `selected[].member_id`
-   order should match the published summary.
-3. For a specific member, compute the Merkle leaf using the serialized member JSON
-   (`norito::json::to_vec(&sortition_member)`) and fold in each proof hash. The final
-   digest must equal `merkle_root_hex`. The helper in the example summary shows
-   how to combine `eligible_index`, `leaf_hash_hex`, and `merkle_proof[]`.
+ဤအရာများသည် စိစစ်နိုင်သော ကျပန်းလုပ်ဆောင်မှုအတွက် MINFO-2b လိုအပ်ချက်ကို ဖြည့်ဆည်းပေးသည်၊
+k-of-m ရွေးချယ်မှု၊ နှင့် on-chain API ကို ကြိုးကြိုးမသွယ်မချင်း နောက်ဆက်တွဲ-သပ်သပ် စာရင်းစစ်မှတ်တမ်းများ။
 
-These artefacts satisfy the MINFO-2b requirement for verifiable randomness,
-k-of-m selection, and append-only audit logs until the on-chain API is wired.
+## အတည်ပြုချက်အမှား ရည်ညွှန်းချက်
 
-## Validation error reference
+`AgendaProposalV1::validate` သည် `AgendaProposalValidationError` မျိုးကွဲများကို ထုတ်လွှတ်သည်
+payload တစ်ခုပျက်သည့်အခါတိုင်း linting ။ အောက်ဖော်ပြပါဇယားသည် အဖြစ်အများဆုံးကို အကျဉ်းချုပ်ဖော်ပြထားသည်။
+ပေါ်တယ်ပြန်လည်သုံးသပ်သူများသည် CLI အထွက်အား လုပ်ဆောင်ချက်လမ်းညွှန်ချက်အဖြစ် ဘာသာပြန်ဆိုနိုင်သောကြောင့် အမှားများဖြစ်သည်။| အမှား | အဓိပ္ပါယ် | ပြုပြင်ခြင်း |
+|---------|---------|-------------|
+| `UnsupportedVersion { expected, found }` | Payload `version` သည် တရားဝင်သူ၏ပံ့ပိုးပေးထားသော အစီအစဉ်နှင့် ကွဲပြားသည်။ | နောက်ဆုံးပေါ် schema အစုအဝေးကို အသုံးပြု၍ JSON ကို ပြန်ထုတ်ပါ ဗားရှင်းသည် `expected` နှင့် ကိုက်ညီပါသည်။ |
+| `MissingProposalId` / `InvalidProposalIdFormat { value }` | `proposal_id` သည် `AC-YYYY-###` ဖောင်တွင် ဗလာဖြစ်နေသည် သို့မဟုတ် မဟုတ်ပါ။ | ပြန်လည်မတင်ပြမီ မှတ်တမ်းတင်ထားသော ဖော်မတ်များအတိုင်း သီးသန့်အမှတ်အသားတစ်ခုကို ထည့်သွင်းပါ။ |
+| `MissingSubmissionTimestamp` | `submitted_at_unix_ms` သည် သုည သို့မဟုတ် ပျောက်ဆုံးနေသည်။ | တင်ပြမှုအချိန်တံဆိပ်ကို Unix မီလီစက္ကန့်များဖြင့် မှတ်တမ်းတင်ပါ။ |
+| `InvalidLanguageTag { value }` | `language` သည် တရားဝင် BCP-47 တဂ်မဟုတ်ပါ။ | `en`၊ `ja-JP`၊ သို့မဟုတ် BCP-47 အသိအမှတ်ပြု အခြားနေရာတစ်ခုကို အသုံးပြုပါ။ |
+| `MissingSummaryField { field }` | `summary.title`၊ `.motivation` သို့မဟုတ် `.expected_impact` များထဲမှ တစ်ခုသည် ဗလာဖြစ်နေသည်။ | ညွှန်ပြထားသော အကျဉ်းချုပ်အကွက်အတွက် အလွတ်မဟုတ်သော စာသားကို ပေးပါ။ |
+| `MissingSubmitterField { field }` | `submitter.name` သို့မဟုတ် `submitter.contact` ပျောက်ဆုံးနေသည်။ | သုံးသပ်သူများသည် အဆိုပြုသူကို ဆက်သွယ်နိုင်စေရန် ပျောက်ဆုံးနေသော တင်ပြသူ မက်တာဒေတာကို ပေးဆောင်ပါ။ |
+| `InvalidTag { value }` | `tags[]` ဝင်ခွင့်စာရင်းတွင် မပါဝင်ပါ။ | တဂ်ကို ဖယ်ရှားခြင်း သို့မဟုတ် အမည်ပြောင်းခြင်း (`csam`၊ `malware` စသည်ဖြင့်)။ |
+| `MissingTargets` | `targets[]` အခင်းအကျင်းသည် ဗလာဖြစ်နေသည်။ | အနည်းဆုံး ပစ်မှတ် hash မိသားစု ထည့်သွင်းမှုကို ပေးပါ။ |
+| `MissingTargetLabel { index }` / `MissingTargetReason { index }` | ပစ်မှတ်ထည့်သွင်းမှု `label` သို့မဟုတ် `reason` အကွက်များ ပျောက်ဆုံးနေပါသည်။ | ပြန်လည်မတင်ပြမီ အညွှန်းကိန်းထည့်သွင်းမှုအတွက် လိုအပ်သောအကွက်ကို ဖြည့်ပါ။ |
+| `InvalidHashFamily { index, value }` | `hash_family` အညွှန်းကို မပံ့ပိုးပါ။ | ဟက်ရှ်မိသားစုအမည်များကို ASCII အက္ခရာဂဏန်းစာလုံးပေါင်း `-_` သို့ ကန့်သတ်ပါ။ |
+| `InvalidHashHex { index, value }` / `TargetDigestTooShort { index }` | Digest သည် တရားဝင် hex မဟုတ်ပါ သို့မဟုတ် 16 bytes ထက်တိုသည်။ | အညွှန်းကိန်းပစ်မှတ်အတွက် စာလုံးသေး hex digest (≥32 hex chars) ကို ပေးပါ။ |
+| `DuplicateTarget { index, fingerprint }` | ပစ်မှတ်အချေအတင်သည် အစောပိုင်းထည့်သွင်းမှု သို့မဟုတ် မှတ်ပုံတင်လက်ဗွေကို ပွားသည်။ | ထပ်နေသည့်အရာများကို ဖယ်ရှားပါ သို့မဟုတ် ထောက်ကူပေးသည့် အထောက်အထားများကို ပစ်မှတ်တစ်ခုတည်းသို့ ပေါင်းစည်းပါ။ |
+| `MissingEvidence` | အထောက်အထားများ ပူးတွဲတင်ပြခြင်း မရှိခဲ့ပါ။ | မျိုးပွားခြင်းဆိုင်ရာ အကြောင်းအရာနှင့် ချိတ်ဆက်ထားသော အနည်းဆုံး အထောက်အထား မှတ်တမ်းတစ်ခုကို ပူးတွဲပါ။ |
+| `MissingEvidenceUri { index }` | `uri` အကွက်တွင် အထောက်အထားထည့်သွင်းမှု ပျောက်ဆုံးနေပါသည်။ | အညွှန်းပြုထားသော အထောက်အထားထည့်သွင်းမှုအတွက် ထုတ်ယူ၍ရနိုင်သော URI သို့မဟုတ် အမှုတွဲအမှတ်အသားကို ပေးပါ။ |
+| `MissingEvidenceDigest { index }` / `InvalidEvidenceDigest { index, value }` | (SoraFS CID သို့မဟုတ် ပူးတွဲပါဖိုင်) လိုအပ်သော အထောက်အထား ထည့်သွင်းမှု ပျောက်ဆုံးနေသည် သို့မဟုတ် `digest_blake3_hex` မမှန်ကန်ပါ။ | အညွှန်းကိန်းထည့်သွင်းမှုအတွက် စာလုံးသေး 64 လုံးပါ BLAKE3 digest ကို ပေးဆောင်ပါ။ |
 
-`AgendaProposalV1::validate` emits `AgendaProposalValidationError` variants
-whenever a payload fails linting. The table below summarises the most common
-errors so portal reviewers can translate CLI output into actionable guidance.
+## ဥပမာများ
 
-| Error | Meaning | Remediation |
-|-------|---------|-------------|
-| `UnsupportedVersion { expected, found }` | Payload `version` differs from the validator’s supported schema. | Regenerate the JSON using the latest schema bundle so the version matches `expected`. |
-| `MissingProposalId` / `InvalidProposalIdFormat { value }` | `proposal_id` is empty or not in `AC-YYYY-###` form. | Populate a unique identifier following the documented format before re-submitting. |
-| `MissingSubmissionTimestamp` | `submitted_at_unix_ms` is zero or missing. | Record the submission timestamp in Unix milliseconds. |
-| `InvalidLanguageTag { value }` | `language` is not a valid BCP‑47 tag. | Use a standard tag such as `en`, `ja-JP`, or another locale recognised by BCP‑47. |
-| `MissingSummaryField { field }` | One of `summary.title`, `.motivation`, or `.expected_impact` is empty. | Provide non-empty text for the indicated summary field. |
-| `MissingSubmitterField { field }` | `submitter.name` or `submitter.contact` missing. | Supply the missing submitter metadata so reviewers can contact the proposer. |
-| `InvalidTag { value }` | `tags[]` entry not on the allowlist. | Remove or rename the tag to one of the documented values (`csam`, `malware`, etc.). |
-| `MissingTargets` | `targets[]` array is empty. | Provide at least one target hash family entry. |
-| `MissingTargetLabel { index }` / `MissingTargetReason { index }` | Target entry missing the `label` or `reason` fields. | Fill in the required field for the indexed entry before resubmitting. |
-| `InvalidHashFamily { index, value }` | Unsupported `hash_family` label. | Restrict hash family names to ASCII alphanumerics plus `-_`. |
-| `InvalidHashHex { index, value }` / `TargetDigestTooShort { index }` | Digest is not valid hex or is shorter than 16 bytes. | Provide a lowercase hex digest (≥32 hex chars) for the indexed target. |
-| `DuplicateTarget { index, fingerprint }` | Target digest duplicates an earlier entry or registry fingerprint. | Remove duplicates or merge the supporting evidence into a single target. |
-| `MissingEvidence` | No evidence attachments were supplied. | Attach at least one evidence record linking to reproduction material. |
-| `MissingEvidenceUri { index }` | Evidence entry missing the `uri` field. | Provide the fetchable URI or case identifier for the indexed evidence entry. |
-| `MissingEvidenceDigest { index }` / `InvalidEvidenceDigest { index, value }` | Evidence entry that requires a digest (SoraFS CID or attachment) is missing or has invalid `digest_blake3_hex`. | Supply a 64-character lowercase BLAKE3 digest for the indexed entry. |
+- `docs/examples/ministry/agenda_proposal_example.json` — စည်းမျဉ်းစည်းကမ်း၊
+  အထောက်အထား ပူးတွဲပါ ပူးတွဲပါ နှစ်ခုပါရှိသော လီတင်-သန့်ရှင်းသော အဆိုပြုလွှာ
+- `docs/examples/ministry/agenda_duplicate_registry.json` — စတင်စာရင်းသွင်းခြင်း။
+  BLAKE3 လက်ဗွေနှင့် ကျိုးကြောင်းဆီလျော်မှု တစ်ခုတည်းပါရှိသည်။
 
-## Examples
-
-- `docs/examples/ministry/agenda_proposal_example.json` — canonical,
-  lint-clean proposal payload with two evidence attachments.
-- `docs/examples/ministry/agenda_duplicate_registry.json` — starter registry
-  containing a single BLAKE3 fingerprint and rationale.
-
-Reuse these files as templates when integrating portal tooling or writing CI
-checks for automated submissions.
+portal tooling သို့မဟုတ် CI ရေးရာတွင် ဤဖိုင်များကို နမူနာများအဖြစ် ပြန်သုံးပါ။
+အလိုအလျောက် တင်ပြမှုများကို စစ်ဆေးသည်။

@@ -6,46 +6,47 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 05149d624d680d04433be41a4525538c97bd103ae7f80dda2613a6adb181a93d
 source_last_modified: "2026-01-03T18:07:57.206662+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Iroha Monitor
+# Iroha Moniteur
 
-The refactored Iroha monitor pairs a lightweight terminal UI with animated
-festival ASCII art and the traditional Etenraku theme.  It focuses on two
-simple workflows:
+Le moniteur Iroha refactorisé associe une interface utilisateur de terminal légère à des animations.
+festival d'art ASCII et le thème traditionnel Etenraku.  Il se concentre sur deux
+flux de travail simples :
 
-- **Spawn-lite mode** – start ephemeral status/metrics stubs that mimic peers.
-- **Attach mode** – point the monitor at existing Torii HTTP endpoints.
+- **Mode Spawn-lite** – démarrez des stubs de statut/métriques éphémères qui imitent les pairs.
+- **Mode Attachement** – pointez le moniteur vers les points de terminaison HTTP Torii existants.
 
-The UI renders three regions on every refresh:
+L'interface utilisateur affiche trois régions à chaque actualisation :
 
-1. **Torii skyline header** – animated torii gate, Mt. Fuji, koi waves, and star
-   field that scroll in sync with the refresh cadence.
-2. **Summary strip** – aggregated blocks/transactions/gas plus refresh timing.
-3. **Peer table & festival whispers** – peer rows on the left, rotating event
-   log on the right that captures warnings (timeouts, oversized payloads, etc.).
-4. **Optional gas trend** – enable `--show-gas-trend` to append a sparkline
-   summarising total gas usage across all peers.
+1. **En-tête d'horizon Torii** – porte torii animée, mont Fuji, vagues de koi et étoile
+   champ qui défile en synchronisation avec la cadence de rafraîchissement.
+2. **Bande récapitulative** – blocs/transactions/gaz agrégés plus calendrier d'actualisation.
+3. **Table des pairs et murmures du festival** – rangées de pairs à gauche, événement tournant
+   connectez-vous à droite qui capture les avertissements (timeouts, charges utiles surdimensionnées, etc.).
+4. **Tendance de gaz facultative** – activez `--show-gas-trend` pour ajouter une ligne d'étincelles
+   résumant la consommation totale de gaz de tous les pairs.
 
-New in this refactor:
+Nouveau dans ce refactor :
 
-- Animated Japanese-style ASCII scene with koi, torii, and lanterns.
-- Simplified command surface (`--spawn-lite`, `--attach`, `--interval`).
-- Intro banner with optional audio playback of the gagaku theme (external MIDI
-  player or the built-in soft synth when the platform/audio stack supports it).
-- `--no-theme` / `--no-audio` flags for CI or fast smoke runs.
-- Per-peer “mood” column showing the latest warning, commit time, or uptime.
+- Scène ASCII animée de style japonais avec koi, torii et lanternes.
+- Surface de commande simplifiée (`--spawn-lite`, `--attach`, `--interval`).
+- Bannière d'introduction avec lecture audio optionnelle du thème gagaku (MIDI externe
+  lecteur ou le synthétiseur logiciel intégré lorsque la plateforme/pile audio le prend en charge).
+- Drapeaux `--no-theme` / `--no-audio` pour CI ou fumées rapides.
+- Colonne « humeur » par homologue affichant le dernier avertissement, l'heure de validation ou la disponibilité.
 
-## Quickstart
+## Démarrage rapide
 
-Build the monitor and run it against the stubbed peers:
+Créez le moniteur et exécutez-le sur les pairs tronqués :
 
 ```bash
 cargo run -p iroha_monitor -- --spawn-lite --peers 3
 ```
 
-Attach to existing Torii endpoints:
+Attachez-vous aux points de terminaison Torii existants :
 
 ```bash
 cargo run -p iroha_monitor -- \
@@ -53,13 +54,13 @@ cargo run -p iroha_monitor -- \
   --interval 500
 ```
 
-CI-friendly invocation (skip intro animation and audio):
+Invocation compatible CI (ignorer l'animation d'introduction et l'audio) :
 
 ```bash
 cargo run -p iroha_monitor -- --spawn-lite --no-theme --no-audio
 ```
 
-### CLI flags
+### Indicateurs CLI
 
 ```
 --spawn-lite         start local status/metrics stubs (default if no --attach)
@@ -77,103 +78,101 @@ cargo run -p iroha_monitor -- --spawn-lite --no-theme --no-audio
                      cap headless fallback to N frames (0 = unlimited)
 ```
 
-## Theme intro
+## Introduction au thème
 
-By default, startup plays a short ASCII animation while the Etenraku score
-begins.  Audio selection order:
+Par défaut, le démarrage lit une courte animation ASCII tandis que l'Etenraku marque
+commence.  Ordre de sélection audio :
 
-1. If `--midi-player` is provided, generate the demo MIDI (or use `--midi-file`)
-   and spawn the command.
-2. Otherwise, on macOS/Windows (or Linux with `--features iroha_monitor/linux-builtin-synth`)
-   render the score with the built-in gagaku soft synth (no external audio
-   assets required).
-3. If audio is disabled or initialization fails, the intro still prints the
-   animation and immediately enters the TUI.
+1. Si `--midi-player` est fourni, générez la démo MIDI (ou utilisez `--midi-file`)
+   et lancez la commande.
+2. Sinon, sous macOS/Windows (ou Linux avec `--features iroha_monitor/linux-builtin-synth`)
+   rendre la partition avec le synthétiseur logiciel gagaku intégré (pas d'audio externe
+   actifs requis).
+3. Si l'audio est désactivé ou si l'initialisation échoue, l'intro imprime toujours le
+   animation et entre immédiatement dans le TUI.
 
-The CPAL-powered synth auto-enables on macOS and Windows. On Linux it is
-opt-in to avoid missing ALSA/Pulse headers during workspace builds; enable it
-with `--features iroha_monitor/linux-builtin-synth` if your system provides a
-working audio stack.
+Le synthétiseur alimenté par CPAL s'active automatiquement sur macOS et Windows. Sous Linux, c'est
+optez pour éviter de manquer les en-têtes ALSA/Pulse lors de la création de l'espace de travail ; l'activer
+avec `--features iroha_monitor/linux-builtin-synth` si votre système fournit un
+pile audio fonctionnelle.
 
-Use `--no-theme` or `--no-audio` when running in CI or headless shells.
+Utilisez `--no-theme` ou `--no-audio` lors de l'exécution dans des shells CI ou sans tête.
 
-The soft synth now follows the arrangement captured in *MIDI synth design in
-Rust.pdf*: hichiriki and ryūteki share a heterophonic melody while the shō
-provides the aitake pads described in the document.  The timed note data lives
-in `etenraku.rs`; it powers both the CPAL callback and the generated demo MIDI.
-When audio output is unavailable the monitor skips playback but still renders
-the ASCII animation.
+Le synthétiseur logiciel suit désormais l'arrangement capturé dans la conception du synthétiseur *MIDI dans
+Rust.pdf* : hichiriki et ryūteki partagent une mélodie hétérophonique tandis que le shō
+fournit les tampons Aitake décrits dans le document.  Les données de note chronométrées sont conservées
+dans `etenraku.rs` ; il alimente à la fois le rappel CPAL et la démo MIDI générée.
+Lorsque la sortie audio n'est pas disponible, le moniteur saute la lecture mais restitue toujours
+l'animation ASCII.
 
-## UI overview
+## Présentation de l'interface utilisateur- **Art d'en-tête** – généré chaque image par `AsciiAnimator` ; koi, lanternes torii,
+  et les vagues dérivent pour donner un mouvement continu.
+- **Bande récapitulative** : affiche les pairs en ligne, le nombre de pairs signalé, les totaux des blocs,
+  totaux de blocs non vides, approbations/rejets d'émission, consommation de gaz et taux de rafraîchissement.
+- **Table des pairs** – colonnes pour l'alias/point de terminaison, les blocs, les transactions, la taille de la file d'attente,
+  consommation de gaz, latence et un indice « d'humeur » (avertissements, temps de validation, temps de disponibilité).
+- **Festival murmure** – journal continu des avertissements (erreurs de connexion, charge utile)
+  dépassements de limites, points finaux lents).  Les messages sont inversés (le dernier en haut).
 
-- **Header art** – generated each frame by `AsciiAnimator`; koi, torii lanterns,
-  and waves drift to give continuous motion.
-- **Summary strip** – shows online peers, reported peer count, block totals,
-  non-empty block totals, tx approvals/rejections, gas usage, and refresh rate.
-- **Peer table** – columns for alias/endpoint, blocks, transactions, queue size,
-  gas usage, latency, and a “mood” hint (warnings, commit time, uptime).
-- **Festival whispers** – rolling log of warnings (connection errors, payload
-  limit breaches, slow endpoints).  Messages are reversed (latest on top).
+Raccourcis clavier :
 
-Keyboard shortcuts:
+- `n` / Droite / Bas – déplace le focus vers le homologue suivant.
+- `p` / Gauche / Haut – déplace le focus sur le homologue précédent.
+- `q` / Esc / Ctrl-C – quittez et restaurez le terminal.
 
-- `n` / Right / Down – move focus to the next peer.
-- `p` / Left / Up – move focus to the previous peer.
-- `q` / Esc / Ctrl-C – exit and restore the terminal.
+Le moniteur utilise crossterm + ratatui avec un tampon d'écran alternatif ; en le quittant
+restaure le curseur et efface l'écran.
 
-The monitor uses crossterm + ratatui with an alternate-screen buffer; on exit it
-restores the cursor and clears the screen.
+## Tests de fumée
 
-## Smoke tests
+La caisse contient des tests d'intégration qui exercent les deux modes et les limites HTTP :
 
-The crate ships integration tests that exercise both modes and the HTTP limits:
+-`spawn_lite_smoke_renders_frames`
+-`attach_mode_with_stubs_runs_cleanly`
+-`invalid_endpoint_surfaces_warning`
+-`status_limit_warning_is_rendered`
+-`attach_mode_with_slow_peer_renders_multiple_frames`
 
-- `spawn_lite_smoke_renders_frames`
-- `attach_mode_with_stubs_runs_cleanly`
-- `invalid_endpoint_surfaces_warning`
-- `status_limit_warning_is_rendered`
-- `attach_mode_with_slow_peer_renders_multiple_frames`
-
-Run just the monitor tests:
+Exécutez uniquement les tests du moniteur :
 
 ```bash
 cargo test -p iroha_monitor -- --nocapture
 ```
 
-The workspace has heavier integration tests (`cargo test --workspace`). Running
-the monitor tests separately is still useful for quick validation when you do
-not need the full suite.
+L'espace de travail comporte des tests d'intégration plus lourds (`cargo test --workspace`). Courir
+les tests du moniteur séparément sont toujours utiles pour une validation rapide lorsque vous le faites
+pas besoin de la suite complète.
 
-## Updating screenshots
+## Mise à jour des captures d'écran
 
-The docs demo now focuses on the torii skyline and peer table.  To refresh the
-assets, run:
+La démo de la documentation se concentre désormais sur l'horizon torii et la table des pairs.  Pour rafraîchir le
+actifs, exécutez :
 
 ```bash
 make monitor-screenshots
 ```
 
-This wraps `scripts/iroha_monitor_demo.sh` (spawn-lite mode, fixed seed/viewport,
-no intro/audio, dawn palette, art-speed 1, headless cap 24) and writes the
-SVG/ANSI frames plus `manifest.json` and `checksums.json` into
+Cela enveloppe `scripts/iroha_monitor_demo.sh` (mode spawn-lite, graine/fenêtre fixe,
+pas d'intro/audio, palette dawn, art-speed 1, capuchon sans tête 24) et écrit le
+Cadres SVG/ANSI plus `manifest.json` et `checksums.json` dans
 `docs/source/images/iroha_monitor_demo/`. `make check-iroha-monitor-docs`
-wraps both CI guards (`ci/check_iroha_monitor_assets.sh` and
-`ci/check_iroha_monitor_screenshots.sh`) so generator hashes, manifest fields,
-and checksums stay in sync; the screenshot check also ships as
-`python3 scripts/check_iroha_monitor_screenshots.py`. Pass `--no-fallback` to
-the demo script if you want the capture to fail instead of falling back to the
-baked frames when the monitor output is empty; when fallback is used the raw
-`.ans` files are rewritten with the baked frames so the manifest/checksums stay
-deterministic.
+enveloppe les deux gardes CI (`ci/check_iroha_monitor_assets.sh` et
+`ci/check_iroha_monitor_screenshots.sh`) donc les hachages du générateur, les champs manifestes,
+et les sommes de contrôle restent synchronisées ; la vérification de la capture d'écran est également livrée sous forme
+`python3 scripts/check_iroha_monitor_screenshots.py`. Transmettez `--no-fallback` à
+le script de démonstration si vous souhaitez que la capture échoue au lieu de revenir au
+images cuites lorsque la sortie du moniteur est vide ; lorsque le repli est utilisé, le brut
+Les fichiers `.ans` sont réécrits avec les images cuites afin que les manifestes/sommes de contrôle restent
+déterministe.
 
-## Deterministic screenshots
+## Captures d'écran déterministes
 
-The shipped snapshots live in `docs/source/images/iroha_monitor_demo/`:
+Les instantanés expédiés se trouvent dans `docs/source/images/iroha_monitor_demo/` :
 
-![monitor overview](images/iroha_monitor_demo/iroha_monitor_demo_overview.svg)
-![monitor pipeline](images/iroha_monitor_demo/iroha_monitor_demo_pipeline.svg)
+![présentation du moniteur](images/iroha_monitor_demo/iroha_monitor_demo_overview.svg)
+![surveiller le pipeline](images/iroha_monitor_demo/iroha_monitor_demo_pipeline.svg)
 
-Reproduce them with a fixed viewport/seed:
+Reproduisez-les avec une fenêtre/graine fixe :
 
 ```bash
 scripts/iroha_monitor_demo.sh \
@@ -182,26 +181,24 @@ scripts/iroha_monitor_demo.sh \
   --seed iroha-monitor-demo
 ```
 
-The capture helper fixes `LANG`/`LC_ALL`/`TERM`, forwards
-`IROHA_MONITOR_DEMO_SEED`, mutes audio, and pins the art theme/speed so the
-frames render identically across platforms. It writes `manifest.json` (generator
-hashes + sizes) and `checksums.json` (SHA-256 digests) under
-`docs/source/images/iroha_monitor_demo/`; CI runs
-`ci/check_iroha_monitor_assets.sh` and `ci/check_iroha_monitor_screenshots.sh`
-to fail when the assets drift from the recorded manifests.
+L'assistant de capture corrige `LANG`/`LC_ALL`/`TERM`, transmet
+`IROHA_MONITOR_DEMO_SEED`, coupe le son et épingle le thème/vitesse artistique afin que le
+les images s’affichent de manière identique sur toutes les plates-formes. Il écrit `manifest.json` (générateur
+hachages + tailles) et `checksums.json` (condensés SHA-256) sous
+`docs/source/images/iroha_monitor_demo/` ; Exécutions CI
+`ci/check_iroha_monitor_assets.sh` et `ci/check_iroha_monitor_screenshots.sh`
+échouer lorsque les actifs dérivent des manifestes enregistrés.
 
-## Troubleshooting
+## Dépannage- **Aucune sortie audio** – le moniteur revient en lecture silencieuse et continue.
+- **Le repli sans tête se termine plus tôt** – le moniteur limite les exécutions sans tête à quelques
+  douzaine d'images (environ 12 secondes à l'intervalle par défaut) lorsqu'il ne peut pas changer
+  le terminal en mode brut ; passez `--headless-max-frames 0` pour le faire fonctionner
+  indéfiniment.
+- **Charges utiles de statut surdimensionnées** – la colonne d'humeur des pairs et le journal du festival
+  afficher `body exceeds …` avec la limite configurée (`128 KiB`).
+- **Pairs lents** – le journal des événements enregistre les avertissements d'expiration ; concentrer ce pair sur
+  mettez la ligne en surbrillance.
 
-- **No audio output** – the monitor falls back to muted playback and continues.
-- **Headless fallback exits early** – the monitor caps headless runs to a couple
-  dozen frames (about 12 seconds at the default interval) when it cannot switch
-  the terminal into raw mode; pass `--headless-max-frames 0` to keep it running
-  indefinitely.
-- **Oversized status payloads** – the peer’s mood column and the festival log
-  show `body exceeds …` with the configured limit (`128 KiB`).
-- **Slow peers** – the event log records timeout warnings; focus that peer to
-  highlight the row.
-
-Enjoy the festival skyline!  Contributions for additional ASCII motifs or
-metrics panels are welcome—keep them deterministic so clusters render the same
-frame-by-frame regardless of terminal.
+Profitez de l'horizon du festival !  Contributions pour des motifs ASCII supplémentaires ou
+les panneaux de métriques sont les bienvenus : gardez-les déterministes pour que les clusters restituent la même chose
+image par image, quel que soit le terminal.

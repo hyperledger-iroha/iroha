@@ -7,19 +7,20 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5e0e4f16000f6a578fe9c9d6e204c01087e987ac3b46d70537a15b072df48a13
 source_last_modified: "2025-12-29T18:16:35.974178+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Kotodama Compiler Error Codes
+# Kotodama የማጠናከሪያ ስህተት ኮዶች
 
-The Kotodama compiler emits stable error codes so that tooling and CLI users can
-quickly understand the cause of a failure. Use `koto_compile --explain <code>`
-to print the corresponding hint.
+የ Kotodama ማጠናከሪያ መሳሪያ እና የ CLI ተጠቃሚዎች የተረጋጋ የስህተት ኮዶችን ያወጣል
+የውድቀት መንስኤን በፍጥነት ይረዱ። `koto_compile --explain <code>` ይጠቀሙ
+ተጓዳኝ ፍንጭ ለማተም.
 
-| Code  | Description | Typical Fix |
-|-------|-------------|-------------|
-| `E0001` | Branch target is out of range for the IVM jump encoding. | Split very large functions or reduce inlining so basic block distances stay within ±1 MiB. |
-| `E0002` | Call sites reference a function that was never defined. | Check for typos, visibility modifiers, or feature flags that removed the callee. |
-| `E0003` | Durable state syscalls were emitted without ABI v1 enabled. | Set `CompilerOptions::abi_version = 1` or add `meta { abi_version: 1 }` inside the `seiyaku` contract. |
-| `E0004` | Asset-related syscalls received non-literal pointers. | Use `account_id(...)`, `asset_definition(...)`, etc., or pass 0 sentinels for host defaults. |
-| `E0005` | `for`-loop initializer is more complex than supported today. | Move complex setup before the loop; only simple `let`/expression initialisers are currently accepted. |
-| `E0006` | `for`-loop step clause is more complex than supported today. | Update the loop counter with a simple expression (e.g. `i = i + 1`). |
+| ኮድ | መግለጫ | የተለመደ ማስተካከያ |
+|-------|-------------|------------|
+| `E0001` | የቅርንጫፍ ኢላማ ለIVM ዝላይ ኢንኮዲንግ ከክልል ውጭ ነው። | በጣም ትልቅ ተግባራትን ይከፋፍሉ ወይም ውስጠ-ግንቡ ይቀንሱ ስለዚህ መሰረታዊ የማገጃ ርቀቶች በ± 1ሚቢ ውስጥ ይቆያሉ። |
+| `E0002` | የጥሪ ጣቢያዎች ፈጽሞ ያልተገለጸ ተግባርን ይጠቅሳሉ። | ጠሪውን ያስወገዱ የትየባ፣ የታይነት ማስተካከያዎች ወይም የባህሪ ባንዲራዎች ካሉ ያረጋግጡ። |
+| `E0003` | ABI v1 ሳይነቃ የሚበረክት የስቴት ሲካሎች ተለቀቁ። | `CompilerOptions::abi_version = 1` ያቀናብሩ ወይም `meta { abi_version: 1 }` በ `seiyaku` ውል ውስጥ ይጨምሩ። |
+| `E0004` | ከንብረት ጋር የተገናኙ ሲሳይሎች ቀጥተኛ ያልሆኑ ጠቋሚዎችን ተቀብለዋል። | `account_id(...)`፣ `asset_definition(...)` ወዘተ ይጠቀሙ ወይም 0 sentinels ለአስተናጋጅ ነባሪዎች ይለፉ። |
+| `E0005` | `for`-loop ማስጀመሪያ ዛሬ ከሚደገፈው የበለጠ ውስብስብ ነው። | ከሉፕ በፊት ውስብስብ ማዋቀርን ያንቀሳቅሱ; ቀላል `let`/መግለጫ ማስጀመሪያዎች ብቻ በአሁኑ ጊዜ ተቀባይነት አላቸው። |
+| `E0006` | `for`-loop የእርምጃ አንቀጽ ዛሬ ከሚደገፈው የበለጠ ውስብስብ ነው። | የሉፕ ቆጣሪውን በቀላል አገላለጽ ያዘምኑ (ለምሳሌ `i = i + 1`)። |

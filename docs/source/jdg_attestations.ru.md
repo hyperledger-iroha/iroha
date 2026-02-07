@@ -6,34 +6,35 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 459e8ed4612da7cfa68053e4e299b2f68e7620d4f3b98a8a721ebf8327829ea1
 source_last_modified: "2026-01-09T07:05:10.922933+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# JDG Attestations: Guard, Rotation, and Retention
+# Аттестации JDG: охрана, ротация и удержание
 
-This note documents the v1 JDG attestation guard that now ships in `iroha_core`.
+В этой заметке описана защита аттестации JDG v1, которая теперь поставляется в `iroha_core`.
 
-- **Committee manifests:** Norito-encoded `JdgCommitteeManifest` bundles carry per-dataspace rotation
-  schedules (`committee_id`, ordered members, threshold, `activation_height`, `retire_height`).
-  Manifests are loaded with `JdgCommitteeSchedule::from_path` and enforce strictly increasing
-  activation heights with an optional grace overlap (`grace_blocks`) between retiring/activating
-  committees.
-- **Attestation guard:** `JdgAttestationGuard` enforces dataspace binding, expiry, stale bounds,
-  committee id/threshold matching, signer membership, supported signature schemes, and optional
-  SDN validation via `JdgSdnEnforcer`. Size caps, max lag, and allowed signature schemes are
-  constructor parameters; `validate(attestation, dataspace, current_height)` returns the active
-  committee or a structured error.
-  - `scheme_id = 1` (`simple_threshold`): per-signer signatures, optional signer bitmap.
-  - `scheme_id = 2` (`bls_normal_aggregate`): single pre-aggregated BLS-normal signature over the
-    attestation hash; signer bitmap optional, defaults to all signers in the attestation. BLS
-    aggregate validation requires a valid PoP per committee member in the manifest; missing or
-    invalid PoPs reject the attestation.
-  Configure the allow-list via `governance.jdg_signature_schemes`.
-- **Retention store:** `JdgAttestationStore` tracks attestations per dataspace with a configurable
-  per-dataspace cap, pruning oldest entries on insert. Call `for_dataspace` or
-  `for_dataspace_and_epoch` to retrieve audit/replay bundles.
-- **Tests:** Unit coverage now exercises valid committee selection, unknown signer rejection, stale
-  attestation rejection, unsupported scheme ids, and retention pruning. See
+- **Манифесты комитета:** Пакеты `JdgCommitteeManifest`, закодированные в Norito, поддерживают ротацию для каждого пространства данных.
+  расписания (`committee_id`, упорядоченные элементы, порог, `activation_height`, `retire_height`).
+  Манифесты загружаются с `JdgCommitteeSchedule::from_path` и строго увеличивают
+  высоты активации с дополнительным плавным перекрытием (`grace_blocks`) между выходом на пенсию/активацией
+  комитеты.
+- **Защита аттестации:** `JdgAttestationGuard` обеспечивает привязку пространства данных, истечение срока действия, устаревшие границы,
+  соответствие идентификатора/порогового значения комитета, членство подписывающего лица, поддерживаемые схемы подписи и необязательное
+  Проверка SDN через `JdgSdnEnforcer`. Ограничения по размеру, максимальная задержка и разрешенные схемы подписей указаны
+  параметры конструктора; `validate(attestation, dataspace, current_height)` возвращает активный
+  комитет или структурированная ошибка.
+  - `scheme_id = 1` (`simple_threshold`): подписи для каждого подписывающего лица, необязательное растровое изображение подписывающего лица.
+  - `scheme_id = 2` (`bls_normal_aggregate`): одна предварительно агрегированная нормальная подпись BLS поверх
+    хэш аттестации; Битовое изображение подписывающего лица необязательно, по умолчанию применяется ко всем подписывающим сторонам в подтверждении. БЛС
+    Для совокупной проверки требуется действительный PoP для каждого члена комитета в манифесте; отсутствует или
+    недействительные PoP отклоняют аттестацию.
+  Настройте список разрешений через `governance.jdg_signature_schemes`.
+- **Хранилище хранения:** `JdgAttestationStore` отслеживает аттестации для каждого пространства данных с помощью настраиваемого хранилища.
+  ограничение на пространство данных, удаление самых старых записей при вставке. Позвоните по телефону `for_dataspace` или
+  `for_dataspace_and_epoch` для получения пакетов аудита/воспроизведения.
+- **Тесты:** покрытие подразделения теперь осуществляется действительным выбором комитета, отклонение неизвестного подписывающего лица, устаревшее
+  отклонение аттестации, неподдерживаемые идентификаторы схем и сокращение срока хранения. См.
   `crates/iroha_core/src/jurisdiction.rs`.
 
-The guard rejects schemes outside the configured allow-list.
+Охранник отклоняет схемы за пределами настроенного списка разрешений.

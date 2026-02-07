@@ -8,68 +8,67 @@ source_hash: ff3faabda5f1c277f545b7edbbc93f3b58dee65cec943cfd464a026b2984a146
 source_last_modified: "2025-12-29T18:16:35.979378+00:00"
 translation_last_reviewed: 2026-02-07
 title: Policy Jury Sortition & Ballots
+translator: machine-google-reviewed
 ---
 
-Roadmap item **MINFO-5 — Policy jury voting toolkit** requires a portable format
-for deterministic juror selection plus sealed commit → reveal ballots.  The
-`iroha_data_model::ministry::jury` module now ships three Norito payloads that
-cover the entire voting workflow:
+“Yoʻl xaritasi” bandi **MINFO-5 — Siyosat hakamlari ovoz berish uchun asboblar toʻplami** portativ formatni talab qiladi
+deterministik hakamlar hay'atini tanlash va muhrlangan majburiyat uchun → byulletenlarni ko'rsatish.  The
+`iroha_data_model::ministry::jury` moduli endi uchta Norito foydali yuklarni yuboradi
+butun ovoz berish jarayonini qamrab oladi:
 
-1. **`PolicyJurySortitionV1`** – records the draw metadata (proposal id,
-   round id, proof-of-personhood snapshot digest, randomness beacon),
-   committee size, selected jurors, and the waitlist used for automatic
-   failover.  Each primary slot may include a `PolicyJuryFailoverPlan`
-   pointing at the waitlist rank it should escalate to after its grace
-   period lapses.  The structure is intentionally deterministic so auditors
-   can replay the draw and regenerate the manifest from the same POP
-   snapshot + beacon.
-2. **`PolicyJuryBallotCommitV1`** – sealed commitment written before ballots
-   are revealed.  It stores the round/proposal/juror identifiers, the
-   Blake2b‑256 digest of the juror id + vote choice + nonce tuple, the capture
-   timestamp, and the ballot mode (`plaintext` or `zk-envelope` when the
-   `zk-ballot` feature is active).  `PolicyJuryBallotCommitV1::verify_reveal`
-   ensures the stored digest matches the reveal payload.
-3. **`PolicyJuryBallotRevealV1`** – the public reveal object containing the
-   vote choice, the nonce used at commit time, and optional ZK proof URIs.
-   Reveals require a minimum 16-byte nonce so governance can treat the
-   commitment as binding even when jurors operate over insecure channels.
+1. **`PolicyJurySortitionV1`** – oʻyin metamaʼlumotlarini qayd etadi (taklif identifikatori,
+   davra identifikatori, shaxsni tasdiqlovchi snapshot dayjesti, tasodifiy mayoq),
+   qo'mita hajmi, tanlangan hakamlar hay'ati va avtomatik uchun ishlatiladigan kutish ro'yxati
+   uzilish.  Har bir asosiy uyaga `PolicyJuryFailoverPlan` kirishi mumkin
+   kutish ro'yxati darajasiga ishora qilib, uning inoyatidan keyin ko'tarilishi kerak
+   davr uzilishlari.  Tuzilma qasddan deterministik, shuning uchun auditorlar
+   durangni takrorlashi va bir xil POP dan manifestni qayta tiklashi mumkin
+   surat + mayoq.
+2. **`PolicyJuryBallotCommitV1`** – ovoz berishdan oldin yozilgan muhrlangan majburiyat
+   oshkor qilinadi.  U davra/taklif/hakamlar identifikatorlarini saqlaydi
+   Blake2b‑256 hakamlar a'zosi identifikatori dayjesti + ovoz berish tanlovi + noaniq kortej, suratga olish
+   vaqt tamg'asi va ovoz berish rejimi (`plaintext` yoki `zk-envelope`
+   `zk-ballot` xususiyati faol).  `PolicyJuryBallotCommitV1::verify_reveal`
+   saqlangan dayjest ochilgan foydali yuk bilan mos kelishini ta'minlaydi.
+3. **`PolicyJuryBallotRevealV1`** – o'z ichiga olgan ommaviy oshkora ob'ekt
+   ovoz berish tanlovi, bajarilish vaqtida foydalanilmagan vaqt va ixtiyoriy ZK isboti URI.
+   Oshkorlar kamida 16 baytlik nonce talab qiladi, shuning uchun boshqaruv ushbu muammoni hal qilishi mumkin
+   majburiyat, hatto hakamlar hay'ati xavfli kanallar orqali ishlaganda ham majburiydir.
 
-The `PolicyJurySortitionV1::validate` helper enforces committee sizing,
-duplicate detection (no juror may appear in both the committee and the
-waitlist), ordered waitlist ranks, and valid failover references.  The ballot
-validation routines raise `PolicyJuryBallotError` when proposal or round ids
-drift, when jurors attempt to reveal with an incorrect nonce, or when a
-`zk-envelope` commitment fails to provide matching proof references in its
-reveal.
+`PolicyJurySortitionV1::validate` yordamchisi qo'mita o'lchamlarini belgilaydi,
+takroriy aniqlash (qo'mitada ham, sud majlisida ham hakamlar hay'ati paydo bo'lishi mumkin emas
+kutish roʻyxati), buyurtma qilingan kutish roʻyxati darajalari va yaroqli oʻzgarish moslamalari.  Saylov byulleteni
+tekshirish tartiblari taklif yoki davra identifikatorlari bo'lganda `PolicyJuryBallotError` ni oshiradi
+drift, hakamlar hay'ati noto'g'ri nonce bilan oshkor qilishga harakat qilganda yoki a
+`zk-envelope` majburiyati o'z hujjatida mos keladigan dalillarni taqdim eta olmaydi
+oshkor qilish.
 
-### Integrating with clients
+### Mijozlar bilan integratsiya
 
-- Governance tools should persist the sortition manifest and include it in
-  policy packets so observers can recompute the POP snapshot digest and
-  confirm that the randomness beacon plus candidate set lead to the same
-  juror assignments.
-- Juror clients record a `PolicyJuryBallotCommitV1` immediately after
-  generating the nonce for their vote.  The derived commitment bytes can be
-  submitted to Torii as a base64 value or embedded directly into Norito
-  events.
-- During the reveal phase, jurors emit `PolicyJuryBallotRevealV1`.  Operators
-  feed the payload to `PolicyJuryBallotCommitV1::verify_reveal` before
-  accepting the vote, ensuring the reveal was not swapped or tampered with.
-- When the `zk-ballot` feature is enabled, jurors can attach deterministic
-  proof URIs (e.g., `sorafs://proofs/pj-2026-02/juror-5`) so downstream
-  auditors can retrieve the zero-knowledge witness bundle referenced by the
-  commitment.
+- Boshqaruv vositalari tartiblash manifestini saqlab turishi va uni o'z ichiga olishi kerak
+  siyosat paketlari, shuning uchun kuzatuvchilar POP snapshot dayjestini qayta hisoblashlari va
+  tasodifiy mayoq plus nomzodlar to'plami bir xil olib kelishini tasdiqlang
+  hakamlar hay'ati topshiriqlari.
+- Hakamlar a'zosi mijozlari darhol keyin `PolicyJuryBallotCommitV1` yozishadi
+  ularning ovozi uchun nonce hosil qiladi.  Olingan majburiyat baytlari bo'lishi mumkin
+  Torii ga tayanch 64 qiymati sifatida taqdim etilgan yoki bevosita Norito ichiga kiritilgan
+  voqealar.
+- Oshkora bosqichida hakamlar hay'ati `PolicyJuryBallotRevealV1` chiqaradi.  Operatorlar
+  oldin foydali yukni `PolicyJuryBallotCommitV1::verify_reveal` ga boqing
+  ovoz berishni qabul qilish, oshkor qilish almashtirilmasligi yoki o'zgartirilmasligini ta'minlash.
+- `zk-ballot` funksiyasi yoqilganda, hakamlar hay'ati deterministik ma'lumotlarni biriktirishi mumkin.
+  dalil URI'lar (masalan, `sorafs://proofs/pj-2026-02/juror-5`) shuning uchun quyi oqim
+  auditorlar tomonidan havola qilingan nol ma'lumotli guvohlar to'plamini olishlari mumkin
+  majburiyat.Barcha uchta tuzilma `Encode`, `Decode` va `IntoSchema` ni hosil qiladi, ya'ni ular
+ISI oqimlari, CLI asboblari, SDKlar va boshqaruv REST API uchun mavjud.
+Kanonik Rust uchun `crates/iroha_data_model/src/ministry/jury.rs` ga qarang
+ta'riflar va yordamchi usullar.
 
-All three structures derive `Encode`, `Decode`, and `IntoSchema`, meaning they
-are available to ISI flows, CLI tooling, SDKs, and the governance REST API.
-See `crates/iroha_data_model/src/ministry/jury.rs` for the canonical Rust
-definitions and helper methods.
+### Saralash manifestlari uchun CLI qo'llab-quvvatlashi
 
-### CLI support for sortition manifests
-
-Roadmap item **MINFO-5** also called for reproducible tooling so governance can
-ship verifiable policy-jury rosters before each referendum packet is published.
-The workspace now exposes the `cargo xtask ministry-jury sortition` command:
+“Yo‘l xaritasi” bandi **MINFO-5**, shuningdek, boshqaruvni amalga oshirish uchun takrorlanadigan vositalarni talab qiladi.
+har bir referendum paketi chop etilishidan oldin tekshirilishi mumkin bo'lgan siyosat-haylar ro'yxatini yuboring.
+Ish maydoni endi `cargo xtask ministry-jury sortition` buyrug'ini ko'rsatadi:
 
 ```bash
 cargo xtask ministry-jury sortition \
@@ -84,31 +83,31 @@ cargo xtask ministry-jury sortition \
   --out artifacts/ministry/policy_jury_sortition.json
 ```
 
-- `--roster` accepts a deterministic PoP roster (JSON example:
-  `docs/examples/ministry/policy_jury_roster_example.json`).  Each entry
-  declares the `juror_id`, `pop_identity`, weight, and optional
-  `grace_period_secs`.  Ineligible entries are filtered automatically.
-- `--beacon` injects the 32-byte randomness beacon captured in the governance
-  minutes.  The CLI wires the beacon directly into the ChaCha20 RNG so auditors
-  can replay the draw byte-for-byte.
-- `--committee-size`, `--waitlist-size`, and `--waitlist-ttl-hours` control the
-  number of seated jurors, the failover buffer, and the expiry timestamp applied
-  to the waitlist entries.  When a failover rank exists for a slot, the command
-  records a `PolicyJuryFailoverPlan` pointing at the matching waitlist rank.
-- `--drawn-at` records the wall-clock timestamp for the sortition; the tool
-  converts it into Unix milliseconds for the manifest.
+- `--roster` deterministik PoP ro'yxatini qabul qiladi (JSON misoli:
+  `docs/examples/ministry/policy_jury_roster_example.json`).  Har bir kirish
+  `juror_id`, `pop_identity`, vazni va ixtiyoriyligini e'lon qiladi
+  `grace_period_secs`.  Nomaqbul yozuvlar avtomatik ravishda filtrlanadi.
+- `--beacon` boshqaruvda olingan 32 baytlik tasodifiy mayoqni kiritadi
+  daqiqa.  CLI mayoqni to'g'ridan-to'g'ri ChaCha20 RNG ga ulaydi, shuning uchun auditorlar
+  chizilgan bayt-baytni takrorlashi mumkin.
+- `--committee-size`, `--waitlist-size` va `--waitlist-ttl-hours`
+  o'tirgan hakamlar hay'ati soni, o'chirilish buferi va amal qilish muddati tugashi
+  kutish ro'yxatidagi yozuvlarga.  Slot uchun muvaffaqiyatsiz daraja mavjud bo'lganda, buyruq
+  mos keladigan kutish ro'yxati darajasiga ishora qiluvchi `PolicyJuryFailoverPlan` qayd qiladi.
+- `--drawn-at` saralash uchun devor soati vaqt tamg'asini yozadi; asbob
+  uni manifest uchun Unix millisekundlariga aylantiradi.
 
-The generated manifest is a fully validated `PolicyJurySortitionV1` payload.
-Large deployments typically save the output under `artifacts/ministry/` so it
-can be bundled directly into referendum packets alongside the review-panel
-summary.  An illustrative output is available in
-`docs/examples/ministry/policy_jury_sortition_example.json` so SDK teams can
-exercise their Norito decoders without replaying an entire draw locally.
+Yaratilgan manifest toʻliq tasdiqlangan `PolicyJurySortitionV1` foydali yukidir.
+Katta o'rnatishlar odatda `artifacts/ministry/` ostida chiqishni saqlaydi, shuning uchun
+ko'rib chiqish paneli bilan birga to'g'ridan-to'g'ri referendum paketlariga to'planishi mumkin
+xulosa.  Tasviriy chiqishda mavjud
+`docs/examples/ministry/policy_jury_sortition_example.json`, shuning uchun SDK guruhlari mumkin
+o'zlarining Norito dekoderlarini mahalliy ravishda butun o'yinni takrorlamasdan ishlating.
 
-### Ballot commit/reveal helpers
+### Saylov byulletenlarini topshirish/ko'rsatish yordamchilari
 
-Juror clients need deterministic tooling for the commit → reveal flow as well.
-The same `cargo xtask ministry-jury` command now exposes the following helpers:
+Hakamlar hay'ati mijozlari majburiyatni bajarish uchun deterministik vositalarga muhtoj → oqimni ochish.
+Xuddi shu `cargo xtask ministry-jury` buyrug'i endi quyidagi yordamchilarni ochib beradi:
 
 ```bash
 cargo xtask ministry-jury ballot commit \
@@ -126,19 +125,19 @@ cargo xtask ministry-jury ballot verify \
   --reveal artifacts/ministry/policy_jury_reveal_ada.json
 ```
 
-- `ballot commit` emits a `PolicyJuryBallotCommitV1` JSON payload.  When
-  `--out` is omitted the command prints the commitment to stdout.  If
-  `--reveal-out` is supplied the tool also writes the matching
-  `PolicyJuryBallotRevealV1`, reusing the provided nonce and applying the
-  optional `--revealed-at` timestamp (defaults to `--committed-at` or the
-  current time).
-- `--nonce-hex` accepts any even-length hex string ≥ 16 bytes.  When omitted the
-  helper generates a 32-byte nonce using `OsRng`, making it easy to script
-  juror workflows without custom randomness plumbing.
-- `--choice` is case-insensitive and accepts `approve`, `reject`, or `abstain`.
+- `ballot commit` `PolicyJuryBallotCommitV1` JSON foydali yukini chiqaradi.  Qachon
+  `--out` qo'yilmaydi, buyruq stdout majburiyatini chop etadi.  Agar
+  `--reveal-out` ta'minlanadi, asbob moslikni ham yozadi
+  `PolicyJuryBallotRevealV1`, taqdim etilganlardan bir marta foydalanish va qo'llash
+  ixtiyoriy `--revealed-at` vaqt tamg'asi (birlamchi `--committed-at` yoki
+  joriy vaqt).
+- `--nonce-hex` har qanday juft uzunlikdagi ≥16 bayt olti burchakli qatorni qabul qiladi.  O'tkazib yuborilganda
+  yordamchi `OsRng` yordamida 32 baytlik nonce hosil qiladi, bu skriptni osonlashtiradi
+  maxsus tasodifiy santexnika holda hakamlar ish oqimlari.
+- `--choice` katta-kichik harflarni sezmaydi va `approve`, `reject` yoki `abstain` ni qabul qiladi.
 
-`ballot verify` cross-checks the commitment/reveal pair via
-`PolicyJuryBallotCommitV1::verify_reveal`, guaranteeing that the round id,
-proposal id, juror id, nonce, and vote choice all align before the reveal is
-admitted to Torii.  The helper exits with a non-zero status when validation
-fails, making it safe to wire into CI or local juror portals.
+`ballot verify` majburiyat/oshkor juftligini oʻzaro tekshiradi
+`PolicyJuryBallotCommitV1::verify_reveal`, dumaloq identifikatorni kafolatlaydi,
+taklif identifikatori, hakamlar aʼzosi identifikatori, nonce va ovoz berish tanlovi oshkor etilishidan oldin bir xil boʻladi
+Torii ga qabul qilingan.  Tekshirish paytida yordamchi nolga teng bo'lmagan holat bilan chiqadi
+muvaffaqiyatsiz bo'lib, CI yoki mahalliy hakamlar portaliga ulanishni xavfsiz qiladi.

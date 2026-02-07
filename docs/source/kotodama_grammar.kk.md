@@ -7,99 +7,96 @@ generator: scripts/sync_docs_i18n.py
 source_hash: ac9b1fa221c6de46c139ee3a3c280957adad4910b49015fbb746259a4af22659
 source_last_modified: "2026-01-30T12:29:10.190473+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Kotodama Language Grammar and Semantics
+# Kotodama Тіл грамматикасы және семантикасы
 
-This document specifies the Kotodama language syntax (lexing, grammar), typing rules, deterministic semantics, and how programs lower to IVM bytecode (.to) with Norito pointer-ABI conventions. Kotodama sources use the .ko extension. The compiler emits IVM bytecode (.to) and can optionally return a manifest.
+Бұл құжат Kotodama тіл синтаксисін (лексинг, грамматика), теру ережелерін, детерминирленген семантикасын және Norito көрсеткіш-ABI конвенциялары бар IVM байт кодына (.to) төмен бағдарламаларды көрсетеді. Kotodama көздері .ko кеңейтімін пайдаланады. Компилятор IVM байт кодын (.to) шығарады және қосымша манифестті қайтара алады.
 
-Contents
-- Overview and Goals
-- Lexical Structure
-- Types and Literals
-- Declarations and Modules
-- Contract Container and Metadata
-- Functions and Parameters
-- Statements
-- Expressions
-- Builtins and Pointer-ABI Constructors
-- Collections and Maps
-- Deterministic Iteration and Bounds
-- Errors and Diagnostics
-- Codegen Mapping to IVM
-- ABI, Header, and Manifest
-- Roadmap
+Мазмұны
+- Шолу және мақсаттар
+- Лексикалық құрылым
+- Түрлер және литералдар
+- Декларациялар мен модульдер
+- Келісім-шарт контейнері және метадеректер
+- Функциялар мен Параметрлер
+- Мәлімдеме
+- Өрнектер
+- Құрылған және Pointer-ABI конструкторлары
+- Жинақтар мен карталар
+- Детерминистік итерация және шектер
+- Қателер және диагностика
+- IVM үшін Codegen салыстыру
+- ABI, тақырып және манифест
+- Жол картасы
 
-## Overview and Goals
+## Шолу және мақсаттар
 
-- Deterministic: Programs must produce identical results across hardware; no floating point or nondeterministic sources. All host interactions happen through syscalls with Norito-encoded arguments.
-- Portable: Targets Iroha Virtual Machine (IVM) bytecode, not a physical ISA. RISC‑V–like encodings visible in the repository are implementation details of IVM decoding and must not change observable behavior.
-- Auditable: Small, explicit semantics; clear mapping of syntax to IVM opcodes and to host syscalls.
-- Boundedness: Loops over unbounded data must carry explicit bounds. Map iteration has strict rules to guarantee determinism.
+- Детерминистикалық: Бағдарламалар аппараттық құралдар бойынша бірдей нәтижелерді шығаруы керек; өзгермелі нүкте немесе анықталмаған көздер жоқ. Барлық хост әрекеттесулері Norito кодталған аргументтері бар жүйе қоңыраулары арқылы жүзеге асады.
+- Портативті: физикалық ISA емес, Iroha виртуалды машинасының (IVM) байткодын мақсат етеді. Репозиторийде көрінетін RISC‑V тәрізді кодтаулар IVM декодтауының іске асыру мәліметтері болып табылады және бақыланатын әрекетті өзгертпеуі керек.
+- Аудиттелетін: Шағын, айқын семантика; синтаксисті IVM операциялық кодтары мен хост жүйесі қоңырауларына нақты салыстыру.
+- Шектелгендік: Шектелмеген деректердің үстіндегі циклдар анық шекараларды қамтуы керек. Карта итерациясында детерминизмге кепілдік беретін қатаң ережелер бар.
 
-## Lexical Structure
+## Лексикалық құрылым
 
-Whitespace and comments
-- Whitespace separates tokens and is otherwise insignificant.
-- Line comments start with `//` and run to end-of-line.
-- Block comments `/* ... */` do not nest.
+Бос орын және түсініктемелер
+- Бос орын таңбалауыштарды бөледі және басқаша маңызды емес.
+- Жолдық түсініктемелер `//` деп басталады және жолдың соңына дейін орындалады.
+- `/* ... */` түсініктемелерін блоктаңыз.
 
-Identifiers
-- Start: `[A-Za-z_]` then continue `[A-Za-z0-9_]*`.
-- Case-sensitive; `_` is a valid identifier but discouraged.
+Идентификаторлар
+- Бастау: `[A-Za-z_]`, содан кейін `[A-Za-z0-9_]*` жалғастырыңыз.
+- регистрге сезімталдық; `_` жарамды идентификатор, бірақ қабылданбайды.
 
-Keywords (reserved)
-- `seiyaku`, `hajimari`, `kotoage`, `kaizen`, `state`, `struct`, `fn`, `let`, `const`, `return`, `if`, `else`, `while`, `for`, `in`, `break`, `continue`, `true`, `false`, `permission`, `kotoba`.
+Түйінді сөздер (резерленген)
+- `seiyaku`, `hajimari`, `kotoage`, `kaizen`, `state`, `struct`, `struct`, Kotodama, Kotodama `const`, `return`, `if`, `else`, `while`, `for`, Kotodama, Kotodama `continue`, `true`, `false`, `permission`, `kotoba`.
 
-Operators and punctuation
-- Arithmetic: `+ - * / %`
-- Bitwise: `& | ^ ~`, shifts `<< >>`
-- Compare: `== != < <= > >=`
-- Logical: `&& || !`
-- Assign: `= += -= *= /= %= &= |= ^= <<= >>=`
-- Misc: `: , ; . :: ->`
-- Brackets: `() [] {}`
+Операторлар және тыныс белгілері
+- Арифметика: `+ - * / %`
+- Биттік: `& | ^ ~`, `<< >>` жылжулары
+- Салыстыру: `== != < <= > >=`
+- Логикалық: `&& || !`
+- Тағайындау: `= += -= *= /= %= &= |= ^= <<= >>=`
+- Әртүрлі: `: , ; . :: ->`
+- Жақшалар: `() [] {}`Литералдар
+- Бүтін сан: ондық (`123`), он алтылық (`0x2A`), екілік (`0b1010`). Барлық бүтін сандар орындалу уақытында 64-биттік қол қойылады; жұрнағы жоқ литералдар қорытынды арқылы немесе әдепкі бойынша `int` түрінде теріледі.
+- Жол: көшірмелері бар қос тырнақшалы (`\n`, `\r`, `\t`, `\0`, `\xNN`, `\xNN`, Kotodama, Kotodama, `\r` `\\`); UTF‑8. `r"..."` немесе `r#"..."#` өңделмеген жолдары шығуды өшіреді және жаңа жолдарға рұқсат береді.
+- Байттар: қашулары бар `b"..."` немесе өңделмеген `br"..."` / `rb"..."`; `bytes` литералын береді.
+- Логикалық: `true`, `false`.
 
-Literals
-- Integer: decimal (`123`), hex (`0x2A`), binary (`0b1010`). All integers are signed 64-bit at runtime; literals without suffix are typed via inference or as `int` by default.
-- String: double-quoted with escapes (`\n`, `\r`, `\t`, `\0`, `\xNN`, `\u{...}`, `\"`, `\\`); UTF‑8. Raw strings `r"..."` or `r#"..."#` disable escapes and allow newlines.
-- Bytes: `b"..."` with escapes, or raw `br"..."` / `rb"..."`; yields a `bytes` literal.
-- Boolean: `true`, `false`.
+## Түрлер және литералдар
 
-## Types and Literals
+Скаляр түрлері
+- `int`: 64-биттік екі толықтауыш; add/sub/mul үшін 2^64 арифметикалық орау модулі; бөлім IVM ішінде қол қойылған/қол қойылмаған нұсқаларды анықтады; компилятор семантика үшін сәйкес операцияны таңдайды.
+- `fixed_u128`, `Amount`, `Balance`: Norito `Numeric` қолдауы бар сандық бүркеншік аттар (512 биттік мантисса және масштабқа дейін таңбаланған ондық). Kotodama бұл бүркеншік аттарды теріс емес шамалар ретінде қарастырады; арифметика тексеріледі, бүркеншік атын сақтайды және толып кету немесе нөлге бөлу кезінде ұстайды. `int` арқылы жасалған мәндер 0 шкаласын пайдаланады; `int` түрлендірулері орындалу уақытында диапазон бойынша тексеріледі (теріс емес, интегралды, i64 жүйесіне сәйкес келеді).
+- `bool`: логикалық ақиқат мәні; `0`/`1` дейін төмендетілді.
+- `string`: өзгермейтін UTF‑8 жолы; жүйе қоңырауларына өткенде Norito TLV ретінде көрсетіледі; VM ішіндегі операциялар байт кесінділері мен ұзындығын пайдаланады.
+- `bytes`: өңделмеген Norito пайдалы жүктемесі; хэштеу/криптографиялық/тексеру кірістері мен ұзаққа созылатын қабаттасулар үшін көрсеткіш-ABI `Blob` түрінің бүркеншік аттары.
 
-Scalar types
-- `int`: 64-bit two’s-complement; arithmetic wraps modulo 2^64 for add/sub/mul; division has defined signed/unsigned variants in IVM; the compiler chooses the appropriate op for semantics.
-- `fixed_u128`, `Amount`, `Balance`: numeric aliases backed by Norito `Numeric` (signed decimal with up to 512-bit mantissa and scale). Kotodama treats these aliases as non-negative quantities; arithmetic is checked, preserves the alias, and traps on overflow or division by zero. Values created from `int` use scale 0; conversions to/from `int` are range-checked at runtime (non-negative, integral, fits in i64).
-- `bool`: logical truth value; lowered to `0`/`1`.
-- `string`: immutable UTF‑8 string; represented as Norito TLV when passed to syscalls; in-VM operations use byte slices and length.
-- `bytes`: raw Norito payload; aliases the pointer-ABI `Blob` type for hashing/crypto/proof inputs and durable overlays.
+Композиттік түрлері
+- `struct Name { field: Type, ... }` пайдаланушы анықтаған өнім түрлері. Конструкторлар өрнектерде `Name(a, b, ...)` шақыру синтаксисін пайдаланады. `obj.field` өрісіне кіруге қолдау көрсетіледі және ішкі түрде кортеж стиліндегі позициялық өрістерге төмендетіледі. Төзімді күйдегі ABI тізбегі Norito кодталған; компилятор құрылым ретін көрсететін қабаттасуды шығарады және соңғы сынақтар (`crates/iroha_core/tests/kotodama_struct_overlay.rs`) орналасуды шығарылымдар арасында құлыптаулы күйде сақтайды.
+- `Map<K, V>`: детерминирленген ассоциативті карта; семантика итерация кезінде итерация мен мутацияларды шектейді (төменде қараңыз).
+- `Tuple (T1, T2, ...)`: позициялық өрістері бар анонимді өнім түрі; көп қайтару үшін қолданылады.
 
-Composite types
-- `struct Name { field: Type, ... }` user-defined product types. Constructors use call syntax `Name(a, b, ...)` in expressions. Field access `obj.field` is supported and lowers to tuple-style positional fields internally. Durable state ABI on-chain is Norito-encoded; the compiler emits overlays that mirror the struct order and recent tests (`crates/iroha_core/tests/kotodama_struct_overlay.rs`) keep the layout locked in across releases.
-- `Map<K, V>`: deterministic associative map; semantics restrict iteration and mutations during iteration (see below).
-- `Tuple (T1, T2, ...)`: anonymous product type with positional fields; used for multi-return.
+Арнайы көрсеткіш-ABI түрлері (хостқа бағытталған)
+- `AccountId`, `AssetDefinitionId`, `Name`, `Json`, `NftId`, `Blob` және ұқсас жұмыс уақытының бірінші класты түрлері емес. Олар INPUT аймағына терілген, өзгермейтін көрсеткіштерді беретін конструкторлар (Norito TLV конверттері) және тек жүйе шақыруының аргументтері ретінде пайдаланылуы немесе мутациясыз айнымалылар арасында жылжытылуы мүмкін.
 
-Special pointer-ABI types (host-facing)
-- `AccountId`, `AssetDefinitionId`, `Name`, `Json`, `NftId`, `Blob`, and similar are not first-class runtime types. They are constructors that yield typed, immutable pointers into the INPUT region (Norito TLV envelopes) and can only be used as syscall arguments or moved between variables without mutation.
+Қорытындыны теріңіз
+- Жергілікті `let` байланыстары инициализатордан түрді анықтайды. Функция параметрлері анық терілуі керек. Қайтару түрлері түсініксіз болмаса, қорытынды жасауға болады.
 
-Type inference
-- Local `let` bindings infer type from initializer. Function parameters must be explicitly typed. Return types may be inferred unless ambiguous.
+## Декларациялар мен модульдерЖоғарғы деңгейлі элементтер
+- Келісімшарттар: `seiyaku Name { ... }` құрамында функциялар, күй, құрылымдар және метадеректер бар.
+- Бір файлға бірнеше келісім-шарттарға рұқсат етіледі, бірақ қабылданбайды; бір негізгі `seiyaku` манифестте әдепкі жазба ретінде пайдаланылады.
+- `struct` мәлімдемелері келісім-шарттағы пайдаланушы түрлерін анықтайды.
 
-## Declarations and Modules
+Көріну
+- `kotoage fn` жалпыға ортақ кіру нүктесін білдіреді; көріну когенге емес, диспетчер рұқсаттарына әсер етеді.
+- Қосымша рұқсат туралы кеңестер: `#[access(read=..., write=...)]` манифестті оқу/жазу пернелерін беру үшін `fn`/`kotoage fn` алдында болуы мүмкін. Сондай-ақ компилятор автоматты түрде кеңестік кеңестер шығарады; мөлдір емес хост қоңыраулары консервативті қойылмалы таңбаларға (`*`) қайта оралады және егер анық қол жеткізу туралы кеңестер берілмесе, диагностикаға шығады, осылайша жоспарлаушылар егжей-тегжейлі кілттер үшін динамикалық дайындықты таңдай алады.
 
-Top-level items
-- Contracts: `seiyaku Name { ... }` contain functions, state, structs, and metadata.
-- Multiple contracts per file are allowed but discouraged; one primary `seiyaku` is used as default entry in manifests.
-- `struct` declarations define user types within a contract.
+## Келісім-шарт контейнері және метадеректер
 
-Visibility
-- `kotoage fn` denotes a public entrypoint; visibility affects dispatcher permissions, not codegen.
-- Optional access hints: `#[access(read=..., write=...)]` can precede `fn`/`kotoage fn` to supply manifest read/write keys. The compiler also emits advisory hints automatically; opaque host calls fall back to conservative wildcard keys (`*`) and surface a diagnostic unless explicit access hints are provided, so schedulers can opt into a dynamic prepass for finer-grained keys.
-
-## Contract Container and Metadata
-
-Syntax
+Синтаксис
 ```
 seiyaku Name {
   meta {
@@ -117,35 +114,33 @@ seiyaku Name {
 }
 ```
 
-Semantics
-- `meta { ... }` fields override compiler defaults for the emitted IVM header: `abi_version`, `vector_length` (0 means unset), `max_cycles` (0 means compiler default), `features` toggles header feature bits (ZK tracing, vector announce). The compiler treats `max_cycles: 0` as “use default” and emits the configured non‑zero default to satisfy admission requirements. Unsupported features are ignored with a warning. When `meta {}` is omitted, the compiler emits `abi_version = 1` and uses the option defaults for the remaining header fields.
-- `features: ["zk", "simd"]` (aliases: `"vector"`) explicitly requests the corresponding header bits. Unknown feature strings now produce a parser error instead of being ignored.
-- `state` declares durable contract variables. The compiler lowers accesses into `STATE_GET/STATE_SET/STATE_DEL` syscalls and the host stages them in a per-transaction overlay (checkpoint/restore rollback, flush-on-commit into WSV). Access hints are emitted for literal state paths; dynamic keys fall back to map-level conflict keys. For explicit host-backed reads/writes, use the `state_get/state_set/state_del` helpers and the `get_or_insert_default` map helpers; these route through Norito TLVs and keep names/field order stable.
-- State identifiers are reserved; shadowing a `state` name in parameters or `let` bindings is rejected (`E_STATE_SHADOWED`).
-- State map values are not first-class: use the state identifier directly for map operations and iteration. Binding or passing state maps to user-defined functions is rejected (`E_STATE_MAP_ALIAS`).
-- Durable state maps currently support `int` and pointer-ABI key types only; other key types are rejected at compile time.
-- Durable state fields must be `int`, `bool`, `Json`, `Blob`/`bytes`, or pointer-ABI types (including structs/tuples composed of these fields); `string` is not supported for durable state.
+Семантика
+- `meta { ... }` өрістері шығарылған IVM тақырыбы үшін компилятордың әдепкі мәндерін қайта анықтайды: `abi_version`, `vector_length` (0 орнатылмаған дегенді білдіреді), `max_cycles` (`max_cycles` (0 compilerer header030) дегенді білдіреді мүмкіндік биттері (ZK трассасы, векторлық хабарландыру). Компилятор `max_cycles: 0` файлын «әдепкі пайдалану» ретінде қарастырады және қабылдау талаптарын қанағаттандыру үшін конфигурацияланған нөлдік емес әдепкі мәнді шығарады. Қолдау көрсетілмейтін мүмкіндіктер ескертумен еленбейді. `meta {}` алынып тасталса, компилятор `abi_version = 1` шығарады және қалған тақырып өрістері үшін опцияның әдепкі мәндерін пайдаланады.
+- `features: ["zk", "simd"]` (бүркеншік аттар: `"vector"`) сәйкес тақырып биттерін нақты сұрайды. Белгісіз мүмкіндік жолдары енді еленудің орнына талдаушы қатесін тудырады.
+- `state` ұзақ мерзімді келісім-шарт айнымалыларын жариялайды. Компилятор `STATE_GET/STATE_SET/STATE_DEL` жүйелік қоңырауларына кіруді төмендетеді және хост оларды әр транзакцияның қабаттасуында (тексеру нүктесі/қалпына қайтару, WSV-ге тапсыру кезінде тазалау) кезеңдерін береді. Қатынас кеңестері сөздік күй жолдары үшін шығарылады; динамикалық кілттер карта деңгейіндегі қайшылықты кілттерге қайта оралады. Хост қолдайтын айқын оқу/жазу үшін `state_get/state_set/state_del` көмекшілерін және `get_or_insert_default` карта көмекшілерін пайдаланыңыз; бұл бағытты Norito TLV арқылы өткізіңіз және атауларды/өріс ретін тұрақты ұстаңыз.
+- мемлекеттік идентификаторлар сақталған; `state` атауын параметрлерде немесе `let` байлауларында көлеңкелеу қабылданбайды (`E_STATE_SHADOWED`).
+- Мемлекет картасының мәндері бірінші дәрежелі емес: карта операциялары мен итерация үшін күй идентификаторын тікелей пайдаланыңыз. Күй карталарын пайдаланушы анықтаған функцияларға байланыстыру немесе беру қабылданбайды (`E_STATE_MAP_ALIAS`).
+- Тұрақты күй карталары қазіргі уақытта тек `int` және көрсеткіш-ABI кілт түрлерін қолдайды; басқа кілт түрлері компиляция уақытында қабылданбайды.
+- Тұрақты күй өрістері `int`, `bool`, `Json`, `Blob`/`bytes` немесе көрсеткіш-ABI түрлері (осы құрылымдардың/өрістердің жинақтарын қоса) болуы керек; `string` ұзақ мерзімді күйге қолдау көрсетпейді.
 
-### Kotoba localization
-Syntax
+### Котобаны локализациялау
+Синтаксис
 ```
 kotoba {
   "E_UNBOUNDED_ITERATION": { en: "Loop over map lacks a bound." }
 }
-```
+```Семантика
+- `kotoba` жазбалары келісім-шарт манифестіне аударма кестелерін тіркейді (`kotoba` өрісі).
+- Хабар идентификаторлары мен тіл тегтері идентификаторларды немесе жол литералдарын қабылдайды; жазбалар бос болмауы керек.
+- `msg_id` қайталанатын + тіл тегтері жұптары компиляция уақытында қабылданбайды.
 
-Semantics
-- `kotoba` entries attach translation tables to the contract manifest (`kotoba` field).
-- Message IDs and language tags accept identifiers or string literals; entries must be non-empty.
-- Duplicate `msg_id` + language tag pairs are rejected at compile time.
+## Триггер мәлімдемелері
 
-## Trigger Declarations
+Триггер мәлімдемелері жоспарлау метадеректерін енгізу нүктесі манифесттеріне қосады және автоматты түрде тіркеледі
+келісім-шарт данасы іске қосылғанда (өшіру кезінде жойылады). Олар а ішінде талданады
+`seiyaku` блогы.
 
-Trigger declarations attach scheduling metadata to entrypoint manifests and are auto-registered
-when a contract instance is activated (removed on deactivation). They are parsed inside a
-`seiyaku` block.
-
-Syntax
+Синтаксис
 ```
 register_trigger wake {
   call run;
@@ -156,71 +151,69 @@ register_trigger wake {
 }
 ```
 
-Notes
-- `call` must reference a public `kotoage fn` entrypoint in the same contract; an optional
-  `namespace::entrypoint` is recorded in the manifest but cross-contract callbacks are rejected
-  by the runtime for now (local callbacks only).
-- Supported filters: `time pre_commit` and `time schedule(start_ms, period_ms?)`, plus
-  `execute trigger <name>` for by-call triggers, `data any`, and pipeline filters
+Ескертпелер
+- `call` сол келісім-шарттағы жалпы `kotoage fn` кіру нүктесіне сілтеме жасауы керек; қосымша
+  `namespace::entrypoint` манифестте жазылған, бірақ контрактаралық кері қоңыраулар қабылданбайды.
+  әзірше орындалу уақыты бойынша (тек жергілікті кері қоңыраулар).
+- Қолдау көрсетілетін сүзгілер: `time pre_commit` және `time schedule(start_ms, period_ms?)`, сонымен қатар
+  Шақыру триггерлері, `data any` және құбыр сүзгілері үшін `execute trigger <name>`
   (`pipeline transaction`, `pipeline block`, `pipeline merge`, `pipeline witness`).
-- `authority` optionally overrides the trigger authority (AccountId string literal). If omitted,
-  the runtime uses the contract-activation authority.
-- Metadata values must be JSON literals (`string`, `number`, `bool`, `null`) or `json!(...)`.
-- Runtime-injected trigger metadata keys: `contract_namespace`, `contract_id`,
+- `authority` триггер өкілеттігін қосымша анықтайды (AccountId жолының литералы). Егер өткізілмесе,
+  орындау уақыты келісім-шартты белсендіру өкілеттігін пайдаланады.
+- Метадеректер мәндері JSON литералы (`string`, `number`, `bool`, `null`) немесе `json!(...)` болуы керек.
+- Орындау уақытында енгізілген триггер метадеректерінің кілттері: `contract_namespace`, `contract_id`,
   `contract_entrypoint`, `contract_code_hash`, `contract_trigger_id`.
 
-## Functions and Parameters
+## Функциялар мен параметрлер
 
-Syntax
-- Declaration: `fn name(param1: Type, param2: Type, ...) -> Ret { ... }`
-- Public: `kotoage fn name(...) { ... }`
-- Initializer: `hajimari() { ... }` (invoked on deploy by the runtime, not by the VM itself).
-- Upgrade hook: `kaizen(args...) permission(Role) { ... }`.
+Синтаксис
+- Декларация: `fn name(param1: Type, param2: Type, ...) -> Ret { ... }`
+- Қоғамдық: `kotoage fn name(...) { ... }`
+- Инициализатор: `hajimari() { ... }` (орналастыру кезінде VM өзі емес, орындау уақыты арқылы шақырылады).
+- Жаңарту ілмегі: `kaizen(args...) permission(Role) { ... }`.
 
-Parameters and returns
-- Arguments are passed in registers `r10..r22` as values or INPUT pointers (Norito TLV) per ABI; additional args spill to stack.
-- Functions return zero or one scalar or tuple. Primary return value is in `r10` for scalar; tuples are materialized in stack/OUTPUT by convention.
+Параметрлер және қайтарулар
+- Аргументтер `r10..r22` регистрлерінде мәндер немесе INPUT көрсеткіштері (Norito TLV) ABI үшін беріледі; қосымша аргтар жинақтау үшін төгіледі.
+- Функциялар нөлді немесе бір скалярды немесе кортежді қайтарады. Негізгі қайтару мәні скаляр үшін `r10`; кортеждер конвенция бойынша стек/OUTPUT ішінде материалдандырылады.
 
-## Statements
+## Мәлімдеме- Айнымалы байланыстар: `let x = expr;`, `let mut x = expr;` (өзгергіштік – компиляция уақытын тексеру; орындалу уақытының мутациясына тек жергілікті тұрғындар үшін рұқсат етіледі).
+- Тағайындау: `x = expr;` және құрама пішіндер `x += 1;` және т.б. Мақсаттар айнымалылар немесе карталық индекстер болуы керек; кортеж/құрылым өрістері өзгермейді.
+- Сандық бүркеншік аттар (`fixed_u128`, `Amount`, `Balance`) `Numeric` қолдауы бар әртүрлі түрлер; арифметика бүркеншік атты сақтайды және бүркеншік аттарды араластыру `int` байланыстыру арқылы түрлендіруді қажет етеді. `int` түрлендірулері орындалу уақытында тексеріледі (теріс емес, интегралдық, ауқым шектелген).
+- Басқару: `if (cond) { ... } else { ... }`, `while (cond) { ... }`, C стиліндегі `for (init; cond; step) { ... }`.
+  - `for` инициализаторлары мен қадамдары қарапайым `let name = expr` немесе өрнек мәлімдемелері болуы керек; күрделі деструктуризация қабылданбайды (`E0005`, `E0006`).
+  - `for` ауқымы: init сөйлеміндегі байланыстырулар циклде және одан кейін көрінеді; денеде немесе қадамда жасалған байлаулар циклден құтылмайды.
+- Теңдікке (`==`, `!=`) `int`, `bool`, `string`, көрсеткіш-ABI скалярлары (мысалы, I102100, I10210X) үшін қолдау көрсетіледі. `Name`, `Blob`/`bytes`, `Json`); кортеждер, құрылымдар және карталар салыстыруға келмейді.
+- Карта циклі: `for (k, v) in map { ... }` (детерминирленген; төменде қараңыз).
+- Ағын: `return expr;`, `break;`, `continue;`.
+- Қоңырау: `name(args...);` немесе `call name(args...);` (екеуі де қабылданады; компилятор шақыру мәлімдемелеріне қалыпқа келтіреді).
+- Бекітулер: `assert(cond);`, `assert_eq(a, b);` ZK емес құрастырмалардағы IVM `ASSERT*` картасына немесе ZK режиміндегі ZK шектеулеріне.
 
-- Variable bindings: `let x = expr;`, `let mut x = expr;` (mutability is a compile-time check; runtime mutation is allowed for locals only).
-- Assignment: `x = expr;` and compound forms `x += 1;` etc. Targets must be variables or map indices; tuple/struct fields are immutable.
-- Numeric aliases (`fixed_u128`, `Amount`, `Balance`) are distinct `Numeric`-backed types; arithmetic preserves the alias and mixing aliases requires converting through an `int` binding. Conversions to/from `int` are checked at runtime (non-negative, integral, range-limited).
-- Control: `if (cond) { ... } else { ... }`, `while (cond) { ... }`, C-style `for (init; cond; step) { ... }`.
-  - `for` initializers and steps must be simple `let name = expr` or expression statements; complex destructuring is rejected (`E0005`, `E0006`).
-  - `for` scoping: bindings from the init clause are visible in the loop and after it; bindings created in the body or step do not escape the loop.
-- Equality (`==`, `!=`) is supported for `int`, `bool`, `string`, pointer-ABI scalars (e.g., `AccountId`, `Name`, `Blob`/`bytes`, `Json`); tuples, structs, and maps are not comparable.
-- Map loop: `for (k, v) in map { ... }` (deterministic; see below).
-- Flow: `return expr;`, `break;`, `continue;`.
-- Call: `name(args...);` or `call name(args...);` (both accepted; compiler normalizes to call statements).
-- Assertions: `assert(cond);`, `assert_eq(a, b);` map to IVM `ASSERT*` in non-ZK builds or ZK constraints in ZK mode.
+## Өрнектер
 
-## Expressions
+Артықшылық (жоғары → төмен)
+1. Мүше/индекс: `a.b`, `a[b]`
+2. Бірлік: `! ~ -`
+3. Мультипликативті: `* / %`
+4. Қоспа: `+ -`
+5. Ауысымдар: `<< >>`
+6. Реляциялық: `< <= > >=`
+7. Теңдік: `== !=`
+8. Биттік ЖӘНЕ/XOR/НЕМЕСЕ: `& ^ |`
+9. Логикалық ЖӘНЕ/НЕМЕСЕ: `&& ||`
+10. Үштік: `cond ? a : b`
 
-Precedence (high → low)
-1. Member/index: `a.b`, `a[b]`
-2. Unary: `! ~ -`
-3. Multiplicative: `* / %`
-4. Additive: `+ -`
-5. Shifts: `<< >>`
-6. Relational: `< <= > >=`
-7. Equality: `== !=`
-8. Bitwise AND/XOR/OR: `& ^ |`
-9. Logical AND/OR: `&& ||`
-10. Ternary: `cond ? a : b`
+Қоңыраулар мен кортеждер
+- Қоңыраулар позициялық аргументтерді пайдаланады: `f(a, b, c)`.
+- Кортеждің литералы: `(a, b, c)` және құрылымы: `let (x, y) = pair;`.
+- Кортежді деструктуризациялау үшін сәйкес артығы бар кортеж/құрылым түрлері қажет; сәйкессіздіктер қабылданбайды.
 
-Calls and tuples
-- Calls use positional arguments: `f(a, b, c)`.
-- Tuple literal: `(a, b, c)` and destructure: `let (x, y) = pair;`.
-- Tuple destructuring requires tuple/struct types with matching arity; mismatches are rejected.
+Жолдар және байттар
+- Жолдар UTF‑8; бастапқыда шикі жол және байт литеральды пішіндері қабылданады.
+- Байт литералдары (`b"..."`, `br"..."`, `rb"..."`) `bytes` (Blob) көрсеткіштеріне дейін төмен; жүйе қоңырауы NoritoBytes TLV пайдалы жүктемелерін күткенде `norito_bytes(...)` арқылы ораңыз.
 
-Strings and bytes
-- Strings are UTF‑8; raw string and byte literal forms are accepted in source.
-- Byte literals (`b"..."`, `br"..."`, `rb"..."`) lower to `bytes` (Blob) pointers; wrap with `norito_bytes(...)` when a syscall expects NoritoBytes TLV payloads.
+## Кірістірілген және Көрсеткіш-ABI конструкторлары
 
-## Builtins and Pointer-ABI Constructors
-
-Pointer constructors (emit Norito TLV into INPUT and return a typed pointer)
+Көрсеткіш конструкторлары (INPUT ішіне Norito TLV шығарыңыз және терілген көрсеткішті қайтарыңыз)
 - `account_id(string) -> AccountId*`
 - `asset_definition(string) -> AssetDefinitionId*`
 - `asset_id(string) -> AssetId*`
@@ -233,28 +226,26 @@ Pointer constructors (emit Norito TLV into INPUT and return a typed pointer)
 - `dataspace_id(string|0xhex) -> DataSpaceId*`
 - `axt_descriptor(string|0xhex) -> AxtDescriptor*`
 - `asset_handle(string|0xhex) -> AssetHandle*`
-- `proof_blob(string|0xhex) -> ProofBlob*`
-
-Prelude macros provide shorter aliases and inline validation for these constructors:
+- `proof_blob(string|0xhex) -> ProofBlob*`Прелюдия макростары осы конструкторлар үшін қысқа бүркеншік аттарды және кірістірілген тексеруді қамтамасыз етеді:
 - `account!("ih58...")`, `account_id!("ih58...")`
 - `asset_definition!("rose#wonderland")`, `asset_id!("rose#wonderland")`
 - `domain!("wonderland")`, `domain_id!("wonderland")`
 - `name!("example")`
-- `json!("{\"hello\":\"world\"}")` or structured literals such as `json!{ hello: "world" }`
+- `json!("{\"hello\":\"world\"}")` немесе `json!{ hello: "world" }` сияқты құрылымдық литералдар
 - `nft_id!("dragon$demo")`, `blob!("bytes")`, `norito_bytes!("...")`
 
-The macros expand to the constructors above and reject invalid literals at compile time.
+Макростар жоғарыдағы конструкторларға кеңейтіледі және компиляция уақытында жарамсыз литералдарды қабылдамайды.
 
-Implementation status
-- Implemented: constructors above accept string literal arguments and lower to typed Norito TLV envelopes placed in the INPUT region. They return immutable typed pointers usable as syscall arguments. Non-literal string expressions are rejected; use `Blob`/`bytes` for dynamic inputs. `blob`/`norito_bytes` also accept `bytes`-typed values at runtime without macro shims.
-- Extended forms:
-  - `json(Blob[NoritoBytes]) -> Json*` via `JSON_DECODE` syscall.
-  - `name(Blob[NoritoBytes]) -> Name*` via `NAME_DECODE` syscall.
-  - Pointer decode from Blob/NoritoBytes: any pointer constructor (including AXT types) accepts a `Blob`/`NoritoBytes` payload and lowers to `POINTER_FROM_NORITO` with the expected type id.
-  - Pass-through for pointer forms: `name(Name) -> Name*`, `blob(Blob) -> Blob*`, `norito_bytes(Blob) -> Blob*`.
-  - Method sugar is supported: `s.name()`, `s.json()`, `b.blob()`, `b.norito_bytes()`.
+Іске асыру күйі
+- Орындалды: жоғарыдағы конструкторлар жолдың әріптік аргументтерін қабылдайды және INPUT аймағында орналастырылған терілген Norito TLV конверттерінен төменірек. Олар жүйе аргументтері ретінде пайдалануға болатын өзгермейтін терілген көрсеткіштерді қайтарады. Литерал емес жол өрнектері қабылданбайды; динамикалық кірістер үшін `Blob`/`bytes` пайдаланыңыз. `blob`/`norito_bytes` сондай-ақ макрос блоктарынсыз орындау уақытында `bytes` типті мәндерді қабылдайды.
+- кеңейтілген пішіндер:
+  - `json(Blob[NoritoBytes]) -> Json*` `JSON_DECODE` жүйесі арқылы.
+  - `name(Blob[NoritoBytes]) -> Name*` `NAME_DECODE` жүйесі арқылы.
+  - Blob/NoritoBytes жүйесінен көрсеткіш декодтауы: кез келген көрсеткіш конструкторы (AXT түрлерін қоса) `Blob`/`NoritoBytes` пайдалы жүктемесін қабылдайды және күтілетін түр идентификаторымен `POINTER_FROM_NORITO` дейін төмендетеді.
+  - Көрсеткіш пішіндері үшін өту: `name(Name) -> Name*`, `blob(Blob) -> Blob*`, `norito_bytes(Blob) -> Blob*`.
+  - Қант әдісіне қолдау көрсетіледі: `s.name()`, `s.json()`, `b.blob()`, `b.norito_bytes()`.
 
-Host/syscall builtins (map to SCALL; exact numbers in ivm.md)
+Хост/жүйелік қоңыраулар құрастырулары (SCALL картасы; ivm.md ішіндегі нақты сандар)
 - `mint_asset(AccountId*, AssetDefinitionId*, numeric)`
 - `burn_asset(AccountId*, AssetDefinitionId*, numeric)`
 - `transfer_asset(AccountId*, AccountId*, AssetDefinitionId*, numeric)`
@@ -280,116 +271,110 @@ Host/syscall builtins (map to SCALL; exact numbers in ivm.md)
 - `axt_commit()`
 - `contains(Map<K,V>, K) -> bool`
 
-Utility builtins
-- `info(string|int)`: emits a structured event/message via OUTPUT.
-- `hash(blob) -> Blob*`: returns a Norito-encoded hash as Blob.
-- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` and `build_unshield_inline(asset, to, amount, inputs32, backend, proof, vk) -> Blob*`: inline ISI builders; all arguments must be compile-time literals (string literals or pointer constructors from literals). `nullifier32` and `inputs32` must be exactly 32 bytes (raw string or `0x` hex), and `amount` must be non-negative.
+Утилита құрастырулары
+- `info(string|int)`: OUTPUT арқылы құрылымдық оқиғаны/хабарды шығарады.
+- `hash(blob) -> Blob*`: Blob ретінде Norito кодталған хэшті қайтарады.
+- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` және `build_unshield_inline(asset, to, amount, inputs32, backend, proof, vk) -> Blob*`: кірістірілген ISI құрастырушылары; барлық аргументтер компиляция уақытындағы литералдар болуы керек (жол литералдары немесе литералдардан көрсеткіш конструкторлары). `nullifier32` және `inputs32` дәл 32 байт (шикі жол немесе `0x` он алтылық) болуы керек және `amount` теріс емес болуы керек.
 - `schema_info(Name*) -> Json* { "id": "<hex>", "version": N }`
-- `encode_schema(Name*, Json*) -> Blob`: encodes JSON using the host schema registry (DefaultRegistry supports `QueryRequest` and `QueryResponse` in addition to Order/Trade samples).
-- `decode_schema(Name*, Blob|bytes) -> Json*`: decodes Norito bytes using the host schema registry.
-- `pointer_to_norito(ptr) -> NoritoBytes*`: wraps an existing pointer-ABI TLV as NoritoBytes for storage or transport.
-- `isqrt(int) -> int`: integer square root (`floor(sqrt(x))`) implemented as an IVM opcode.
-- `min(int, int) -> int`, `max(int, int) -> int`, `abs(int) -> int`, `div_ceil(int, int) -> int`, `gcd(int, int) -> int`, `mean(int, int) -> int` — fused arithmetic helpers backed by native IVM opcodes (ceil division traps on divide-by-zero).
+- `encode_schema(Name*, Json*) -> Blob`: хост схема тізбесін пайдаланып JSON кодтайды (DefaultRegistry Тапсырыс/Сауда үлгілеріне қосымша `QueryRequest` және `QueryResponse` қолдау көрсетеді).
+- `decode_schema(Name*, Blob|bytes) -> Json*`: хост схемасы тізілімін пайдаланып Norito байт кодтарын шешеді.
+- `pointer_to_norito(ptr) -> NoritoBytes*`: сақтау немесе тасымалдау үшін бар ABI TLV көрсеткішін NoritoBytes ретінде орайды.
+- `isqrt(int) -> int`: бүтін квадрат түбір (`floor(sqrt(x))`) IVM операция коды ретінде жүзеге асырылады.
+- `min(int, int) -> int`, `max(int, int) -> int`, `abs(int) -> int`, `div_ceil(int, int) -> int`, `gcd(int, int) -> int`, `mean(int, int) -> int` — біріктірілген арифметикалық көмекшілер I10050 (нөлге бөлудегі төбені бөлу тұзақтары).Ескертпелер
+- Кіріктірілген жіңішке шығыршықтар; компилятор қозғалыстарды және `SCALL` тіркеу үшін оларды төмендетеді.
+- Көрсеткіш конструкторлары таза: VM INPUT ішіндегі Norito TLV қоңырау ұзақтығы үшін өзгермейтіндігін қамтамасыз етеді.
+ - Көрсеткіш-ABI өрістері бар құрылымдарды (мысалы, `DomainId`, `AccountId`) жүйе шақыру аргументтерін эргономикалық түрде топтастыру үшін пайдалануға болады. Компилятор `obj.field` қосымша бөлусіз дұрыс тізілімге/мәнге салыстырады.
 
-Notes
-- Builtins are thin shims; the compiler lowers them to register moves and a `SCALL`.
-- Pointer constructors are pure: the VM ensures the Norito TLV in INPUT is immutable for the call duration.
- - Structs with pointer-ABI fields (e.g., `DomainId`, `AccountId`) can be used to group syscall arguments ergonomically. The compiler maps `obj.field` to the correct register/value without extra allocations.
+## Жинақтар мен карталар
 
-## Collections and Maps
+Түрі: `Map<K, V>`
+- Жадтағы карталар (`Map::new()` арқылы үйме бөлінген немесе параметрлер ретінде берілген) бір кілт/мән жұбын сақтайды; пернелер мен мәндер сөз өлшеміндегі типтер болуы керек: `int`, `bool`, `string`, `Blob`, `bytes`, `Json`, немесе, `AccountId`, `Name`).
+- Тұрақты күй карталары (`state Map<...>`) Norito кодталған кілттерді/мәндерді пайдаланады. Қолдау көрсетілетін пернелер: `int` немесе көрсеткіш түрлері. Қолдау көрсетілетін мәндер: `int`, `bool`, `Json`, `Blob`/`bytes` немесе көрсеткіш түрлері.
+- `Map::new()` жадтағы жалғыз жазбаны бөледі және нөлдік инициализациялайды (кілт/мән = 0); `Map<int,int>` емес карталар үшін анық түрдегі аннотацияны немесе қайтару түрін қамтамасыз етіңіз.
+- Күй карталары бірінші дәрежелі мәндер емес: оларды қайта тағайындай алмайсыз (мысалы, `M = Map::new()`); индекстеу (`M[key] = value`) арқылы жазбаларды жаңарту.
+- Операциялар:
+  - Индекстеу: `map[key]` мәнін алу/орнату (орнату хост жүйесі арқылы орындалады; орындау уақытының API салыстыруын қараңыз).
+  - Бар болуы: `contains(map, key) -> bool` (төмендетілген көмекші; ішкі жүйе қоңырауы болуы мүмкін).
+  - Итерация: детерминирленген тәртіппен және мутация ережелерімен `for (k, v) in map { ... }`.
 
-Type: `Map<K, V>`
-- In-memory maps (heap-allocated via `Map::new()` or passed as parameters) store a single key/value pair; keys and values must be word-sized types: `int`, `bool`, `string`, `Blob`, `bytes`, `Json`, or pointer types (e.g., `AccountId`, `Name`).
-- Durable state maps (`state Map<...>`) use Norito-encoded keys/values. Supported keys: `int` or pointer types. Supported values: `int`, `bool`, `Json`, `Blob`/`bytes`, or pointer types.
-- `Map::new()` allocates and zero-initializes the single in-memory entry (key/value = 0); for non-`Map<int,int>` maps, provide an explicit type annotation or return type.
-- State maps are not first-class values: you cannot reassign them (e.g., `M = Map::new()`); update entries via indexing (`M[key] = value`).
-- Operations:
-  - Indexing: `map[key]` get/set value (set performed via host syscall; see runtime API mapping).
-  - Existence: `contains(map, key) -> bool` (lowered helper; may be an intrinsic syscall).
-  - Iteration: `for (k, v) in map { ... }` with deterministic order and mutation rules.
+Детерминирленген итерация ережелері
+- Итерация жиыны цикл енгізу кезіндегі пернелердің суреті болып табылады.
+- Тапсырыс Norito кодталған кілттердің қатаң өсетін байт-лексикографиялық тәртібі.
+- Цикл кезінде қайталанатын картаға құрылымдық өзгертулер (кірістіру/жою/тазалау) детерминирленген `E_ITER_MUTATION` тұзағын тудырады.
+- Шектелгендік қажет: картада жарияланған максимум (`@max_len`), `#[bounded(n)]` айқын төлсипаты немесе `.take(n)`/`.range(..)` арқылы айқын шектелген; әйтпесе компилятор `E_UNBOUNDED_ITERATION` шығарады.
 
-Deterministic iteration rules
-- The iteration set is the snapshot of keys at loop entry.
-- Order is strictly ascending byte-lexicographic order of Norito-encoded keys.
-- Structural modifications (insert/remove/clear) to the iterated map during the loop cause a deterministic `E_ITER_MUTATION` trap.
-- Boundedness is required: either a declared max (`@max_len`) on the map, an explicit attribute `#[bounded(n)]`, or an explicit bound using `.take(n)`/`.range(..)`; otherwise the compiler emits `E_UNBOUNDED_ITERATION`.
+Көмекшілерді шектейді
+- `#[bounded(n)]`: карта өрнегіндегі қосымша төлсипат, мысалы. `for (k, v) in my_map #[bounded(2)] { ... }`.
+- `.take(n)`: бірінші `n` жазбаларын басынан қайталаңыз.
+- `.range(start, end)`: `[start, end)` жартылай ашық интервалдағы жазбаларды қайталаңыз. Семантика `start` және `n = end - start` сәйкес келеді.Динамикалық шекаралар туралы ескертпелер
+- Литерал шектер: `n`, `start` және `end`, өйткені бүтін литералдар толығымен қолдау көрсетеді және итерациялардың бекітілген санына құрастырылады.
+- Әріптік емес шектеулер: `kotodama_dynamic_bounds` мүмкіндігі `ivm` жәшігінде қосылғанда, компилятор динамикалық `n`, `start` және `end` (қауіпсіздік және кірістіру өрнектері) үшін (қауіпсіздік және кірістіру өрнектері) ретінде қабылдайды. `end >= start`). Төмендету қосымша денені орындауды болдырмау үшін `if (i < n)` тексерулерімен K қорғалған итерацияларды шығарады (әдепкі K=2). K параметрін `CompilerOptions { dynamic_iter_cap, .. }` арқылы бағдарламалы түрде реттеуге болады.
+- `koto_lint` іске қосу Kotodama түктері туралы ескертулерді құрастыру алдында тексеру; Негізгі компилятор талдаудан және типті тексеруден кейін әрқашан төмендетуді жалғастырады.
+- Қате кодтары [Kotodama Compiler Error Codes](./kotodama_error_codes.md) ішінде құжатталған; жылдам түсіндіру үшін `koto_compile --explain <code>` пайдаланыңыз.
 
-Bounds helpers
-- `#[bounded(n)]`: optional attribute on the map expression, e.g. `for (k, v) in my_map #[bounded(2)] { ... }`.
-- `.take(n)`: iterate the first `n` entries from the start.
-- `.range(start, end)`: iterate entries in the half-open interval `[start, end)`. Semantics are equivalent to `start` and `n = end - start`.
+## Қателер және диагностика
 
-Notes on dynamic bounds
-- Literal bounds: `n`, `start`, and `end` as integer literals are fully supported and compile to a fixed number of iterations.
-- Non-literal bounds: when the `kotodama_dynamic_bounds` feature is enabled in the `ivm` crate, the compiler accepts dynamic `n`, `start`, and `end` expressions and inserts runtime assertions for safety (non-negative, `end >= start`). Lowering emits up to K guarded iterations with `if (i < n)` checks to avoid extra body executions (default K=2). You can tune K programmatically via `CompilerOptions { dynamic_iter_cap, .. }`.
-- Run `koto_lint` to inspect Kotodama lint warnings prior to compilation; the main compiler always proceeds with lowering after parsing and type-checking.
-- Error codes are documented in [Kotodama Compiler Error Codes](./kotodama_error_codes.md); use `koto_compile --explain <code>` for quick explanations.
-
-## Errors and Diagnostics
-
-Compile-time diagnostics (examples)
-- `E_UNBOUNDED_ITERATION`: loop over map lacks a bound.
-- `E_MUT_DURING_ITER`: structural mutation of iterated map in loop body.
-- `E_STATE_SHADOWED`: local bindings cannot shadow `state` declarations.
-- `E_BREAK_OUTSIDE_LOOP`: `break` used outside a loop.
-- `E_CONTINUE_OUTSIDE_LOOP`: `continue` used outside a loop.
-- `E0005`: for-loop initializer is more complex than supported.
-- `E0006`: for-loop step clause is more complex than supported.
-- `E_BAD_POINTER_USE`: using a pointer-ABI constructor result where a first-class type is required.
+Компиляция уақыты диагностикасы (мысалдар)
+- `E_UNBOUNDED_ITERATION`: картадағы циклде шек жоқ.
+- `E_MUT_DURING_ITER`: цикл денесінде қайталанатын картаның құрылымдық мутациясы.
+- `E_STATE_SHADOWED`: жергілікті байланыстар `state` мәлімдемелеріне көлеңке түсіре алмайды.
+- `E_BREAK_OUTSIDE_LOOP`: `break` циклден тыс пайдаланылады.
+- `E_CONTINUE_OUTSIDE_LOOP`: `continue` циклден тыс пайдаланылады.
+- `E0005`: for-loop инициализаторы қолдау көрсетілетіннен күрделірек.
+- `E0006`: for-цикл қадамы қолдау көрсетілетіннен күрделірек.
+- `E_BAD_POINTER_USE`: бірінші класс түрі қажет болатын көрсеткіш-ABI конструктор нәтижесін пайдалану.
 - `E_UNRESOLVED_NAME`, `E_TYPE_MISMATCH`, `E_ARITY_MISMATCH`, `E_DUP_SYMBOL`.
-- Tooling: `koto_compile` runs the lint pass before emitting bytecode; use `--no-lint` to skip or `--deny-lint-warnings` to fail the build on lint output.
+- Құралдар: `koto_compile` байт-кодты шығару алдында линт өтуін іске қосады; өткізіп жіберу үшін `--no-lint` пайдаланыңыз немесе талшық шығару бойынша құрастыруды орындамау үшін `--deny-lint-warnings` пайдаланыңыз.
 
-Runtime VM errors (selected; full list in ivm.md)
+Орындалу уақытының VM қателері (таңдалған; ivm.md ішіндегі толық тізім)
 - `E_NORITO_INVALID`, `E_OOB`, `E_UNALIGNED`, `E_SCALL_UNKNOWN`, `E_ASSERT`, `E_ASSERT_EQ`, `E_ITER_MUTATION`.
 
-Error messages
-- Diagnostics carry stable `msg_id`s that map to entries in `kotoba {}` translation tables when available.
+Қате туралы хабарлар
+- Диагностикада қол жетімді болған кезде `kotoba {}` аударма кестелеріндегі жазбалармен салыстырылатын тұрақты `msg_id`s бар.
 
-## Codegen Mapping to IVM
+## IVM үшін кодогенді салыстыру
 
-Pipeline
-1. Lexer/Parser produce AST.
-2. Semantic analysis resolves names, checks types, and populates symbol tables.
-3. IR lowering to a simple SSA-like form.
-4. Register allocation to IVM GPRs (`r10+` for args/ret per calling convention); spills to stack.
-5. Bytecode emission: mix of IVM-native and RV-compat encodings as allowed; metadata header emitted with `abi_version`, features, vector length, and `max_cycles`.
+Құбыр
+1. Lexer/Parser AST шығарады.
+2. Семантикалық талдау атауларды шешеді, типтерді тексереді және символдық кестелерді толтырады.
+3. ИК қарапайым SSA тәрізді пішінге дейін төмендету.
+4. IVM GPRs (шақыру конвенциясына args/ret үшін `r10+`) бөлуді тіркеу; үймелеу үшін төгіледі.
+5. Байткод эмиссиясы: рұқсат етілгендей IVM-негізгі және RV-үйлесімді кодтаулардың араласуы; `abi_version`, мүмкіндіктер, вектор ұзындығы және `max_cycles` шығарылған метадеректер тақырыбы.Бөлек нүктелерді салыстыру
+- IVM ALU операцияларына арифметикалық және логикалық карта.
+- шартты тармақтар мен секірулерге тармақталу және бақылау картасы; компилятор пайдалы болған жерде қысылған пішіндерді пайдаланады.
+- Жергілікті тұрғындарға арналған жад VM стекіне төгіледі; теңестіру жүзеге асырылады.
+- Қозғалысты тіркеу үшін төменгі және 8 биттік нөмірі бар `SCALL` кірістірілген.
+- Көрсеткіш конструкторлары Norito TLVs INPUT аймағына орналастырады және олардың адрестерін шығарады.
+- `ASSERT`/`ASSERT_EQ` үшін бекітулер картасы, олар ZK емес орындалуды ұстайды және ZK құрастыруларында шектеулер шығарады.
 
-Mapping highlights
-- Arithmetic and logic map to IVM ALU ops.
-- Branching and control map to conditional branches and jumps; the compiler uses compressed forms where profitable.
-- Memory for locals spills to the VM stack; alignment is enforced.
-- Builtins lower to register moves and `SCALL` with 8-bit number.
-- Pointer constructors place Norito TLVs into the INPUT region and produce their addresses.
-- Assertions map to `ASSERT`/`ASSERT_EQ` which trap in non-ZK execution and emit constraints in ZK builds.
+Детерминизмнің шектеулері
+- FP жоқ; детерминирленген емес жүйелік қоңыраулар жоқ.
+- SIMD/GPU жеделдету байт-кодқа көрінбейді және бит-бірдей болуы керек; компилятор аппараттық құралдарға қатысты операцияларды шығармайды.
 
-Determinism constraints
-- No FP; no nondeterministic syscalls.
-- SIMD/GPU acceleration is invisible to bytecode and must be bit-identical; compiler does not emit hardware-specific ops.
+## ABI, тақырып және манифест
 
-## ABI, Header, and Manifest
+IVM тақырып өрістері компилятор арқылы орнатылған
+- `version`: IVM байт код пішімінің нұсқасы (major.minor).
+- `abi_version`: жүйені шақыру кестесі және көрсеткіш-ABI схемасының нұсқасы.
+- `feature_bits`: мүмкіндік жалаулары (мысалы, `ZK`, `VECTOR`).
+- `vector_len`: логикалық вектор ұзындығы (0 → орнатылмаған).
+- `max_cycles`: рұқсат қағазы және ZK толтыру туралы кеңес.
 
-IVM header fields set by the compiler
-- `version`: IVM bytecode format version (major.minor).
-- `abi_version`: syscall table and pointer-ABI schema version.
-- `feature_bits`: feature flags (e.g., `ZK`, `VECTOR`).
-- `vector_len`: logical vector length (0 → unset).
-- `max_cycles`: admission bound and ZK padding hint.
+Манифест (міндетті емес жанама)
+- `code_hash`, `abi_hash`, `meta {}` блогының метадеректері, компилятор нұсқасы және қайталану мүмкіндігіне қатысты кеңестер құрастыру.
 
-Manifest (optional sidecar)
-- `code_hash`, `abi_hash`, metadata from `meta {}` block, compiler version, and build hints for reproducibility.
+## Жол картасы
 
-## Roadmap
+- **KD-231 (сәуір 2026):** итерация шектері үшін компиляция уақыты диапазонының талдауын қосыңыз, осылайша циклдар жоспарлаушыға шектелген қатынас жиындарын көрсетеді.
+- **KD-235 (2026 жылдың мамыры):** көрсеткіш конструкторлары мен ABI анықтығы үшін `string`-тен ерекшеленетін бірінші сыныпты `bytes` скалярын енгізіңіз.
+- **KD-242 (маусым 2026):** детерминирленген резервтері бар мүмкіндік жалауларының артындағы кірістірілген операция кодтар жинағын (хэш/қолтаңбаны тексеру) кеңейтіңіз.
+- **KD-247 (маусым 2026):** `msg_id`s қатесін тұрақтандыру және локализацияланған диагностика үшін `kotoba {}` кестелеріндегі салыстыруды сақтаңыз.
+### Манифесттік эмиссия
 
-- **KD-231 (Apr 2026):** add compile-time range analysis for iteration bounds so loops expose bounded access sets to the scheduler.
-- **KD-235 (May 2026):** introduce a first-class `bytes` scalar distinct from `string` for pointer constructors and ABI clarity.
-- **KD-242 (Jun 2026):** expand the builtin opcode set (hash / signature verification) behind feature flags with deterministic fallbacks.
-- **KD-247 (Jun 2026):** stabilize error `msg_id`s and maintain the mapping in `kotoba {}` tables for localized diagnostics.
-### Manifest Emission
-
-- The Kotodama compiler API can return a `ContractManifest` alongside the compiled `.to` via `ivm::kotodama::compiler::Compiler::compile_source_with_manifest`.
-- Fields:
-  - `code_hash`: hash of the code bytes (excluding the IVM header and literals) computed by the compiler to bind the artifact.
-  - `abi_hash`: stable digest of the allowed syscall surface for the program's `abi_version` (see `ivm.md` and `ivm::syscalls::compute_abi_hash`).
-- Optional `compiler_fingerprint` and `features_bitmap` are reserved for toolchains.
-- `entrypoints`: ordered list of exported entrypoints (public, `hajimari`, `kaizen`) including their required `permission(...)` strings and the compiler’s best-effort read/write key hints so admission logic and schedulers can reason about expected WSV access.
-- The manifest is intended for admission-time checks and for registries; see `docs/source/new_pipeline.md` for lifecycle.
+- Kotodama компиляторы API `ContractManifest`-ті `ivm::kotodama::compiler::Compiler::compile_source_with_manifest` арқылы құрастырылған `.to`-пен бірге қайтара алады.
+- Өрістер:
+  - `code_hash`: артефактты байланыстыру үшін компилятор есептеген код байттарының хэші (IVM тақырыбы мен литералдардан басқа).
+  - `abi_hash`: бағдарламаның `abi_version` үшін рұқсат етілген жүйені шақыру бетінің тұрақты дайджесті (`ivm.md` және `ivm::syscalls::compute_abi_hash` қараңыз).
+- Қосымша `compiler_fingerprint` және `features_bitmap` құралдар тізбегі үшін сақталған.
+- `entrypoints`: экспортталған кіру нүктелерінің реттелген тізімі (жалпыға ортақ, `hajimari`, `kaizen`), соның ішінде олардың талап етілетін `permission(...)` жолдары мен компилятордың ең жақсы күш-жігері, соның ішінде WSV кіру рұқсаттары туралы күтілетін оқу/жазу кестесі.
+- Манифест қабылдау уақытын тексеруге және тізілімдерге арналған; өмірлік цикл үшін `docs/source/new_pipeline.md` қараңыз.

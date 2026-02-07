@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: cba8780bcec4ebf562dc9c5725f328b0ea2d9009517efa5b5a504e2fb6be81fe
 source_last_modified: "2026-01-11T04:52:11.136647+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Error Mapping Guide
+# Xatolarni xaritalash bo'yicha qo'llanma
 
-Last updated: 2025-08-21
+Oxirgi yangilangan: 2025-08-21
 
-This guide maps common failure modes in Iroha to stable error categories surfaced by the data model. Use it to design tests and to make client error handling predictable.
+Ushbu qo'llanmada Iroha da umumiy nosozlik rejimlari ma'lumotlar modeli tomonidan yuzaga keladigan barqaror xato toifalari bilan taqqoslanadi. Sinovlarni loyihalash va mijoz xatolarini oldindan aytib bo'ladigan qilish uchun undan foydalaning.
 
-Principles
-- Instruction and query paths emit structured enums. Avoid panics; report a specific category wherever possible.
-- Categories are stable, messages may evolve. Clients should match on categories, not on free‑form strings.
+Prinsiplar
+- Ko'rsatma va so'rovlar yo'llari tuzilgan raqamlarni chiqaradi. Vahimalardan saqlaning; iloji bo'lsa, ma'lum bir toifa haqida xabar bering.
+- Turkumlar barqaror, xabarlar rivojlanishi mumkin. Mijozlar erkin shakldagi satrlarda emas, balki toifalar bo'yicha mos kelishi kerak.
 
-Categories
-- InstructionExecutionError::Find: Entity missing (asset, account, domain, NFT, role, trigger, permission, public key, block, transaction). Example: removing a non‑existent metadata key yields Find(MetadataKey).
-- InstructionExecutionError::Repetition: Duplicate registration or conflicting ID. Contains the instruction type and the repeated IdBox.
-- InstructionExecutionError::Mintability: Mintability invariant violated (`Once` exhausted twice, `Limited(n)` overdrawn, or attempts to disable `Infinitely`). Examples: minting an asset defined as `Once` twice yields `Mintability(MintUnmintable)`; configuring `Limited(0)` yields `Mintability(InvalidMintabilityTokens)`.
-- InstructionExecutionError::Math: Numeric domain errors (overflow, divide‑by‑zero, negative value, not enough quantity). Example: burning more than available amount yields Math(NotEnoughQuantity).
-- InstructionExecutionError::InvalidParameter: Invalid instruction parameter or configuration (e.g., time trigger in the past). Use for malformed contract payloads.
-- InstructionExecutionError::Evaluate: DSL/spec mismatch for instruction shape or types. Example: wrong numeric spec for an asset value yields Evaluate(Type(AssetNumericSpec(..))).
-- InstructionExecutionError::InvariantViolation: Violation of a system invariant that cannot be expressed in other categories. Example: attempting to remove the last signatory.
-- InstructionExecutionError::Query: Wrapping of QueryExecutionFail when a query fails during instruction execution.
+Kategoriyalar
+- InstructionExecutionError::Find: ob'ekt etishmayotgan (aktiv, hisob, domen, NFT, rol, trigger, ruxsat, ochiq kalit, blok, tranzaksiya). Misol: mavjud bo'lmagan metama'lumotlar kalitini olib tashlash Find (MetadataKey) ni beradi.
+- InstructionExecutionError::Repetition: dublikat ro'yxatga olish yoki ziddiyatli ID. Ko'rsatma turini va takroriy IdBoxni o'z ichiga oladi.
+- InstructionExecutionError::Mintability: Mintability invariant buzilgan (`Once` ikki marta charchagan, `Limited(n)` haddan tashqari chizilgan yoki `Infinitely`ni o‘chirishga urinish). Misollar: `Once` sifatida belgilangan aktivni ikki marta zarb qilish `Mintability(MintUnmintable)` daromad keltiradi; `Limited(0)` konfiguratsiyasi `Mintability(InvalidMintabilityTokens)` hosil qiladi.
+- InstructionExecutionError::Math: Raqamli domen xatolari (toshib ketish, nolga boʻlish, manfiy qiymat, miqdor yetarli emas). Misol: mavjud miqdordan ko'proq yoqish Math(NotEnoughQuantity) beradi.
+- InstructionExecutionError::InvalidParameter: Yo'riqnoma parametri yoki konfiguratsiyasi noto'g'ri (masalan, o'tmishdagi vaqtni ishga tushirish). Noto'g'ri tuzilgan shartnoma yuklamalari uchun foydalaning.
+- InstructionExecutionError::Evaluate: ko'rsatma shakli yoki turlari uchun DSL/spec nomuvofiqligi. Misol: aktiv qiymatining noto‘g‘ri raqamli spetsifikatsiyasi Evaluate(Type(AssetNumericSpec(...))).
+- InstructionExecutionError::InvariantViolation: Boshqa toifalarda ifodalab bo'lmaydigan tizim invariantining buzilishi. Misol: oxirgi imzo qo'ygan shaxsni olib tashlashga urinish.
+- InstructionExecutionError::Query: Ko‘rsatmani bajarish vaqtida so‘rov bajarilmasa, QueryExecutionFailni o‘rash.
 
 QueryExecutionFail
-- Find: Missing entity in query context.
-- Conversion: Wrong type expected by a query.
-- NotFound: Missing live query cursor.
-- CursorMismatch / CursorDone: Cursor protocol errors.
-- FetchSizeTooBig: Server‑enforced limit exceeded.
-- GasBudgetExceeded: Query execution exceeded the gas/materialization budget.
-- InvalidSingularParameters: Unsupported parameters for singular queries.
-- CapacityLimit: Live query store capacity reached.
+- Topish: so'rov kontekstida etishmayotgan ob'ekt.
+- Konvertatsiya: so'rov tomonidan kutilgan noto'g'ri tur.
+- Topilmadi: jonli so'rov kursori yo'q.
+- CursorMismatch / CursorDone: Kursor protokoli xatolari.
+- FetchSizeTooBig: Server tomonidan belgilangan chegaradan oshib ketdi.
+- GasBudgetExceeded: so'rovning bajarilishi gaz/materializatsiya byudjetidan oshdi.
+- InvalidSingularParameters: Singular so'rovlar uchun qo'llab-quvvatlanmaydigan parametrlar.
+- CapacityLimit: jonli so'rovlar saqlash hajmiga erishildi.
 
-Testing Tips
-- Prefer unit tests close to the origin of an error. For example, asset numeric spec mismatch can be generated in data‑model tests.
-- Integration tests should cover end‑to‑end mapping for representative cases (e.g., duplicate register, missing key on remove, transfer without ownership).
-- Keep assertions resilient by matching enum variants instead of message substrings.
+Sinov bo'yicha maslahatlar
+- Xatoning kelib chiqishiga yaqin birlik testlariga ustunlik bering. Masalan, ob'ektning raqamli spetsifikatsiyasi mos kelmasligi ma'lumotlar modeli testlarida yaratilishi mumkin.
+- Integratsiya testlari vakillik holatlari (masalan, dublikat registr, o'chirishda etishmayotgan kalit, egaliksiz o'tkazish) uchun uchdan-uchga xaritalashni qamrab olishi kerak.
+- Xabar pastki satrlari o'rniga enum variantlarini moslashtirish orqali tasdiqlarni mustahkam saqlang.

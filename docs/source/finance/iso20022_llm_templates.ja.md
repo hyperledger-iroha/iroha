@@ -6,22 +6,23 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 8d4569e75fb219979ee7c5e776427336bc43c155a24210af977e7a8e6ee1c8be
 source_last_modified: "2026-01-03T18:08:00.803277+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! ISO 20022 clarification prompt templates for roadmap Milestone F3.
+//!ロードマップ マイルストーン F3 の ISO 20022 明確化プロンプト テンプレート。
 
-# ISO 20022 Clarification Prompt Templates
+# ISO 20022 説明プロンプト テンプレート
 
-These templates help seed requests to LLM (or other assistants) when financial-settlement engineers need quick references from ISO 20022 documentation or market-structure norms. Always include concrete payload samples and cite the specific message families you are working on so responses remain deterministic and audit-friendly.
+これらのテンプレートは、財務決済エンジニアが ISO 20022 ドキュメントや市場構造規範からのクイック リファレンスを必要とする場合に、LLM (または他のアシスタント) へのリクエストをシードするのに役立ちます。常に具体的なペイロード サンプルを含め、作業中の特定のメッセージ ファミリを引用することで、応答が決定的で監査しやすい状態に保たれます。
 
-## Before You Ask
-- Identify the ISO 20022 message (`MsgDefId`, variant, market practice pack) and version.
-- Collect the Norito/ISI context: instruction name, legs, optional parameters, expected execution timeline.
-- Note which artefacts you already have (schema snippet, BR-n validation rule, market practice note).
-- Clarify whether you need regulatory guidance (e.g., CPMI-IOSCO) or operational norms (cut-off windows, liquidity buffers).
+## 質問する前に
+- ISO 20022 メッセージ (`MsgDefId`、バリアント、マーケット プラクティス パック) とバージョンを特定します。
+- Norito/ISI コンテキスト: 命令名、レッグ、オプションのパラメータ、予想される実行タイムラインを収集します。
+- すでに所有しているアーティファクトに注意してください (スキーマ スニペ​​ット、BR-n 検証ルール、市場慣行メモ)。
+- 規制上のガイダンス (CPMI-IOSCO など) または運用基準 (カットオフ ウィンドウ、流動性バッファー) が必要かどうかを明確にします。
 
-## Template 1 – Field Mapping & Semantics
+## テンプレート 1 – フィールド マッピングとセマンティクス
 ```text
 You are LLM acting as an ISO 20022 integration analyst.
 Goal: map {{Norito_instruction_or_field}} in Hyperledger Iroha to ISO 20022 {{message_id}} (version {{version}}).
@@ -38,7 +39,7 @@ Questions:
 Return the answer as a table with `Field`, `ISO Path`, `Rules`, `Notes`.
 ```
 
-## Template 2 – Settlement Workflow & Timeline Clarifications
+## テンプレート 2 – 決済ワークフローとスケジュールの明確化
 ```text
 You are LLM advising on DvP/PvP settlement workflows referencing ISO 20022 repo/payments messages.
 Scenario: {{brief_repo_or_pvp_scenario}}, including legs, currencies, and counterparties.
@@ -55,7 +56,7 @@ Questions:
 Deliver the answer as bullet lists grouped by phase, citing ISO references (e.g., sese.023 BR23).
 ```
 
-## Template 3 – Validation Rules & Code Sets
+## テンプレート 3 – 検証ルールとコード セット
 ```text
 You are LLM validating ISO 20022 message content.
 Message: {{message_id_version}} for {{business_process}}.
@@ -68,7 +69,7 @@ Tasks:
 Produce the result as a checklist with `Requirement`, `Reference`, `Implementation Hint`.
 ```
 
-## Template 4 – Market-Structure & Regulatory Context
+## テンプレート 4 – 市場構造と規制の背景
 ```text
 You are LLM providing market-structure references for ISO 20022 settlement.
 Region/Market: {{market_or_region}}
@@ -81,7 +82,7 @@ Need:
 Return concise paragraphs with citations and note where operator documentation should reference these rules.
 ```
 
-## Template 5 – Exception Handling & Reconciliation
+## テンプレート 5 – 例外処理と調整
 ```text
 You are LLM focusing on exception handling for ISO 20022-driven settlements.
 Scenario: {{failure_case}} (e.g., counterparty fails cash leg).
@@ -94,7 +95,7 @@ Questions:
 Respond with a step-by-step outline and map each action to ISO codes.
 ```
 
-## Usage Notes
-- Store filled-in prompts in the issue tracker or design docs to ensure conversations remain auditable.
-- When sharing external references, link to official ISO documentation portals or SMPG extracts; avoid unpublished material.
-- Update this template set whenever new ISO message families or market practices enter scope (e.g., pacs.009, derivatives collateral).
+## 使用上の注意
+- 入力済みのプロンプトを課題トラッカーまたは設計ドキュメントに保存して、会話を監査可能な状態に保ちます。
+- 外部参照を共有する場合は、公式 ISO ドキュメント ポータルまたは SMPG 抜粋にリンクします。未公開の内容は避けてください。
+- 新しい ISO メッセージ ファミリまたは市場慣行が対象範囲に入るたびに、このテンプレート セットを更新します (例: pacs.009、デリバティブ担保)。

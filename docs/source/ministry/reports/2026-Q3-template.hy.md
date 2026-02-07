@@ -10,6 +10,7 @@ translation_last_reviewed: 2026-02-07
 title: Ministry Transparency Report — 2026 Q3 (Template)
 summary: Scaffold for the MINFO-8 quarterly transparency packet; replace all tokens before publication.
 quarter: 2026-Q3
+translator: machine-google-reviewed
 ---
 
 <!--
@@ -19,126 +20,124 @@ quarter: 2026-Q3
     3. Attach supporting artefacts (data appendix, CSVs, manifest, Grafana export) under artifacts/ministry/transparency/<YYYY-Q>/.
 -->
 
-# Executive Summary
+# Գործադիր ամփոփում
 
-> Provide a one-paragraph summary of moderation accuracy, appeal outcomes, denylist churn, and treasury highlights. Mention whether release met the T+14 deadline.
+> Տրամադրեք չափավորության ճշգրտության, բողոքարկման արդյունքների, մերժումների մերժման և գանձապետական կարևորագույն կետերի մեկ պարբերության ամփոփում: Նշեք, թե արդյոք ազատ արձակումը համապատասխանում է T+14 ժամկետին:
 
-## Quarter in Review
+## Եռամսյակը վերանայման մեջ
 
-### Highlights
+### Կարևորություններ
 - {{HIGHLIGHT_1}}
 - {{HIGHLIGHT_2}}
 - {{HIGHLIGHT_3}}
 
-### Risks & Mitigations
+### Ռիսկեր և մեղմացումներ
 
-| Risk | Impact | Mitigation | Owner | Status |
+| Ռիսկ | Ազդեցություն | Մեղմացում | Սեփականատեր | Կարգավիճակը |
 |------|--------|------------|-------|--------|
-| {{RISK_1}} | {{Impact}} | {{Mitigation}} | {{Owner}} | {{Status}} |
-| {{RISK_2}} | {{Impact}} | {{Mitigation}} | {{Owner}} | {{Status}} |
+| {{RISK_1}} | {{Ազդեցություն}} | {{Մեղմացում}} | {{Սեփականատեր}} | {{Կարգավիճակ}} |
+| {{RISK_2}} | {{Ազդեցություն}} | {{Մեղմացում}} | {{Սեփականատեր}} | {{Կարգավիճակ}} |
 
-## Metrics Overview
+## Չափման ակնարկ
 
-All metrics originate from `ministry_transparency_builder` (Norito bundle) after the DP sanitizer runs. Attach corresponding CSV slices referenced below.
+Բոլոր ցուցանիշները ծագում են `ministry_transparency_builder`-ից (Norito փաթեթից)՝ DP ախտահանիչի գործարկումից հետո: Կցեք ստորև նշված համապատասխան CSV հատվածները:
 
-### AI Moderation Accuracy
+### AI-ի չափավորության ճշգրտություն
 
-| Model Profile | Region | FP Rate (Target) | FN Rate (Target) | Drift vs Calibration | Sample Size | Notes |
-|---------------|--------|------------------|------------------|----------------------|-------------|-------|
-| {{profile}} | {{region}} | {{fp_rate}} ({{fp_target}}) | {{fn_rate}} ({{fn_target}}) | {{drift}} | {{samples}} | {{notes}} |
+| Մոդելի պրոֆիլը | Մարզ | FP տոկոսադրույքը (նպատակային) | FN տոկոսադրույքը (նպատակային) | Drift vs Calibration | Նմուշի չափը | Ծանոթագրություններ |
+|----------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| {{պրոֆիլ}} | {{տարածաշրջան}} | {{fp_rate}} ({{fp_target}}) | {{fn_rate}} ({{fn_target}}) | {{drift}} | {{նմուշներ}} | {{նշումներ}} |
 
-### Appeals & Panel Activity
+### Բողոքարկումներ և վահանակի գործունեությունը
 
-| Metric | Value | SLA Target | Trend vs Q-1 | Notes |
-|--------|-------|------------|--------------|-------|
-| Appeals received | {{appeals_received}} | {{sla}} | {{delta}} | {{notes}} |
-| Median resolution time | {{median_resolution}} | {{sla}} | {{delta}} | {{notes}} |
-| Reversal rate | {{reversal_rate}} | {{target}} | {{delta}} | {{notes}} |
-| Panel utilization | {{panel_utilization}} | {{target}} | {{delta}} | {{notes}} |
+| Մետրական | Արժեք | SLA թիրախ | Թրենդ ընդդեմ Q-1 | Ծանոթագրություններ |
+|--------|-------|------------|-------------|------|
+| Ստացված բողոքներ | {{բողոքարկումներ_ստացված}} | {{սլա}} | {{դելտա}} | {{նշումներ}} |
+| Միջին լուծման ժամանակը | {{միջին_բանաձև}} | {{սլա}} | {{դելտա}} | {{նշումներ}} |
+| Հակադարձման տոկոսադրույքը | {{վերադարձի_դրույքաչափ}} | {{նպատակ}} | {{դելտա}} | {{նշումներ}} |
+| Վահանակի օգտագործում | {{վահանակի_օգտագործում}} | {{նպատակ}} | {{դելտա}} | {{նշումներ}} |
 
 ### Denylist & Emergency Canon
 
-| Metric | Count | DP Noise (ε) | Emergency Flags | TTL Compliance | Notes |
-|--------|-------|--------------|-----------------|----------------|-------|
-| Hash additions | {{additions}} | {{epsilon_counts}} | {{flags}} | {{ttl_status}} | {{notes}} |
-| Hash removals | {{removals}} | {{epsilon_counts}} | {{flags}} | {{ttl_status}} | {{notes}} |
-| Canon invocations | {{canon_invocations}} | n/a | {{flags}} | {{ttl_status}} | {{notes}} |
+| Մետրական | Հաշվել | DP աղմուկ (ε) | Արտակարգ դրոշներ | TTL Համապատասխանություն | Ծանոթագրություններ |
+|--------|-----------------------------------------|----------------|------|
+| Հեշ հավելումներ | {{ավելացումներ}} | {{epsilon_counts}} | {{դրոշներ}} | {{ttl_status}} | {{նշումներ}} |
+| Հեշ հեռացումներ | {{հեռացումներ}} | {{epsilon_counts}} | {{դրոշներ}} | {{ttl_status}} | {{նշումներ}} |
+| Canon կոչումներ | {{կանոնական_կանչումներ}} | հ/հ | {{դրոշներ}} | {{ttl_status}} | {{նշումներ}} |
 
-### Treasury Movements
+### Գանձապետական շարժումներ
 
-| Flow | Amount (MINFO) | Source Reference | Notes |
-|------|----------------|------------------|-------|
-| Appeal deposits | {{amount}} | {{tx_ref}} | {{notes}} |
-| Panel rewards | {{amount}} | {{tx_ref}} | {{notes}} |
-| Operational spend | {{amount}} | {{tx_ref}} | {{notes}} |
+| Հոսք | Գումարը (MINFO) | Աղբյուրի հղում | Ծանոթագրություններ |
+|------|----------------|-----------------|------|
+| Բողոքարկման ավանդներ | {{գումար}} | {{tx_ref}} | {{նշումներ}} |
+| Վահանակի պարգևներ | {{գումար}} | {{tx_ref}} | {{նշումներ}} |
+| Գործառնական ծախս | {{գումար}} | {{tx_ref}} | {{նշումներ}} |
 
-### Volunteer & Outreach Signals
+### Կամավորների և օգնության ազդանշաններ
 
-| Metric | Value | Target | Notes |
+| Մետրական | Արժեք | Թիրախային | Ծանոթագրություններ |
 |--------|-------|--------|-------|
-| Volunteer briefs published | {{value}} | {{target}} | {{notes}} |
-| Languages covered | {{value}} | {{target}} | {{notes}} |
-| Governance workshops hosted | {{value}} | {{target}} | {{notes}} |
+| Հրապարակվել են կամավորների ամփոփագրեր | {{արժեք}} | {{նպատակ}} | {{նշումներ}} |
+| Լեզուներ ընդգրկված | {{արժեք}} | {{նպատակ}} | {{նշումներ}} |
+| Տեղակայվել են կառավարման սեմինարներ | {{արժեք}} | {{նպատակ}} | {{նշումներ}} |
 
-## Differential Privacy & Sanitization
+## Դիֆերենցիալ գաղտնիություն և ախտահանում
 
-Summarise the sanitizer run and include the RNG commitment.
+Ամփոփեք ախտահանիչի գործարկումը և ներառեք RNG պարտավորությունը:
 
-- Sanitizer job: `{{CI_JOB_URL}}`
-- DP parameters: ε = {{epsilon_total}}, δ = {{delta_total}}
-- RNG commitment: `{{blake3_seed_commitment}}`
-- Buckets suppressed: {{suppressed_buckets}}
-- QA reviewer: {{reviewer}}
+- Ախտահանիչի աշխատանք՝ `{{CI_JOB_URL}}`
+- DP պարամետրեր՝ ε={{epsilon_total}}, δ={{delta_total}}
+- RNG պարտավորություն՝ `{{blake3_seed_commitment}}`
+- Դույլերը ճնշված են. {{suppressed_buckets}}
+- ՈԱ գրախոս՝ {{ գրախոս }}
 
-Attach `artifacts/ministry/transparency/{{Quarter}}/dp_report.json` and note any manual interventions.
+Կցեք `artifacts/ministry/transparency/{{Quarter}}/dp_report.json`-ը և նշեք ձեռքով կատարված ցանկացած միջամտություն:## Տվյալների հավելվածներ
 
-## Data Attachments
+| Արտեֆակտ | Ճանապարհ | SHA-256 | Վերբեռնվե՞լ է SoraFS-ում: | Ծանոթագրություններ |
+|----------|------|---------|--------------------|-------|
+| Ամփոփում PDF | `artifacts/ministry/transparency/{{Quarter}}/summary.pdf` | {{հաշ}} | {{Այո/Ոչ}} | {{նշումներ}} |
+| Norito տվյալների հավելված | `artifacts/ministry/transparency/{{Quarter}}/data/appendix.norito` | {{հաշ}} | {{Այո/Ոչ}} | {{նշումներ}} |
+| Metrics CSV փաթեթ | `artifacts/ministry/transparency/{{Quarter}}/data/csv/` | {{հաշ}} | {{Այո/Ոչ}} | {{նշումներ}} |
+| Grafana արտահանում | `dashboards/grafana/ministry_transparency_overview.json` | {{հաշ}} | {{Այո/Ոչ}} | {{նշումներ}} |
+| Զգուշացման կանոններ | `dashboards/alerts/ministry_transparency_rules.yml` | {{հաշ}} | {{Այո/Ոչ}} | {{նշումներ}} |
+| Ծագման դրսևորում | `artifacts/ministry/transparency/{{Quarter}}/manifest.json` | {{հաշ}} | {{Այո/Ոչ}} | {{նշումներ}} |
+| Մանիֆեստ ստորագրություն | `artifacts/ministry/transparency/{{Quarter}}/manifest.json.sig` | {{հաշ}} | {{Այո/Ոչ}} | {{նշումներ}} |
 
-| Artefact | Path | SHA-256 | Uploaded to SoraFS? | Notes |
-|----------|------|---------|---------------------|-------|
-| Summary PDF | `artifacts/ministry/transparency/{{Quarter}}/summary.pdf` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Norito data appendix | `artifacts/ministry/transparency/{{Quarter}}/data/appendix.norito` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Metrics CSV bundle | `artifacts/ministry/transparency/{{Quarter}}/data/csv/` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Grafana export | `dashboards/grafana/ministry_transparency_overview.json` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Alert rules | `dashboards/alerts/ministry_transparency_rules.yml` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Provenance manifest | `artifacts/ministry/transparency/{{Quarter}}/manifest.json` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Manifest signature | `artifacts/ministry/transparency/{{Quarter}}/manifest.json.sig` | {{hash}} | {{Yes/No}} | {{notes}} |
+## Հրապարակման մետատվյալներ
 
-## Publication Metadata
-
-| Field | Value |
+| Դաշտային | Արժեք |
 |-------|-------|
-| Release quarter | {{Quarter}} |
-| Release timestamp (UTC) | {{timestamp}} |
+| Թողարկման եռամսյակ | {{եռամսյակ}} |
+| Թողարկման ժամանակի դրոշմակնիք (UTC) | {{ժամանականիշ}} |
 | SoraFS CID | `{{cid}}` |
-| Governance vote ID | {{vote_id}} |
-| Manifest digest (`blake2b`) | `{{manifest_digest}}` |
-| Git commit / tag | `{{git_rev}}` |
-| Release owner | {{owner}} |
+| Կառավարման քվեարկության ID | {{vote_id}} |
+| Մանիֆեստ մարսողություն (`blake2b`) | `{{manifest_digest}}` |
+| Git commit / հատկորոշիչ | `{{git_rev}}` |
+| Ազատ արձակել սեփականատիրոջը | {{սեփականատեր}} |
 
-## Approvals
+## Հաստատումներ
 
-| Role | Name | Decision | Timestamp | Notes |
-|------|------|----------|-----------|-------|
-| Ministry Observability TL | {{name}} | ✅/⚠️ | {{timestamp}} | {{notes}} |
-| Governance Council Liaison | {{name}} | ✅/⚠️ | {{timestamp}} | {{notes}} |
-| Docs/Comms Lead | {{name}} | ✅/⚠️ | {{timestamp}} | {{notes}} |
+| Դերը | Անունը | Որոշում | Ժամացույց | Ծանոթագրություններ |
+|------|------|----------|----------|-------|
+| Նախարարության դիտարկելիության TL | {{անուն}} | ✅/⚠️ | {{ժամանականիշ}} | {{նշումներ}} |
+| Կառավարման խորհրդի կապ | {{անուն}} | ✅/⚠️ | {{ժամանականիշ}} | {{նշումներ}} |
+| Փաստաթղթեր/Comms առաջատար | {{անուն}} | ✅/⚠️ | {{ժամանականիշ}} | {{նշումներ}} |
 
-## Changelog & Follow-Ups
+## Փոփոխություններ և հետևություններ
 
 - {{CHANGELOG_ITEM_1}}
 - {{CHANGELOG_ITEM_2}}
 
-### Open Action Items
+### Բացեք Գործողությունների կետերը
 
-| Item | Owner | Due | Status | Notes |
+| Նյութ | Սեփականատեր | Ժամկետային | Կարգավիճակը | Ծանոթագրություններ |
 |------|-------|-----|--------|-------|
-| {{Action}} | {{Owner}} | {{Due}} | {{Status}} | {{Notes}} |
+| {{Գործողություն}} | {{Սեփականատեր}} | {{Պարտք}} | {{Կարգավիճակ}} | {{Ծանոթագրություններ}} |
 
-### Contact
+### Կապ
 
-- Primary contact: {{contact_name}} (`{{chat_handle}}`)
-- Escalation path: {{escalation_details}}
-- Distribution list: {{mailing_list}}
+- Հիմնական կոնտակտ՝ {{contact_name}} (`{{chat_handle}}`)
+- Էսկալացիայի ճանապարհ՝ {{escalation_details}}
+- Բաշխման ցուցակ՝ {{mailing_list}}
 
-_Template version: 2026-03-25. Update the revision date when making structural changes._
+_Կաղապարի տարբերակ՝ 2026-03-25: Կառուցվածքային փոփոխություններ կատարելիս թարմացրեք վերանայման ամսաթիվը:_

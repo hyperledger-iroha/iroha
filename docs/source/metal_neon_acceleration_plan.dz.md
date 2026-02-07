@@ -7,262 +7,279 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 628eb2c7776bf818a310dd4bae51e3fc655f92e885d0cd9da7ff487fd9128102
 source_last_modified: "2025-12-29T18:16:35.976997+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Metal & NEON Acceleration Plan (Swift & Rust)
+# ལྕགས་དང་མིང་འབོར་མགྱོགས་ཚད་འཆར་གཞི།(Swift & Rust)
 
-This document captures the shared plan for enabling deterministic hardware
-acceleration (Metal GPU + NEON/Accelerate SIMD + StrongBox integration) across
-the Rust workspace and the Swift SDK. It addresses the roadmap items tracked
-under **Hardware Acceleration Workstream (macOS/iOS)** and provides a hand-off
-artifact for the Rust IVM team, Swift bridge owners, and telemetry tooling.
+ཡིག་ཆ་འདི་གིས་ གཏན་འབེབས་སྲ་ཆས་ལྕོགས་ཅན་བཟོ་ནི་ལུ་ བརྗེ་སོར་འཆར་གཞི་འདི་ བཀོདཔ་ཨིན།
+མགྱོགས་ཚད་ (མེ་ཊལ་ཇི་པི་ཡུ་ + ནེ/མགྱོགས་ཚད་ སི་ཨེམ་ཌི་ + ཨིསི་ཊོང་སྒྲོམ་མཉམ་བསྡོམས་) ནང་འཁོད་ལུ་ མཉམ་བསྡོམས་འབད་ཡོདཔ།
+the Rust ལཱ་གི་ས་སྒོ་དང་ སུའིཕཊི་ཨེསི་ཌི་ཀེ་ ཨིན། འདི་གིས་ ལམ་སྟོན་གྱི་ རྣམ་གྲངས་ཚུ་ བརྟག་ཞིབ་འབདཝ་ཨིན།
+འོག་ལུ་ **ཧར་ཌི་ཝེར་མགྱོགས་ཚད་ལཱ་གི་རྒྱུན་རིམ་ (མེཀ་ཨོ་ཨེསི་/ཨའི་ཨོ་ཨེསི་)** དང་ ལགཔ་བཀག་བཞག་འབདཝ་ཨིན།
+རསཊ་ IVM སྡེ་ཚན་དང་ Swift ཟམ་གྱི་ཇོ་བདག་ དེ་ལས་ བརྒྱུད་འཕྲིན་གྱི་ལག་ཆ་ཚུ་གི་དོན་ལུ་ ཅ་ཆད།
 
-> Last updated: 2026-01-12  
-> Owners: IVM Performance TL, Swift SDK Lead
+> མཐའ་མའི་དུས་མཐུན་བཟོ་ཡོདཔ།: ༢༠༢༦-༠༡-༡༢  
+> ཇོ་བདག་: IVM ལཱ་འགན་ཊི་ཨེལ་, སུའིཕཊི་ཨེསི་ཌི་ཀེ་ལིཌ།
 
-## Goals
+## རིལ་ཚང
 
-1. Reuse the Rust GPU kernels (Poseidon/BN254/CRC64) on Apple hardware via Metal
-   compute shaders with deterministic parity against CPU paths.
-2. Expose acceleration toggles (`AccelerationConfig`) end-to-end so Swift apps
-   can opt into Metal/NEON/StrongBox while preserving ABI/parity guarantees.
-3. Instrument CI + dashboards to surface parity/benchmark data and flag
-   regressions across CPU vs GPU/SIMD paths.
-4. Share StrongBox/secure-enclave lessons between Android (AND2) and Swift
-   (IOS4) to keep signing flows deterministically aligned.
+༡ རསཊ་ཇི་པི་ཡུ་ཀར་ནེལ་ཚུ་ (པོ་སི་ཌོན་/བི་ཨེན་༢༥༤/སི་ཨར་སི་༦༤) མེཊ་ཊལ་བརྒྱུད་དེ་ ཨེ་པཱལ་མཉེན་ཆས་གུ་ལོག་སྟེ་ལག་ལེན་འཐབ།
+   སི་པི་ཡུ་འགྲུལ་ལམ་ལུ་འགོག་པའི་ གཏན་འབེབས་ཆ་སྙོམས་ཡོད་པའི་ རྩིས་འཕྲུལ་གྱི་ཤེ་ཌར་ཚུ།
+2. ཕྱིར་འགྱངས་མགྱོགས་ཚད་ལག་ཆ་ (`AccelerationConfig`) མཇུག་ནས་མཇུག་ནས་སུའིཕཊི་གློག་རིམ་ཚུ།
+   ABI/འདྲ་མཉམ་གྱི་ངེས་གཏན་ཉམས་སྲུང་འབད་བའི་སྐབས་ Metal/NEON/StrongBox ནང་ལུ་བཙུགས་ཚུགས།
+3. ལག་ཆ་ CI + བརྡ་བཀོད་བཀོད་སྒྲུང་།
+   CPU དང་ GPU/SIMD འགྲུལ་ལམ་ཚུ་ནང་ རི་གེ་རི་བ།
+༤ Android (AND2) དང་ Swift གི་བར་ན་ StrongBox/secure-enclave སློབ་ཚན་ཚུ་ བརྗེ་སོར་འབད་ནི།
+   (IOS4) མཚན་རྟགས་བཞུར་རྒྱུན་ཚུ་ གཏན་འཁེལ་སྦེ་ ཕྲང་སྒྲིག་འབད་བཞག་ནིའི་དོན་ལུ་ཨིན།
 
-**Update (CRC64 + Stage‑1 refresh):** CRC64 GPU helpers are now wired into `norito::core::hardware_crc64` with a 192 KiB default cutoff (override via `NORITO_GPU_CRC64_MIN_BYTES` or explicit helper path `NORITO_CRC64_GPU_LIB`) while retaining SIMD and scalar fallbacks. JSON Stage‑1 cutovers were re-benchmarked (`examples/stage1_cutover` → `benchmarks/norito_stage1/cutover.csv`), keeping the scalar cutover at 4 KiB and aligning the Stage‑1 GPU default to 192 KiB (`NORITO_STAGE1_GPU_MIN_BYTES`) so small documents stay on CPU and large payloads amortize GPU launch costs.
+**དུས་མཐུན་བཟོ་ནི་ (CRC64 + Stage‐1 བསྐྱར་བཟོ):** CRC64 ཇི་པི་ཡུ་གྲོགས་རམ་པ་ཚུ་ ད་ལྟོ་ `norito::core::hardware_crc64` ནང་ལུ་ 192KiB སྔོན་སྒྲིག་བཏོག་བཏང་ཡོདཔ་ཨིན། ལོར།. JSON Stage‐1 cutovers ཚུ་ ལོག་སྟེ་ benchmarked བཟོ་ཡོདཔ་ཨིན། (`examples/stage1_cutover` → `benchmarks/norito_stage1/cutover.csv`) 4KiB ལུ་ scalar scalover བཞག་སྟེ་ ཡིག་ཆའི་སྔོན་སྒྲིག་ ༡༩༢KiB (`NORITO_STAGE1_GPU_MIN_BYTES`) ཡིག་ཆ་ཆུང་ཀུ་དང་ སྦོམ་དང་སྦོམ་ཚུ་ ཕྲང་སྟེ་སྡོད་ཡོདཔ་ཨིན། paploades གིས་ ཇི་པི་ཡུ་ འགོ་འབྱེད་ཀྱི་འགྲོ་སོང་ མར་ཕབ་འབདཝ་ཨིན།
 
-## Deliverables & Owners
+## བུ་བརྒྱུད་དང་བདག་པ།
 
-| Milestone | Deliverable | Owner(s) | Target |
-|-----------|-------------|----------|--------|
-| Rust WP2-A/B | Metal shader interfaces mirroring CUDA kernels | IVM Perf TL | Feb 2026 |
-| Rust WP2-C | Metal BN254 parity tests & CI lane | IVM Perf TL | Q2 2026 |
-| Swift IOS6 | Bridge toggles wired (`connect_norito_set_acceleration_config`) + SDK API + samples | Swift Bridge Owners | Done (Jan 2026) |
-| Swift IOS5 | Sample apps/docs demonstrating config usage | Swift DX TL | Q2 2026 |
-| Telemetry | Dashboard feeds w/ acceleration parity + benchmark metrics | Swift Program PM / Telemetry | Pilot data Q2 2026 |
-| CI | XCFramework smoke harness exercising CPU vs Metal/NEON on device pool | Swift QA Lead | Q2 2026 |
-| StrongBox | Hardware-backed signing parity tests (shared vectors) | Android Crypto TL / Swift Security | Q3 2026 |
+| མའིལ་སི་ཊོན་ | བཀྲམ་སྤེལ་ཅན། | ཇོ་བདག་(ཚུ་) | དམིགས་ཚད་ |
+|---------------------------------------------------------- --|
+| རསཊ་ཌབ་ལུ་པི་༢-ཨེ་/བི་ | ལྕགས་རིགས་ཀྱི་གྱིབ་མ་ངོས་འདྲ་བ་ཚུ་གིས་ CUDA ཀར་ནེལ་ཚུ་ མེ་ལོང་ | IVM པར་ཕི་ཊི་ཨེལ་ | སྤྱི་ཟླ་༢ པའི་ཚེས་ ༢༠༢༦ |
+| རསཊ་ཌབ་ལུ་པི་༢-སི་ | ལྕགས་རིགས་ BN254 ཆ་སྙོམས་བརྟག་དཔྱད་ & CI ལེན། | IVM པར་ཕི་ཊི་ཨེལ་ | Q2 2026 |
+| IOS6 | ཟམ་གྱི་ གློག་ཐག་ཚུ་ (`connect_norito_set_acceleration_config`) + ཨེསི་ཌི་ཀེ་ཨེ་པི་ཨའི་ + དཔེ་ཚད་ཚུ་ | སུའིཕཊི་ཟམ་གྱི་ཇོ་བདག་ | འབད་ (༢༠༢༦ ཟླ་ ༡ པ།) |
+| IOS5 | དཔེ་ཚད་གློག་རིམ་ཚུ་/ཡིག་ཆ་ཚུ་ རིམ་སྒྲིག་ལག་ལེན་ | Swift DX TL | Q2 2026 |
+| བརྒྱུད་འཕྲིན་ | ཌེཤ་བོཌི་ཕིཌ་ཚུ་ w/ མགྱོགས་ཚད་ཆ་སྙོམས་ + བེན་ཇ་མཱརཀ་མེ་ཊིག | Swift Program PM / བརྒྱུད་འཕྲིན་ | པའི་ལོ་ཊི་གནས་སྡུད་ Q2 2026 |
+| སི་ཨའི་ | ཐབས་འཕྲུལ་ཆུ་རྫིང་ནང་ CPU དང་ Metal/NEON ལག་ལེན་འཐབ་ཐོག་ལས་ XCFramework གི་ཐ་མག་འཐུང་ནི། | Swift QA ལིཌ་ | Q2 2026 |
+| StrongBox | མཐུན་རྐྱེན་རྒྱབ་སྐྱོར་གྱི་མིང་རྟགས་བཀོད་པའི་འདྲ་མཉམ་གྱི་བརྟག་དཔྱད་ (བེག་ཊར་བརྗེ་སོར་འབད་ཡོདཔ་) | Android Crypto TL / ཆུ་བཤལ་ཉེན་སྲུང་། | Q༣ ༢༠༢༦ |
 
-## Interfaces & API Contracts
-
-### Rust (`ivm::AccelerationConfig`)
-- Keep existing fields (`enable_simd`, `enable_metal`, `enable_cuda`, `max_gpus`, thresholds).
-- Add explicit Metal warm-up to avoid first-use latency (Rust #15875).
-- Provide parity APIs returning status/diagnostics for dashboards:
-  - e.g. `ivm::vector::metal_status()` -> {enabled, parity, last_error}.
-- Output benchmarking metrics (Merkle tree timings, CRC throughput) via
-  telemetry hooks for `ci/xcode-swift-parity`.
-- Metal host now loads the compiled `fastpq.metallib`, dispatches FFT/IFFT/LDE
-  and Poseidon kernels, and falls back to the CPU implementation whenever the
-  metallib or device queue is unavailable.
+## ངོས་འདྲ་དང་ཨེ་པི་ཨའི་ གན་ཡིག་།### རསཊ་ (`ivm::AccelerationConfig`)
+- ད་ལྟོ་ཡོད་པའི་ས་སྒོ་ཚུ་ (`enable_simd`, `enable_metal`, `enable_cuda`, Norito, threshold).
+- ལག་ལེན་དང་པའི་ འཕྲོ་མཐུད་མ་འགྱོ་བར་ ལྕགས་དྲོད་བཏགས་ (Rust #15875) འདི་ གསལ་ཏོག་ཏོ་སྦེ་ ཁ་སྐོང་བརྐྱབ།
+- ཌེཤ་བོརཌི་ཚུ་གི་དོན་ལུ་ ཆ་སྙོམས་ཨེ་པི་ཨའི་ཨེསི་སླར་ལོག་གནས་རིམ་/བརྟག་དཔྱད་ཚུ་བྱིན།
+  - དཔེར་ན། `ivm::vector::metal_status()` -> {enabled, ཆ་སྙོམས་, མཇུག་_འཛོལ་བ་}.
+- ཐོན་འབྲས་བེན་ཀ་མཱར་ཀ་མེ་ཊིག་ (ཚོང་འབྲེལ་ཤིང་གི་དུས་ཚོད་ཚུ་, སི་ཨར་སི་ཐོན་འབྲས་) བརྒྱུད་དེ་)
+  `ci/xcode-swift-parity` གི་དོན་ལུ་ telenemetry hooks.
+- ལྕགས་ཧོསཊི་གིས་ ད་ལྟོ་ བསྡུ་སྒྲིག་འབད་ཡོད་པའི་ `fastpq.metallib` འདི་ མངོན་གསལ་འབདཝ་ཨིན།
+  དང་ པོ་སི་ཌོན་ཀར་ནེལ་ཚུ་ དེ་ལས་ ག་དུས་འབད་རུང་ སི་པི་ཡུ་ལག་ལེན་འཐབ་ཐངས་ལུ་ ལོག་འགྱོཝ་ཨིན།
+  ལྕགས་རིགས་ཡང་ན་ ཐབས་འཕྲུལ་གྱི་གྱལ་འདི་ འཐོབ་མ་ཚུགས།
 
 ### C FFI (`connect_norito_bridge`)
-- New struct `connect_norito_acceleration_config` (completed).
-- Getter coverage now includes `connect_norito_get_acceleration_config` (config only) and `connect_norito_get_acceleration_state` (config + parity) to mirror the setter.
-- Document struct layout in header comments for SPM/CocoaPods consumers.
+- བཀོད་སྒྲིག་གསརཔ་ `connect_norito_acceleration_config` (མཇུག་བསྡུ་ཡོདཔ།)
+- Getter ཁྱབ་ཚད་ནང་ ད་ལྟོ་ གཞི་སྒྲིག་འབད་མི་འདི་ མེ་ལོང་ནང་ `connect_norito_get_acceleration_config` (config only) དང་ `connect_norito_get_acceleration_state` (config + parity) ཚུ་ཚུདཔ་ཨིན།
+- ཨེསི་པི་ཨེམ་/ཀོ་ཀོ་པོཌསི་གི་ ཉོ་སྤྱོད་འབད་མི་ཚུ་གི་དོན་ལུ་ མགོ་ཡིག་བསམ་བཀོད་ཚུ་ནང་ ཡིག་ཆའི་སྒྲིག་བཀོད་།
 
-### Swift (`AccelerationSettings`)
-- Defaults: Metal enabled, CUDA disabled, thresholds nil (inherit).
-- Negative values ignored; `apply()` invoked automatically by `IrohaSDK`.
-- `AccelerationSettings.runtimeState()` now surfaces the `connect_norito_get_acceleration_state`
-  payload (config + Metal/CUDA parity status) so Swift dashboards emit the same telemetry
-  as Rust (`supported/configured/available/parity`). The helper returns `nil` when the
-  bridge is absent to keep tests portable.
-- `AccelerationBackendStatus.lastError` copies the disable/error reason from
-  `connect_norito_get_acceleration_state` and frees the native buffer once the string is
-  materialised so mobile parity dashboards can annotate why Metal/CUDA were disabled on
-  each host.
+### སུའིཕ (`AccelerationSettings`)
+- སྔོན་སྒྲིག་ཚུ་: ལྕགས་རིགས་ལྕོགས་ཅན་བཟོ་ཡོདཔ་, CUDA ལྕོགས་མིན་བཟོ་ཡོདཔ།
+- བེ་ལུསི་ ལོག་སྤྱོད་འབད་མི་ གནས་གོང་ཚུ་ སྣང་མེད་བཞག་ཡོདཔ། `apply()` རང་བཞིན་གྱིས་ `IrohaSDK` གིས་ འབོད་བརྡ་འབད་ཡོདཔ་ཨིན།
+- `AccelerationSettings.runtimeState()` ད་ལྟ་`connect_norito_get_acceleration_state` གི་ཐོན་ཡོད།
+  པེ་ལོཌི་ (རིམ་སྒྲིག་ + ལྕགས་/སི་ཡུ་ཌ་ ཆ་སྙོམས་གནས་རིམ་) དེ་འབདཝ་ལས་ སུའིཕཊི་ ཌེཤ་བོརཌ་ཚུ་གིས་ ཊེ་ལི་མེ་ཊི་གཅིག་བཏོནམ་ཨིན།
+  རསཊ་ (`supported/configured/available/parity`). གྲོགས་རམ་པ་གིས་ `nil` འདི་ སླར་ལོག་འབདཝ་ཨིན།
+  བརྟག་དཔྱད་ཚུ་ འབག་བཏུབ་སྦེ་བཞག་ནི་ལུ་ ཟམ་འདི་མེདཔ་ཨིན།
+- `AccelerationBackendStatus.lastError` ལས་ ལྕོགས་མིན་/འཛོལ་བ་རྒྱུ་མཚན་ཚུ་ འདྲ་བཤུས་རྐྱབ་ཨིན།
+  `connect_norito_get_acceleration_state` དང་ཡིག་རྒྱུན་འདི་ ཨིན་པ་ཅིན་ འདི་འབད་ཚརཝ་ད་ ས་ཁུལ་བཱ་ཕར་འདི་ རང་དབང་བཟོཝ་ཨིན།
+  finized དེ་འབདཝ་ལས་ འགྲུལ་འཕྲིན་ཆ་སྙོམས་ ཌེཤ་བོརཌ་ཚུ་གིས་ ལྕགས་/སི་ཨུ་ཌི་ཨེ་འདི་ ག་ཅི་འབད་ ལྕོགས་མིན་བཟོ་ཚུགས།
+  རེ་རེ་བཞིན་གྱི་ གཙོ་བོ་།
 - `AccelerationSettingsLoader` (`IrohaSwift/Sources/IrohaSwift/AccelerationSettingsLoader.swift`,
-  tests under `IrohaSwift/Tests/IrohaSwiftTests/AccelerationSettingsLoaderTests.swift`) now
-  resolves operator manifests in the same priority order as the Norito demo: honour
-  `NORITO_ACCEL_CONFIG_PATH`, search bundled `acceleration.{json,toml}` / `client.{json,toml}`,
-  log the chosen source, and fall back to defaults. Apps no longer need bespoke loaders to
-  mirror the Rust `iroha_config` surface.
-- Update sample apps & README to show toggles and telemetry integration.
+  ད་ལྟ་ `IrohaSwift/Tests/IrohaSwiftTests/AccelerationSettingsLoaderTests.swift` གི་འོག་ལུ་ཡོད་པའི་བརྟག་དཔྱད་ཚུ།
+  བཀོལ་སྤྱོད་པ་ཚུ་ Norito བརྡ་སྟོན་: གལ་གནད་ཆུང་བའི་ གཙོ་རིམ་གོ་རིམ་གཅིག་ནང་ སེལ་ཚུགསཔ་ཨིན།
+  `NORITO_ACCEL_CONFIG_PATH`, འཚོལ་ཞིབ་འདི་ `acceleration.{json,toml}` / `client.{json,toml}`,
+  སེལ་འཐུ་འབད་ཡོད་པའི་འབྱུང་ཁུངས་འདི་ཐོ་བཀོད་འབད་ཞིནམ་ལས་ སྔོན་སྒྲིག་ལུ་ལོག་འགྱོ། གློག་རིམ་ཚུ་ལུ་ ད་ལས་ཕར་ བེ་སི་པོཀ་མངོན་གསལ་འབད་མི་དགོ།
+  རསཊ་ `iroha_config` ཁ་ཐོག་ལུ་ མེ་ལོང་།
+- དཔེ་ཚད་གློག་རིམ་ཚུ་དུས་མཐུན་བཟོ་ནི་དང་ README འདི་ སོར་བསྒྱུར་དང་ ཊེ་ལི་མི་ཊི་མཉམ་བསྡོམས་སྟོན་ནིའི་དོན་ལུ་ཨིན།
 
-### Telemetry (Dashboards + Exporters)
-- Parity feed (mobile_parity.json):
-  - `acceleration.metal/neon/strongbox` -> {enabled, parity, perf_delta_pct}.
-  - Accept `perf_delta_pct` baseline CPU vs GPU comparison.
-  - `acceleration.metal.disable_reason` mirrors `AccelerationBackendStatus.lastError`
-    so Swift automation can flag disabled GPUs with the same fidelity as the Rust
-    dashboards.
-- CI feed (mobile_ci.json):
-  - `acceleration_bench.metal_vs_cpu_merkle_ms` -> {cpu, metal}
-  - `acceleration_bench.neon_crc64_throughput_mb_s` -> Double.
-- Exporters must source metrics from Rust benchmarks or CI runs (e.g., run
-  Metal/CPU microbench as part of `ci/xcode-swift-parity`).
+### ཊེ་ལི་མི་ཊི་རི་ (ཌེཤ་བོཌི་ཚུ་ + ཕྱིར་འདྲེན་)།
+- པེ་རི་ཊི་ཕིཌི་ (མོ་བཱའིལ་_མཉམ་མཐུན་.json):
+  - `acceleration.metal/neon/strongbox` -> {enabled, ཆ་སྙོམས་, perf_delta_pct}.
+  - `perf_delta_pct` གཞི་རྟེན་སི་པི་ཡུ་ དང་ ཇི་པི་ཡུ་ག་བསྡུར་ལུ་ངོས་ལེན་འབད།
+  - `acceleration.metal.disable_reason` མེ་ལོང་ `AccelerationBackendStatus.lastError`
+    དེ་འབདཝ་ལས་ སུའིཕཊི་རང་བཞིན་གྱིས་ དབང་པོ་སྐྱོན་ཅན་གྱི་ ཇི་པི་ཡུ་ཚུ་ རཱསིཊི་བཟུམ་སྦེ་ བདེན་དཔང་ཅོག་འཐདཔ་འབད་མི་ ཇི་པི་ཡུ་ཚུ་ རྟགས་བཀལ་ཚུགས།
+    གྲིབ་ཤོག་ཚུ།
+- CI ཕིཌི་ (མོ་བཱའིལ་_སི་.json):
+  - `acceleration_bench.metal_vs_cpu_merkle_ms` -> {cpu, ལྕགས་ཁག}
+  - `acceleration_bench.neon_crc64_throughput_mb_s` -> གཉིས་པ།
+- ཕྱིར་འདྲེན་འབད་མི་ཚུ་གིས་ རསཊི་བེན་ཇི་མཱརཀ་ ཡང་ན་ སི་ཨའི་གཡོག་བཀོལ་མི་ཚུ་ལས་ མེ་ཊིག་ཚུ་ འབྱུང་ཁུངས་འོང་ (དཔེར་ན་ གཡོག་བཀོལ་ནི།
+  ལྕགས་/སི་པི་ཡུ་མའི་ཀོ་རོ་བེནཆ་ `ci/xcode-swift-parity` གི་ཆ་ཤས་ཅིག་སྦེ་)།### རིམ་སྒྲིག་མདུད་པ་ & སྔོན་སྒྲིག་ཚུ་ (WP6-C)
+- `AccelerationConfig` སྔོན་སྒྲིག་ཚུ་: macOS བཟོ་བསྐྲུན་གུ་ Norito, `enable_cuda = true` འདི་ CUDA ཁྱད་རྣམ་འདི་ བསྡུ་སྒྲིག་འབད་བའི་སྐབས་, `max_gpus = None` (ཀེབ་མེན)། Swift `AccelerationSettings` གིས་ `connect_norito_set_acceleration_config` བརྒྱུད་དེ་ སྔོན་སྒྲིག་ཅོག་འཐདཔ་འདི་ ཤུལ་འཛིན་འབདཝ་ཨིན།
+- Norito Merkle heuristics (GPU vs CPU): ```bash
+# Prometheus textfile from a single capture
+cargo xtask acceleration-state --format json > artifacts/acceleration_state_macos_m4.json
+python3 scripts/acceleration/export_prometheus.py \
+  --input artifacts/acceleration_state_macos_m4.json \
+  --output artifacts/acceleration_state_macos_m4.prom \
+  --instance macos-m4
 
-### Configuration knobs & defaults (WP6-C)
-- `AccelerationConfig` defaults: `enable_metal = true` on macOS builds, `enable_cuda = true` when the CUDA feature is compiled, `max_gpus = None` (no cap). The Swift `AccelerationSettings` wrapper inherits the same defaults through `connect_norito_set_acceleration_config`.
-- Norito Merkle heuristics (GPU vs CPU): `merkle_min_leaves_gpu = 8192` enables GPU hashing for trees with ≥8192 leaves; backend overrides (`merkle_min_leaves_metal`, `merkle_min_leaves_cuda`) default to the same threshold unless explicitly set.
-- CPU preference heuristics (SHA2 ISA present): on both AArch64 (ARMv8 SHA2) and x86/x86_64 (SHA-NI) the CPU path remains preferred up to `prefer_cpu_sha2_max_leaves_* = 32_768` leaves; above that the GPU threshold applies. These values are configurable via `AccelerationConfig` and should be adjusted only with benchmark evidence.
+# Aggregate multiple captures into a Markdown matrix
+python3 scripts/acceleration/acceleration_matrix.py \
+  --state macos-m4=artifacts/acceleration_state_macos_m4.json \
+  --state sim-m3=artifacts/acceleration_state_sim_m3.json \
+  --format markdown \
+  --output artifacts/acceleration_matrix.md
+``` གིས་ ཤིང་ཚུ་གི་དོན་ལུ་ ཇི་པི་ཡུ་ཧ་ཤིང་འདི་ ≥8192 འདབ་མ་ཡོད་པའི་ ལྕོགས་ཅན་བཟོཝ་ཨིན། རྒྱབ་ཕྱོགས་འདི་ (`merkle_min_leaves_metal`, `merkle_min_leaves_cuda`) སྔོན་སྒྲིག་འདི་ གསལ་ཏོག་ཏོ་སྦེ་གཞི་སྒྲིག་མ་འབད་ཚུན་ཚོད་ ཚད་གཞི་གཅིག་པ་ལུ་ སྔོན་སྒྲིག་འབདཝ་ཨིན།
+- སི་པི་ཡུ་དགའ་གདམ་གྱི་ ཧུ་རི་སི་ཊིག་ (SHA2 ISA state): AArch64 (ARMv8 SHA2) དང་ x86/x86_64 (SHA-NI) གཉིས་ཆ་རའི་གུ་ སི་པི་ཡུ་འགྲུལ་ལམ་འདི་ `prefer_cpu_sha2_max_leaves_* = 32_768` འདབ་མ་ཚུན་ཚོད་ དགའ་གདམ་སྦེ་ལུསཔ་ཨིན། ཇི་པི་ཡུ་ཚད་གཞི་འདི་འཇུག་པའི་གུ་ལས་གོང་། གནས་གོང་འདི་ཚུ་ `AccelerationConfig` བརྒྱུད་དེ་ རིམ་སྒྲིག་འབད་ཚུགསཔ་ཨིནམ་དང་ བེན་ཇ་མཱརཀ་སྒྲུབ་བྱེད་དང་གཅིག་ཁར་རྐྱངམ་ཅིག་ བདེ་སྒྲིག་འབད་དགོ།
 
-## Testing Strategy
+## བརྟག་དཔྱད།
 
-1. **Unit parity tests (Rust)**: ensure Metal kernels match CPU outputs for
-   deterministic vectors; run under `cargo test -p ivm --features metal`.
-   `crates/fastpq_prover/src/metal.rs` now ships macOS-only parity tests that
-   exercise FFT/IFFT/LDE and Poseidon against the scalar reference.
-2. **Swift smoke harness**: extend IOS6 test runner to execute CPU vs Metal
-   encoding (Merkle/CRC64) on both emulators and StrongBox devices; compare
-   results and log parity status.
-3. **CI**: update `norito_bridge_ios.yml` (already calls `make swift-ci`) to push
-   acceleration metrics to artifacts; ensure the run confirms Buildkite
-   `ci/xcframework-smoke:<lane>:device_tag` metadata before publishing harness changes,
-   and fail the lane on parity/benchmark drift.
-4. **Dashboards**: new fields now render in CLI output. Ensure exporters produce
-   data before flipping dashboards live.
+1. **སྡེ་ཚན་ཆ་སྙོམས་བརྟག་དཔྱད་ (Rust)**: ལྕགས་རིགས་ཀར་ནེལ་ཚུ་ སི་པི་ཡུ་ཨའུཊི་པུཊི་ཚུ་དང་མཐུན་སྒྲིག་འབད།
+   གཏན་འབེབས་ཀྱི་བེག་ཊར་ཚུ། `cargo test -p ivm --features metal` གི་འོག་ལུ་གཡོག་བཀོལ།
+   `crates/fastpq_prover/src/metal.rs` ད་ལྟ་ macOS-only parity བརྟག་དཔྱད་ཚུ་
+   ལག་ལེན་ FFT/IFFT/LDE དང་ Poseidon གཉིས་ scalar གཞི་བསྟུན་ལུ་རྒྱབ་འགལ་འབདཝ་ཨིན།
+2. **Swift གི་ཐ་མག་འཐེན་ཆས་**: IOS6 བརྟག་དཔྱད་རྒྱུག་འགྲན་པ་ སི་པི་ཡུ་དང་མེ་ཊལ་ལག་ལེན་འཐབ་ནིའི་དོན་ལུ་ རྒྱ་སྐྱེད་འབད།
+   ཨིམ་ཀོ་ཌིང་ (Merkle/CRC64) གཉིས་ཆ་རའི་ཐོག་ལུ་ བརྡ་རྟགས་དང་ StrongBox ཐབས་འཕྲུལ་གཉིས་ཆ་རའི་ནང་; ག༌བསྡུར༌རྐྱབ༌ནི༌
+   གྲུབ་འབྲས་དང་ ལོག ཆ་སྙོམས་གནས་ཚད།
+3. **CI**: དུས་མཐུན་བཟོ་ནིའི་དོན་ལུ་ IVM (ཧེ་མ་ལས་རང་ འབོད་བརྡ་གཏང་། `make swift-ci`)
+   མགྱོགས་ཚད་ཀྱི་ཚད་གཞི་ཚུ་ ཅ་རྙིང་ཚུ་ལུ་; རན་འདི་གིས་ བཱུལཌི་ཀི་ཊི་ ངེས་གཏན་བཟོཝ་ཨིན།
+   `ci/xcframework-smoke:<lane>:device_tag` མེ་ཊ་ཌེ་ཊ་འདི་ ཧར་ནིསི་བསྒྱུར་བཅོས་མ་འབད་བའི་ཧེ་མ་ཨིན།
+   དང་ ཆ་སྙོམས་/བེན་ཀ་མཱརཀ་ ཌིརཕཊི་གུ་ཡོད་པའི་ ལམ་འདི་ འཐུས་ཤོར་བྱུང་ཡོདཔ།
+༤. **ཌེཤ་བོརཌི་ཚུ་**: ས་སྒོ་གསརཔ་ད་ལྟོ་སི་ཨེལ་ཨའི་ཨའུཊི་པུཊི་ནང་ལུ་བཀྲམ་སྟོན་འབདཝ་ཨིན། ཕྱིར་ཚོང་འཐབ་མི་ཚུ་གིས་ ཐོན་སྐྱེད་འབད་ནི།
+   གནད་སྡུད་བཀོད་སྒྲིག་མ་འབད་བའི་ཧེ་མ་ གནས་སྡུད་ཚུ།
 
-## WP2-A Metal Shader Plan (Poseidon Pipelines)
+## WP2-A ལྕགས་རིགས་གྱིབ་མ་འཆར་གཞི།
 
-The first WP2 milestone covers the planning work for the Poseidon Metal kernels
-that mirror the CUDA implementation. The plan splits the effort into kernels,
-host scheduling, and shared constant staging so later work can focus purely on
-implementation and testing.
+དང་པ་ WP2 གི་ལམ་རིམ་གྱིས་ Poseidon Metal kernels གི་དོན་ལུ་ འཆར་གཞིའི་ལཱ་འདི་ ཁྱབ་ཚུགསཔ་ཨིན།
+དེ་ཡང་ CUDA ལག་ལེན་འཐབ་ཐངས་འདི་ཨིན། འཆར་གཞི་འདི་གིས་ འབད་བརྩོན་འདི་ ཀར་ནེལ་ལུ་ བགོ་བཤའ་རྐྱབ་ཨིན།
+གཙོ་བོར་བསྟེན་པའི་དུས་ཚོད་བཟོ་ནི་དང་ དེ་ལས་ དུས་རྒྱུན་གྱི་ལས་རིམ་འདི་ བརྗེ་སོར་འབད་དེ་ ཤུལ་ལས་ལཱ་གིས་ གཙོ་བོར་བཏོན་ཚུགས།
+ལག་ལེན་དང་བརྟག་དཔྱད།
 
-### Kernel Scope
+### ཀེར་ནེལ་ཁྱབ་ཁོངས།
 
-1. `poseidon_permute`: permutes `state_count` independent states. Each thread
-   owns a `STATE_CHUNK` (4 states) and runs all `TOTAL_ROUNDS` iterations using
-   threadgroup-shared round constants staged at dispatch time.
-2. `poseidon_hash_columns`: reads the sparse `PoseidonColumnSlice` catalogue and
-   performs Merkle-friendly hashing of every column (matching the CPU’s
-   `PoseidonColumnBatch` layout). It uses the same threadgroup constant buffer
-   as the permute kernel but loops over `(states_per_lane * block_count)`
-   outputs so the kernel can amortize queue submissions.
-3. `poseidon_trace_fused`: computes the parent/leaf digests for the trace table
-   in a single pass. The fused kernel consumes `PoseidonFusedArgs` so the host
-   can describe non-contiguous regions and a `leaf_offset`/`parent_offset`, and
-   it shares all round/MDS tables with the other kernels.
+1. `poseidon_permute`: པར་ཆས་ `state_count` རང་དབང་ཅན་གྱི་གནས་སྟངས། སྐུད་རེ་རེ།
+   `STATE_CHUNK` (མངའ་སྡེ་༤) དང་ ལག་ལེན་འཐབ་སྟེ་ `TOTAL_ROUNDS` བསྐྱར་ལོག་ཚུ་ལག་ལེན་འཐབ་ཐོག་ལས་ གཡོག་བཀོལཝ་ཨིན།
+   བཏང་བའི་དུས་ཚོད་ལུ་ ཐགསཔ་སྡེ་ཚན་བརྗེ་སོར་འབད་མི་ སྒོར་རིམ་གྱི་ ཆ་རྐྱེན་ཚུ་ཨིན།
+2. `poseidon_hash_columns`: ཕྲ་རིང་`PoseidonColumnSlice` ཐོ་གཞུང་དང་ལྷག་ཡོད།
+   ཀེར་ཐིག་རེ་རེ་གི་ Merkle མཐུན་འབྲེལ་ཅན་གྱི་ཧ་ཤིང་འབདཝ་ཨིན། (CPU གི་མཐུན་སྒྲིག་འབད་ནི།
+   `PoseidonColumnBatch` བཀོད་སྒྲིག་). འདི་གིས་ ཐགསཔ་སྡེ་ཚན་ རྟག་བརྟན་གྱི་བཱ་ཕར་འདི་ལག་ལེན་འཐབ་ཨིན།
+   པར་ཆས་ཀར་ནེལ་ཡིན་ནའང་ `(states_per_lane * block_count)` ལས་ལྷག་ཡོད།
+   ཐོན་འབྲས་ཚུ་ དེ་འབདཝ་ལས་ ཀར་ནེལ་འདི་གིས་ གྱལ་རིམ་ཕུལ་མི་ཚུ་ བསྒྱུར་བཅོས་འབད་ཚུགས།
+3. `poseidon_trace_fused`: འཚོལ་ཞིབ་ཐིག་ཁྲམ་གྱི་དོན་ལུ་ ཕ་མའི་/འདབ་མ་བཞུ་མི་ཚུ་ རྩིས་རྐྱབ་ཨིན།
+   བརྒྱུད་ལམ་གཅིག་ནང་། ཕུའུ་སི་ཀར་ནེལ་གྱིས་ `PoseidonFusedArgs` ཟ་སྤྱོད་འབདཝ་ལས་ ཧོསིཊི་འདི་ ཧོསིཊི་འདི་ཨིན།
+   འབྲེལ་མཐུན་མེད་པའི་ལུང་ཕྱོགས་དང་ `leaf_offset`/`parent_offset` དང་།
+   དེ་གིས་ སྒོར་རིམ་/ཨེམ་ཌི་ཨེསི་ཐིག་ཁྲམ་ཚུ་ག་ར་ ཀར་ནེལ་གཞན་ཚུ་དང་གཅིག་ཁར་ བརྗེ་སོར་འབདཝ་ཨིན།
 
-### Command Scheduling & Host Contracts
+### བརྡ་བཀོད་ལས་རིམ་དང་ཧོསཊ་ཁ་འབག་།- ཀར་ནེལ་གཏང་མི་རེ་རེ་བཞིན་ `MetalPipelines::command_queue` བརྒྱུད་དེ་འགྱོཝ་ཨིན།
+  མཐུན་སྒྲིག་ལས་རིམ་བཟོ་མི་ (དམིགས་གཏད་ ~2 ms) དང་ གྱལ་རིམ་རླུང་འཕྲིན་ཚད་འཛིན་ཚུ་ བསྟར་སྤྱོད་འབདཝ་ཨིན།
+  `FASTPQ_METAL_QUEUE_FANOUT` དང་།
+  `FASTPQ_METAL_COLUMN_THRESHOLD`. `with_metal_state` ནང་དྲོད་བཏགས།
+  པོ་སི་ཌོན་ཀར་ནེལ་གསུམ་ཆ་ར་ གདོང་ཁར་ བསྡུ་སྒྲིག་འབད་དེ་ བཏང་མི་འདི་ འགོ་དང་པ་རང་ འབད་མི་ཚུགས།
+  མདོང་ལམ་གསར་བཟོའི་ཉེས་ཆད་ཅིག་སྤྲོད་དགོ།
+- ཐརཌ་སྡེ་ཚན་ཚད་འདི་གིས་ ད་ལྟོ་ཡོད་པའི་མེ་ཊལ་ཨེཕ་ཨེཕ་ཊི་/ཨེལ་ཌི་ཨི་སྔོན་སྒྲིག་ཚུ་: དམིགས་གཏད་འདི་ ཨིན།
+  སྡེ་ཚན་རེ་ལུ་ ཐགསཔ་༢༥༦ གི་ ཧརཌི་ཀེབ་དང་གཅིག་ཁར་ ཐགསཔ་རེ་ལུ་ ཐགསཔ་༨༡༩༢ ཨིན། ཚིག༌ཕྲད
+  ཧོསིཊི་གིས་ ༡༠༠ གིས་ `states_per_lane` སྒྱུར་རྩིས་འདི་ མར་ཕབ་འབད་ཚུགས།
+  མཐའ་འཁོར་གནས་སྟངས་ལུ་བསྒྱུར་བཅོས་འབད་ནི། (`FASTPQ_METAL_POSEIDON_STATES_PER_BATCH`)
+  ཤེཌར་ཚད་མ་འདི་ ལེགས་བཅོས་མ་འབད་བར་ WP2-B ནང་ལུ་ཁ་སྐོང་བརྐྱབ་ནི་ལུ་ཨིན།
+- ཀེར་ཐིག་གནས་རིམ་འདི་གིས་ ཧེ་མ་ལས་ ཨེཕ་ཨེཕ་ཊི་གིས་ལག་ལེན་འཐབ་མི་ གཉིས་ལྡན་བཱ་ཕར་ཡོད་པའི་ཆུ་རྫིང་གཅིག་པ་དེ་ རྗེས་སུ་འཇུག་ཨིན།
+  མདོང་ལམ་ཚུ། Poseidon ཀར་ནེལ་གྱིས་ གནས་རིམ་གྱི་བཱ་ཕར་འདི་ལུ་ དཔག་བྱེད་ཚུ་ ངོས་ལེན་འབདཝ་ཨིན།
+  དང་ འཇིག་རྟེན་དམར་པོའི་བགོ་བཀྲམ་ཚུ་ ནམ་ཡང་ ལགཔ་མ་འཐབ་པས།
+  CUDA གི་ཧོསིཊི་དང་གཅིག་ཁར་ཕྲང་སྒྲིག་འབད་ཡོདཔ།
 
-- Every kernel dispatch runs through `MetalPipelines::command_queue`, which
-  enforces the adaptive scheduler (target ~2 ms) and the queue fan-out controls
-  exposed via `FASTPQ_METAL_QUEUE_FANOUT` and
-  `FASTPQ_METAL_COLUMN_THRESHOLD`. The warm-up path in `with_metal_state`
-  compiles all three Poseidon kernels up-front so the first dispatch does not
-  pay a pipeline creation penalty.
-- Threadgroup sizing mirrors the existing Metal FFT/LDE defaults: the target is
-  8,192 threads per submission with a hard cap of 256 threads per group. The
-  host may downshift the `states_per_lane` multiplier for low-power devices by
-  dialing the environment overrides (`FASTPQ_METAL_POSEIDON_STATES_PER_BATCH`
-  to be added in WP2-B) without modifying the shader logic.
-- Column staging follows the same double-buffered pool already used by the FFT
-  pipelines. The Poseidon kernels accept raw pointers into that staging buffer
-  and never touch global heap allocations, which keeps memory-determinism
-  aligned with the CUDA host.
+### བརྗེ་སོར་གྱི་གོ་བསྡུར།
 
-### Shared Constants
+- `PoseidonSnapshot` གསལ་སྟོན་ནང་གསལ་ལྟར་
+  IVM འདི་ད་ལྟ་ཁྲིམས་ལུགས་ཡིན།
+  སྒོར་རིམ་གྱི་ རྟག་བརྟན་དང་ ཨེམ་ཌི་ཨེསི་ མེ་ཊིགསི། ལྕགས་རིགས་ (`poseidon2.metal`) གཉིས་ཀ)
+  དང་ CUDA (`fastpq_cuda.cu`) ཀར་ནེལ་ཚུ་ གསལ་སྟོན་འབད་བའི་སྐབས་ བསྐྱར་བཟོ་འབད་དགོ།
+  འགྱུར་བ།
+- WP2-B གིས་ རཱན་ཊའིམ་དང་ མངོན་གསལ་ལྷག་མི་ ཧོསིཊི་མངོན་གསལ་ཆུང་ཀུ་ཅིག་ཁ་སྐོང་འབད་འོང་ དང་།
+  SHA-256 འདི་ ཊེ་ལི་མི་ཊི་ (`acceleration.poseidon_constants_sha`) ནང་ལུ་ བཏོནམ་ཨིན།
+  ཆ་སྙོམས་ཀྱི་ བརྡ་བཀོད་སྒྲོམ་ཚུ་གིས་ ཤེ་ཌར་གྱི་ རྟག་བརྟན་ཚུ་ དཔར་བསྐྲུན་འབད་ཡོད་པའི་ བརྡ་བཀོད་འབད་ཚུགས།
+  པར་ལེན་ .
+- དྲོད་བཏགས་པའི་སྐབས་ ང་བཅས་ཀྱིས་ `TOTAL_ROUNDS x STATE_WIDTH` གི་ ཆ་རྐྱེན་ཚུ་ འདྲ་བཤུས་རྐྱབ་འོང་།
+  `MTLBuffer` དང་ དེ་ ཐབས་འཕྲུལ་རེ་ལུ་ ཚར་གཅིག་ སྐྱེལ་བཙུགས་འབད། དེ་ལས་ ཀར་ནེལ་རེ་རེ་གིས་ གནད་སྡུད་འདྲ་བཤུས་རྐྱབ་ཨིན།
+  དེ་གི་ཆ་ཤས་ཚུ་ ལས་སྦྱོར་མ་འབད་བའི་ཧེ་མ་ ཐགསཔ་སྡེ་ཚན་དྲན་ཚད་ནང་ གཏན་འབེབས་བཟོ་དགོ།
+  གནམ་གྲུའི་ནང་ བརྡ་བཀོད་བཱ་ཕར་ལེ་ཤ་ཅིག་གཡོག་བཀོལ་བའི་སྐབས་ལུ་ཡང་ གོ་རིམ་སྒྲིག་དགོ།
 
-- The `PoseidonSnapshot` manifest described in
-  `docs/source/fastpq/poseidon_metal_shared_constants.md` is now the canonical
-  source for the round constants and MDS matrix. Both Metal (`poseidon2.metal`)
-  and CUDA (`fastpq_cuda.cu`) kernels must be regenerated whenever the manifest
-  changes.
-- WP2-B will add a tiny host loader that reads the manifest at runtime and
-  emits the SHA-256 into telemetry (`acceleration.poseidon_constants_sha`) so
-  parity dashboards can assert that the shader constants match the published
-  snapshot.
-- During warm-up we will copy the `TOTAL_ROUNDS x STATE_WIDTH` constants into a
-  `MTLBuffer` and upload it once per device. Each kernel then copies the data
-  into threadgroup memory before processing its chunk, ensuring deterministic
-  ordering even when multiple command buffers run in flight.
+### བདེན་དཔང་འབད་ནི།
 
-### Validation Hooks
+- ཡུ་ནིཊ་བརྟག་དཔྱད་ (`cargo test -p fastpq_prover --features fastpq-gpu`) ཅིག་འཕེལ་འོང་།
+  བདེན་བཤད་ཀྱི་བདེན་དཔང་འདི་ བཙུགས་ཡོད་པའི་ ཤེད་ཌར་གྱི་ གནས་གོང་ཚུ་ དང་ཅིག་ཁར་ ག་བསྡུར་འབདཝ་ཨིན།
+  ཇི་པི་ཡུ་ སྒྲིག་ཆས་ཆ་ཚང་འདི་ ལག་ལེན་འཐབ་པའི་ཧེ་མ་ གསལ་སྟོན་གྱི་ ཨེསི་ཨེ།
+- ད་ལྟོ་ཡོད་པའི་ཀར་ནེལ་རྩིས་དཔྱད་ཚུ་ སོར་བསྒྱུར་འབདཝ་ཨིན། (`FASTPQ_METAL_TRACE_DISPATCH`,
+  `FASTPQ_METAL_QUEUE_FANOUT`, བང་རིམ་གཏིང་ཚད་བརྡ་འཕྲིན་) དགོས་མཁོའི་སྒྲུབ་བྱེད་ལུ་འགྱུརཝ་ཨིན།
+  ཝ་པི་༢ ཕྱིར་ཐོན་གྱི་དོན་ལུ་: བརྟག་དཔྱད་རན་རེ་རེ་གིས་ ལས་རིམ་བཟོ་མི་གིས་ ནམ་ཡང་ མ་འགལ་བར་ཡོདཔ་སྦེ་ བདེན་ཁུངས་བཀལ་དགོ།
+  རིམ་སྒྲིག་འབད་ཡོད་པའི་ ཕེན་ཨའུཊ་དང་ ཕུའུ་སི་ཊེསི་ཀར་ནེལ་འདི་གིས་ བང་རིམ་འདི་ འོག་ལུ་བཞགཔ་ཨིན།
+  མཐུན་སྒྲིག་སྒོ་སྒྲིག་།
+- སུའིཕཊ་ཨེགསི་སི་ཕེརེམ་ལས་ཀའི་ ཐ་མག་འཐུང་ཆས་དང་ རསཊ་བེན་ཇ་མཱརཀ་རྒྱུག་འགྲན་ཚུ་འགོ་བཙུགས་འོང་།
+  ཕྱིར་གཏོང་ `acceleration.poseidon.permute_p90_ms{cpu,metal}` དེ་འབདཝ་ལས་ WP2-D
+  མེ་ཊལ་-vs-CPU deltas གིས་ བརྒྱུད་འཕྲིན་གསརཔ་ གསརཔ་ གསར་བཏོད་འབདཝ་ཨིན།
 
-- Unit tests (`cargo test -p fastpq_prover --features fastpq-gpu`) will grow an
-  assertion that hashes the embedded shader constants and compares them with
-  the manifest’s SHA before executing the GPU fixture suite.
-- The existing kernel statistics toggles (`FASTPQ_METAL_TRACE_DISPATCH`,
-  `FASTPQ_METAL_QUEUE_FANOUT`, queue depth telemetry) become required evidence
-  for WP2 exit: every test run must prove that the scheduler never violates the
-  configured fan-out and that the fused trace kernel keeps the queue below the
-  adaptive window.
-- The Swift XCFramework smoke harness and the Rust benchmark runners will start
-  exporting `acceleration.poseidon.permute_p90_ms{cpu,metal}` so WP2-D can chart
-  Metal-vs-CPU deltas without reinventing new telemetry feeds.
+## WP2-B Poseidon མ་ཕལ་བའི་ལོ་ཌར་དང་རང་དོན་བརྟག་དཔྱད་མཉམ་པ།- `fastpq_prover::poseidon_manifest()` ད་ལྟ་བཙུགས་དང་དཔྱད་ཡིག་བཙུགས་ཡོད།
+  ```bash
+# Prometheus textfile from a single capture
+cargo xtask acceleration-state --format json > artifacts/acceleration_state_macos_m4.json
+python3 scripts/acceleration/export_prometheus.py \
+  --input artifacts/acceleration_state_macos_m4.json \
+  --output artifacts/acceleration_state_macos_m4.prom \
+  --instance macos-m4
 
-## WP2-B Poseidon Manifest Loader & Self-Test Parity
-
-- `fastpq_prover::poseidon_manifest()` now embeds and parses
-  `artifacts/offline_poseidon/constants.ron`, computes its SHA-256
-  (`poseidon_manifest_sha256()`), and validates the snapshot against the CPU
-  poseidon tables before any GPU work runs. `build_metal_context()` logs the
-  digest during warm-up so telemetry exporters can publish
+# Aggregate multiple captures into a Markdown matrix
+python3 scripts/acceleration/acceleration_matrix.py \
+  --state macos-m4=artifacts/acceleration_state_macos_m4.json \
+  --state sim-m3=artifacts/acceleration_state_sim_m3.json \
+  --format markdown \
+  --output artifacts/acceleration_matrix.md
+```, དེའི་SHA-256 རྩིས་རྐྱབ་ཡོད།
+  (`poseidon_manifest_sha256()`) དང་ སི་པི་ཡུ་གི་རྒྱབ་འགལ་ལུ་ པར་ལེན་འདི་ བདེན་དཔྱད་འབདཝ་ཨིན།
+  ཇི་པི་ཡུ་ལཱ་གང་རུང་ཅིག་གི་ཧེ་མ་ poseidon tables ཚུ་ གཡོག་བཀོལ་དོ་ཡོདཔ་ཨིན། Prometheus འདི་ ནང་བསྐྱོད་འབདཝ་ཨིན།
+  དྲོད་བཏགས་པའི་སྐབས་ བརྡ་འཕྲིན་ཕྱིར་ཚོང་པ་ཚུ་གིས་ དཔར་བསྐྲུན་འབད་ཚུགས།
   `acceleration.poseidon_constants_sha`.
-- The manifest parser rejects mismatched width/rate/round-count tuples and
-  ensures the manifest MDS matrix equals the scalar implementation, preventing
-  silent drift when the canonical tables are regenerated.
-- Added `crates/fastpq_prover/tests/poseidon_manifest_consistency.rs`, which
-  parses the Poseidon tables embedded in `poseidon2.metal` and
-  `fastpq_cuda.cu` and asserts that both kernels serialize exactly the same
-  constants as the manifest. CI now fails if someone edits the shader/CUDA
-  files without regenerating the canonical manifest.
-- Future parity hooks (WP2-C/D) can reuse `poseidon_manifest()` to stage the
-  round constants into GPU buffers and to expose the digest via Norito
-  telemetry feeds.
+- གསལ་སྟོན་དབྱེ་དཔྱད་པ་གིས་ མཐུན་སྒྲིག་མེད་པའི་རྒྱ་ཚད་/ཚད་གཞི་/སྒོར་སྒོརམ་རྩིས་སྟོན་ཚུ་བཀག་ཆ་འབདཝ་ཨིན།
+  གསལ་སྟོན་གྱི་ཨེམ་ཌི་ཨེསི་མེ་ཊིགསི་འདི་ སི་ཀེ་ལར་ལག་ལེན་འཐབ་ནི་དང་འདྲ་མཉམ་སྦེ་ ངེས་གཏན་བཟོཝ་ཨིན་ དེ་གིས་ བཀག་ཐབས་འབདཝ་ཨིན།
+  ཁྲིམས་ལུགས་ཀྱི་ཐིག་ཁྲམ་ཚུ་ ལོག་བཏོན་པའི་སྐབས་ ཁུ་སིམ་སིམ་སྦེ་ འཕྱེལ་འགྱོཝ་ཨིན།
+- `crates/fastpq_prover/tests/poseidon_manifest_consistency.rs`, དེ་ཡང་ཁ་སྐོང་འབད་ཡོདཔ།
+  `poseidon2.metal` དང་ `poseidon2.metal` ནང་བཙུགས་ཡོད་པའི་ Poseidon ཐིག་ཁྲམ་ཚུ་དབྱེ་དཔྱད་འབདཝ་ཨིན།
+  `fastpq_cuda.cu` དང་ ཀར་ནེལ་གཉིས་ཆ་རང་གིས་ གཅིག་མཚུངས་སྦེ་ རིམ་སྒྲིག་འབདཝ་ཨིན་ཟེར་ བརྡ་སྟོནམ་ཨིན།
+  །རྟག་པ་བཞིན་དུ་མངོན་དུ་བྱེད་པ་སྟེ། སི་ཨའི་ད་ལྟོ་ མི་ཅིག་གིས་ ཤེ་ཌར་/སི་ཡུ་ཌ་ ཞུན་དག་འབད་བ་ཅིན།
+  ཡིག་སྣོད་ཚུ་ ཀེ་ནོ་ནིག་གསལ་སྟོན་འདི་ ལོག་བཟོ་བཅོས་འབདཝ་ཨིན།
+- མ་འོངས་པ་ ཆ་སྙོམས་ཧུཀ་ (WP2-C/D) གིས་ `poseidon_manifest()` འདི་ གོ་རིམ་ལུ་ ལོག་སྟེ་ལག་ལེན་འཐབ་བཏུབ།
+  ཇི་པི་ཡུ་བཱ་ཕར་ཚུ་ནང་ལུ་ རྟག་བརྟན་ཚུ་ བསྐོར་ར་རྐྱབ་སྟེ་ Norito བརྒྱུད་དེ་ ཟས་བཅུད་ཚུ་ གསལ་སྟོན་འབད་ནི།
+  ཊེ་ལི་མི་ཊི་ཌི་ཕིཌི་ཚུ།
 
-## WP2-C BN254 Metal Pipelines & Parity Tests
+## WP2-C BN254 ལྕགས་རིགས་ཀྱི་ཆུམ་དང་ཆ་སྙོམས་བརྟག་དཔྱད།- **Scope & five:** ཧོསིཊི་བཏང་མི་དང་ ཆ་སྙོམས་ཀྱི་ ཧར་ནིསི་ཚུ་ ཐད་རི་འབའ་རི་ཨིན་ དེ་ལས་ `crates/fastpq_prover/metal/kernels/bn254.metal` གིས་ ད་ལྟོ་ མོན་ཊི་གོ་མེ་རི་ དང་ཕུ་དང་ ཐགསཔ་སྡེ་ཚན་ དེ་ལས་ ཐགསཔ་སྡེ་ཚན་ཚུ་ ལག་ལེན་འཐབ་ཨིན། བཏང་མི་རེ་རེ་གིས་ གནས་རིམ་རེ་རེ་གི་ནང་ན་ལུ་ ཀེར་ཐིག་ཆ་མཉམ་རང་ གནས་རིམ་རེ་ལུ་ བར་ཆད་ཚུ་དང་གཅིག་ཁར་ གཡོག་བཀོལཝ་ཨིནམ་ལས་ ཀར་ནེལ་ཚུ་གིས་ གནས་རིམ་བཀོད་ཡོད་པའི་ གསལ་སྟོན་ཚུ་ མཉམ་འགྲོས་སྦེ་ གསལ་སྟོན་འབདཝ་ཨིན། ད་ལྟོ་ བརྒྱུད་འཕྲིན་འདི་ གློག་ཐག་བཟོ་སྟེ་ དུས་ཚོད་བཀོད་མི་ཚུ་ གུས་ཞབས་འབད་ཡོདཔ་ལས་ ང་བཅས་ཀྱིས་ གཱོལ་ཌི་ལོགསི་གི་ ཀར་ནེལ་ཚུ་གི་དོན་ལུ་ ལག་ལེན་འཐབ་མི་ སྒྲུབ་བྱེད་ཚུ་ གཅིག་མཚུངས་སྦེ་ འཛུལ་སྤྱོད་འབད་ཚུགས།
+- **ཀར་ནེལ་དགོས་མཁོ་ཚུ་:** ✅ གནས་རིམ་ཊའིཊི་ཝིཌལ་/ཀོ་སེཊ་མངོན་རྟགས་ཚུ་ལོག་སྟེ་ལག་ལེན་འཐབ་ཞིནམ་ལས་ ཨིན་པུཊི་ཚུ་ཚར་གཅིག་གཞི་བསྒྱུར་འབད་ཞིནམ་ལས་ ཀེར་ཐིག་རེ་རེའི་ནང་ན་ཡོད་པའི་རེ་ཌིགསི་༢ གནས་རིམ་ཚུ་ཆ་མཉམ་ལག་ལེན་འཐབ་དགོཔ་ལས་ ང་བཅས་ལུ་ སྣ་མང་-བཀྲམ་པའི་མཉམ་འབྱུང་དགོཔ་མེདཔ་ཨིན། མོན་གོ་མེ་རི་གྲོགས་རམ་པ་ཚུ་ ཨེཕ་ཨེཕ་ཊི་/ཨེལ་ཌི་ཨི་གི་བར་ན་ བརྗེ་སོར་འབད་དེ་ཡོདཔ་ལས་ བསྐྱར་འཁོར་དབྱིབས་རྩིས་འདི་རྐྱངམ་ཅིག་ བསྒྱུར་བཅོས་འབད་ཡོདཔ་ཨིན།
+- **ཧོསིཊི་གློག་ཐག་:** ✅ `crates/fastpq_prover/src/metal.rs` གིས་ ཀེ་ནོ་ནིག་ལགཔ་ཚུ་བཟོཝ་ཨིན་ ཀླད་ཀོར་-ཨེལ་ཌི་ཨི་བཱ་ཕར་གྱིས་ ཀེར་ཐིག་རེ་ལུ་ ཐགསཔ་སྡེ་ཚན་གཅིག་སེལ་འཐུ་འབད་དེ་ གཱེང་གྱི་དོན་ལུ་ `bn254_status()` གསལ་སྟོན་འབདཝ་ཨིན། ཊེ་ལི་མི་ཊི་གི་དོན་ལུ་ ཧོསིཊི་བསྒྱུར་བཅོས་ཁ་སྐོང་དགོཔ་མེད།
+- **བཟོ་བསྐྲུན་སྲུང་སྐྱོབ་པ་:** `fastpq.metallib` གིས་ ཊ་རལ་ཚུ་ བཏངམ་ཨིནམ་ལས་ ཤེཌར་འདི་ འཕྱུར་འགྱོ་བ་ཅིན་ སི་ཨའི་འདི་ ད་ལྟོ་ཡང་ མགྱོགས་དྲགས་སྦེ་ འཐུས་ཤོར་འགྱོཝ་ཨིན། མ་འོངས་པའི་ཡར་འཕེལ་གང་རུང་ཅིག་ དུས་ཚོད་བསྡུ་སྒྲིག་འབད་མི་ལས་ བརྒྱུད་འཕྲིན་/ཁྱད་རྣམ་སྒོ་སྒྲིག་ཚུ་གི་རྒྱབ་ལུ་སྡོདཔ་ཨིན།
+- **ཕམ་པའི་སྒྲིག་བཀོད་ཚུ་:** ✅ `bn254_parity` བརྟག་དཔྱད་ཚུ་ CPU གི་སྒྲིག་ཆས་ཚུ་དང་ ཇི་པི་ཡུ་ཨེཕ་ཨེཕ་ཊི་/ཨེལ་ཌི་ཨི་ཨའུཊི་པུཊི་ཚུ་ ག་བསྡུར་རྐྱབ་ནིའི་དོན་ལུ་ འཕྲོ་མཐུད་དེ་ འཕྲོ་མཐུད་དེ་རང་ མེཊ་ཊལ་སྲ་ཆས་ནང་ ཐད་རི་བ་རི་ གཡོག་བཀོལ་དོ་ཡོདཔ་ཨིན། ཀར་ནེལ་ཨང་རྟགས་འགྲུལ་ལམ་གསརཔ་འབྱུང་པ་ཅིན་ ཊམ་པེར་ཌི་-མན་ཧྥེནསི་བརྟག་དཔྱད་ཚུ་ སེམས་ཁར་བཞག་དགོ།
+- **འཕྲུལ་རིག་དང་ཚད་གཞི་:** `fastpq_metal_bench` གིས་ ད་ལྟ་ཕྱིར་འདོན་འབདཝ་ཨིན།
+  - a `bn254_dispatch` སྡེབ་ཚན་འདི་ བཀྲམ་སྤེལ་རེ་ལུ་ ཐགསཔ་སྡེ་ཚན་རྒྱ་ཚད་དང་ གཏན་ཚིག་ཅན་གྱི་ཐགསཔ་གྱངས་ཁ་ དེ་ལས་ ཨེཕ་ཨེཕ་ཊི་/ཨེལ་ཌི་ཨི་ ཀེར་ཐིག་རྐྱང་པའི་སྡེ་ཚན་ཚུ་གི་དོན་ལུ་ པའིཔ་ལའིན་ཚད་གཞི་ཚུ་ བཅུད་བསྡུས་འབད་དོ་ཡོདཔ། དང༌
+  - སི་པི་ཡུ་གཞི་རྟེན་གྱི་དོན་ལུ་ `acceleration.bn254_{fft,ifft,lde,poseidon}_ms` ཐོ་བཀོད་འབད་མི་ `bn254_metrics` སྡེབ་ཚན་ཅིག་དང་ GPU backen ག་འདི་ གཡོག་བཀོལ་ཡོདཔ་ཨིན།
+  བེན་ཀ་མཱརཀ་གི་བཤུབ་འདི་གིས་ སབ་ཁྲ་གཉིས་ཆ་ར་ བཀབ་ཡོད་པའི་ ཅ་རྙིང་ཚུ་ནང་ལུ་ འདྲ་བཤུས་རྐྱབ་དོ་ཡོདཔ་ལས་ ཌབ་ལུ་པི་༢-ཌི་ དྲེཤ་བོརཌི་ཚུ་གིས་ བཀོལ་སྤྱོད་ཀྱི་ཨེ་རེ་ རྒྱབ་འགྱངས་/དབྱིབས་རྩིས་ཚུ་ བཏོནམ་ཨིན། `FASTPQ_METAL_THREADGROUP` ད་ལྟ་ BN254 FFT/LDE བཀོལ་སྤྱོད་ལུ་ཡང་འཇུག་སྤྱོད་འབད་ཡོདཔ་ལས་ knob འདི་ perf གི་དོན་ལུ་ལག་ལེན་འཐབ་བཏུབ་བཟོཝ་ཨིན། sweeps.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1448】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:3155】【scripts/fastpq/wrap_benchmark.py:1037】
 
-- **Scope & gap:** Host dispatchers, parity harnesses, and `bn254_status()` are live, and `crates/fastpq_prover/metal/kernels/bn254.metal` now implements the Montgomery primitives plus threadgroup-synchronized FFT/LDE loops. Each dispatch runs an entire column inside a single threadgroup with per-stage barriers, so the kernels exercise the staged manifests in parallel. Telemetry is now wired and scheduler overrides are honored so we can gate the default-on rollout with the same evidence we use for the Goldilocks kernels.
-- **Kernel requirements:** ✅ reuse the staged twiddle/coset manifests, convert inputs/outputs once, and execute all radix-2 stages inside the per-column threadgroup so we don’t need multi-dispatch synchronisation. Montgomery helpers remain shared between FFT/LDE so only the loop geometry changed.
-- **Host wiring:** ✅ `crates/fastpq_prover/src/metal.rs` stages canonical limbs, zero-fills the LDE buffer, selects a single threadgroup per column, and exposes `bn254_status()` for gating. No extra host changes are required for telemetry.
-- **Build guards:** the `fastpq.metallib` ships the tiled kernels, so CI still fails fast if the shader drifts. Any future optimisations stay behind telemetry/feature gates rather than compile-time switches.
-- **Parity fixtures:** ✅ `bn254_parity` tests continue to compare GPU FFT/LDE outputs against CPU fixtures and now run live on Metal hardware; keep tampered-manifest tests in mind if new kernel code paths appear.
-- **Telemetry & benchmarks:** `fastpq_metal_bench` now emits:
-  - a `bn254_dispatch` block summarising per-dispatch threadgroup widths, logical thread counts, and pipeline limits for FFT/LDE single-column batches; and
-  - a `bn254_metrics` block that records `acceleration.bn254_{fft,ifft,lde,poseidon}_ms` for the CPU baseline plus whichever GPU backend ran.
-  The benchmark wrapper copies both maps into every wrapped artefact so WP2-D dashboards ingest labelled latencies/geometry without reverse-engineering the raw operations array. `FASTPQ_METAL_THREADGROUP` now applies to BN254 FFT/LDE dispatches as well, making the knob usable for perf sweeps.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1448】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:3155】【scripts/fastpq/wrap_benchmark.py:1037】
-
-## Open Questions (Resolved May 2027)
-
-1. **Metal resource cleanup:** `warm_up_metal()` reuses the thread-local
-   `OnceCell` and now has idempotence/regression tests
+## དྲི་བ་ཁ་ཕྱེ་ (༢༠༢༧ ཟླ་༥ པ།)1. **ལྕགས་རིགས་གཙང་མ་:** `warm_up_metal()` ཐགཔ་གི་ས་གནས་འདི་ལོག་ལག་ལེན་འཐབ་ཨིན།
+   `OnceCell` དང་ ད་ལྟ་ བརྡ་རྟགས་/ཕྱིར་ལོག་བརྟག་དཔྱད་ཡོད།
    (`crates/ivm/src/vector.rs::warm_up_metal_reuses_cached_state` /
-   `warm_up_metal_is_noop_on_non_metal_targets`), so app lifecycle transitions
-   can safely call the warm-up path without leaking or double-initialising.
-2. **Benchmark baselines:** Metal lanes must remain within 20 % of the CPU
-   baseline for FFT/IFFT/LDE and within 15 % for Poseidon CRC/Merkle helpers;
-   alerting should fire when `acceleration.*_perf_delta_pct > 0.20` (or missing)
-   in the mobile parity feed. IFFT regressions observed in the 20 k trace bundle
-   are now gated by the queue override fix noted in WP2-D.
-3. **StrongBox fallback:** Swift follows the Android fallback playbook by
-   recording attestation failures in the support runbook
-   (`docs/source/sdk/swift/support_playbook.md`) and automatically switching to
-   the documented HKDF-backed software path with audit logging; parity vectors
-   stay shared via the existing OA fixtures.
-4. **Telemetry storage:** Acceleration captures and device pool proofs are
-   archived under `configs/swift/` (e.g.,
-   `configs/swift/xcframework_device_pool_snapshot.json`), and exporters
-   should mirror the same layout (`artifacts/swift/telemetry/acceleration/*.json`
-   or `.prom`) so Buildkite annotations and portal dashboards can ingest the
-   feeds without ad-hoc scraping.
+   `warm_up_metal_is_noop_on_non_metal_targets`), དེ་འབདཝ་ལས་ གློག་རིམ་གྱི་མི་ཚེ་འཁོར་ལོའི་འཕོ་འགྱུར་ཚུ།
+   དྲོད་བཏགས་ལམ་འདི་ ཆུ་འཛག་དང་ ཡང་ན་ གཉིས་ལྡན་སྦེ་ མ་བཏོན་པར་ ཉེན་སྲུང་དང་ལྡནམ་སྦེ་ ཁ་པར་གཏང་ཚུགས།
+2. **བེན་ཀ་མཱརཀ་གཞི་རྟེན་:** ལྕགས་ལམ་ཚུ་ སི་པི་ཡུ་གི་ བརྒྱ་ཆ་༢༠ གི་ནང་འཁོད་ལུ་སྡོད་དགོ།
+   FFT/IFFT/LDE དང་ Poseidon CRC/Merkle གྲོགས་རམ་གྱི་དོན་ལུ་ ༡༥% གི་ནང་འཁོད་ལུ་ཡོདཔ་ཨིན།
+   `acceleration.*_perf_delta_pct > 0.20` ༼ཡང་ན་ བརླག་སྟོར་ཤོར་བའི་དུས་ཚོད་༽ སྐབས་ཉེན་བརྡ་བཏང་དགོ།
+   ནང་དོན་ནང་། 20k རྗེས་འདེད་བང་སྒྲིག་ནང་ IFFT འགྱུར་ལྡོག་བརྟག་དཔྱད་བྱས།
+   ད་ལྟ་ WP2-D ནང་ བཀོད་ཡོད་པའི་ གྱལ་རིམ་གྱི་ བཀོད་སྒྲིག་གིས་ འཛུལ་ཡོདཔ་ཨིན།
+3. **StrongBox falleback:** Swift གིས་ Android fallback རྩེད་དེབ་ཀྱི་རྗེས་སུ་འབྲང་།
+   རྒྱབ་སྐྱོར་རྔོན་དེབ་ནང་བདེན་དཔང་འཐུས་ཤོར་ཚུ་ཐོ་བཀོད་འབད་ནི།
+   (`docs/source/sdk/swift/support_playbook.md`) དང་རང་བཞིན་གྱིས་ ལུ་སོར་བསྒྱུར་འབདཝ་ཨིན།
+   རྩིས་ཞིབ་དྲན་ཐོ་དང་གཅིག་ཁར་ ཡིག་ཆ་བཟོ་ཡོད་པའི་ HKDF-backed མཉེན་ཆས་འགྲུལ་ལམ་ཚུ། ཆ་སྙོམས་བེག་ཊར་ཚུ།
+   ད་ལྟོ་ཡོད་པའི་ OA གི་སྒྲིག་ཆས་བརྒྱུད་དེ་ བརྗེ་སོར་འབད་དེ་སྡོད།
+4. **Telemetry གསོག་འཇོག་:** མགྱོགས་ཚད་འཛིན་བཟུང་དང་ ཐབས་འཕྲུལ་ཆུ་རྫིང་གི་བདེན་དཔང་ཚུ་ཨིན།
+   `configs/swift/` འོག་ལུ་གཏན་མཛོད་འབད་ཡོདཔ།
+   `configs/swift/xcframework_device_pool_snapshot.json`) དང་ཕྱིར་གཏོང་པ་དང་།
+   བཀོད་སྒྲིག་གཅིག་པ་ (`artifacts/swift/telemetry/acceleration/*.json`
+   ཡང་ན་ `.prom`) དེ་འབདཝ་ལས་ བཟོ་བསྐྲུན་གྱི་བརྡ་དོན་དང་ དྲྭ་ཐོག་བཀོད་ཁྲམ་ཚུ་གིས་ བཀོད་སྒྲིག་འབད་ཚུགས།
+   ad-hoc བརྡབ་གསིག་མེད་པའི་ ཕིཌ་ཚུ།
 
-## Next Steps (Feb 2026)
+## ཤུལ་མམ་གྱི་རིམ་པ་ (༢༠༢༦ ཟླ་ ༢ པ།)
 
-- [x] Rust: land Metal host integration (`crates/fastpq_prover/src/metal.rs`) and
-      expose the kernel interface for Swift; doc hand-off tracked alongside the
-      Swift bridge notes.
-- [x] Swift: expose SDK-level acceleration settings (done Jan 2026).
-- [x] Telemetry: `scripts/acceleration/export_prometheus.py` now converts
-      `cargo xtask acceleration-state --format json` output into a Prometheus
-      textfile (with optional `--instance` label) so CI runs can attach GPU/CPU
-      enablement, thresholds, and parity/disable reasons directly to textfile
-      collectors without bespoke scraping.
-- [x] Swift QA: `scripts/acceleration/acceleration_matrix.py` aggregates multiple
-      acceleration-state captures into JSON or Markdown tables keyed by device
-      label, giving the smoke harness a deterministic “CPU vs Metal/CUDA” matrix
-      to upload alongside the sample-app smokes. The Markdown output mirrors the
-      Buildkite evidence format so dashboards can ingest the same artefact.
-- [x] Update status.md now that `irohad` ships the queue/zero-fill exporters and
-      the env/config validation tests cover the Metal queue overrides, so WP2-D
+- [x] Rust: ས་ཆ་ལྕགས་རིགས་ཀྱི་ གཙོ་བོར་མཉམ་བསྡོམས་ (`crates/fastpq_prover/src/metal.rs`) དང་།
+      སུའིཕཊི་གི་དོན་ལུ་ ཀར་ནེལ་ངོས་འདྲ་བ་འདི་ཕྱིར་བཏོན་འབད། doc ལགཔ་གིས་ འཚོལ་ཞིབ་འབད་ཡོདཔ།
+      ཟམ་གྱི་དྲན་ཐོ།
+- [x] སུའིཕཊི་: ཨེསི་ཌི་ཀེ་གནས་རིམ་གྱི་མགྱོགས་ཚད་སྒྲིག་སྟངས་ཚུ་ ཕྱིར་བཏོན་འབད་ཡོདཔ་ (Done Jan 2026).
+- [x] བརྒྱུད་འཕྲིན་: `scripts/acceleration/export_prometheus.py` ད་ལྟ་བསྒྱུར་བཅོས།
+      `cargo xtask acceleration-state --format json` ཐོན་འབྲས་འདི་ Prometheus ལུ།
+      ཚིག་ཡིག་ཡིག་སྣོད་ (གདམ་ཁ་ཅན་གྱི་ `--instance` ཁ་ཡིག་དང་གཅིག་ཁར་) དེ་འབདཝ་ལས་ སི་ཨའི་ རྒྱུགཔ་ཚུ་གིས་ ཇི་པི་ཡུ་/སི་པི་ཡུ་ མཉམ་སྦྲགས་འབད་ཚུགས།
+      ལྕོགས་ཅན་བཟོ་ནི་དང་ ཐེམ་སྐས་ཚུ་ ཆ་སྙོམས་/ལྕོགས་མིན་གྱི་རྒྱུ་མཚན་ཚུ་ ཚིག་ཡིག་ཡིག་སྣོད་ལུ་ཐད་ཀར་དུ་ ལྕོགས་མིན་བཟོ།
+      བསྡུ་སྒྲིག་མེད་པའི་བསྡུ་སྒྲིག་ཚུ།
+- [x] སུའིཕཊ་ཀིའུ་: `scripts/acceleration/acceleration_matrix.py` སྣ་མང་བསྡོམས་རྩིས་འབདཝ་ཨིན།
+      མགྱོགས་ཚད་-གནས་སྟངས་ཀྱིས་ ཇེ་ཨེསི་ཨོ་ཨེན་ ཡང་ན་ ཐབས་འཕྲུལ་གྱིས་ལྡེ་མིག་བརྐྱབ་ཡོད་མི་ ཇེ་ཨེསི་ཨོ་ཨེན་ ཡང་ན་ མརཀ་ཌའོན་ཐིག་ཁྲམ་ཚུ་ནང་ འཛིན་བཟུང་འབདཝ་ཨིན།
+      བརྡ་རྟགས་འདི་ ཐ་མག་འཐེན་མི་འདི་ གཏན་འབེབས་ “CPU vs Metal/CUDA” matrix ཨིན།
+      དཔེ་ཚད་-ཨེཔ་གི་ཐ་མག་འཐེན་མི་ཚུ་དང་གཅིག་ཁར་ སྐྱེལ་བཙུགས་འབད་ནི། མརཀ་ཌའོན་ཨའུཊི་པུཊི་གིས་ མེ་ལོང་མེ་ལོང་ནང་།
+      Buildkite སྒྲུབ་བྱེད་ཀྱི་རྩ་སྒྲིག་འདི་གིས་ བརྡ་བཀོད་བཀོད་ཁྲམ་ཚུ་གིས་ ཅ་རྙིང་གཅིག་སྦེ་བཙུགས་ཚུགས།
+- [x] ད་ལྟོ་དུས་མཐུན་གནས་.md, `NORITO_CRC64_GPU_LIB` གིས་ གྱལ་རིམ་/ཀླད་ཀོར་ཕིལ་ཕྱིར་འདྲེན་པ་ཚུ་ བཏངམ་ཨིན།
+      env/config བདེན་དཔྱད་བརྟག་དཔྱད་ཚུ་གིས་ ལྕགས་རིགས་གྱལ་རིམ་ཚུ་ ཁྱབ་ཚུགསཔ་ལས་ WP2-D
       telemetry + bindings have live evidence attached.【crates/irohad/src/main.rs:2664】【crates/iroha_config/tests/fastpq_queue_overrides.rs:1】【status.md:1546】
 
-Telemetry/export helper commands:
+བརྒྱུད་འཕྲིན་/ཕྱིར་འདྲེན་རོགས་སྐྱོར་བརྡ་བཀོད་ཚུ།
 
 ```bash
 # Prometheus textfile from a single capture
@@ -280,34 +297,32 @@ python3 scripts/acceleration/acceleration_matrix.py \
   --output artifacts/acceleration_matrix.md
 ```
 
-## WP2-D Release Benchmark & Binding Notes
+## WP2-D བེན་ཀ་མཱརཀ་དང་ མཐུད་པའི་དྲན་ཐོ།- **20k-row གསར་བཏོན་འབད་ནི:** macOS14 གུ་ ལྕགས་རིགས་དང་ སི་པི་ཡུ་ བེན་ཀ་མཱརཀ་ གསརཔ་ཅིག་ དྲན་ཐོ་བཀོད་ཡོདཔ།
+  (arm64, ལམ་གྱི་མཉམ་བསྡོམས་ཚད་གཞི་།, བསྒྱིར་ཡོད་པའི་ གྲལ་ཐིག་ ༣༢,༧༦༨-གྲལ་ཐིག་གཉིས་) དང་།
+  JSON བཱན་ཌལ་འདི་ `fastpq_metal_bench_20k_release_macos14_arm64.json` ནང་ལུ་བརྟག་དཔྱད་འབད་ཡི།
+  བེན་ཀ་མཱརཀ་ བཀོལ་སྤྱོད་ཀྱི་དུས་ཚོད་དང་ པོ་སི་ཌོན་མའི་ཀོ་རོ་བེནཆ་སྒྲུབ་བྱེད་དེ་ ཕྱིར་གཏོང་འབདཝ་ཨིན།
+  WP2-D ལུ་ Metal Queue heuristics གསརཔ་དང་གཅིག་ཁར་ བསྡམ་ཡོད་པའི་ GA གི་སྤུས་ཚད་ཅན་གྱི་ཅ་ཆས་ཚུ་ཡོདཔ་ཨིན། མགོ་ཡིག་།
+  deltas (ཐིག་ཁྲམ་ཆ་ཚང་ནང་ `docs/source/benchmarks.md` ནང་སྡོད་):
 
-- **20 k-row release capture:** Recorded a fresh Metal vs CPU benchmark on macOS 14
-  (arm64, lane-balanced parameters, padded 32,768-row trace, two column batches) and
-  checked the JSON bundle into `fastpq_metal_bench_20k_release_macos14_arm64.json`.
-  The benchmark exports per-operation timings plus Poseidon microbench evidence so
-  WP2-D has a GA-quality artefact tied to the new Metal queue heuristics. Headline
-  deltas (full table lives in `docs/source/benchmarks.md`):
+  | བཀོལ་སྤྱོད་ | སི་པི་ཡུ་གི་ (ms) | ལྕགས་རིགས་ཀྱི་ཆ་སྙོམས་ (ms) | གསུང་བཤད་ |
+  |---------------------------------------------------------------------------------------------------------------------------------------------- |
+  | FFT (༣༢,༧༦༨ ཨིན་པུཊི་) | ༡༢.༧༤༡ | ༡༠.༩༦༣ | ༡.༡༦× |
+  | IFFT (༣༢,༧༦༨ ཨིན་པུཊི་) | ༡༧.༤༩༩ | ༢༥.༦༨༨ | 0.68×(regression: གཏན་འབེབས་བཟོ་ནི་གི་དོན་ལུ་ གྱལ་རིམ་གྱི་ ཕན་ཐོགཔ་ཨིན།
+  | LDE (༢༦༢,༡༤༤ ཨིན་པུཊི་) | ༦༨.༣༨༩ | ༦༥.༧༠༡ | ༡.༠༤× |
+  | པོ་སི་ཌོན་ཧེཤ་ཀེར་ཐིག་ (༥༢༤,༢༨༨ ཨིན་པུཊ་) | ༡,༧༢༨.༨༣༥ | ༡,༤༤༧.༠༧༦ | ༡.༡༩× |
 
-  | Operation | CPU mean (ms) | Metal mean (ms) | Speedup |
-  |-----------|---------------|-----------------|---------|
-  | FFT (32,768 inputs) | 12.741 | 10.963 | 1.16× |
-  | IFFT (32,768 inputs) | 17.499 | 25.688 | 0.68× *(regression: queue fan-out throttled to keep determinism; needs follow-up tuning)* |
-  | LDE (262,144 inputs) | 68.389 | 65.701 | 1.04× |
-  | Poseidon hash columns (524,288 inputs) | 1,728.835 | 1,447.076 | 1.19× |
-
-  Each capture logs `zero_fill` timings (9.651 ms for 33,554,432 bytes) and
-  `poseidon_microbench` entries (default lane 596.229 ms vs scalar 656.251 ms,
-  1.10× speedup) so dashboard consumers can diff queue pressure alongside the
-  main operations.
-- **Bindings/docs cross-link:** `docs/source/benchmarks.md` now references the
-  release JSON and reproducer command, the Metal queue overrides are validated
-  via `iroha_config` env/manifest tests, and `irohad` publishes live
-  `fastpq_metal_queue_*` gauges so dashboards flag IFFT regressions without
-  ad-hoc log scraping. Swift’s `AccelerationSettings.runtimeState` exposes the
-  same telemetry payload shipped in the JSON bundle, closing the WP2-D
-  binding/doc gap with a reproducible acceptance baseline.【crates/iroha_config/tests/fastpq_queue_overrides.rs:1】【crates/irohad/src/main.rs:2664】
-- **IFFT queue fix:** Inverse FFT batches now skip multi-queue dispatch whenever
-  the workload barely meets the fan-out threshold (16 columns on the lane-balanced
-  profile), removing the Metal-vs-CPU regression called out above while keeping
-  large-column workloads on the multi-queue path for FFT/LDE/Poseidon.
+  པར་ལེན་དྲན་ཐོ་ཚུ་ `zero_fill` དུས་ཚོད་ཚུ་ (༣༣,༥༥༤,༤༣༢ བཱའིཊི་གི་དོན་ལུ་ ༩.༦༥༡ms) དང་།
+  `poseidon_microbench` ཐོ་བཀོད་ཚུ་ (སྔོན་སྒྲིག་ལམ་ ༥༩༦.༢༢༩ms vs སི་ཀེ་ལར་ ༦༥༦.༢༥༡ms,
+  1.10× མགྱོགས་ཚད་) དེ་འབདཝ་ལས་ ཌེཤ་བོརཌ་ ཉོ་སྤྱོད་འབད་མི་ཚུ་གིས་ གྱལ་རིམ་གྱི་གནོན་ཤུགས་འདི་ མཉམ་སྦྲགས་འབད་ཚུགས།
+  བཀོལ་སྤྱོད་ངོ་མ་།
+- **བཱའིན་ཌིང་/ཌོཀ་ཚུ་ ཕར་ཚུར་འབྲེལ་ལམ་:** `docs/source/benchmarks.md` གིས་ ད་ལྟོ་ གཞི་བསྟུན་འབདཝ་ཨིན།
+  གསར་བཏོན་འབད་མི་ JSON དང་ བསྐྱར་བཟོ་འབད་མི་བརྡ་བཀོད་ ལྕགས་རིགས་གྱལ་རིམ་ཚུ་ བདེན་དཔྱད་འབད་ཡོདཔ་ཨིན།
+  vie `iroha_config` env/རིག་ཤེས་བརྟག་དཔྱད་དང་ `irohad` གིས་ དངོས་མཐོང་པར་སྐྲུན་འབདཝ་ཨིན།
+  `fastpq_metal_queue_*` དེ་འབདཝ་ལས་ ཌེཤ་བོརཌ་ཚུ་གིས་ IFFT གི་རི་གེ་རེ་ཤཱན་ རྒྱ་བསྐྱེད་འབདཝ་ཨིན།
+  ad-hoc དྲན་ཐོ་བཤུབ་པ། Swift’s `AccelerationSettings.runtimeState` གིས་ གསལ་སྟོན་འབདཝ་ཨིན།
+  དེ་དང་འདྲ་བར་ JSON གི་བང་མཛོད་ནང་བཏང་ཡོད་པའི་ བརྡ་འཕྲིན་དེ་ WP2-D སྒོ་བསྡམས།
+  འདོན་སྤེལ།: ༢༠༡༡/༠༤/༢༠ རིག་པ།(༡)
+- **IFFT གྱལ་སྒྲིག་:** ད་ལྟ་ ལྡོག་ཕྱོགས་ཨེཕ་ཨེཕ་ཊི་བེཆ་ཚུ་ ད་ལྟ་ སྣ་མང་གྲལ་ཐིག་གཏང་ ག་དུས་འབད་རུང་ མང་ ཀིའུ་ཌིཔ་ཊི་ གོམ་འགྱོ།
+  ལཱ་གི་འབོར་ཚད་འདི་ ཕན་བདེ་ཚད་གཞི་འདི་ ཧ་ཅང་གིས་ འཕྱད་མི་ཚུགས། (ལམ་ཐིག་གུ་ཡོད་པའི་ ཀེར་ཐིག་༡༦ ཚུ་ མཐུན་སྒྲིག་འབདཝ་ཨིན།
+  གསལ་སྡུད།
+  ཨེཕ་ཨེཕ་ཊི་/ཨེལ་ཌི་ཨི་/པོ་སི་ཌོན་གྱི་དོན་ལུ་ སྣ་མང་གྲལ་ཐིག་འགྲུལ་ལམ་གུ་ ཀེར་ཐིག་སྦོམ་གྱི་ལཱ་གི་མངའ་ཁོངས།

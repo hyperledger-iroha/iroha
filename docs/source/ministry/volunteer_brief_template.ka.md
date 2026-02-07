@@ -9,70 +9,69 @@ source_last_modified: "2025-12-29T18:16:35.984008+00:00"
 translation_last_reviewed: 2026-02-07
 title: Volunteer Brief Template
 summary: Structured template for roadmap item MINFO-3a covering balanced briefs, fact tables, conflict disclosures, and moderation tags.
+translator: machine-google-reviewed
 ---
 
-# Volunteer Brief Template (MINFO-3a)
+# მოხალისეთა მოკლე შაბლონი (MINFO-3a)
 
-Roadmap reference: **MINFO-3a — Balanced brief templates & conflict disclosure.**
+საგზაო რუქის მითითება: **MINFO-3a — დაბალანსებული მოკლე შაბლონები და კონფლიქტების გამჟღავნება.**
 
-Volunteer brief submissions summarise positions that citizen panels want governance to review when blacklist changes or other Ministry enforcement motions are proposed. MINFO-3a requires that every brief follows a deterministic structure so the transparency pipeline can (1) render comparable fact tables, (2) confirm that conflicts-of-interest are disclosed, and (3) drop or flag off-topic submissions automatically. This page defines the canonical fields, CSV-style fact table layout, and moderation tags expected by the tooling shipped in `cargo xtask ministry-transparency`.
+მოხალისეთა მოკლე წარდგინებები აჯამებს პოზიციებს, რომლებიც მოქალაქეთა კოლეგიებს სურთ, გადახედოს მმართველობას, როდესაც შავ სიაში ცვლილებების ან სამინისტროს სხვა აღსრულების შუამდგომლობები იქნება შემოთავაზებული. MINFO-3a მოითხოვს, რომ ყოველი ბრიფინგი მიჰყვეს დეტერმინისტულ სტრუქტურას, რათა გამჭვირვალობის მილსადენმა შეძლოს (1) წარმოადგინოს შესადარებელი ფაქტების ცხრილები, (2) დაადასტუროს, რომ ინტერესთა კონფლიქტი გამჟღავნებულია და (3) ავტომატურად ჩამოაგდეს ან მონიშნოს გვერდის თემა. ეს გვერდი განსაზღვრავს კანონიკურ ველებს, CSV სტილის ფაქტების ცხრილის განლაგებას და მოდერაციის ტეგებს, რომლებიც მოსალოდნელია `cargo xtask ministry-transparency`-ში გამოგზავნილი ხელსაწყოებით.
 
-> **Norito schema:** the `iroha_data_model::ministry::VolunteerBriefV1` struct (version `1`) is now the authoritative schema for all submissions. Tooling and portal validators call `VolunteerBriefV1::validate` before publishing a brief or referencing it in panel summaries.
+> **Norito სქემა:** `iroha_data_model::ministry::VolunteerBriefV1` სტრუქტურა (ვერსია `1`) ახლა არის ავტორიტეტული სქემა ყველა წარდგენისთვის. ხელსაწყოების და პორტალის ვალიდატორები დარეკავენ `VolunteerBriefV1::validate`-ზე, სანამ არ გამოაქვეყნებენ ბრიფინგს ან მიუთითებენ მას პანელის შეჯამებებში.
 
-## Submission payload structure
+## წარდგენის დატვირთვის სტრუქტურა
 
-| Section | Fields | Requirements |
+| განყოფილება | ველები | მოთხოვნები |
 |---------|--------|--------------|
-| **Envelope** | `version` (u16) | Must be `1`. The version guard allows the Ministry to evolve the schema without ambiguity. |
-| **Identity & stance** | `brief_id` (string, unique per calendar year), `proposal_id` (links to the blacklist or policy motion), `language` (BCP-47), `stance` (`support`/`oppose`/`context`), `submitted_at` (RFC 3339) | All fields required. `stance` feeds dashboards and must match the allowed vocabulary. |
-| **Author info** | `author.name`, `author.organization` (optional), `author.contact`, `author.no_conflicts_certified` (bool) | `author.contact` is redacted from public dashboards but stored in the raw artefact. Set `no_conflicts_certified: true` only if the author attests that no disclosures apply. |
-| **Summary** | `summary.title`, `summary.abstract`, `summary.requested_action` | Textual overview surfaced beside the fact table. Limit `summary.abstract` to ≤2 000 characters. |
-| **Fact table** | `fact_table` array (see next section) | Required even for short briefs. The CLI and transparency ingest job reject submissions without a fact table. |
-| **Disclosures** | `disclosures` array OR `author.no_conflicts_certified: true` | Each disclosure row must include `type` (`financial`, `employment`, `governance`, `family`, `other`), `entity`, `relationship`, and `details`. |
-| **Moderation metadata** | `moderation.off_topic` (bool), `moderation.tags` (array of enum strings), `moderation.notes` | Used by reviewers to suppress astroturfing or unrelated submissions. Off-topic entries do not contribute to dashboards. |
+| **კონვერტი** | `version` (u16) | უნდა იყოს `1`. ვერსიის მცველი საშუალებას აძლევს სამინისტროს განავითაროს სქემა გაურკვევლობის გარეშე. |
+| **იდენტობა და პოზიცია ** | `brief_id` (სტრიქონი, უნიკალური კალენდარული წლის განმავლობაში), `proposal_id` (ბმულები შავ სიაზე ან პოლიტიკის მოძრაობაზე), `language` (BCP-47), `stance` (`support`/`oppose`/`context`), `submitted_at` (RFC3339) | საჭიროა ყველა ველი. `stance` კვებავს დაფებს და უნდა შეესაბამებოდეს დაშვებულ ლექსიკას. |
+| **ავტორის ინფორმაცია** | `author.name`, `author.organization` (სურვილისამებრ), `author.contact`, `author.no_conflicts_certified` (ბოოლ) | `author.contact` რედაქტირებულია საჯარო დაფებიდან, მაგრამ ინახება დაუმუშავებელ არტეფაქტში. დააყენეთ `no_conflicts_certified: true` მხოლოდ იმ შემთხვევაში, თუ ავტორი დაადასტურებს, რომ გამჟღავნება არ ვრცელდება. |
+| **შეჯამება** | `summary.title`, `summary.abstract`, `summary.requested_action` | ტექსტური მიმოხილვა გამოჩნდა ფაქტების ცხრილის გვერდით. შეზღუდეთ `summary.abstract` ≤2000 სიმბოლომდე. |
+| **ფაქტების ცხრილი** | `fact_table` მასივი (იხილეთ შემდეგი განყოფილება) | საჭიროა თუნდაც მოკლე ბრიფინგებისთვის. CLI და გამჭვირვალობის ჩანერგვის ვაკანსიები უარყოფენ წარდგენებს ფაქტების ცხრილის გარეშე. |
+| ** გამჟღავნება ** | `disclosures` მასივი OR `author.no_conflicts_certified: true` | გამჟღავნების თითოეული მწკრივი უნდა შეიცავდეს `type` (`financial`, `employment`, `governance`, `family`, `other`, I1803), I1803 `relationship` და `details`. |
+| **მოდერაციის მეტამონაცემები** | `moderation.off_topic` (bool), `moderation.tags` (enum strings-ის მასივი), `moderation.notes` | გამოიყენება რეცენზენტების მიერ ასტროტურფის ან დაუკავშირებელი წარდგენის ჩასახშობად. თემის გარეთ ჩანაწერები ხელს არ უწყობს საინფორმაციო დაფებს. |
 
-## Fact table specification
+## ფაქტების ცხრილის სპეციფიკაცია
 
-Each `fact_table` row captures a machine-readable claim. Store the rows as JSON objects with the following fields:
-
-| Field | Description |
+თითოეული `fact_table` მწკრივი ასახავს მანქანით წაკითხვადი პრეტენზიას. შეინახეთ რიგები, როგორც JSON ობიექტები შემდეგი ველებით:| ველი | აღწერა |
 |-------|-------------|
-| `claim_id` | Stable identifier (e.g., `VB-2026-04-F1`). |
-| `claim` | Single-sentence statement of fact or impact. |
-| `status` | One of `corroborated`, `disputed`, `context-only`. |
-| `impact` | Array containing one or more of `governance`, `technical`, `compliance`, `community`. |
-| `citations` | Non-empty array of strings. URLs, Torii case IDs, or CID references are accepted. |
-| `evidence_digest` | Optional BLAKE3 checksum of supporting documents. |
+| `claim_id` | სტაბილური იდენტიფიკატორი (მაგ., `VB-2026-04-F1`). |
+| `claim` | ფაქტის ან გავლენის ერთწინადადებიანი განცხადება. |
+| `status` | ერთი `corroborated`, `disputed`, `context-only`. |
+| `impact` | მასივი, რომელიც შეიცავს ერთ ან მეტს `governance`, `technical`, `compliance`, `community`. |
+| `citations` | სტრიქონების არა ცარიელი მასივი. მიიღება URL-ები, Torii შემთხვევების ID-ები ან CID მითითებები. |
+| `evidence_digest` | დამხმარე დოკუმენტების არჩევითი BLAKE3 საკონტროლო ჯამი. |
 
-Automation notes:
-- The ingest job counts `fact_rows` and `fact_rows_with_citation` to build publication scorecards. Rows without citations still appear in the human-readable table but are tracked as missing evidence.
-- Keep claims concise and reference the same identifiers used in governance proposals so cross-linking is deterministic.
+ავტომატიზაციის შენიშვნები:
+- ამოღებული სამუშაო ითვლის `fact_rows` და `fact_rows_with_citation` პუბლიკაციების ქულების ბარათების შესაქმნელად. ციტატების გარეშე სტრიქონები კვლავ ჩნდება ადამიანის მიერ წასაკითხად ცხრილში, მაგრამ ასახულია როგორც დაკარგული მტკიცებულება.
+- შეინახეთ პრეტენზიები ლაკონურად და მიუთითეთ იგივე იდენტიფიკატორები, რომლებიც გამოიყენება მმართველობის წინადადებებში, რათა ჯვარედინი კავშირი განმსაზღვრელი იყოს.
 
-## Conflict disclosure requirements
+## კონფლიქტის გამჟღავნების მოთხოვნები
 
-1. Provide at least one disclosure entry when a financial, employment, governance, or familial tie exists.
-2. Use `author.no_conflicts_certified: true` to assert “no known conflicts.” Submissions must include either a disclosure entry or a `true` certification; otherwise, they’re flagged during ingest.
-3. Include `disclosures[i].evidence` whenever public documentation exists (e.g., corporate filings, DAO votes). Evidence is optional for “none” certifications but strongly recommended.
+1. მიაწოდეთ მინიმუმ ერთი გამჟღავნების ჩანაწერი, როდესაც არსებობს ფინანსური, დასაქმების, მმართველობის ან ოჯახური კავშირი.
+2. გამოიყენეთ `author.no_conflicts_certified: true`, რათა დაადასტუროთ „ცნობილი კონფლიქტები“. წარდგენა უნდა შეიცავდეს ან გამჟღავნების ჩანაწერს ან `true` სერთიფიკატს; წინააღმდეგ შემთხვევაში, ისინი მონიშნულია ჩასმისას.
+3. ჩართეთ `disclosures[i].evidence`, როდესაც არსებობს საჯარო დოკუმენტაცია (მაგ. კორპორატიული შეტყობინებები, DAO ხმები). მტკიცებულება არჩევითია „არცერთი“ სერთიფიკატებისთვის, მაგრამ მკაცრად რეკომენდებულია.
 
-## Moderation tags & off-topic handling
+## მოდერაციის ტეგები და თემის გარეთ დამუშავება
 
-Moderation reviewers can label submissions before they enter the transparency pipeline:
+მოდერაციის მიმომხილველებს შეუძლიათ წარდგენის წარდგენა გამჭვირვალობის ხაზში შესვლამდე:
 
-- `moderation.off_topic: true` removes the entry from aggregate counts while incrementing an `off_topic_rejections` counter. The row is still available in raw archives for audit.
-- `moderation.tags` accepts enum values: `duplicate`, `needs-translation`, `needs-follow-up`, `spam`, `astroturf`, `policy-escalation`. Tags help downstream reviewers triage without re-reading the full brief.
-- `moderation.notes` stores a short justification for the moderation decision (≤512 characters).
+- `moderation.off_topic: true` აშორებს ჩანაწერს მთლიანი დათვლებიდან `off_topic_rejections` მრიცხველის გაზრდისას. სტრიქონი კვლავ ხელმისაწვდომია აუდიტის არქივებში.
+- `moderation.tags` იღებს რიცხობრივ მნიშვნელობებს: `duplicate`, `needs-translation`, `needs-follow-up`, `spam`, `astroturf`, I180NI73. ტეგები ეხმარებიან ქვედა რეცენზენტებს ტრიაჟში სრული მოკლე შინაარსის ხელახლა წაკითხვის გარეშე.
+- `moderation.notes` ინახავს ზომიერების გადაწყვეტილების მოკლე დასაბუთებას (≤512 სიმბოლო).
 
-## Submission checklist
+## წარდგენის ჩამონათვალი
 
-1. Fill out the JSON payload using this template or the helper CLI described below.
-2. Populate at least one fact table row; include citations for each row.
-3. Provide disclosures or explicitly set `author.no_conflicts_certified: true`.
-4. Attach moderation metadata (default `off_topic: false`) so reviewers can triage quickly.
-5. Validate the payload with `cargo xtask ministry-transparency ingest --volunteer <file>` or any Norito validator before uploading.
+1. შეავსეთ JSON payload ამ შაბლონის ან ქვემოთ აღწერილი დამხმარე CLI-ის გამოყენებით.
+2. შეავსეთ ფაქტების ცხრილის მინიმუმ ერთი მწკრივი; ჩართეთ ციტატები თითოეული რიგისთვის.
+3. მიაწოდეთ გამჟღავნება ან ცალსახად დააყენეთ `author.no_conflicts_certified: true`.
+4. მიამაგრეთ მოდერაციის მეტამონაცემები (ნაგულისხმევი `off_topic: false`), რათა მიმომხილველებმა შეძლონ ტრიაჟი სწრაფად.
+5. გადაამოწმეთ დატვირთვა `cargo xtask ministry-transparency ingest --volunteer <file>` ან ნებისმიერი Norito ვალიდიატორით ატვირთვამდე.
 
-## Validation CLI (MINFO-3)
+## დადასტურება CLI (MINFO-3)
 
-The repository now ships a dedicated validator for volunteer briefs:
+საცავი ახლა აგზავნის სპეციალურ ვალიდატორს მოხალისეთა ბრიფინგებისთვის:
 
 ```bash
 cargo xtask ministry-transparency volunteer-validate \
@@ -80,32 +79,30 @@ cargo xtask ministry-transparency volunteer-validate \
   --json-output artifacts/ministry/volunteer_lint_report.json
 ```
 
-Key behaviour:
+ძირითადი ქცევა:- იღებს ცალკეულ JSON ობიექტებს *ან* ბრიფების მასივებს; გაიარეთ `--input` რამდენჯერმე, რათა რამდენიმე ფაილი ერთ გაშვებაში გაანათოთ.
+- გამოსცემს თითო მოკლე რეზიუმეს, რომელიც აჩვენებს შეცდომების და გაფრთხილებების რაოდენობას; გაფრთხილებები ხაზს უსვამს ციტირების ცარიელ სიებს ან ზედმეტ შენიშვნებს, ხოლო შეცდომები ბლოკავს პუბლიკაციას.
+- უზრუნველყოფს, რომ აუცილებელი ველები (`brief_id`, `proposal_id`, `stance`, ფაქტების ცხრილის შინაარსი, გამჟღავნება ან `no_conflicts_certified`) ემთხვევა ამ შაბლონს და რომ enum მნიშვნელობები დარჩეს დოკუმენტურ ლექსიკაში.
+- როდესაც დაყენებულია `--json-output <path>`, ვალიდატორი წერს მანქანით წაკითხვადი მანიფესტს, რომელიც აჯამებს ყველა მოკლე ინფორმაციას (წინადადების ID, პოზიცია, სტატუსი, შეცდომები/გაფრთხილებები). პორტალის `npm run generate:volunteer-lint` ბრძანება მოიხმარს ამ მანიფესტს, რათა აჩვენოს ლინტის სტატუსი თითოეული წინადადების გვერდის გვერდით.
 
-- Accepts individual JSON objects *or* arrays of briefs; pass `--input` multiple times to lint several files in one run.
-- Emits a per-brief summary showing the number of errors and warnings; warnings highlight empty citation lists or overlong notes, while errors block publication.
-- Ensures required fields (`brief_id`, `proposal_id`, `stance`, fact table contents, disclosures or `no_conflicts_certified`) match this template and that enum values stay within the documented vocabularies.
-- When `--json-output <path>` is set the validator writes a machine-readable manifest summarising every brief (proposal id, stance, status, errors/warnings). The portal’s `npm run generate:volunteer-lint` command consumes this manifest to display lint status next to each proposal page.
+დააკავშირეთ ბრძანება პორტალის სამუშაო პროცესებში ან CI-ში, რათა მოხალისეთა წინადადებები შეესაბამებოდეს **MINFO-3**-ს, სანამ ისინი მიაღწევენ გამჭვირვალობის ჩაბარების სამუშაოს.
 
-Integrate the command into portal workflows or CI to keep volunteer submissions compliant with **MINFO-3** before they reach the transparency ingest job.
+## სამაგალითო დატვირთვა
 
-## Example payload
+იხილეთ `docs/examples/ministry/volunteer_brief_template.json` სრულად დასახლებული მაგალითისთვის, ფაქტების ცხრილის რიგების, გამჟღავნებისა და მოდერაციის ტეგების ჩათვლით. ქვედა დინების დაფები მოიხმარენ დაუმუშავებელ JSON-ს და ავტომატურად ითვლის:
 
-See `docs/examples/ministry/volunteer_brief_template.json` for a fully populated example, including fact table rows, disclosures, and moderation tags. Downstream dashboards consume the raw JSON and automatically calculate:
-
-- `total_briefs` (off-topic submissions excluded)
+- `total_briefs` (თემას მიღმა წარდგენები გამორიცხულია)
 - `fact_rows` / `fact_rows_with_citation`
 - `disclosures_missing`
 - `off_topic_rejections`
 
-If new fields are required, update this document and the ingest summariser (`xtask/src/ministry.rs`) in the same change so the governance evidence remains reproducible.
+თუ საჭიროა ახალი ველები, განაახლეთ ეს დოკუმენტი და შემაჯამებელი (`xtask/src/ministry.rs`) იგივე ცვლილება, რათა მმართველობითი მტკიცებულებები დარჩეს რეპროდუცირებადი.
 
-## Publication SLA & portal surfacing (MINFO-3)
+## პუბლიკაცია SLA და პორტალის ზედაპირი (MINFO-3)
 
-To keep citizen submissions transparent, the portal now publishes briefs on a fixed cadence once they pass validation:
+მოქალაქეთა წარდგენის გამჭვირვალობის მიზნით, პორტალი ახლა აქვეყნებს ბრიფინგებს ფიქსირებული კადენციის შესახებ, როგორც კი ისინი გაივლიან ვალიდაციას:
 
-1. **T+0–6 hours:** submissions land via the volunteer intake form or `cargo xtask ministry-transparency ingest`. Validators run `VolunteerBriefV1::validate`, reject malformed payloads, and emit lint reports (missing disclosures, duplicate fact IDs, etc.).
-2. **T+6–24 hours:** accepted briefs are queued for translation/triage. Moderation tags (`needs-translation`, `duplicate`, `policy-escalation`, …) are applied, and off-topic entries are archived but excluded from aggregate counts.
-3. **T+24–48 hours:** the portal publishes the brief alongside the corresponding proposal page. Each published proposal now links to “Volunteer Opinions” so reviewers can read support/oppose/context briefs without opening raw JSON.
+1. **T+0–6 საათი:** წარდგენის ადგილი მოხალისეთა მიღების ფორმის ან `cargo xtask ministry-transparency ingest`-ის მეშვეობით. ვალიდიატორები აწარმოებენ `VolunteerBriefV1::validate`-ს, უარყოფენ არასწორ ფორმატულ დატვირთვას და ავრცელებენ ნათელ ანგარიშებს (გამოტოვებული ინფორმაციის გამჟღავნება, დუბლიკატი ფაქტის ID და ა.შ.).
+2. **T+6–24 საათი:** მიღებული ბრიფინგები დგას რიგში თარგმნისთვის/ტრიაჟისთვის. გამოიყენება მოდერაციის ტეგები (`needs-translation`, `duplicate`, `policy-escalation`,…) და არქივდება ჩანაწერები, რომლებიც არ არის თემატური, მაგრამ გამორიცხულია მთლიანი დათვლისგან.
+3. **T+24–48 საათი:** პორტალი აქვეყნებს ბრიფინგს შესაბამისი წინადადების გვერდზე. ყოველი გამოქვეყნებული წინადადება ახლა დაკავშირებულია „მოხალისეების მოსაზრებებთან“, რათა მიმომხილველებს შეეძლოთ წაიკითხონ მხარდაჭერა/დაპირისპირება/კონტექსტური ბრიფინგები დაუმუშავებელი JSON-ის გახსნის გარეშე.
 
-If a submission is marked `policy-escalation` or `astroturf`, the SLA tightens to **12 hours** so governance can respond quickly. Operators can audit the SLA via the **Volunteer Briefs** page in the docs portal (`docs/portal/docs/ministry/volunteer-briefs.md`), which lists the latest publication windows, lint status, and links to Norito artefacts.
+თუ წარდგენა მონიშნულია `policy-escalation` ან `astroturf`, SLA გამკაცრდება **12 საათამდე**, რათა მმართველობამ შეძლოს სწრაფად რეაგირება. ოპერატორებს შეუძლიათ SLA-ის აუდიტი **მოხალისეების მოკლე შინაარსის** გვერდის მეშვეობით დოკუმენტების პორტალში (`docs/portal/docs/ministry/volunteer-briefs.md`), სადაც ჩამოთვლილია უახლესი პუბლიკაციის ფანჯრები, ლინტის სტატუსი და ბმულები Norito არტეფაქტებთან.

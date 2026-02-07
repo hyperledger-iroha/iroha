@@ -446,9 +446,15 @@ impl Topology {
     }
 
     /// Re-arrange the set of peers after each successful block commit.
+    #[cfg(test)]
     fn rotate_set_a(&mut self) {
-        let rotate_at = self.min_votes_for_commit();
-        self.0[..rotate_at].rotate_left(1);
+        if self.0.len() <= 1 {
+            return;
+        }
+        let rotate_at = self.min_votes_for_commit().min(self.0.len());
+        if rotate_at > 1 {
+            self.0[..rotate_at].rotate_left(1);
+        }
     }
 
     /// Update topology after a block has been committed.
@@ -480,8 +486,7 @@ pub fn commit_quorum_from_len(len: usize) -> usize {
     if len <= 3 {
         return len;
     }
-    let max_faults = len.saturating_sub(1) / 3;
-    max_faults.saturating_mul(2).saturating_add(1)
+    len.saturating_mul(2).saturating_add(1) / 3
 }
 
 /// Compute the redundant send fan-out (r) for a topology of the given length.
@@ -1189,6 +1194,13 @@ mod tests {
                 "quorum mismatch for len={len}"
             );
         }
+    }
+
+    #[test]
+    fn commit_quorum_len6_is_four() {
+        let topology = test_topology(6);
+        assert_eq!(commit_quorum_from_len(6), 4);
+        assert_eq!(topology.min_votes_for_commit(), 4);
     }
 
     #[test]

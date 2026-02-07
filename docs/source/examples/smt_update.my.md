@@ -7,51 +7,50 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 788902cfafc6c7db6d52d4237b46ffe78193efd57852bc3427a16d7f3cda2f9c
 source_last_modified: "2025-12-29T18:16:35.954370+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Sparse Merkle Update Example
+# Sparse Merkle Update ဥပမာ
 
-This worked example illustrates how the FASTPQ Stage 2 trace encodes a
-non-membership witness using the `neighbour_leaf` column. The sparse Merkle tree
-is binary over Poseidon2 field elements. Keys are converted to canonical
-32-byte little-endian strings, hashed to a field element, and the most
-significant bits select the branch at each level.
+ဤအလုပ်နမူနာသည် FASTPQ အဆင့် 2 ခြေရာကောက်သည် a ကို မည်သို့ကုဒ်လုပ်သည်ကို ဖော်ပြသည်။
+`neighbour_leaf` ကော်လံကို အသုံးပြု၍ အဖွဲ့ဝင်မဟုတ်သော သက်သေ။ ကျဲနေတဲ့ Merkle သစ်ပင်
+Poseidon2 အကွက်ဒြပ်စင်များပေါ်တွင် binary ဖြစ်သည်။ သော့များကို Canonical အဖြစ်ပြောင်းလဲထားသည်။
+32-byte little-endian strings များ၊ အကွက်ဒြပ်စင်တစ်ခုသို့ hashed နှင့် အများဆုံး
+အဆင့်တစ်ခုစီရှိ အကိုင်းအခက်များကို သိသိသာသာရွေးချယ်ပါ။
 
-## Scenario
+## ဇာတ်လမ်း
 
-- Pre-state leaves
-  - `asset::alice::rose` -> hashed key `0x12b7...` with value `0x0000_0000_0000_0005`.
-  - `asset::bob::rose`   -> hashed key `0x1321...` with value `0x0000_0000_0000_0003`.
-- Update request: insert `asset::carol::rose` with value 2.
-- The canonical key hash for Carol expands to the 5-bit prefix `0b01011`. The
-  existing neighbours have prefixes `0b01010` (Alice) and `0b01101` (Bob).
+- ရွက်ကြိုရွက်
+  - `asset::alice::rose` -> တန်ဖိုး `0x0000_0000_0000_0005` ဖြင့် တွဲထားသော `0x12b7...`။
+  - `asset::bob::rose` -> တန်ဖိုး `0x0000_0000_0000_0003` ဖြင့် တွဲထားသော `0x1321...`။
+- အပ်ဒိတ်တောင်းဆိုချက်- `asset::carol::rose` ကို တန်ဖိုး 2 ဖြင့် ထည့်ပါ။
+- Carol အတွက် canonical key hash သည် 5-bit prefix `0b01011` သို့ တိုးချဲ့သည်။ ဟိ
+  ရှိရင်းစွဲအိမ်နီးချင်းများတွင် `0b01010` (Alice) နှင့် `0b01101` (Bob) ရှေ့ဆက်များရှိသည်။
 
-Because there is no leaf whose prefix matches `0b01011`, the prover must provide
-additional evidence that the interval `(alice, bob)` is empty. Stage 2 populates
-the trace row across the columns `path_bit_{level}`, `sibling_{level}`,
-`node_in_{level}`, and `node_out_{level}` (with `level` in `[0, 31]`). All values
-are Poseidon2 field elements encoded in little-endian form:
+`0b01011` နှင့် ကိုက်ညီသော အရွက်မရှိသောကြောင့် သက်သေပြရမည်
+ကြားကာလ `(alice, bob)` သည် ဗလာဖြစ်ကြောင်း ထပ်လောင်းအထောက်အထားများ။ အဆင့် 2 ကိုတွေ့ရပါမယ်။
+`path_bit_{level}`၊ `sibling_{level}`၊
+`node_in_{level}` နှင့် `node_out_{level}` (`[0, 31]` တွင် `level` နှင့်)။ အားလုံးတန်ဖိုးများ
+Poseidon2 အကွက်ဒြပ်စင်များသည် အနည်းအကျဉ်းပုံစံဖြင့် ကုဒ်လုပ်ထားသည်-
 
-| level | `path_bit_level` | `sibling_level`             | `node_in_level`                      | `node_out_level`                     | Notes |
-| ----- | ---------------- | --------------------------- | ------------------------------------ | ------------------------------------ | ----- |
-| 0 | 1             | `0x241f...` (Alice leaf hash) | `0x0000...`                          | `0x4b12...` (`value_2 = 2`)          | Insert: start from zero, store new value. |
-| 1 | 1             | `0x7d45...` (empty right)     | Poseidon2(`node_out_0`, `sibling_0`) | Poseidon2(`sibling_1`, `node_out_1`) | Follow prefix bit 1. |
-| 2 | 0             | `0x03ae...` (Bob branch)      | Poseidon2(`node_out_1`, `sibling_1`) | Poseidon2(`node_in_2`, `sibling_2`)  | Branch flips because bit = 0. |
-| 3 | 1             | `0x9bc4...`                   | Poseidon2(`node_out_2`, `sibling_2`) | Poseidon2(`sibling_3`, `node_out_3`) | Higher levels continue hashing upward. |
-| 4 | 0             | `0xe112...`                   | Poseidon2(`node_out_3`, `sibling_3`) | Poseidon2(`node_in_4`, `sibling_4`)  | Root level; result is the post-state root. |
+| အဆင့် | `path_bit_level` | `sibling_level` | `node_in_level` | `node_out_level` | မှတ်စုများ |
+| -----| ---------------- | --------------------------- | ------------------------------------ | ------------------------------------ | -----|
+| 0 | ၁ | `0x241f...` (Alice leaf hash) | `0x0000...` | `0x4b12...` (`value_2 = 2`) | ထည့်ပါ- သုညမှစတင်ပါ၊ တန်ဖိုးအသစ်ကို သိမ်းဆည်းပါ။ |
+| ၁ | ၁ | `0x7d45...` (ဗလာ) | Poseidon2(`node_out_0`၊ `sibling_0`) | Poseidon2(`sibling_1`၊ `node_out_1`) | ရှေ့ဆက် bit 1. |
+| 2 | 0 | `0x03ae...` (ဘော့ကိုင်း) | Poseidon2(`node_out_1`၊ `sibling_1`) | Poseidon2(`node_in_2`၊ `sibling_2`) | အကိုင်းအခက် လှန်ရခြင်းမှာ bit = 0. |
+| 3 | ၁ | `0x9bc4...` | Poseidon2(`node_out_2`၊ `sibling_2`) | Poseidon2(`sibling_3`၊ `node_out_3`) | မြင့်မားသောအဆင့်များသည် အထက်သို့ ဆက်လက်တက်လှမ်းနေပါသည်။ |
+| 4 | 0 | `0xe112...` | Poseidon2(`node_out_3`၊ `sibling_3`) | Poseidon2(`node_in_4`၊ `sibling_4`) | အမြစ်အဆင့်; ရလဒ်သည် post-state root ဖြစ်သည်။ |
 
-The `neighbour_leaf` column for this row is populated with Bob's leaf
-(`key = 0x1321...`, `value = 3`, `hash = Poseidon2(key, value) = 0x03ae...`). When
-verifying, the AIR checks that:
+ဤအတန်းအတွက် `neighbour_leaf` ကော်လံကို Bob ၏အရွက်ဖြင့် ဖြည့်ထားသည်။
+(`key = 0x1321...`, `value = 3`, `hash = Poseidon2(key, value) = 0x03ae...`)။ ဘယ်တော့လဲ။
+အတည်ပြုခြင်း၊ AIR မှ စစ်ဆေးသည်-
 
-1. The supplied neighbour corresponds to the sibling used at level 2.
-2. The neighbour key is lexicographically greater than the inserted key and the
-   left sibling (Alice) is lexicographically smaller.
-3. Replacing the inserted leaf with the neighbour reproduces the pre-state root.
-
-Together these checks prove that no leaf existed for the interval `(0b01010,
-0b01101)` before the update. Implementations generating FASTPQ traces can use
-this layout verbatim; the numerical constants above are illustrative. For a full
-JSON witness, emit the columns exactly as they appear in the table above (with
-numeric suffixes per level), using little-endian byte strings serialized with
-Norito JSON helpers.
+1. ပံ့ပိုးပေးထားသော အိမ်နီးချင်းသည် အဆင့် 2 တွင်အသုံးပြုသော ပေါက်ဖော်နှင့် ကိုက်ညီပါသည်။
+2. အိမ်နီးချင်းသော့သည် ထည့်သွင်းထားသောသော့ထက် အဘိဓာန်အရ ပိုကြီးသည်။
+   ဘယ်ဖက်မွေးချင်း (အဲလစ်) သည် အဘိဓာန်အရ သေးငယ်သည်။
+3. ထည့်သွင်းထားသော အရွက်ကို အိမ်နီးချင်းနှင့် အစားထိုးခြင်းဖြင့် အကြိုအပင်အမြစ်ကို မျိုးပွားစေသည်။ဤစစ်ဆေးမှုများသည် ကြားကာလအတွက် အရွက်မရှိကြောင်း သက်သေပြခဲ့သည် (၀b၀၁၀၁၀၊
+0b01101)` မွမ်းမံခြင်းမပြုမီ။ အကောင်အထည်ဖော်မှုများကို FASTPQ ခြေရာခံများထုတ်ပေးခြင်းကို အသုံးပြုနိုင်သည်။
+ဤ layout ကို verbatim; အထက်ဖော်ပြပါကိန်းသေများသည် သရုပ်ဖော်သည်။ ပြည့်စုံဘို့
+JSON သက်သေ၊ အထက်ဇယားတွင် ပြထားသည့်အတိုင်း ကော်လံများကို အတိအကျ ထုတ်လွှတ်သည် (နှင့်အတူ
+အဆင့်အလိုက် ဂဏန်း နောက်ဆက်တွဲများ)၊ နံပါတ်စဉ်တပ်ထားသော little-endian byte strings များကို အသုံးပြုခြင်း။
+Norito JSON အကူအညီပေးသူများ။

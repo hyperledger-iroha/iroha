@@ -9,82 +9,79 @@ source_last_modified: "2026-01-05T09:28:12.023255+00:00"
 translation_last_reviewed: 2026-02-07
 title: MOCHI Architecture Plan
 description: High-level design for the MOCHI local-network GUI supervisor.
+translator: machine-google-reviewed
 ---
 
-# MOCHI Architecture Plan
+# MOCHI བཟོ་རིག་འཆར་གཞི།
 
 
-## Goals
+## རིལ་ཚང
 
-- Bootstrap single-peer or multi-peer (four-node BFT) local networks quickly.
-- Wrap `kagami`, `irohad`, and supporting binaries in a friendly GUI workflow.
-- Surface live block, event, and state data through Torii HTTP/WebSocket endpoints.
-- Provide structured builders for transactions and Iroha Special Instructions (ISI), with local signing and submission.
-- Manage snapshots, re-genesis flows, and configuration tweaks without editing files manually.
-- Ship as a single cross-platform Rust binary with no webview or Docker dependency.
+- བུཊི་སི་ཊརཔ་རྐྱང་པ་ ཡང་ན་ སྣ་མང་པའིར་ (མཐུད་མཚམས་བཞི་བི་ཨེཕ་ཊི་) ཉེ་གནས་ཡོངས་འབྲེལ་ཚུ་ མགྱོགས་དྲགས་སྦེ་ འགྱོཝ་ཨིན།
+- `kagami`, `irohad`, མཐུན་སྒྲིལ་ཅན་གྱི་ GUI ལཱ་གི་རྒྱུན་རིམ་ནང་ གཉིས་ལྡན་ལུ་རྒྱབ་སྐྱོར་འབད་ནི།
+- ཁ་ཐོག་གི་ ཐད་སྙོམས་བཀག་ཆ་དང་ བྱུང་ལས་ དེ་ལས་ མངའ་སྡེའི་གནས་སྡུད་ Torii ཨེཆ་ཊི་ཊི་པི་/ཝེབ་སོ་ཀེཊི་མཐའ་མཚམས་ཚུ་བརྒྱུད་དེ་ ཚུ་ཨིན།
+- ཚོང་འབྲེལ་གྱི་དོན་ལུ་ གཞི་བཀོད་འབད་ཡོད་པའི་བཟོ་བསྐྲུན་པ་ཚུ་དང་ ས་གནས་ཀྱི་མིང་རྟགས་བཀོད་ནི་དང་ བཙུགས་ནིའི་དོན་ལུ་ Iroha དམིགས་བསལ་བཀོད་རྒྱ་ (ISI) བྱིན་དགོ།
+- ཡིག་སྣོད་ཚུ་ ལག་ཐོག་ལས་ཞུན་དག་མ་འབད་བར་ པར་ལེན་ཚུ་ བསྐྱར་བཟོ་འབད་ནི་ དེ་ལས་ རིམ་སྒྲིག་བསྒྱུར་བཅོས་འབད་ནི་ཚུ་ འཛིན་སྐྱོང་འཐབ།
+- ཝེབ་མཐོང་སྣང་དང་ ཡང་ན་ Docker བརྟེན་པའི་ Rust གཉིས་ལྡན་སྦེ་ སྐྱེལ་འདྲེན་འབད་ནི།
 
-## Architecture Overview
+## བཟོ་རིག་སྤྱི་འཚོལ།
 
-MOCHI is split into two primary crates housed in a new `/mochi` directory (see the
-[MOCHI Quickstart](mochi/quickstart.md) for build and usage instructions):
+MOCHI འདི་ Norito སྣོད་ཐོ་གསརཔ་ནང་ བཞག་སྟེ་ཡོད་པའི་ གཞི་རྟེན་གྱི་ cratres གཉིས་ལུ་དབྱེ་སྟེ་ཡོདཔ་ཨིན།
+[MOCHI མགྱོགས་མྱུར་](mochi/quickstart.md) བཟོ་བསྐྲུན་དང་ལག་ལེན་གྱི་བཀོད་རྒྱ་ཚུ་གི་དོན་ལུ་):
 
-1. `mochi-core`: a headless library responsible for configuration templating, key and genesis material generation, supervising child processes, driving Torii clients, and managing filesystem state.
-2. `mochi-ui-egui`: a desktop application built on `egui`/`eframe` that renders the user interface and delegates all orchestration through the `mochi-core` API.
+1. `mochi-core`: རིམ་སྒྲིག་ཊེམ་པེལེཊི་དང་ ལྡེ་མིག་དང་རིགས་མཚན་རྒྱུ་ཆའི་བཟོ་སྐྲུན་གྱི་འགན་ཁུར་འབག་མི་ མགུ་ཏོ་མེད་པའི་དཔེ་མཛོད་ཅིག་ཨིན།
+2. `mochi-ui-egui`: `egui`/`eframe` གུ་བཟོ་བསྐྲུན་འབད་མི་ ཌེཀསི་ཊོཔ་གློག་རིམ་ཅིག ལག་ལེན་པའི་ངོས་འདྲ་བ་བཟོ་བཅོས་འབད་དེ་ རོལ་དབྱངས་ཆ་མཉམ་ `mochi-core` API བརྒྱུད་དེ་སྤྲོད་ཚུགས།
 
-Additional front ends (for example a Tauri shell) can hook into `mochi-core` later without reworking the supervisor logic.
+ཁ་སྐོང་གདོང་ཕྱོགས་ (དཔེར་ན་ Tauri shell) གིས་ ཤུལ་ལས་ `mochi-core` ནང་ལུ་ ལྟ་རྟོག་པའི་ཚད་མ་འདི་ ལོག་སྟེ་ལཱ་འབད་མ་དགོ་པར་ འབྲེལ་འཐུད་འབད་ཚུགས།
 
-## Process Model
+## ལས་སྦྱོར་གྱི་དཔེ་སྟོན།
 
-- Peer nodes run as separate `irohad` child processes. MOCHI never links the peer as a library, avoiding unstable internal APIs and matching production deployment topologies.
-- Genesis and key material are created through `kagami` invocations with user provided inputs (chain ID, initial accounts, assets).
-- Configuration files are generated from TOML templates, filling in Torii and P2P ports, storage paths, snapshot settings, and trusted peer lists. Generated configs are stored beneath a per-network workspace directory.
-- The supervisor tracks process lifecycles, streams stdout/stderr for log surfaces, and polls `/status`, `/metrics`, and `/configuration` endpoints for health.
-- A thin Torii client layer wraps HTTP and WebSocket calls, leaning on the Iroha Rust client crates where possible to avoid reimplementing SCALE encoding/decoding.
+- པི་ཡར་ མཐུད་མཚམས་ཚུ་ སོ་སོ་སྦེ་ `irohad` བྱིས་པའི་བྱ་རིམ་སྦེ་འགྱོཝ་ཨིན། MOCHI གིས་ མཉམ་རོགས་འདི་ དཔེ་མཛོད་སྦེ་ མཐུད་དེ་མེདཔ་མ་ཚད་ བརྟན་ཏོག་ཏོ་མེད་པའི་ ནང་འཁོད་ཨེ་པི་ཨའི་ཚུ་ བཀག་ཐབས་དང་ བཟོ་བསྐྲུན་གྱི་ བཀྲམ་སྤེལ་གྱི་ ས་སྒོ་ཚུ་ མཐུན་སྒྲིག་འབདཝ་ཨིན།
+- རིགས་མཚན་དང་ལྡེ་མིག་རྒྱུ་ཆ་ཚུ་ ལག་ལེན་པ་གིས་བྱིན་ཡོད་པའི་ཨིན་པུཊི་ཚུ་དང་གཅིག་ཁར་ `kagami` འབོད་བརྡ་ཚུ་བརྒྱུད་དེ་གསར་བསྐྲུན་འབདཝ་ཨིན།
+- རིམ་སྒྲིག་ཡིག་སྣོད་ཚུ་ TOML ཊེམ་པེལེཊི་ཚུ་ལས་ བཏོན་ཡོདཔ་ད་ Torii དང་ P2P འདྲེན་ལམ་ གསོག་འཇོག་འགྲུལ་ལམ་ པར་སྒྲིག་སྒྲིག་སྟངས་ཚུ་ དེ་ལས་ བློ་གཏད་ཅན་གྱི་མཉམ་རོགས་ཐོ་ཡིག་ཚུ་ བཀང་ཡོདཔ་ཨིན། བཟོ་སྐྲུན་འབད་ཡོད་པའི་རིམ་སྒྲིག་ཚུ་ ཡོངས་འབྲེལ་ལཱ་གི་ས་སྒོ་སྣོད་ཐོ་ཅིག་གི་འོག་ལུ་ གསོག་འཇོག་འབད་ཡོདཔ་ཨིན།
+- ལྟ་རྟོག་པ་གིས་ མི་ཚེ་འཁོར་རིམ་དང་ ཤིང་གི་ཁ་ཐོག་གི་དོན་ལུ་ རྒྱུན་ལམ་ཚུ་ stdout/stderr ཚུ་ བརྟག་ཞིབ་འབདཝ་ཨིན།
+- Torii མཁོ་སྤྲོད་པ་བང་རིམ་འདི་གིས་ HTTP དང་ WebSocket འབོད་བརྡ་ཚུ་ བཀོད་སྒྲིག་འབད་དེ་ Iroha Rust མཁོ་སྤྲོད་པ་ཀེརེསི་ལུ་ ཨེསི་སི་ཨེ་ཨེལ་ཨེན་ཀོ་ཌིང་/ཌི་ཀོ་ཌིང་ཚུ་ ལོག་ལག་ལེན་འཐབ་ནི་ལས་ བཀག་ཐབས་ལུ་ འབད་ཚུགསཔ་ཨིན།
 
-## User Flows Backed by `mochi-core`
+## `mochi-core` གིས་ལག་ལེན་པའི་ཕྱིར་ལོག་།- **ནེཊི་ལཱ་གསར་བསྐྲུན་ཝི་ཛརཌི་*:: མཉམ་རོགས་ གསལ་སྡུད་གཅིག་ཡང་ན་བཞི་གདམ་ཁ་རྐྱབ་སྟེ་ སྣོད་ཐོ་ཚུ་འཐུ་ཞིནམ་ལས་ ངོ་རྟགས་ཚུ་དང་ རིགས་མཚན་བཟོ་ནི་གི་དོན་ལུ་ `kagami` ལུ་འབོད་བཀུག་འབད།
+- **འཚོ་བའི་འཁོར་རིམ་ཚད་འཛིན་**: འགོ་བཙུགས་ནི་དང་བཀག་ནི་ མཉམ་རོགས་ ལོག་འགོ་བཙུགས། ཁ་ཐོག་གི་ ཐད་གཏོང་ མེ་ཊིག་; ཕྱིར་ཐོན་གྱི་མཇུག་མ་ཚུ་; རན་དུས་ཚོད་རིམ་སྒྲིག་མཇུག་བསྡུའི་ས་ཚིགས་ཚུ་སོར་བསྒྱུར་འབད་ (དཔེར་ན་ དྲན་ཐོ་གནས་རིམ་)།
+- **བཀག་ཆ་དང་བྱུང་ལས་ཀྱི་ རྒྱུན་ལམ་ཚུ་***: `/block/stream` དང་ `/events` ལུ་ མིང་རྟགས་བཀོདཔ་ད་ ཡུ་ཨའི་པེ་ནཱལ་ཚུ་གི་དོན་ལུ་ དྲན་ཚད་ནང་ བསྐོར་བའི་ བཱ་ཕར་ཅིག་ གསོག་འཇོག་འབད་ནི།
+- **མངའ་སྡེ་འཚོལ་ཞིབ་པ་**:: Norito-backed `/query` འདི་ ཐོ་ཡིག་མངའ་ཁོངས་དང་ རྩིས་ཐོ་ རྒྱུ་དངོས་ཚུ་ དེ་ལས་ རྒྱུ་དངོས་ངེས་ཚིག་ཚུ་ལུ་ ཤོག་ལེབ་ཀྱི་གྲོགས་རམ་པ་དང་ མེ་ཊ་ཌེ་ཊ་བཅུད་བསྡུས་ཚུ་དང་གཅིག་ཁར་ འབོད་བརྡ་འབདཝ་ཨིན།
+- **Transaction Composer***: གོ་རིམ་མིན་ཊི་/བརྗེ་སྒྱུར་གྱི་བཀོད་རྒྱ་ཟིན་བྲིས་ཚུ་ མཚན་རྟགས་བཀོད་ཡོད་པའི་ཚོང་འབྲེལ་ནང་ བཀོད་སྒྲིག་འབད་དེ་ `/transaction` བརྒྱུད་དེ་ ཕུལ་ཞིནམ་ལས་ གྲུབ་འབྲས་བྱུང་རིམ་ཚུ་ ལྟ་རྟོག་འབད། vault མཚན་རྟགས་ཀྱི་ཧུཀ་ཚུ་ མ་འོངས་པའི་བསྐྱར་ལོག་ཅིག་སྦེ་ལུསཔ་ཨིན།
+- **Snapshots and Re-Genesis**: ཀུ་ར་གིས་ ཕྱིར་ཚོང་/ནང་འདྲེན་དང་ འཕྱགས་བདའ་ དེ་ལས་ རིགས་མཚན་རྒྱུ་ཆ་ཚུ་ མགྱོགས་དྲགས་སྦེ་ ཆུ་མཛོད་ཀྱི་དོན་ལུ་ བསྐྱར་བཟོ་འབདཝ་ཨིན།
 
-- **Network Creation Wizard**: choose single or four-peer profile, pick directories, and call `kagami` to generate identities plus genesis.
-- **Lifecycle Controls**: start, stop, restart peers; surface live metrics; expose log tails; toggle runtime configuration endpoints (e.g., log levels).
-- **Block and Event Streams**: subscribe to `/block/stream` and `/events`, storing an in-memory rolling buffer for UI panels.
-- **State Explorer**: run Norito-backed `/query` calls to list domains, accounts, assets, and asset definitions with pagination helpers and metadata summaries.
-- **Transaction Composer**: stage mint/transfer instruction drafts, batch them into signed transactions, preview the Norito payload, submit via `/transaction`, and monitor the resulting events; vault signing hooks remain a future iteration.
-- **Snapshots and Re-Genesis**: orchestrate Kura snapshot export/import, wipe stores, and regenerate genesis material for quick resets.
+## ཡུ་ཨའི་ ལེ་ཡར་ (`mochi-ui-egui`)
 
-## UI Layer (`mochi-ui-egui`)
+- ཕྱིའི་རཱན་ཊའིམ་མེད་པར་ བཀོལ་སྤྱོད་འབད་བཏུབ་པའི་ མི་ཁུངས་གཅིག་རྐྱངམ་ཅིག་ སྐྱེལ་འདྲེན་འབད་ནི་ལུ་ `egui`/`eframe` ལག་ལེན་འཐབ་ཨིན།
+- བཀོད་སྒྲིག་ནང་།
+  - **ནེཊི་ཝརཀ་ ཌེཤ་བོརཌ་** མཉམ་རོགས་ ཤོག་བྱང་དང་ གསོ་བའི་བརྡ་མཚོན་ དེ་ལས་ མགྱོགས་དྲགས་ཀྱི་ བྱ་བ་ཚུ་དང་གཅིག་ཁར་ཨིན།
+  - **བཀག་ཆ་** འཕྲལ་གྱི་ཁས་བླངས་ཚུ་དང་ མཐོ་ཚད་འཚོལ་ཞིབ་འབད་བཅུགཔ་ཨིན།
+  - **ལས་སྣ་ཚུ་** པེ་ནཱལ་ཚགས་མ་བཙུགས་ནི་གི་ཚོང་འབྲེལ་གནས་རིམ་ཚུ་ ཧེ་ཤི་ཡང་ན་རྩིས་ཐོ་གིས་ .
+  - **མངའ་སྡེ་འཚོལ་ཞིབ་པ་** མཆོང་ལྡེ་ཚུ་ མངའ་ཁོངས་དང་རྩིས་ཐོ་ རྒྱུ་དངོས་ དེ་ལས་ རྒྱུ་དངོས་ངེས་ཚིག་ཚུ་གི་དོན་ལུ་ ཤོག་ལེབ་ཀྱི་ Norito གྲུབ་འབྲས་དང་གཅིག་ཁར་ བརྟག་དཔྱད་འབད་ནིའི་དོན་ལུ་ བཀོ་བཞགཔ་ཨིན།
+- **བསྡོམས་** འབྲི་ཤོག་དང་གཅིག་ཁར་ བེཆ་ཊི་ མིན་ཊི་ མིནཊི་ མིནཊི་ མིནཊི་ མིན་ཊི་ མིན་ཊི་ པེ་ལེཊི་ བང་རིམ་འཛིན་སྐྱོང་ (ཁ་སྐོང་/བཏོན་གཏང་/གསལ་ཏོག་ཏོ་) གཙང་མ་ Norito སྔོན་ལྟ་ དེ་ལས་ བརྡ་རྟགས་བཀོད་མི་གིས་ རྒྱབ་སྐྱོར་འབད་མི་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ dev དང་ དབང་འཛིན་ཚུ་གི་བར་ན་ བརྗེ་སོར་འབད་ཚུགས།
+- **Genesis & པར་རིས་ཚུ་** འཛིན་སྐྱོང་མཐོང་སྣང་།
+- **སྒྲིག་སྟངས་ཚུ་** རན་ཊའིམ་སོར་སྟོན་དང་ གནད་སྡུད་སྣོད་ཐོ་མགྱོགས་ཐབས་ཚུ་གི་དོན་ལུ་ཨིན།
+- UI གིས་ རྒྱུན་ལམ་བརྒྱུད་དེ་ `mochi-core` ལས་ དུས་མཉམ་མེན་པའི་དུས་མཐུན་བཟོ་མི་ཚུ་ལུ་ མཉམ་འབྲེལ་འབདཝ་ཨིན། ཀོར་གྱིས་ གཞི་བཀོད་འབད་ཡོད་པའི་བྱུང་ལས་ཚུ་ རྒྱུན་སྤེལ་འབད་མི་ `SupervisorHandle` ཅིག་གསལ་སྟོན་འབདཝ་ཨིན།
 
-- Uses `egui`/`eframe` to ship a single native executable without external runtimes.
-- Layout includes:
-  - **Network Dashboard** with peer cards, health indicators, and quick actions.
-  - **Blocks** panel streaming recent commits and allowing height search.
-  - **Events** panel filtering transaction statuses by hash or account.
-  - **State Explorer** tabs for domains, accounts, assets, and asset definitions with paginated Norito results plus raw dumps for inspection.
-- **Composer** form with batchable mint/transfer palettes, queue management (add/remove/clear), raw Norito preview, and submission feedback backed by the signer vault so operators can swap between dev and real authorities.
-- **Genesis & Snapshots** management view.
-- **Settings** for runtime toggles and data directory shortcuts.
-- UI subscribes to asynchronous updates from `mochi-core` via channels; the core exposes a `SupervisorHandle` that streams structured events (peer status, block headers, transaction updates).
+### ས་གནས་གོང་འཕེལ་མཐའ།
 
-## Local Development Notes
+- ལཱ་གི་ས་སྒོ་རིམ་སྒྲིག་ཆ་ཚན་ `ZSTD_SYS_USE_PKG_CONFIG=1` sor `zstd-sys` གིས་ ཧོསིཊི་ Norito ལུ་ ཚོང་བསྒྱུར་འབད་ཡོད་པའི་ཡིག་མཛོད་ཚུ་ལེན་ནིའི་ཚབ་ལུ་ མཐུད་ལམ་འབདཝ་ཨིན། འདི་གིས་ པི་ཀིའུ་ཀིརིཔ་ཊོ་ལུ་བརྟེན་པའི་ བཟོ་བསྐྲུན་ཚུ་ (དང་ MOCHI བརྟག་དཔྱད་) འདི་ ཡོངས་འབྲེལ་དང་ ཡང་ན་ བྱེམ་སྒྲོམ་གྱི་མཐའ་འཁོར་ནང་ གཡོག་བཀོལ་བཅུགཔ་ཨིན།
 
-- The workspace config sets `ZSTD_SYS_USE_PKG_CONFIG=1` so `zstd-sys` links against the host `libzstd` instead of fetching vendored archives. This keeps pqcrypto-dependent builds (and MOCHI tests) running inside offline or sandboxed environments.
+## ཐུམ་སྒྲིལ་དང་བཀྲམ་སྤེལ།
 
-## Packaging and Distribution
+- MOCHI (`PATH` ནང་) Norito དང་ Sumeragi, དང་ `kagami` གཉིས་ལྡན་ཚུ་ .
+- OpenSSL བརྟེན་པ་ཚུ་ བཀག་ཐབས་ལུ་ ཕྱི་ཁའི་ཨེཆ་ཊི་ཊི་པི་ཨེསི་གི་དོན་ལུ་ Norito ལག་ལེན་འཐབ་ཨིན།
+- དྲྭ་རྒྱ་རེ་རེ་གི་སྣོད་ཐོ་ཚུ་ཡོད་པའི་ གློག་རིམ་གྱི་རྩ་བ་ (དཔེར་ན་ Norito ཡང་ན་ སྟེགས་བུ་འདྲ་མཉམ་) ནང་ལུ་ བཟོ་ཡོད་པའི་ ཅ་རྙིང་ཚུ་ཆ་མཉམ་ གསོག་འཇོག་འབདཝ་ཨིན། GUI གིས་ “Tinder/Explorer in in inder/Explorer” གྲོགས་རམ་པ་བྱིནམ་ཨིན།
+- རང་བཞིན་བརྟག་དཔྱད་དང་ གསོག་འཇོག་ Torii (8080+) དང་ P2P (1337+) འདྲེན་ལམ་ཚུ་ འཁྲུག་རྩོད་ཚུ་ བཀག་ཐབས་ལུ་ མཉམ་རོགས་ཚུ་ འགོ་མ་བཙུགས་པའི་ཧེ་མ་ཨིན།
 
-- MOCHI bundles (or discovers on `PATH`) the `irohad`, `iroha_cli`, and `kagami` binaries.
-- Uses `rustls` for outbound HTTPS to avoid OpenSSL dependencies.
-- Stores all generated artifacts in a dedicated application data root (e.g., `~/.local/share/mochi` or platform equivalent) with per-network subdirectories. GUI provides “reveal in Finder/Explorer” helpers.
-- Auto-detects and reserves Torii (8080+) and P2P (1337+) ports before launching peers to prevent conflicts.
+## མ་འོངས་རྒྱ་སྐྱེད་ (MVP གི་དོན་ལུ་ཁྱབ་ཁོངས།)- གདོང་ཕྱོགས་གཞན་ (Tauri, CLI མགུ་ཏོ་མེད་པའི་ཐབས་ལམ་) བརྗེ་སོར་ `mochi-core` བརྗེ་སོར་འབད།
+- བཀྲམ་སྤེལ་འབད་ཡོད་པའི་ བརྟག་དཔྱད་ཀྱི་ ཀླད་ཀོར་ཚུ་གི་དོན་ལུ་ སྣ་མང་ཧོསིཊི་ ཨོར་ཀེཊ།
+- མོས་མཐུན་གྱི་ ནང་ མོས་མཐུན་གྱི་ མཐོང་སྣང་ཚུ་ (I1NT00000000X མངའ་སྡེ་སྐོར་རིམ་, གོས་ཐུང་དུས་ཚོད་)།
+- རང་བཞིན་གྱིས་ཨའི་ཊི་མཱརལ་ཡོངས་འབྲེལ་པར་ལེན་ཚུ་གི་དོན་ལུ་ སི་ཨའི་ པའིཔ་ལའིན་ཚུ་དང་གཅིག་ཁར་ མཉམ་བསྡོམས་འབད་ནི།
+- སྲོལ་སྒྲིག་ཌེཤ་བོརཊི་ཡང་ན་ མངའ་ཁོངས་དམིགས་བསལ་ཞིབ་དཔྱད་པ་ཚུ་གི་དོན་ལུ་ པ་ལག་ཨིན་ལམ་ལུགས།
 
-## Future Extensions (Out of Scope for MVP)
+## དཔྱད་གཞི།
 
-- Alternate front ends (Tauri, CLI headless mode) sharing `mochi-core`.
-- Multi-host orchestration for distributed testing clusters.
-- Visualizers for consensus internals (Sumeragi round states, gossip timings).
-- Integration with CI pipelines for automated ephemeral network snapshots.
-- Plug-in system for custom dashboards or domain-specific inspectors.
-
-## References
-
-- [Torii Endpoints](https://docs.iroha.tech/reference/torii-endpoints.html)
-- [Peer Configuration Parameters](https://docs.iroha.tech/reference/peer-config/params.html)
-- [`kagami` repository documentation](https://github.com/hyperledger-iroha/iroha)
-- [Iroha Special Instructions](https://iroha-test.readthedocs.io/en/iroha2-dev/references/isi/)
+- [Torii མཇུག་བསྡུ།](https://docs.iroha.tech/reference/torii-endpoints.html)
+- [པི་ཡར་རིམ་སྒྲིག་ཚད་གཞི་](https://docs.iroha.tech/reference/peer-config/params.html)
+- [Docker མཛོད་ཁང་ཡིག་ཆ་](https://github.com/hyperledger-iroha/iroha)
+- [Iroha དམིགས་བསལ་བཀོད་རྒྱ་](https://iroha-test.readthedocs.io/en/iroha2-dev/references/isi/)

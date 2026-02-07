@@ -7,65 +7,66 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 44faf6c98d141959cf8cf40b1df7d3d82c3448e6f2b1bc4fa54cdeceb97994b0
 source_last_modified: "2025-12-29T18:16:35.985408+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# MOCHI Quickstart
+# MOCHI ፈጣን ጅምር
 
-**MOCHI** is the desktop supervisor for local Hyperledger Iroha networks. This guide walks through
-installing the prerequisites, building the application, launching the egui shell, and using the
-runtime tools (settings, snapshots, wipes) for day‑to‑day development.
+**MOCHI** ለአካባቢያዊ Hyperledger Iroha አውታረ መረቦች የዴስክቶፕ ተቆጣጣሪ ነው። ይህ መመሪያ ያልፋል
+ቅድመ ሁኔታዎችን መጫን, አፕሊኬሽኑን መገንባት, የ egui ሼልን ማስጀመር እና የ
+ለቀን-ቀን ልማት የሩጫ ጊዜ መሳሪያዎች (ቅንብሮች፣ ቅጽበተ-ፎቶዎች፣ መጥረጊያዎች)።
 
-## Prerequisites
+## ቅድመ ሁኔታዎች
 
-- Rust toolchain: `rustup default stable` (workspace targets edition 2024 / Rust 1.82+).
-- Platform toolchain:
-  - macOS: Xcode Command Line Tools (`xcode-select --install`).
-  - Linux: GCC, pkg-config, OpenSSL headers (`sudo apt install build-essential pkg-config libssl-dev`).
-- Iroha workspace dependencies:
-  - `cargo xtask mochi-bundle` requires built `irohad`, `kagami`, and `iroha_cli`. Build them once via
+- Rust toolchain: `rustup default stable` (የስራ ቦታ ኢላማዎች እትም 2024 / Rust 1.82+)።
+- የመሳሪያ ሰንሰለት;
+  - MacOS: Xcode Command Line Tools (`xcode-select --install`)።
+  - ሊኑክስ፡ GCC፣ pkg-config፣ OpenSSL ራስጌዎች (`sudo apt install build-essential pkg-config libssl-dev`)።
+- Iroha የስራ ቦታ ጥገኞች፡-
+  - `cargo xtask mochi-bundle` የተገነባ `irohad`፣ `kagami` እና `iroha_cli` ይፈልጋል። አንድ ጊዜ በ በኩል ይገንቧቸው
     `cargo build -p irohad -p kagami -p iroha_cli`.
-- Optional: `direnv` or `cargo binstall` for managing local cargo binaries.
+- አማራጭ፡ `direnv` ወይም `cargo binstall` ለአካባቢው የካርጎ ሁለትዮሽ አስተዳደር።
 
-MOCHI shells out to the CLI binaries. Ensure they are discoverable via the environment variables
-below or available on the PATH:
+MOCHI ወደ CLI ሁለትዮሾች ይወጣል። በአካባቢ ተለዋዋጮች በኩል ሊገኙ እንደሚችሉ ያረጋግጡ
+ከታች ወይም በ PATH ላይ ይገኛል፡
 
-| Binary   | Environment override | Notes                                   |
-|----------|----------------------|-----------------------------------------|
-| `irohad` | `MOCHI_IROHAD`       | Supervises peers                        |
-| `kagami` | `MOCHI_KAGAMI`       | Generates genesis manifests/snapshots   |
-| `iroha_cli` | `MOCHI_IROHA_CLI` | Optional for upcoming helper features   |
+| ሁለትዮሽ | አካባቢ መሻር | ማስታወሻ |
+|------------------|------------------------------------|
+| `irohad` | `MOCHI_IROHAD` | እኩዮችን ይቆጣጠራል |
+| `kagami` | `MOCHI_KAGAMI` | ዘፍጥረትን ያመነጫል/ቅጽበተ-ፎቶ |
+| `iroha_cli` | `MOCHI_IROHA_CLI` | ለመጪው የረዳት ባህሪያት አማራጭ |
 
-## Building MOCHI
+## MOCHI መገንባት
 
-From the repository root:
+ከማከማቻ ስር፡-
 
 ```bash
 cargo build -p mochi-ui-egui
 ```
 
-This command builds both `mochi-core` and the egui frontend. To produce a distributable bundle, run:
+ይህ ትዕዛዝ ሁለቱንም `mochi-core` እና egui frontend ይገነባል። ሊሰራጭ የሚችል ጥቅል ለማምረት፣ ያሂዱ፡-
 
 ```bash
 cargo xtask mochi-bundle
 ```
 
-The bundle task assembles the binaries, manifest, and config stubs under `target/mochi-bundle`.
+የጥቅል ተግባር በ`target/mochi-bundle` ስር ሁለትዮሾችን፣ አንጸባራቂ እና ማዋቀርን ይሰበስባል።
 
-## Launching the egui shell
+## የ egui ሼል ማስጀመር
 
-Run the UI directly from cargo:
+UI ን በቀጥታ ከጭነት ያሂዱ፡-
 
 ```bash
 cargo run -p mochi-ui-egui
 ```
 
-By default MOCHI creates a single-peer preset in a temporary data directory:
+በነባሪ MOCHI በጊዜያዊ የውሂብ ማውጫ ውስጥ የአንድ-አቻ ቅድመ-ቅምጥን ይፈጥራል፡-
 
-- Data root: `$TMPDIR/mochi`.
-- Torii base port: `8080`.
-- P2P base port: `1337`.
+- የውሂብ ሥር: `$TMPDIR/mochi`.
+- Torii ቤዝ ወደብ: `8080`.
+- P2P ቤዝ ወደብ: `1337`.
 
-Use CLI flags to override the defaults when launching:
+ሲጀመር ነባሪዎችን ለመሻር የCLI ባንዲራዎችን ይጠቀሙ፡-
 
 ```bash
 cargo run -p mochi-ui-egui -- \
@@ -77,99 +78,95 @@ cargo run -p mochi-ui-egui -- \
   --irohad /path/to/irohad
 ```
 
-Environment variables mirror the same overrides when CLI flags are omitted: set `MOCHI_DATA_ROOT`,
-`MOCHI_PROFILE`, `MOCHI_CHAIN_ID`, `MOCHI_TORII_START`, `MOCHI_P2P_START`, `MOCHI_RESTART_MODE`,
-`MOCHI_RESTART_MAX`, or `MOCHI_RESTART_BACKOFF_MS` to preseed the supervisor builder; binary paths
-continue to respect `MOCHI_IROHAD`/`MOCHI_KAGAMI`/`MOCHI_IROHA_CLI`, and `MOCHI_CONFIG` points at an
-explicit `config/local.toml`.
+የአካባቢ ተለዋዋጮች የCLI ባንዲራዎች ሲቀሩ ተመሳሳይ መሻሮችን ያንፀባርቃሉ፡ `MOCHI_DATA_ROOT` አዘጋጅ፣
+`MOCHI_PROFILE`፣ `MOCHI_CHAIN_ID`፣ `MOCHI_TORII_START`፣ `MOCHI_P2P_START`፣ `MOCHI_RESTART_MODE`፣
+`MOCHI_RESTART_MAX`፣ ወይም `MOCHI_RESTART_BACKOFF_MS` የበላይ ተቆጣጣሪውን መገንቢያ ቅድመ ዝግጅት ማድረግ; ሁለትዮሽ መንገዶች
+`MOCHI_IROHAD`/`MOCHI_KAGAMI`/`MOCHI_IROHA_CLI` እና `MOCHI_CONFIG` ነጥቦችን ማክበርዎን ይቀጥሉ
+ግልጽ `config/local.toml`.
 
-## Settings & persistence
+## ቅንጅቶች እና ጽናት
 
-Open the **Settings** dialog from the dashboard toolbar to adjust the supervisor configuration:
+የሱፐርቫይዘሩን ውቅረት ለማስተካከል **ቅንጅቶች** ከዳሽቦርዱ የመሳሪያ አሞሌ ይክፈቱ፡
 
-- **Data root** — base directory for peer configs, storage, logs, and snapshots.
-- **Torii / P2P base ports** — starting ports for deterministic allocation.
-- **Log visibility** — toggle stdout/stderr/system channels in the log viewer.
+- ** የውሂብ ስር ** - ለአቻ ውቅሮች ፣ ማከማቻ ፣ ምዝግብ ማስታወሻዎች እና ቅጽበተ-ፎቶዎች የመሠረት ማውጫ።
+- ** Torii / P2P የመሠረት ወደቦች *** - ለመወሰኛ ምደባ መነሻ ወደቦች።
+- ** የምዝግብ ማስታወሻ ታይነት *** — በሎግ መመልከቻ ውስጥ stdout/stderr/system channels ቀይር።
 
-Advanced knobs such as the supervisor restart policy live in
-`config/local.toml`. Set `[supervisor.restart] mode = "never"` to disable
-automatic restarts during incident debugging, or adjust
-`max_restarts`/`backoff_ms` (via either the config file or the CLI flags
-`--restart-mode`, `--restart-max`, `--restart-backoff-ms`) to control retry
-behaviour.
+እንደ ተቆጣጣሪው ዳግም ማስጀመር መመሪያ ያሉ የላቁ ቁልፎች በቀጥታ በ ውስጥ
+`config/local.toml`. ለማሰናከል `[supervisor.restart] mode = "never"` አዘጋጅ
+በስህተት ማረም ጊዜ በራስ-ሰር እንደገና ይጀምራል ወይም ያስተካክሉ
+`max_restarts`/`backoff_ms` (በማዋቀር ፋይሉ ወይም በCLI ባንዲራዎች በኩል)
+`--restart-mode`፣ `--restart-max`፣ `--restart-backoff-ms`) እንደገና ይሞክሩ
+ባህሪ.ለውጦችን መተግበር ተቆጣጣሪውን እንደገና ይገነባል፣ ማንኛቸውም አቻዎችን እንደገና ያስጀምራል እና መሻሪያዎቹን ይጽፋል
+`config/local.toml`. የላቁ ተጠቃሚዎች ማቆየት እንዲችሉ የውቅረት ውህደት የማይገናኙ ቁልፎችን ይጠብቃል።
+በMOCHI ከሚተዳደሩ እሴቶች ጋር በእጅ የተደረጉ ለውጦች።
 
-Applying changes rebuilds the supervisor, restarts any running peers, and writes the overrides to
-`config/local.toml`. The configuration merge preserves unrelated keys so advanced users can keep
-manual tweaks alongside MOCHI-managed values.
+## ቅጽበታዊ ገጽ እይታዎች እና መጥረግ/ዳግም-ዘፍጥረት
 
-## Snapshots & wipe/re-genesis
+**የጥገና** ንግግር ሁለት የደህንነት ስራዎችን ያጋልጣል፡-
 
-The **Maintenance** dialog exposes two safety operations:
+- ** ቅጽበታዊ ገጽ እይታን ወደ ውጭ ላክ *** - የአቻ ማከማቻ/ውቅረት/ምዝግብ ማስታወሻዎችን እና የአሁኑን ዘፍጥረት ይገለጻል።
+  `snapshots/<label>` በንቁ የመረጃ ስር። መለያዎች በራስ-ሰር ይጸዳሉ።
+- ** ቅጽበተ-ፎቶን ወደነበረበት መልስ *** - የአቻ ማከማቻን፣ ቅጽበተ-ፎቶ ሥሮችን፣ ማዋቀርን፣ ምዝግቦችን እና ዘፍጥረትን ያድሳል።
+  ከነባር ጥቅል አንጸባራቂ። `Supervisor::restore_snapshot` ፍጹም መንገድ ወይም ይቀበላል
+  የጸዳው `snapshots/<label>` የአቃፊ ስም; UI ይህንን ፍሰት ያንፀባርቃል ስለዚህ ጥገና → ወደነበረበት መመለስ
+  ፋይሎችን በእጅ ሳይነኩ የማስረጃ እሽጎችን እንደገና ማጫወት ይችላል።
+- ** መጥረግ እና እንደገና ማመንጨት *** - እኩዮችን መሮጥ ያቆማል፣ የማከማቻ ማውጫዎችን ያስወግዳል፣ ዘፍጥረትን በ
+  Kagami፣ እና ማጽዳቱ ሲጠናቀቅ እኩዮቹን እንደገና ይጀምራል።
 
-- **Export snapshot** — copies peer storage/config/logs and the current genesis manifest into
-  `snapshots/<label>` under the active data root. Labels are sanitized automatically.
-- **Restore snapshot** — rehydrates peer storage, snapshot roots, configs, logs, and the genesis
-  manifest from an existing bundle. `Supervisor::restore_snapshot` accepts either an absolute path or
-  the sanitised `snapshots/<label>` folder name; the UI mirrors this flow so Maintenance → Restore
-  can replay evidence bundles without touching files manually.
-- **Wipe & re-genesis** — stops running peers, removes storage directories, regenerates genesis via
-  Kagami, and restarts peers when the wipe completes.
+ሁለቱም ፍሰቶች በእንደገና ሙከራዎች (`export_snapshot_captures_storage_and_metadata`፣
+`wipe_and_regenerate_resets_storage_and_genesis`) የሚወስኑ ውጤቶችን ዋስትና ለመስጠት።
 
-Both flows are covered by regression tests (`export_snapshot_captures_storage_and_metadata`,
-`wipe_and_regenerate_resets_storage_and_genesis`) to guarantee deterministic outputs.
+## መዝገቦች እና ዥረቶች
 
-## Logs & streams
+ዳሽቦርዱ በጨረፍታ ውሂብ/መለኪያዎችን ያጋልጣል፡-
 
-The dashboard exposes data/metrics at a glance:
+- ** መዝገቦች *** - `irohad` stdout/stderr/የስርዓት የህይወት ዑደት መልዕክቶችን ይከተላል። በቅንብሮች ውስጥ ሰርጦችን ይቀያይሩ።
+- ** ያግዳል/ክስተቶች** — የሚተዳደሩ ዥረቶች ከሰፊ የኋላ መጥፋት እና ማብራሪያ ክፈፎች ጋር በራስ-ሰር ዳግም ይገናኙ
+  ከ Norito-የተገለጹ ማጠቃለያዎች ጋር።
+- ** ሁኔታ *** — ምርጫዎች `/status` እና ለወረፋ ጥልቀት፣ ውፅዓት እና መዘግየት ብልጭታዎችን ይሰጣል።
+- ** የጅምር ዝግጁነት *** - ከተጫኑ በኋላ ** ጀምር *** (ነጠላ አቻ ወይም ሁሉም እኩዮች) ፣ MOCHI ምርመራዎች።
+  `/status` ከታሰረ ጀርባ ጋር; ባነር እያንዳንዱ እኩያ ሲዘጋጅ ሪፖርት ያደርጋል (ከተስተዋለው ጋር
+  የወረፋ ጥልቀት) ወይም የዝግጁነት ጊዜ ካለፈ የTorii ስህተቱን ይሸፍነዋል።
 
-- **Logs** — follows `irohad` stdout/stderr/system lifecycle messages. Toggle channels in Settings.
-- **Blocks / Events** — managed streams auto-reconnect with exponential backoff and annotate frames
-  with Norito-decoded summaries.
-- **Status** — polls `/status` and renders sparklines for queue depth, throughput, and latency.
-- **Startup readiness** — after pressing **Start** (single peer or all peers), MOCHI probes
-  `/status` with bounded backoff; the banner reports when each peer goes ready (with the observed
-  queue depth) or surfaces the Torii error if readiness times out.
+የስቴት አሳሽ እና አቀናባሪ ትሮች ወደ መለያዎች፣ ንብረቶች፣ አቻዎች እና የተለመዱ ፈጣን መዳረሻ ይሰጣሉ
+ከዩአይዩ ሳይወጡ መመሪያዎች። ማረጋገጥ እንዲችሉ የእኩዮች እይታ የ`FindPeers` መጠይቁን ያንፀባርቃል
+የውህደት ሙከራዎችን ከማካሄድዎ በፊት የትኞቹ የህዝብ ቁልፎች በአሁኑ ጊዜ በአረጋጋጭ ስብስብ ውስጥ ተመዝግበዋል ።
 
-Tabs for state explorer and composer provide quick access to accounts, assets, peers, and common
-instructions without leaving the UI. The Peers view mirrors the `FindPeers` query so you can confirm
-which public keys are currently registered in the validator set before running integration tests.
+የመፈረሚያ ባለስልጣናትን ለማስመጣት ወይም ለማርትዕ የአቀናባሪውን የመሳሪያ አሞሌ **አቀናብር ፊርማ ማከማቻን ይጠቀሙ። የ
+መገናኛ ወደ ንቁው የአውታረ መረብ ስርወ (`<data_root>/<profile>/signers.json`) ግቤቶችን ይጽፋል እና ተቀምጧል
+የቮልት ቁልፎች ወዲያውኑ ለግብይት ቅድመ እይታዎች እና ግቤቶች ይገኛሉ። ማስቀመጫው በሚሆንበት ጊዜ
+ባዶ አቀናባሪው ተመልሶ ወደ ተሰቀለው የእድገት ቁልፎች ስለሚወድቅ የሀገር ውስጥ የስራ ፍሰቶች መስራታቸውን ይቀጥላሉ።
+ቅጾች አሁን ሚንት/ማቃጠል/ማስተላለፍ (ስውር መቀበልን ጨምሮ)፣ ጎራ/መለያ/ንብረት-ፍቺን ይሸፍናሉ።
+ምዝገባ፣ የመለያ መግቢያ ፖሊሲዎች፣ ባለብዙ ሲግ ፕሮፖዛል፣ የቦታ ማውጫ መግለጫዎች (AXT/AMX)፣
+SoraFS ፒን ይገለጣል፣ እና የአስተዳደር እርምጃዎች በጣም የተለመዱ ሚናዎችን መስጠት ወይም መሻር
+የመንገድ ካርታ-ደራሲ ስራዎች ያለ እጅ-መፃፍ Norito ጭነቶች ሊለማመዱ ይችላሉ.
 
-Use the composer toolbar's **Manage signing vault** button to import or edit signing authorities. The
-dialog writes entries to the active network root (`<data_root>/<profile>/signers.json`), and saved
-vault keys are immediately available for transaction previews and submissions. When the vault is
-empty the composer falls back to the bundled development keys so local workflows continue to work.
-Forms now cover mint/burn/transfer (including implicit receive), domain/account/asset-definition
-registration, account admission policies, multisig proposals, Space Directory manifests (AXT/AMX),
-SoraFS pin manifests, and governance actions such as granting or revoking roles so common
-roadmap-authoring tasks can be rehearsed without hand-writing Norito payloads.
+## ማፅዳት እና መላ መፈለግ- ክትትል የሚደረግባቸው እኩዮችን ለማቋረጥ ማመልከቻውን ያቁሙ።
+- ሁሉንም ሁኔታ እንደገና ለማስጀመር የውሂብ ስር (`rm -rf <data_root>`) ያስወግዱ።
+- Kagami ወይም Irohad አካባቢዎች ከተቀየሩ የአካባቢ ተለዋዋጮችን ያዘምኑ ወይም MOCHIን በ
+  ተገቢ የ CLI ባንዲራዎች; የቅንጅቶች መገናኛ በሚቀጥለው ተፈጻሚነት ላይ አዳዲስ መንገዶችን ይቀጥላል.
 
-## Cleanup & troubleshooting
+ለተጨማሪ አውቶሜሽን ፍተሻ `mochi/mochi-core/tests` (ተቆጣጣሪ የህይወት ዑደት ሙከራዎች) እና
+`mochi/mochi-integration` ለተሳለቁ Torii ሁኔታዎች። ጥቅሎችን ለመላክ ወይም ሽቦውን ለመላክ
+ዴስክቶፕ ወደ CI ቧንቧዎች፣ የ{doc}`mochi/packaging` መመሪያን ይመልከቱ።
 
-- Stop the application to terminate supervised peers.
-- Remove the data root (`rm -rf <data_root>`) to reset all state.
-- If Kagami or irohad locations change, update the environment variables or re-run MOCHI with the
-  appropriate CLI flags; the Settings dialog will persist new paths on the next apply.
+## የአካባቢ የሙከራ በር
 
-For additional automation check `mochi/mochi-core/tests` (supervisor lifecycle tests) and
-`mochi/mochi-integration` for mocked Torii scenarios. To ship bundles or wire the
-desktop into CI pipelines, refer to the {doc}`mochi/packaging` guide.
-
-## Local test gate
-
-Run `ci/check_mochi.sh` before sending patches so the shared CI gate exercises all three MOCHI
-crates:
+ጥገናዎችን ከመላክዎ በፊት `ci/check_mochi.sh` ን ያሂዱ ስለዚህ የጋራው CI በር ሦስቱንም MOCHI ይለማመዳል
+ሳጥኖች:
 
 ```bash
 ./ci/check_mochi.sh
 ```
 
-The helper executes `cargo check`/`cargo test` for `mochi-core`, `mochi-ui-egui`, and
-`mochi-integration`, which catches fixture drift (canonical block/event captures) and egui harness
-regressions in one shot. If the script reports stale fixtures, rerun the ignored regeneration tests,
-for example:
+ረዳቱ `cargo check`/`cargo test` ለ `mochi-core`፣ `mochi-ui-egui` እና
+`mochi-integration`፣ የቋሚ ተንሸራታች (ቀኖናዊ ብሎክ/የዝግጅት ቀረጻ) እና egui መታጠቂያ የሚይዝ
+በአንድ ምት ውስጥ regressions. ስክሪፕቱ የቆዩ መጫዎቻዎችን ሪፖርት ካደረገ፣ ችላ የተባሉትን የማደስ ሙከራዎችን እንደገና ያካሂዱ፣
+ለምሳሌ፡-
 
 ```bash
 cargo test -p mochi-core regenerate_block_wire_fixture -- --ignored
 ```
 
-Re-running the gate after regenerating ensures the updated bytes stay consistent before you push.
+እንደገና ከታደሰ በኋላ በሩን እንደገና ማስኬድ የተዘመነው ባይት ከመግፋትዎ በፊት ወጥነት ባለው መልኩ መቆየቱን ያረጋግጣል።

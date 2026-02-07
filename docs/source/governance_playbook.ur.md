@@ -6,170 +6,165 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 9201c0027f05b1ab2c83fa6b3e1a1e6dad3ff9660a8ed23bac7667408d421ada
 source_last_modified: "2026-01-22T15:38:30.665014+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Governance Playbook
+# گورننس پلے بک
 
-This playbook captures the day-to-day rituals that keep the Sora Network
-governance council aligned. It aggregates the authoritative references from the
-repository so individual ceremonies can remain concise, while operators always
-have a single entry point for the broader process.
+اس پلے بوک نے روزانہ کی رسومات کو اپنی گرفت میں لیا ہے جو سورہ نیٹ ورک کو برقرار رکھتے ہیں
+گورننس کونسل نے منسلک کیا۔ یہ مستند حوالہ جات کو جمع کرتا ہے
+ذخیرہ تاکہ انفرادی تقاریب جامع رہ سکیں ، جبکہ آپریٹرز ہمیشہ
+وسیع تر عمل کے لئے ایک ہی انٹری پوائنٹ حاصل کریں۔
 
-## Council Ceremonies
+## کونسل کی تقریبات
 
-- **Fixture governance** – See [Sora Parliament Fixture Approval](sorafs/signing_ceremony.md)
-  for the on-chain approval flow that the Parliament’s Infrastructure Panel now
-  follows when reviewing SoraFS chunker updates.
-- **Vote tally publication** – Refer to
-  [Governance Vote Tally](governance_vote_tally.md) for the step-by-step CLI
-  workflow and reporting template.
+- ** فکسچر گورننس ** - دیکھیں [سورہ پارلیمنٹ کی حقیقت سے منظوری] (sorafs/signing_ceremony.md)
+  چین پر منظوری کے بہاؤ کے لئے کہ اب پارلیمنٹ کا انفراسٹرکچر پینل
+  SoraFS چنکر اپ ڈیٹس کا جائزہ لینے کے وقت پیروی کرتا ہے۔
+- ** ووٹ ٹیلی کی اشاعت ** - حوالہ دیں
+  [گورننس ووٹ ٹیلی] (governance_vote_tally.md) مرحلہ وار سی ایل آئی کے لئے
+  ورک فلو اور رپورٹنگ ٹیمپلیٹ۔
 
-## Operational Runbooks
+## آپریشنل رن بکس
 
-- **API integrations** – [Governance API reference](governance_api.md) lists the
-  REST/gRPC surfaces exposed by council services, including authentication
-  requirements and pagination rules.
-- **Telemetry dashboards** – The Grafana JSON definitions under
-  `docs/source/grafana_*` define the “Governance Constraints” and “Scheduler
-  TEU” boards. Export the JSON into Grafana after each release to stay aligned
-  with the canonical layout.
+- ** API انضمام ** - [گورننس API حوالہ] (governance_api.md) کی فہرست ہے
+  باقی/جی آر پی سی سطحوں کو کونسل خدمات کے ذریعہ بے نقاب ، بشمول توثیق
+  تقاضے اور صفحہ بندی کے قواعد۔
+- ** ٹیلی میٹری ڈیش بورڈز ** - Grafana JSON تعریفوں کے تحت
+  `docs/source/grafana_*` "گورننس کی رکاوٹوں" اور "شیڈیولر کی وضاحت کرتا ہے
+  ٹی ای یو "بورڈز۔ ہر ریلیز کے بعد JSON کو Grafana میں برآمد کریں
+  کیننیکل لے آؤٹ کے ساتھ۔
 
-## Data Availability Oversight
+## ڈیٹا کی دستیابی کی نگرانی
 
-### Retention classes
+### برقرار رکھنے کی کلاسیں
 
-Parliament panels approving DA manifests must reference the enforced retention
-policy before voting. The table below mirrors the defaults enforced via
-`torii.da_ingest.replication_policy` so reviewers can spot mismatches without
-hunting for the source TOML.【docs/source/da/replication_policy.md:1】
+پارلیمنٹ کے پینلز کو ڈی اے کے منشور کی منظوری کے لئے نافذ شدہ برقرار رکھنے کا حوالہ دینا ہوگا
+رائے دہندگی سے پہلے پالیسی۔ نیچے دیئے گئے جدول میں ڈیفالٹس کے ذریعے نافذ کیا گیا ہے
+`torii.da_ingest.replication_policy` تاکہ جائزہ لینے والے بغیر مماثلت پائیں
+ماخذ ٹومل کے لئے شکار
 
-| Governance tag | Blob class | Hot retention | Cold retention | Required replicas | Storage class |
-|----------------|------------|---------------|----------------|-------------------|---------------|
-| `da.taikai.live` | `taikai_segment` | 24 h | 14 d | 5 | `hot` |
-| `da.sidecar` | `nexus_lane_sidecar` | 6 h | 7 d | 4 | `warm` |
-| `da.governance` | `governance_artifact` | 12 h | 180 d | 3 | `cold` |
-| `da.default` | _all other classes_ | 6 h | 30 d | 3 | `warm` |
+| گورننس ٹیگ | بلاب کلاس | گرم برقرار رکھنا | سرد برقرار رکھنا | مطلوبہ نقلیں | اسٹوریج کلاس |
+| ---------------- | -------------- | --------------- | ------------------ | ------------------- | ----------------- |
+| `da.taikai.live` | `taikai_segment` | 24h | 14d | 5 | `hot` |
+| `da.sidecar` | `nexus_lane_sidecar` | 6H | 7d | 4 | `warm` |
+| `da.governance` | `governance_artifact` | 12h | 180d | 3 | `cold` |
+| `da.default` | _ تمام کلاسز_ | 6H | 30d | 3 | `warm` |
 
-The Infrastructure Panel should attach the filled template from
-`docs/examples/da_manifest_review_template.md` to every ballot so the manifest
-digest, retention tag, and Norito artefacts remain linked in the governance
-record.
+انفراسٹرکچر پینل سے بھرے ہوئے ٹیمپلیٹ کو منسلک کرنا چاہئے
+`docs/examples/da_manifest_review_template.md` ہر بیلٹ میں تاکہ ظاہر ہوں
+ڈائجسٹ ، برقرار رکھنے کا ٹیگ ، اور Norito نمونے گورننس میں منسلک ہیں
+ریکارڈ.
 
-### Signed manifest audit trail
+### دستخط شدہ ظاہر آڈٹ ٹریل
 
-Before a ballot reaches the agenda, council staff must prove that the manifest
-bytes under review match the Parliament envelope and the SoraFS artefact. Use
-the existing tooling to collect that evidence:
-
-1. Fetch the manifest bundle from Torii (`iroha app da get-blob --storage-ticket <hex>`
-   or the equivalent SDK helper) so everyone hashes the same bytes that reached
-   the gateways.
-2. Run the manifest stub verifier with the signed envelope:
+کسی بیلٹ کے ایجنڈے تک پہنچنے سے پہلے ، کونسل کے عملے کو یہ ثابت کرنا ہوگا کہ منشور
+زیر نظر بائٹس پارلیمنٹ کے لفافے اور SoraFS آرٹفیکٹ سے ملتے ہیں۔ استعمال کریں
+اس ثبوت کو جمع کرنے کے لئے موجودہ ٹولنگ:1. Torii (`iroha app da get-blob --storage-ticket <hex>` سے مینی فیسٹ بنڈل لائیں
+   یا مساوی SDK مددگار) لہذا ہر کوئی ایک ہی بائٹس کو ہیش کرتا ہے جو پہنچ گیا
+   گیٹ وے
+2. دستخط شدہ لفافے کے ساتھ مینی فیسٹ اسٹب تصدیق کنندہ چلائیں:
    ```
    cargo run -p sorafs_car --bin sorafs-manifest-stub -- manifest.json \
      --manifest-signatures-in=fixtures/sorafs_chunker/manifest_signatures.json \
      --json-out=/tmp/manifest_report.json
    ```
-   This recomputes the BLAKE3 manifest digest, validates the
-   `chunk_digest_sha3_256`, and checks every Ed25519 signature embedded in
-   `manifest_signatures.json`. See `docs/source/sorafs/manifest_pipeline.md`
-   for additional CLI options.
-3. Copy the digest, `chunk_digest_sha3_256`, profile handle, and signer list into
-   the review template. NOTE: if the verifier reports “profile mismatch” or a
-   missing signature, halt the vote and request a corrected envelope.
-4. Store the verifier output (or CI artefact from
-   `ci/check_sorafs_fixtures.sh`) alongside the Norito `.to` payload so auditors
-   can replay the evidence without accessing internal gateways.
+   یہ بلیک 3 منشور ڈائجسٹ کو دوبارہ تشکیل دیتا ہے ، اس کی توثیق کرتا ہے
+   `chunk_digest_sha3_256` ، اور ہر ED25519 دستخط کو شامل کیا گیا ہے
+   `manifest_signatures.json`۔ `docs/source/sorafs/manifest_pipeline.md` دیکھیں
+   اضافی CLI اختیارات کے لئے۔
+3. ڈائجسٹ ، `chunk_digest_sha3_256` ، پروفائل ہینڈل ، اور دستخط کنندہ کی فہرست میں کاپی کریں
+   جائزہ ٹیمپلیٹ۔ نوٹ: اگر تصدیق کنندہ "پروفائل مماثلت" یا ایک کی اطلاع دیتا ہے
+   دستخط سے محروم ، ووٹ کو روکیں اور درست لفافے کی درخواست کریں۔
+4. تصدیق کنندہ آؤٹ پٹ (یا CI Artefact سے ذخیرہ کریں
+   `ci/check_sorafs_fixtures.sh`) Norito `.to` پے لوڈ کے ساتھ ساتھ آڈیٹرز
+   داخلی گیٹ ویز تک رسائی کے بغیر شواہد کو دوبارہ چلا سکتے ہیں۔
 
-The resulting audit pack should let Parliament recreate every hash and signature
-check even after the manifest is rotated out of hot storage.
+نتیجے میں آڈٹ پیک کو پارلیمنٹ کو ہر ہیش اور دستخط کو دوبارہ بنانا چاہئے
+گرم اسٹوریج سے باہر گھومنے کے بعد بھی چیک کریں۔
 
-### Review checklist
+### جائزہ چیک لسٹ
 
-1. Pull the Parliament-approved manifest envelope (see
-   `docs/source/sorafs/signing_ceremony.md`) and record the BLAKE3 digest.
-2. Verify the manifest’s `RetentionPolicy` block matches the tag in the table
-   above; Torii will reject mismatches, but the council must capture the
-   evidence for auditors.【docs/source/da/replication_policy.md:32】
-3. Confirm that the submitted Norito payload references the same retention tag
-   and blob class that appears in the intake ticket.
-4. Attach proof of the policy check (CLI output, `torii.da_ingest.replication_policy`
-   dump, or CI artefact) to the review packet so SRE can replay the decision.
-5. Record planned subsidy taps or rent adjustments when the proposal depends on
-   `docs/source/sorafs_reserve_rent_plan.md`.
+1. پارلیمنٹ سے منظور شدہ مینی فیسٹ لفافہ کھینچیں (دیکھیں
+   `docs/source/sorafs/signing_ceremony.md`) اور بلیک 3 ڈائجسٹ کو ریکارڈ کریں۔
+2. مینی فیسٹ کی تصدیق کریں `RetentionPolicy` بلاک ٹیبل میں ٹیگ سے میچ کرتا ہے
+   اوپر ؛ Torii مماثلتوں کو مسترد کرے گا ، لیکن کونسل کو لازمی طور پر اس پر قبضہ کرنا ہوگا
+   آڈیٹرز کے لئے ثبوت
+3. تصدیق کریں کہ جمع کرایا گیا Norito پے لوڈ ایک ہی برقرار رکھنے والے ٹیگ کے حوالہ جات
+   اور بلاب کلاس جو انٹیک ٹکٹ میں ظاہر ہوتا ہے۔
+4. پالیسی چیک کا ثبوت منسلک کریں (CLI آؤٹ پٹ ، `torii.da_ingest.replication_policy`
+   جائزہ لینے والے پیکٹ میں ڈمپ ، یا سی آئی آرٹ فیکٹ) تاکہ SRE اس فیصلے کو دوبارہ چلا سکے۔
+5. جب تجویز پر منحصر ہوتا ہے تو سبسڈی کے نلکوں یا کرایے میں ایڈجسٹمنٹ ریکارڈ کریں
+   `docs/source/sorafs_reserve_rent_plan.md`۔
 
-### Escalation matrix
+### ایسکلیشن میٹرکس
 
-| Request type | Owning panel | Evidence to attach | Deadlines & telemetry | References |
-|--------------|--------------|--------------------|-----------------------|------------|
-| Subsidy / rent adjustment | Infrastructure + Treasury | Filled DA packet, rent delta from `reserve_rentd`, updated reserve projection CSV, council vote minutes | Note rent impact before submitting the Treasury update; include rolling 30 d buffer telemetry so Finance can reconcile within the next settlement window | `docs/source/sorafs_reserve_rent_plan.md`, `docs/examples/da_manifest_review_template.md` |
-| Moderation takedown / compliance action | Moderation + Compliance | Compliance ticket (`ComplianceUpdateV1`), proof tokens, signed manifest digest, appeal status | Follow the gateway compliance SLA (acknowledge within 24 h, full removal ≤72 h). Attach `TransparencyReportV1` excerpt showing the action. | `docs/source/sorafs_gateway_compliance_plan.md`, `docs/source/sorafs_moderation_panel_plan.md` |
-| Emergency freeze / rollback | Parliament moderation panel | Prior approval packet, new freeze order, rollback manifest digest, incident log | Publish freeze notice immediately and schedule the rollback referendum within the next governance slot; include buffer saturation + DA replication telemetry to justify the emergency. | `docs/source/sorafs/signing_ceremony.md`, `docs/source/sorafs_moderation_panel_plan.md` |
+| درخواست کی قسم | پینل کا مالک | منسلک کرنے کا ثبوت | ڈیڈ لائن اور ٹیلی میٹری | حوالہ جات |
+| -------------- | ---------------- | ---------------------- | ---------------------------------------------------------- |
+| سبسڈی / کرایہ ایڈجسٹمنٹ | انفراسٹرکچر + ٹریژری | بھرا ہوا ڈا پیکٹ ، `reserve_rentd` سے ڈیلٹا کرایہ پر ، تازہ کاری شدہ ریزرو پروجیکشن CSV ، کونسل ووٹ منٹ | ٹریژری اپ ڈیٹ جمع کروانے سے پہلے کرایہ کے اثرات کو نوٹ کریں۔ رولنگ 30D بفر ٹیلی میٹری کو شامل کریں تاکہ فنانس اگلی آبادکاری ونڈو میں صلح کر سکے `docs/source/sorafs_reserve_rent_plan.md` ، `docs/examples/da_manifest_review_template.md` |
+| اعتدال پسند ٹاؤن / تعمیل ایکشن | اعتدال پسند + تعمیل | تعمیل ٹکٹ (`ComplianceUpdateV1`) ، پروف ٹوکن ، دستخط شدہ منشور ڈائجسٹ ، اپیل کی حیثیت | گیٹ وے کی تعمیل ایس ایل اے پر عمل کریں (24h کے اندر ، مکمل طور پر ہٹانے ≤72h کے اندر تسلیم کریں)۔ عمل کو ظاہر کرتے ہوئے `TransparencyReportV1` اقتباس منسلک کریں۔ | `docs/source/sorafs_gateway_compliance_plan.md` ، `docs/source/sorafs_moderation_panel_plan.md` |
+| ایمرجنسی فریز / رول بیک | پارلیمنٹ کے اعتدال پسند پینل | پہلے منظوری کا پیکٹ ، نیا فریز آرڈر ، رول بیک مینی فیسٹ ڈائجسٹ ، واقعہ لاگ | فوری طور پر منجمد نوٹس شائع کریں اور اگلی گورننس سلاٹ کے اندر رول بیک ریفرنڈم کا شیڈول کریں۔ ایمرجنسی کو جواز پیش کرنے کے لئے بفر سنترپتی + دا نقل کی ٹیلی میٹری شامل کریں۔ | `docs/source/sorafs/signing_ceremony.md` ، `docs/source/sorafs_moderation_panel_plan.md` |ٹیبل کا استعمال کریں جب انٹیک ٹکٹوں کو ٹرائج کرتے ہو تو ہر پینل کو عین مطابق ملتا ہے
+اس کے مینڈیٹ کو عملی جامہ پہنانے کے لئے درکار نوادرات۔
 
-Use the table when triaging intake tickets so every panel receives the exact
-artefacts required to execute its mandate.
+### فراہمی کی اطلاع دہندگی
 
-### Reporting deliverables
+ہر DA-10 کے فیصلے کو درج ذیل نوادرات کے ساتھ بھیجنا چاہئے (انہیں اس کے ساتھ منسلک کریں
+ووٹ میں گورننس ڈی اے جی انٹری کا حوالہ دیا گیا):
 
-Every DA-10 decision must ship with the following artefacts (attach them to the
-Governance DAG entry referenced in the vote):
+- مکمل مارک ڈاون پیکٹ سے
+  `docs/examples/da_manifest_review_template.md` (اب دستخط اور بشمول
+  بڑھتے ہوئے حصے)۔
+- دستخط شدہ Norito مینی فیسٹ (`.to`) کے علاوہ `manifest_signatures.json` لفافہ
+  یا CI تصدیق کنندہ لاگ ان جو بازیافت ڈائجسٹ کو ثابت کرتے ہیں۔
+- کسی بھی شفافیت کی تازہ کاریوں نے کارروائی کے ذریعہ متحرک کیا:
+  - `TransparencyReportV1` ڈیلٹا برائے ٹاک ڈاونس یا تعمیل سے چلنے والی منجمد۔
+  - سبسڈی کے لئے کرایہ/ریزرو لیجر ڈیلٹا یا `ReserveSummaryV1` اسنیپ شاٹ۔
+- جائزہ کے دوران جمع کردہ ٹیلی میٹری اسنیپ شاٹس کے لنکس (نقل کی گہرائی ،
+  بفر ہیڈ روم ، اعتدال پسندی کا بیکلاگ) تاکہ مبصرین حالات کو کراس کرسکیں
+  حقیقت کے بعد
 
-- The completed Markdown packet from
-  `docs/examples/da_manifest_review_template.md` (now including signature and
-  escalation sections).
-- The signed Norito manifest (`.to`) plus the `manifest_signatures.json` envelope
-  or CI verifier logs that prove the fetch digest.
-- Any transparency updates triggered by the action:
-  - `TransparencyReportV1` delta for takedowns or compliance-driven freezes.
-  - Rent/reserve ledger delta or `ReserveSummaryV1` snapshot for subsidies.
-- Links to telemetry snapshots collected during the review (replication depth,
-  buffer headroom, moderation backlog) so observers can cross-check conditions
-  after the fact.
+## اعتدال اور اضافے
 
-## Moderation & Escalation
+گیٹ وے ٹاک ڈاؤن ، سبسڈی کلوا بیکس ، یا ڈی اے جمنا تعمیل کی پیروی کریں
+پائپ لائن `docs/source/sorafs_gateway_compliance_plan.md` اور میں بیان کی گئی ہے
+`docs/source/sorafs_moderation_panel_plan.md` میں اپیل ٹولنگ۔ پینل چاہئے:
 
-Gateway takedowns, subsidy clawbacks, or DA freezes follow the compliance
-pipeline described in `docs/source/sorafs_gateway_compliance_plan.md` and the
-appeal tooling in `docs/source/sorafs_moderation_panel_plan.md`. Panels should:
+1. اصل تعمیل ٹکٹ (`ComplianceUpdateV1` یا پر لاگ ان کریں
+   `ModerationAppealV1`) اور اس سے وابستہ پروف ٹوکن منسلک کریں۔
+2. تصدیق کریں کہ آیا درخواست اعتدال پسند اپیل کے راستے پر زور دیتی ہے (شہری پینل
+   ووٹ) یا ایمرجنسی پارلیمنٹ منجمد ؛ دونوں بہاؤ کو ظاہر کرنا ہوگا
+   نئے ٹیمپلیٹ میں ہضم اور برقرار رکھنے کا ٹیگ پکڑا گیا۔
+3. انیمریٹ اسکیلیشن ڈیڈ لائن (اپیل کا ارتکاب/انکشاف ونڈوز ، ایمرجنسی
+   مدت کو منجمد کریں) اور یہ بتائیں کہ کون سا کونسل یا پینل فالو اپ کا مالک ہے۔
+4. ٹیلی میٹری اسنیپ شاٹ (بفر ہیڈ روم ، اعتدال پسند بیک بلاگ) پر قبضہ کریں
+   کارروائی کا جواز پیش کریں تاکہ بہاو آڈٹ براہ راست کے فیصلے سے مماثل ہو
+   ریاست
 
-1. Log the originating compliance ticket (`ComplianceUpdateV1` or
-   `ModerationAppealV1`) and attach the associated proof tokens.【docs/source/sorafs_gateway_compliance_plan.md:20】
-2. Confirm whether the request invokes the moderation appeal path (citizen panel
-   vote) or an emergency Parliament freeze; both flows must cite the manifest
-   digest and retention tag captured in the new template.【docs/source/sorafs_moderation_panel_plan.md:1】
-3. Enumerate escalation deadlines (appeal commit/reveal windows, emergency
-   freeze duration) and state which council or panel owns the follow-up.
-4. Capture the telemetry snapshot (buffer headroom, moderation backlog) used to
-   justify the action so downstream audits can match the decision to the live
-   state.
+تعمیل اور اعتدال پسند پینلز کو اپنی ہفتہ وار شفافیت کی رپورٹوں کو ہم آہنگ کرنا ہوگا
+تصفیہ روٹر آپریٹرز کے ساتھ لہذا ٹیک ڈاؤن اور سبسڈی اسی کو متاثر کرتی ہے
+منشور کا سیٹ
 
-The compliance and moderation panels must sync their weekly transparency reports
-with the settlement router operators so takedowns and subsidies affect the same
-set of manifests.
+## ٹیمپلیٹس کی اطلاع دہندگی
 
-## Reporting Templates
+تمام DA-10 جائزوں میں اب دستخط شدہ مارک ڈاون پیکٹ کی ضرورت ہے۔ کاپی
+`docs/examples/da_manifest_review_template.md` ، منشور میٹا ڈیٹا کو آباد کریں ،
+برقرار رکھنے کی توثیق کی میز ، اور پینل ووٹ کا خلاصہ ، پھر مکمل شدہ پن
+گورننس ڈی اے جی انٹری کے لئے دستاویز (اس کے علاوہ حوالہ دیا گیا Norito/JSON Artefacts)۔
+پینلز کو گورننس منٹ میں پیکٹ کو لنک کرنا چاہئے تاکہ مستقبل میں ٹاؤن ڈاونس یا
+سبسڈی کی تجدیدات اصل مینی فیسٹ ڈائجسٹ کا حوالہ دے کر دوبارہ چلائی جاسکتی ہیں
+پوری تقریب
 
-All DA-10 reviews now require a signed Markdown packet. Copy
-`docs/examples/da_manifest_review_template.md`, populate the manifest metadata,
-retention verification table, and panel vote summary, then pin the completed
-document (plus referenced Norito/JSON artefacts) to the Governance DAG entry.
-Panels should link the packet in the governance minutes so future takedowns or
-subsidy renewals can cite the original manifest digest without re-running the
-entire ceremony.
+## واقعہ اور منسوخی کا فلو
 
-## Incident & Revocation Workflow
+ہنگامی اقدامات اب چین پر ہوتے ہیں۔ جب حقیقت میں رہائی کی ضرورت ہوتی ہے
+واپس رولڈ ، گورننس کا ٹکٹ فائل کریں اور پارلیمنٹ کی ریورٹ پروپوزل کھولیں
+پہلے منظور شدہ مینی فیسٹ ڈائجسٹ کی طرف اشارہ کرنا۔ انفراسٹرکچر پینل
+ووٹ کو سنبھالتا ہے ، اور ایک بار Nexus رن ٹائم کو حتمی شکل دے دیتا ہے رول بیک کو شائع کرتا ہے
+ایونٹ جو بہاو کلائنٹ استعمال کرتا ہے۔ کسی مقامی JSON نوادرات کی ضرورت نہیں ہے۔
 
-Emergency actions now happen on-chain. When a fixture release needs to be
-rolled back, file a governance ticket and open a Parliament revert proposal
-pointing at the previously approved manifest digest. The Infrastructure Panel
-handles the vote, and once finalized the Nexus runtime publishes the rollback
-event that downstream clients consume. No local JSON artefacts are required.
-
-## Keeping the Playbook Current
-
-- Update this file whenever a new governance-facing runbook lands in the
-  repository.
-- Cross-link new ceremonies here so the council index remains discoverable.
-- If a referenced document moves (for example, a new SDK path), update the link
-  as part of the same pull request to avoid stale pointers.
+## پلے بک کو موجودہ رکھنا- جب بھی کوئی نئی گورننس کا سامنا کرنے والی رن بک میں اس فائل کو اپ ڈیٹ کریں
+  ذخیرہ
+- یہاں نئی ​​تقریبات کراس لنک لنک ہیں تاکہ کونسل انڈیکس قابل دریافت رہے۔
+- اگر ایک حوالہ دستاویز حرکت کرتا ہے (مثال کے طور پر ، ایک نیا SDK راستہ) ، لنک کو اپ ڈیٹ کریں
+  باسی پوائنٹرز سے بچنے کے لئے اسی پل کی درخواست کے ایک حصے کے طور پر۔

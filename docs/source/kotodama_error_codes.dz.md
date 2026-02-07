@@ -7,19 +7,20 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5e0e4f16000f6a578fe9c9d6e204c01087e987ac3b46d70537a15b072df48a13
 source_last_modified: "2025-12-29T18:16:35.974178+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Kotodama Compiler Error Codes
+# Kotodama བརྩམས་པའི་ནོར་འཁྲུལ་ཨང་རྟགས་ཚུ།
 
-The Kotodama compiler emits stable error codes so that tooling and CLI users can
-quickly understand the cause of a failure. Use `koto_compile --explain <code>`
-to print the corresponding hint.
+Kotodama བསྡུ་སྒྲིག་འབད་མི་འདི་གིས་ བརྟན་ཏོག་ཏོ་འཛོལ་བ་ཨང་རྟགས་ཚུ་ བཏོནམ་ཨིནམ་ལས་ ལག་ཆས་དང་ སི་ཨེལ་ཨའི་ ལག་ལེན་པ་ཚུ་གིས་ འབད་ཚུགས།
+།མྱུར་དུ་མ་བྱུང་བའི་རྒྱུ་རྟོགས་པར་བྱ། `koto_compile --explain <code>` ལག་ལེན་འཐབ།
+མཐུན་སྒྲིག་བརྡ་སྟོན་འདི་དཔར་བསྐྲུན་འབད་ནི།
 
-| Code  | Description | Typical Fix |
-|-------|-------------|-------------|
-| `E0001` | Branch target is out of range for the IVM jump encoding. | Split very large functions or reduce inlining so basic block distances stay within ±1 MiB. |
-| `E0002` | Call sites reference a function that was never defined. | Check for typos, visibility modifiers, or feature flags that removed the callee. |
-| `E0003` | Durable state syscalls were emitted without ABI v1 enabled. | Set `CompilerOptions::abi_version = 1` or add `meta { abi_version: 1 }` inside the `seiyaku` contract. |
-| `E0004` | Asset-related syscalls received non-literal pointers. | Use `account_id(...)`, `asset_definition(...)`, etc., or pass 0 sentinels for host defaults. |
-| `E0005` | `for`-loop initializer is more complex than supported today. | Move complex setup before the loop; only simple `let`/expression initialisers are currently accepted. |
-| `E0006` | `for`-loop step clause is more complex than supported today. | Update the loop counter with a simple expression (e.g. `i = i + 1`). |
+| ཨང་རྟགས་ | འགྲེལ་བཤད་ | སྤྱིར་བཏང་གི་བཅོ་ |
+|------------------------------------------ |
+| `E0001` | ཡན་ལག་དམིགས་གཏད་འདི་ IVM མཆོང་བཀོད་ཀྱི་ཁྱབ་ཚད་ལས་ཕྱི་ཁར་ཨིན། | ལས་འགན་ཧ་ཅང་སྦོམ་བགོ་བཤའ་རྐྱབ་ནི་དང་ ཡང་ན་ ནང་ན་མར་ཕབ་འབད་དེ་ གཞི་རྟེན་བཀག་ཆ་གི་ཐག་རིང་ཚད་འདི་ ±1MiB ནང་འཁོད་ལུ་སྡོད་དགོ། |
+| Kotodama | འབོད་བརྡ་ས་ཁོངས་ཚུ་གིས་ ནམ་ཡང་ངེས་འཛིན་མ་འབད་བའི་ལས་འགན་ཅིག་གཞི་བསྟུན་འབདཝ་ཨིན། | ཡིག་འཕྲིན་དང་ མཐོང་སྣང་ལེགས་བཅོས་འབད་མི་ ཡང་ན་ འབོད་བརྡ་བཏང་མི་འདི་བཏོན་གཏང་མི་ ཁྱད་རྣམ་དར་ཆ་ཚུ་ ཞིབ་དཔྱད་འབད། |
+| `E0003` | ABI v1 ལྕོགས་ཅན་མེད་པར་ ཐུབ་ཚད་ཅན་གྱི་མངའ་སྡེ་གི་ལམ་ལུགས་ཚུ་ བཏོན་ཡོདཔ་ཨིན། | `CompilerOptions::abi_version = 1` གཞི་སྒྲིག་ཡང་ན་ `seiyaku` གན་རྒྱ་ནང་ལུ་ `meta { abi_version: 1 }` ཁ་སྐོང་འབད། |
+| `E0004` | རྒྱུ་དངོས་དང་འབྲེལ་བའི་ syscalls ལུ་ ངོ་མ་མེན་པའི་ དཔག་བྱེད་ཚུ་ཐོབ་ཡོདཔ་ཨིན། | `account_id(...)`, `asset_definition(...)`, ལ་སོགས་པ་ཚུ་ལག་ལེན་འཐབ། |
+| `E0005` | `for`-loop འགོ་བཙུགས་མི་འདི་ ད་རེས་རྒྱབ་སྐྱོར་འབད་མི་ལས་ མགུ་རྙོག་དྲགས་ཡོདཔ་ཨིན། | བསྐྱར་འཁོར་གྱི་ཧེ་མ་ སྣ་མང་གཞི་སྒྲིག་འདི་སྤོ་བཤུད་འབད། ད་ལྟོ་འཇམ་ཏོང་ཏོ་ `let`/གསལ་བརྗོད་འགོ་བཙུགས་མི་ཚུ་ངོས་ལེན་འབདཝ་ཨིན། |
+| `E0006` | `for`-loop ཚིག་ཕྲད་འདི་ད་རེས་ནངས་པ་རྒྱབ་སྐྱོར་ལས་ མགུ་རྙོག་དྲགས་ཡོདཔ་ཨིན། | ལོཔ་གྱངས་ཁ་འདི་ གསལ་བརྗོད་འཇམ་ཏོང་ཏོ་ཅིག་གིས་ དུས་མཐུན་བཟོ།(དཔེར་ན་ `i = i + 1`) |

@@ -7,164 +7,157 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 3f40329b9968530dea38745b49f7fee4d55aeb461e515e6f97b5b5986cb27e3f
 source_last_modified: "2026-01-21T19:17:13.238594+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# IVM ⇄ ISI ⇄ Data Model ⇄ Kotodama — Alignment Review
+#IVM ⇄ ISI ⇄ ဒေတာမော်ဒယ် ⇄ Kotodama — ချိန်ညှိမှု ပြန်လည်သုံးသပ်ခြင်း
 
-This document audits how the Iroha Virtual Machine (IVM) instruction set and syscall surface map to the Iroha Special Instructions (ISI) and `iroha_data_model`, and how Kotodama compiles into that stack. It identifies current gaps and proposes concrete improvements so the four layers fit together deterministically and ergonomically.
+ဤစာတမ်းသည် Iroha Virtual Machine (IVM) ညွှန်ကြားချက်ကို မည်သို့စစ်ဆေးသတ်မှတ်ပြီး Iroha အထူးညွှန်ကြားချက်များ (ISI) နှင့် `iroha_data_model` နှင့် Iroha တို့ကို မည်သို့ပေါင်းစည်းမည်နည်း၊ ၎င်းသည် လက်ရှိကွာဟချက်များကို ခွဲခြားသတ်မှတ်ပြီး ခိုင်မာသောတိုးတက်မှုများကို အဆိုပြုသောကြောင့် အလွှာလေးခုသည် အဆုံးအဖြတ်ကျကျနှင့် ergonomically အတူတကွ လိုက်ဖက်သည်။
 
-Note on bytecode target: Kotodama smart contracts compile to Iroha Virtual Machine (IVM) bytecode (`.to`). They do not target “risc5”/RISC‑V as a standalone architecture. Any RISC‑V‑like encodings referenced here are part of IVM’s mixed instruction format and remain an implementation detail.
+bytecode ပစ်မှတ်အပေါ် မှတ်ချက်- Kotodama စမတ်စာချုပ်များကို Iroha Virtual Machine (IVM) bytecode (`.to`) သို့ စုစည်းပါ။ ၎င်းတို့သည် “risc5”/RISC‑V ကို သီးခြားဗိသုကာအဖြစ် ပစ်မှတ်မထားပါ။ ဤနေရာတွင် ကိုးကားထားသော RISC‑V ကဲ့သို့သော ကုဒ်နံပါတ်များသည် IVM ၏ ရောစပ်ညွှန်ကြားချက်ဖော်မတ်၏ တစ်စိတ်တစ်ပိုင်းဖြစ်ပြီး အကောင်အထည်ဖော်မှုအသေးစိတ်တစ်ခုအဖြစ် ကျန်ရှိနေပါသည်။
 
-## Scope and Sources
-- IVM: `crates/ivm/src/{instruction.rs,ivm.rs,syscalls.rs,host.rs,mock_wsv.rs}` and `crates/ivm/docs/*`.
-- ISI/Data Model: `crates/iroha_data_model/src/isi/*`, `crates/iroha_core/src/smartcontracts/isi/*`, and docs `docs/source/data_model_and_isi_spec.md`.
-- Kotodama: `crates/kotodama_lang/src/*`, docs in `crates/ivm/docs/*`.
-- Core integration: `crates/iroha_core/src/{state.rs,executor.rs,smartcontracts/ivm/cache.rs}`.
+## နယ်ပယ်နှင့် အရင်းအမြစ်များ
+- IVM: `crates/ivm/src/{instruction.rs,ivm.rs,syscalls.rs,host.rs,mock_wsv.rs}` နှင့် `crates/ivm/docs/*`။
+- ISI/Data Model- `crates/iroha_data_model/src/isi/*`၊ `crates/iroha_core/src/smartcontracts/isi/*` နှင့် docs `docs/source/data_model_and_isi_spec.md`။
+- Kotodama- `crates/kotodama_lang/src/*`၊ `crates/ivm/docs/*` ရှိ စာရွက်စာတမ်း။
+- Core ပေါင်းစပ်မှု- `crates/iroha_core/src/{state.rs,executor.rs,smartcontracts/ivm/cache.rs}`။
 
-Terminology
-- “ISI” refers to built‑in instruction types that mutate world state via the executor (e.g., RegisterAccount, Mint, Transfer).
-- “Syscall” refers to IVM `SCALL` with an 8‑bit number that delegates to the host for ledger operations.
+အသုံးအနှုန်းများ
+- “ISI” သည် executor မှတစ်ဆင့် ကမ္ဘာ့အခြေအနေပြောင်းသည့် built-in ညွှန်ကြားချက်အမျိုးအစားများ (ဥပမာ၊ RegisterAccount၊ Mint၊ Transfer)။
+- "Syscall" သည် လယ်ဂျာလုပ်ငန်းဆောင်ရွက်မှုများအတွက် လက်ခံဆောင်ရွက်ပေးသူထံ လွှဲအပ်ပေးသည့် 8-bit နံပါတ်ဖြင့် IVM `SCALL` ကို ရည်ညွှန်းသည်။
 
 ---
 
-## Current Mapping (As Implemented)
+## လက်ရှိမြေပုံဆွဲခြင်း (အကောင်အထည်ဖော်ခဲ့သည့်အတိုင်း)
 
-### IVM Instructions
-- Arithmetic, memory, control flow, crypto, vector, and ZK helpers are defined in `instruction.rs` and implemented in `ivm.rs`. These are self‑contained and deterministic; acceleration paths (SIMD/Metal/CUDA) have CPU fallbacks.
-- System/host boundary is via `SCALL` (opcode 0x60). Numbers are listed in `syscalls.rs` and include world operations (register/unregister domain/account/asset, mint/burn/transfer, role/permission ops, triggers) plus helpers (`GET_PRIVATE_INPUT`, `COMMIT_OUTPUT`, `GET_MERKLE_PATH`, etc.).
+### IVM ညွှန်ကြားချက်များ
+- ဂဏန်းသင်္ချာ၊ မှတ်ဉာဏ်၊ ထိန်းချုပ်စီးဆင်းမှု၊ crypto၊ vector နှင့် ZK အကူအညီများကို `instruction.rs` တွင် သတ်မှတ်ပြီး `ivm.rs` တွင် အကောင်အထည်ဖော်သည်။ ၎င်းတို့သည် ကိုယ်တိုင်ပါ၀င်ပြီး အဆုံးအဖြတ်ပေးသော၊ အရှိန်မြှင့်လမ်းကြောင်းများ (SIMD/Metal/CUDA) တွင် CPU အမှားအယွင်းများရှိသည်။
+- စနစ်/အိမ်ရှင်နယ်နိမိတ်သည် `SCALL` (opcode 0x60) မှတဆင့်ဖြစ်သည်။ နံပါတ်များကို `syscalls.rs` တွင် စာရင်းသွင်းထားပြီး ကမ္ဘာလည်ပတ်မှုများ (မှတ်ပုံတင်ရန်/မှတ်ပုံတင်ခြင်း/ဆိုင်းငံ့ထားသော ဒိုမိန်း/အကောင့်/ပိုင်ဆိုင်မှု၊ mint/burn/transfer၊ role/permission ops၊ triggers) နှင့် အကူအညီပေးသူများ (`GET_PRIVATE_INPUT`၊ `COMMIT_OUTPUT`၊ I180NI60)။
 
 ### Host Layer
-- Trait `IVMHost::syscall(number, &mut IVM)` lives in `host.rs`.
-- DefaultHost implements only non‑ledger helpers (alloc, heap growth, inputs/outputs, ZK proof helpers, feature discovery) — it does NOT perform world state mutations.
-- A demo `WsvHost` exists in `mock_wsv.rs` that maps a subset of asset operations (Transfer/Mint/Burn) to a tiny in‑memory WSV using `AccountId`/`AssetDefinitionId` via ad‑hoc integer→ID maps in registers x10..x13.
+- Trait `IVMHost::syscall(number, &mut IVM)` သည် `host.rs` တွင်နေထိုင်သည်။
+- DefaultHost သည် လယ်ဂျာမဟုတ်သော အထောက်အကူများ (အစုအဝေး၊ အစုအပုံကြီးထွားမှု၊ အသွင်း/အထွက်များ၊ ZK သက်သေအကူအညီပေးသူများ၊ အင်္ဂါရပ်ရှာဖွေတွေ့ရှိမှု) တို့ကိုသာ လုပ်ဆောင်သည် — ၎င်းသည် ကမ္ဘာ့အခြေအနေပြောင်းလဲမှုများကို မလုပ်ဆောင်ပါ။
+- သရုပ်ပြ `WsvHost` သည် `mock_wsv.rs` တွင် တည်ရှိပြီး ပိုင်ဆိုင်မှုလုပ်ဆောင်ချက်များ၏ အစုခွဲ (လွှဲပြောင်း/ Mint/Burn) ကို `AccountId`/`AssetDefinitionId` ကို အသုံးပြု၍ သေးငယ်သော in-memory WSV သို့ မြေပုံညွှန်းပေးပါသည်။
 
-### ISI and Data Model
-- Built‑in ISI types and semantics are implemented in `iroha_core::smartcontracts::isi::*` and documented in `docs/source/data_model_and_isi_spec.md`.
-- `InstructionBox` uses a registry with stable “wire IDs” and Norito encoding; native execution dispatch is the current code path in core.
-
-### Core Integration of IVM
-- `State::execute_trigger(..)` clones the cached `IVM`, attaches a `CoreHost::with_accounts_and_args`, and then calls `load_program` + `run`.
-- `CoreHost` implements `IVMHost`: stateful syscalls are decoded via the pointer‑ABI TLV layout, mapped to built-in ISI (`InstructionBox`), and queued. Once the VM returns, the host hands those ISI to the regular executor so permissions, invariants, events, and telemetry remain identical to native execution. Helper syscalls that do not touch WSV still delegate to `DefaultHost`.
-- `executor.rs` continues to run built-in ISI natively; migrating the validator executor itself to IVM remains future work.
+### ISI နှင့် Data Model
+- Built-in ISI အမျိုးအစားများနှင့် ဝေါဟာရများကို `iroha_core::smartcontracts::isi::*` တွင် အကောင်အထည်ဖော်ပြီး `docs/source/data_model_and_isi_spec.md` တွင် မှတ်တမ်းတင်ထားပါသည်။
+- `InstructionBox` သည် တည်ငြိမ်သော “ဝါယာကြိုး IDs” နှင့် Norito ကုဒ်နံပါတ်ဖြင့် မှတ်ပုံတင်ခြင်းကို အသုံးပြုသည်။ native execution dispatch သည် core ရှိ လက်ရှိကုဒ်လမ်းကြောင်းဖြစ်သည်။### IVM ၏ Core ပေါင်းစပ်မှု
+- `State::execute_trigger(..)` သည် ကက်ရှ်လုပ်ထားသော `IVM` ကိုပွားပြီး `CoreHost::with_accounts_and_args` ကို ပူးတွဲပြီး `load_program` + `run` ကို ခေါ်သည်။
+- `CoreHost` သည် `IVMHost` ကို အကောင်အထည်ဖော်သည်- stateful syscall များကို pointer-ABI TLV အပြင်အဆင်မှတဆင့် decode လုပ်ထားပြီး built-in ISI (`InstructionBox`) နှင့် တန်းစီထားသည်။ VM ပြန်ရောက်သည်နှင့်၊ လက်ခံသူသည် ထို ISI များကို ပုံမှန် executor သို့ လွှဲပြောင်းပေးသောကြောင့် ခွင့်ပြုချက်များ၊ မျိုးကွဲများ၊ ဖြစ်ရပ်များနှင့် တယ်လီမီတာတို့သည် မူလလုပ်ဆောင်မှုတွင် ထပ်တူထပ်မျှ ရှိနေပါသည်။ WSV ကိုမထိသော Helper syscall များသည် `DefaultHost` သို့လွှဲအပ်ဆဲဖြစ်သည်။
+- `executor.rs` သည် built-in ISI ကို မူလအတိုင်း ဆက်လက်လည်ပတ်နေပါသည်။ validator executor ကိုယ်တိုင် IVM သို့ ပြောင်းရွှေ့ခြင်းသည် အနာဂတ်တွင် အလုပ်ဖြစ်နေဆဲဖြစ်သည်။
 
 ### Kotodama → IVM
-- Frontend pieces exist (lexer/parser/minimal semantics/IR/regalloc).
-- Codegen (`kotodama::compiler`) emits a subset of IVM ops and uses `SCALL` for asset operations:
-  - `MintAsset` → set x10=account, x11=asset, x12=&NoritoBytes(Numeric); `SCALL SYSCALL_MINT_ASSET`.
-  - `BurnAsset`/`TransferAsset` similar (amount passed as NoritoBytes(Numeric) pointer).
-- Demos `koto_*_demo.rs` show using `WsvHost` with integer indices mapped to IDs for quick testing.
+- Frontend အပိုင်းများ ရှိပါသည် (lexer/parser/minimal semantics/IR/regalloc)။
+- Codegen (`kotodama::compiler`) သည် IVM ops ၏ အခွဲတစ်ခုကို ထုတ်လွှတ်ပြီး ပိုင်ဆိုင်မှုဆိုင်ရာ လုပ်ဆောင်ချက်များအတွက် `SCALL` ကို အသုံးပြုသည်-
+  - `MintAsset` → set x10=account၊ x11=asset၊ x12=&NoritoBytes(Numeric); `SCALL SYSCALL_MINT_ASSET`။
+  - `BurnAsset`/`TransferAsset` အလားတူ (ပမာဏကို NoritoBytes(Numeric) ညွှန်ပြချက်အဖြစ် ကျော်သွားသည်)။
+- `koto_*_demo.rs` ကို အမြန်စမ်းသပ်ရန်အတွက် ID များထံ ပုံဖော်ထားသော ကိန်းပြည့်အညွှန်းများဖြင့် `WsvHost` ကို အသုံးပြုထားသော သရုပ်ပြ။
 
 ---
 
-## Gaps and Mismatches
+## ကွာဟချက်နှင့် မကိုက်ညီမှုများ
 
-1) Core host coverage and parity
-- Status: `CoreHost` now exists in core and translates many ledger syscalls into ISI that execute via the standard path. Coverage is still incomplete (e.g., some roles/permission/trigger syscalls are stubs), and parity tests are required to guarantee the enqueued ISI produce the same state/events as native execution.
+1) Core host coverage နှင့် parity
+- အခြေအနေ- `CoreHost` သည် ယခု core တွင်ရှိနေပြီး စံလမ်းကြောင်းမှတဆင့် လုပ်ဆောင်သည့် ISI သို့ လယ်ဂျာ syscalls အများအပြားကို ဘာသာပြန်ပါသည်။ အကျုံးဝင်မှု မပြည့်စုံသေးပါ (ဥပမာ၊ အချို့သော အခန်းကဏ္ဍ/ခွင့်ပြုချက်/အစပျိုး syscalls များသည် ချလံများဖြစ်သည်)၊ နှင့် တန်းစီထားသော ISI သည် မူလကွပ်မျက်မှုကဲ့သို့ တူညီသောအခြေအနေ/ဖြစ်ရပ်များကို ထုတ်လုပ်ကြောင်း အာမခံရန်အတွက် တူညီသောစစ်ဆေးမှုများ လိုအပ်ပါသည်။
 
-2) Syscall surface vs. ISI/Data Model naming and coverage
-- NFTs: syscalls now expose canonical `SYSCALL_NFT_*` names aligned with `iroha_data_model::nft`.
-- Roles/Permissions/Triggers: syscall list exists, but no reference implementation or mapping table tying each call to a concrete ISI in core.
-- Parameters/semantics: some syscalls do not specify parameter encoding (typed IDs vs. pointers) or gas semantics; ISI semantics are well‑defined.
+2) Syscall မျက်နှာပြင်နှင့် ISI/Data Model အမည်ပေးခြင်းနှင့် လွှမ်းခြုံမှု
+- NFTs- ယခု syscalls များသည် `iroha_data_model::nft` နှင့် လိုက်လျောညီထွေဖြစ်သော Canonical `SYSCALL_NFT_*` အမည်များကို ဖော်ထုတ်ပြသပါသည်။
+- ရာထူး/ခွင့်ပြုချက်များ/အစပျိုးမှုများ- syscall စာရင်းရှိသော်လည်း ခေါ်ဆိုမှုတစ်ခုစီတိုင်းကို ခိုင်မာသော ISI နှင့် ချိတ်ဆက်ထားသည့် အကိုးအကား သို့မဟုတ် မြေပုံဇယားဇယားမရှိပါ။
+- Parameters/semantics- အချို့သော syscalls များသည် parameter encoding (typed IDs နှင့် pointers) သို့မဟုတ် gas semantics ကို သတ်မှတ်မထားပါ။ ISI ဝေါဟာရများကို ကောင်းစွာသတ်မှတ်ထားသည်။
 
-3) ABI for passing typed data across the VM/host boundary
-- Pointer‑ABI TLVs are now decoded in `CoreHost` (`decode_tlv_typed`), giving a deterministic path for IDs, metadata, and JSON payloads. Work remains to ensure every syscall documents the expected pointer types and that Kotodama emits the correct TLVs (including error handling when the policy rejects a type).
+3) ABI သည် VM/host နယ်နိမိတ်ကိုဖြတ်၍ ရိုက်ထည့်ထားသော ဒေတာကို ဖြတ်သန်းရန်
+- Pointer-ABI TLV များကို ယခု `CoreHost` (`decode_tlv_typed`) တွင် ကုဒ်နံပါတ်တပ်ထားပြီး IDs၊ မက်တာဒေတာနှင့် JSON ပေးချေမှုများအတွက် အဆုံးအဖြတ်ပေးသည့်လမ်းကြောင်းကို ပေးပါသည်။ syscall တိုင်းတွင် မျှော်လင့်ထားသော pointer အမျိုးအစားများကို မှတ်တမ်းတင်ထားပြီး Kotodama သည် မှန်ကန်သော TLVs များကို ထုတ်လွှတ်သည် (မူဝါဒက အမျိုးအစားတစ်ခုကို ငြင်းပယ်သည့်အခါ အမှားအယွင်းကိုင်တွယ်ခြင်းအပါအဝင်) အလုပ်က ကျန်ရှိနေပါသည်။
 
-4) Gas and error mapping consistency
-- IVM opcodes charge per‑op gas; CoreHost now returns extra gas for ISI syscalls using the native gas schedule (including batch transfers and the vendor ISI bridge), and ZK verify syscalls reuse the confidential gas schedule. DefaultHost still keeps minimal costs for test coverage.
-- Error surfaces differ: IVM returns `VMError::{OutOfGas,PermissionDenied,...}`; ISI returns `InstructionExecutionError` categories (`Find`, `Repetition`, `InvariantViolation`, `Math`, `Type`, `Mintability`, `InvalidParameter`).
+4) ဓာတ်ငွေ့နှင့် အမှားအယွင်း မြေပုံထုတ်ခြင်း ညီညွတ်မှု
+- IVM opcode များသည် per-op ဓာတ်ငွေ့ကို အားသွင်းသည်။ CoreHost သည် ယခုအခါ မူရင်းဓာတ်ငွေ့အချိန်ဇယားကို အသုံးပြု၍ (အသုတ်လွှဲပြောင်းမှုများနှင့် ရောင်းချသူ ISI တံတားအပါအဝင်) ကိုအသုံးပြု၍ ISI syscalls များအတွက် အပိုဓာတ်ငွေ့ကို ပြန်လည်ပေးအပ်ပြီး ZK သည် လျှို့ဝှက်ဓာတ်ငွေ့အချိန်ဇယားကို ပြန်လည်အသုံးပြုကြောင်း အတည်ပြုပါသည်။ DefaultHost သည် စမ်းသပ်မှု အကျုံးဝင်မှုအတွက် အနည်းငယ်မျှသော ကုန်ကျစရိတ်များကို ဆက်လက်ထားရှိဆဲဖြစ်သည်။
+- မျက်နှာပြင် အမှားအယွင်းများ ကွဲပြားသည်- IVM သည် `VMError::{OutOfGas,PermissionDenied,...}` ကို ပြန်ပေးသည်။ ISI သည် `InstructionExecutionError` အမျိုးအစားများ (`Find`၊ `Repetition`၊ `InvariantViolation`၊ `Math`၊ `Type`၊ Kotodama `InvalidParameter`)။5) အရှိန်အဟုန်လမ်းကြောင်းများကိုဖြတ်၍ ဆုံးဖြတ်ခြင်း။
+- IVM vector/CUDA/Metal တွင် CPU ချို့ယွင်းချက်များရှိသော်လည်း အချို့သော ops များကို လက်ဝယ်ထားဆဲဖြစ်သည် (`SETVL`၊ PARBEGIN/PAREND) ရှိပြီး အဆုံးအဖြတ်ပေးသော core ၏ မပါဝင်သေးပါ။
+- Merkle သစ်ပင်များသည် IVM နှင့် node (`ivm::merkle_tree` vs `iroha_crypto::MerkleTree`) အကြား ကွဲပြားသည် — `roadmap.md` တွင် ပေါင်းစည်းထားသည့်အရာတစ်ခုပေါ်လာပြီးဖြစ်သည်။
 
-5) Determinism across acceleration paths
-- IVM vector/CUDA/Metal have CPU fallbacks, but some ops remain reserved (`SETVL`, PARBEGIN/PAREND) and are not part of the deterministic core yet.
-- Merkle trees differ between IVM and node (`ivm::merkle_tree` vs `iroha_crypto::MerkleTree`) — a unification item already appears in `roadmap.md`.
-
-6) Kotodama language surface vs. intended ledger semantics
-- Compiler emits a small subset; most language features (state/structs, triggers, permissions, typed params/returns) are not wired to the host/ISI model yet.
-- No capability/effect typing to ensure that syscalls are legal for the authority.
+6) Kotodama ဘာသာစကား မျက်နှာပြင်နှင့် ရည်ရွယ်ထားသော လယ်ဂျာ ဝေါဟာရများ
+- Compiler သည် သေးငယ်သော အခွဲတစ်ခုကို ထုတ်လွှတ်သည်။ ဘာသာစကားအင်္ဂါရပ်အများစု (အခြေအနေ/တည်ဆောက်ပုံများ၊ အစပျိုးမှုများ၊ ခွင့်ပြုချက်များ၊ ရိုက်ထည့်ထားသော ဘောင်များ/ပြန်ခြင်း) သည် host/ISI မော်ဒယ်သို့ ကြိုးမဆက်ရသေးပါ။
+- syscalls များသည် အာဏာပိုင်အတွက် တရားဝင်ကြောင်း သေချာစေရန် စွမ်းရည်/အကျိုးသက်ရောက်မှု စာရိုက်ခြင်း မရှိပါ။
 
 ---
 
-## Recommendations (Concrete Steps)
+## အကြံပြုချက်များ (ကွန်ကရစ်အဆင့်များ)
 
-### A. Implement a production IVM host in core
-- Add `iroha_core::smartcontracts::ivm::host` module implementing `ivm::host::IVMHost`.
-- For each syscall in `ivm::syscalls`:
-  - Decode arguments via a canonical ABI (see B.), construct the corresponding built‑in ISI or call the same core logic directly, execute it against `StateTransaction`, and map errors deterministically back to an IVM return code.
-  - Charge gas deterministically using a per‑syscall table defined in core (and exposed to IVM via `SYSCALL_GET_PARAMETER` if needed in the future). Initially, return fixed extra gas from the host for each call.
-- Thread `authority: &AccountId` and `&mut StateTransaction` into the host so permission checks and events are identical to native ISI.
-- Update `State::execute_trigger(ExecutableRef::Ivm)` to attach this host before `vm.run()` and return the same `ExecutionStep` semantics as ISI (events are already emitted in core; consistent behavior should be validated).
+### A. ထုတ်လုပ်မှု IVM ကို core တွင် ထည့်သွင်းပါ။
+- `ivm::host::IVMHost` ကိုအကောင်အထည်ဖော်နေသော `iroha_core::smartcontracts::ivm::host` module ကိုထည့်ပါ။
+- `ivm::syscalls` ရှိ syscall တစ်ခုစီအတွက်၊
+  - Canonical ABI (B. ကိုကြည့်ပါ) မှတဆင့် ဆက်စပ်နေသော ဆက်စပ် ISI ကို တည်ဆောက်ပါ သို့မဟုတ် တူညီသော core logic ကို တိုက်ရိုက်ခေါ်ဆိုပါ၊ ၎င်းကို `StateTransaction` နှင့် ဆန့်ကျင်ပြီး မြေပုံအမှားများကို IVM သို့ ပြန်သွားရန် အဆုံးအဖြတ်ပေးသော မြေပုံအမှားများ။
+  - core တွင်သတ်မှတ်ထားသော per-syscall ဇယားကိုအသုံးပြု၍ ဂက်စ်အား အဆုံးအဖြတ်ပေးသည် (အနာဂတ်တွင် လိုအပ်ပါက `SYSCALL_GET_PARAMETER` မှတစ်ဆင့် IVM နှင့်ထိတွေ့သည်)။ အစပိုင်းတွင်၊ ဖုန်းခေါ်ဆိုမှုတစ်ခုစီအတွက် လက်ခံသူထံမှ သတ်မှတ်ထားသော အပိုဓာတ်ငွေ့ကို ပြန်ပေးပါ။
+- Thread `authority: &AccountId` နှင့် `&mut StateTransaction` ကို host ထဲသို့ ထည့်ထားသောကြောင့် ခွင့်ပြုချက်စစ်ဆေးမှုများနှင့် ဖြစ်ရပ်များသည် မူရင်း ISI နှင့် တူညီပါသည်။
+- `State::execute_trigger(ExecutableRef::Ivm)` ကို `vm.run()` မတိုင်မီ ဤအိမ်ရှင်ကို ပူးတွဲပါရန် `State::execute_trigger(ExecutableRef::Ivm)` ကို အပ်ဒိတ်လုပ်ပြီး ISI ကဲ့သို့တူညီသော `ExecutionStep` ဝေါဟာရကို ပြန်ပေးသည် (ဖြစ်ရပ်များကို core တွင် ထုတ်လွှတ်ထားပြီးဖြစ်သည်၊ တသမတ်တည်း အပြုအမူကို အတည်ပြုသင့်သည်)။
 
-### B. Define a deterministic VM/host ABI for typed values
-- Use Norito on the VM side for structured arguments:
-  - Pass pointers (in x10..x13, etc.) to VM memory regions containing Norito‑encoded values for types like `AccountId`, `AssetDefinitionId`, `Numeric`, `Metadata`.
-  - Host reads bytes via `IVM` memory helpers and decodes with Norito (`iroha_data_model` already derives `Encode/Decode`).
-- Add minimal helpers in Kotodama codegen to serialize literal IDs into code/constant pools or to prepare call frames in memory.
-- Amounts are `Numeric` and are passed as NoritoBytes pointers; other complex types also pass by pointer.
-- Document this in `crates/ivm/docs/calling_convention.md` and add examples.
+### B။ ရိုက်ထည့်ထားသော တန်ဖိုးများအတွက် အဆုံးအဖြတ်ပေးသော VM/host ABI ကို သတ်မှတ်ပါ။
+- ဖွဲ့စည်းတည်ဆောက်ထားသော အကြောင်းပြချက်များအတွက် VM ဘက်မှ Norito ကိုသုံးပါ-
+  - `AccountId`၊ `AssetDefinitionId`၊ `Numeric`၊ I1810000126X၊ Kotodama ကဲ့သို့သော အမျိုးအစားများအတွက် `Numeric`၊ Kotodama။
+  - Host သည် `IVM` memory helpers မှတစ်ဆင့် bytes ဖတ်ပြီး Norito (`iroha_data_model` သည် `Encode/Decode` ဖြင့် ကုဒ်များဖတ်သည်)။
+- Kotodama တွင် ပကတိ ID များကို code/constant pool များအဖြစ် ခွဲခြားရန် သို့မဟုတ် memory ရှိ ခေါ်ဆိုမှုဘောင်များကို ပြင်ဆင်ရန်အတွက် အနည်းငယ်မျှသော အထောက်အကူများကို ထည့်ပါ။
+- ပမာဏများမှာ `Numeric` ဖြစ်ပြီး NoritoBytes ညွှန်ပြချက်များအဖြစ် ကျော်သွားသည် ။ အခြားရှုပ်ထွေးသောအမျိုးအစားများသည်လည်း pointer ဖြင့်ဖြတ်သန်းပါသည်။
+- ဤအရာကို `crates/ivm/docs/calling_convention.md` တွင်မှတ်တမ်းတင်ပြီး ဥပမာများထည့်ပါ။### C. syscall အမည်ပေးခြင်းနှင့် အကျုံးဝင်မှုကို ISI/Data Model ဖြင့် ချိန်ညှိပါ။
+- ရှင်းလင်းပြတ်သားမှုအတွက် NFT နှင့်ပတ်သက်သည့် syscalls များကို အမည်ပြောင်းပါ- ယခု Canonical အမည်များသည် `SYSCALL_NFT_*` ပုံစံ (`SYSCALL_NFT_MINT_ASSET`၊ `SYSCALL_NFT_SET_METADATA` စသည်ဖြင့်) ကို လိုက်နာပါသည်။
+- မြေပုံဆွဲဇယား (doc + ကုဒ်မှတ်ချက်များ) အပါအဝင် syscall တစ်ခုစီမှ core ISI semantics အထိ၊
+  - ကန့်သတ်ချက်များ (စာရင်းသွင်းမှုများနှင့် ညွှန်ပြချက်များ)၊ မျှော်မှန်းထားသော ကြိုတင်အခြေအနေများ၊ ဖြစ်ရပ်များနှင့် အမှားအယွင်းများကို ပုံဖော်ခြင်း။
+  - ဓာတ်ငွေ့ကုန်ကျစရိတ်။
+- Kotodama (ဒိုမိန်းများ၊ အကောင့်များ၊ ပိုင်ဆိုင်မှုများ၊ အခန်းကဏ္ဍများ/ခွင့်ပြုချက်များ၊ အစပျိုးမှုများ၊ ကန့်သတ်ချက်များ) မှ ခေါ်ဆို၍မရသော ထည့်သွင်းထားသော ISI တစ်ခုစီအတွက် syscall တစ်ခုရှိနေကြောင်း သေချာပါစေ။ ISI သည် အခွင့်ထူးခံအဖြစ် ဆက်လက်ရှိနေပါက၊ ၎င်းကို မှတ်တမ်းတင်ပြီး လက်ခံသူရှိ ခွင့်ပြုချက်စစ်ဆေးမှုများမှတစ်ဆင့် ပြဋ္ဌာန်းပါ။
 
-### C. Align syscall naming and coverage with ISI/Data Model
-- Rename NFT‑related syscalls for clarity: canonical names now follow the `SYSCALL_NFT_*` pattern (`SYSCALL_NFT_MINT_ASSET`, `SYSCALL_NFT_SET_METADATA`, etc.).
-- Publish a mapping table (doc + code comments) from each syscall to core ISI semantics, including:
-  - Parameters (registers vs. pointers), expected preconditions, events, and error mappings.
-  - Gas charges.
-- Ensure there is a syscall for each built‑in ISI that should be invocable from Kotodama (domains, accounts, assets, roles/permissions, triggers, parameters). If an ISI must remain privileged, document it and enforce via permission checks in the host.
-
-### D. Unify errors and gas
-- Add a translation layer in the host: map `InstructionExecutionError::{Find,Repetition,InvariantViolation,Math,Type,Mintability,InvalidParameter}` to specific `VMError` codes or an extended result convention (e.g., set `x10=0/1` and use a well‑defined `VMError::HostRejected { code }`).
-- Introduce a gas table in core for syscalls; mirror it in IVM docs; ensure costs are input‑size predictable and platform‑independent.
+### D. အမှားများနှင့် ဓာတ်ငွေ့ကို ပေါင်းစည်းပါ။
+- လက်ခံဆောင်ရွက်ပေးသူတွင် ဘာသာပြန်အလွှာကို ထည့်ပါ- `InstructionExecutionError::{Find,Repetition,InvariantViolation,Math,Type,Mintability,InvalidParameter}` ကို သီးခြား `VMError` ကုဒ်များ သို့မဟုတ် တိုးချဲ့ရလဒ်ဆိုင်ရာ ကွန်ဗင်းရှင်းတစ်ခုသို့ မြေပုံထည့်ပါ (ဥပမာ၊ `x10=0/1` ကို သတ်မှတ်ပြီး ကောင်းစွာသတ်မှတ်ထားသော `VMError::HostRejected { code }`) ကို အသုံးပြုပါ။
+- syscalls များအတွက် core တွင် gas table တစ်ခုကို မိတ်ဆက်ပါ။ ၎င်းကို IVM docs ဖြင့် ပြန်ပြောင်းပါ။ ကုန်ကျစရိတ်များသည် သွင်းသွင်းအရွယ်အစားကို ကြိုတင်မှန်းဆနိုင်ပြီး ပလက်ဖောင်းအမှီအခိုကင်းကြောင်း သေချာပါစေ။
 
 ### E. Determinism and shared primitives
-- Complete Merkle tree unification (see roadmap) and remove/alias `ivm::merkle_tree` to `iroha_crypto` with identical leaves and proofs.
-- Keep `SETVL`/PARBEGIN/PAREND` reserved until end‑to‑end determinism checks and a deterministic scheduler strategy are in place; document that IVM ignores these hints today.
-- Ensure acceleration paths produce byte‑for‑byte identical outputs; where not feasible, guard behind features with a test ensuring CPU fallback equivalence.
+- Merkle သစ်ပင် ပေါင်းစည်းမှုကို အပြီးသတ်ပါ (လမ်းပြမြေပုံကိုကြည့်ပါ) နှင့် ထပ်တူအရွက်များနှင့် အထောက်အထားများဖြင့် `ivm::merkle_tree` မှ `iroha_crypto` သို့/အမည်တူများကို ဖယ်ရှားပါ။
+- `SETVL`/PARBEGIN/PAREND` အား အဆုံးမှအဆုံးအဖြတ်ပေးသောစစ်ဆေးမှုများနှင့် အဆုံးအဖြတ်ပေးသော အချိန်ဇယားရေးဆွဲမှုဗျူဟာကို နေရာချထားသည်အထိ သိမ်းဆည်းထားပါ။ IVM သည် ဤအရိပ်အမြွက်များကို ယနေ့ လျစ်လျူရှုထားသည့် စာရွက်စာတမ်း။
+- အရှိန်မြှင့်လမ်းကြောင်းများသည် byte-for-byte တူညီသောအထွက်များထုတ်ပေးကြောင်းသေချာပါစေ။ မဖြစ်နိုင်ပါက CPU ဆုတ်ယုတ်မှုညီမျှမှုကို သေချာစေရန် စမ်းသပ်မှုဖြင့် အင်္ဂါရပ်များကို နောက်ကွယ်မှ စောင့်ရှောက်ပါ။
 
-### F. Kotodama compiler wiring
-- Extend codegen to the canonical ABI (B.) for IDs and complex parameters; stop using integer→ID demo maps.
-- Add builtins mapping directly to ISI syscalls beyond assets (domains/accounts/roles/permissions/triggers) with clear names.
-- Add compile‑time capability checks and optional `permission(...)` annotations; fallback to runtime host errors when static proof is not possible.
-- Add unit tests in `crates/ivm/tests/kotodama.rs` that compile and run small contracts end‑to‑end using a test host that decodes Norito arguments and mutates a temporary WSV.
+### F. Kotodama compiler ဝါယာကြိုး
+- ID များနှင့် ရှုပ်ထွေးသော ကန့်သတ်ဘောင်များအတွက် canonical ABI (B.) သို့ codegen ကို တိုးချဲ့ပါ။ ကိန်းပြည့် → ID သရုပ်ပြမြေပုံများ အသုံးပြုခြင်းကို ရပ်ပါ။
+- ရှင်းလင်းသောအမည်များဖြင့် ပိုင်ဆိုင်မှုများ (domains/accounts/roles/permissions/triggers) များအပြင် ISI syscall များသို့ တိုက်ရိုက်မြေပုံဆွဲထည့်သွင်းပါ။
+- compile-time capability checks နှင့် optional `permission(...)` မှတ်ချက်များထည့်ပါ။ static proof မဖြစ်နိုင်သောအခါ runtime host အမှားများဆီသို့ ပြန်သွားပါ။
+- `crates/ivm/tests/kotodama.rs` တွင် `crates/ivm/tests/kotodama.rs` တွင် စမ်းသပ်မှုများပြုလုပ်ပြီး ယာယီ WSV ကို ပြောင်းလဲပေးသည့် စမ်းသပ် host ကို အသုံးပြု၍ စာချုပ်ငယ်များကို အဆုံးမှ အဆုံးအထိ စုစည်းပြီး လုပ်ဆောင်သည့် ယူနစ်စမ်းသပ်မှုများကို ပေါင်းထည့်ပါ။
 
-### G. Documentation and developer ergonomics
-- Update `docs/source/data_model_and_isi_spec.md` with the syscall mapping table and ABI notes.
-- Add a new doc “IVM Host Integration Guide” in `crates/ivm/docs/` describing how to implement an `IVMHost` over real `StateTransaction`.
-- Clarify in `README.md` and crate docs that Kotodama targets IVM `.to` bytecode and that syscalls are the bridge into world state.
-
----
-
-## Suggested Mapping Table (Initial Draft)
-
-Representative subset — finalize and expand during host implementation.
-
-- SYSCALL_REGISTER_DOMAIN(id: ptr DomainId) → ISI Register<Domain>
-- SYSCALL_REGISTER_ACCOUNT(id: ptr AccountId) → ISI Register<Account>
-- SYSCALL_REGISTER_ASSET(id: ptr AssetDefinitionId, mintable: u8) → ISI Register<AssetDefinition>
-- SYSCALL_MINT_ASSET(account: ptr AccountId, asset: ptr AssetDefinitionId, amount: ptr NoritoBytes(Numeric)) → ISI Mint<Numeric, Asset>
-- SYSCALL_BURN_ASSET(account: ptr AccountId, asset: ptr AssetDefinitionId, amount: ptr NoritoBytes(Numeric)) → ISI Burn<Numeric, Asset>
-- SYSCALL_TRANSFER_ASSET(from: ptr AccountId, to: ptr AccountId, asset: ptr AssetDefinitionId, amount: ptr NoritoBytes(Numeric)) → ISI Transfer<Asset>
-- SYSCALL_TRANSFER_V1_BATCH_BEGIN() / SYSCALL_TRANSFER_V1_BATCH_END() → ISI TransferAssetBatch (open/close the scope; individual entries are lowered via `transfer_asset`)
-- SYSCALL_TRANSFER_V1_BATCH_APPLY(&NoritoBytes<TransferAssetBatch>) → Submit a pre-encoded batch when contracts already serialized the entries off-chain
-- SYSCALL_NFT_MINT_ASSET(id: ptr NftId, owner: ptr AccountId) → ISI Register<Nft>
-- SYSCALL_NFT_TRANSFER_ASSET(from: ptr AccountId, to: ptr AccountId, id: ptr NftId) → ISI Transfer<Nft>
-- SYSCALL_NFT_SET_METADATA(id: ptr NftId, content: ptr Metadata) → ISI SetKeyValue<Nft>
-- SYSCALL_NFT_BURN_ASSET(id: ptr NftId) → ISI Unregister<Nft>
-- SYSCALL_CREATE_ROLE(id: ptr RoleId, role: ptr Role) → ISI Register<Role>
-- SYSCALL_GRANT_ROLE(account: ptr AccountId, role: ptr RoleId) → ISI Grant<Role>
-- SYSCALL_REVOKE_ROLE(account: ptr AccountId, role: ptr RoleId) → ISI Revoke<Role>
-- SYSCALL_SET_PARAMETER(param: ptr Parameter) → ISI SetParameter
-
-Notes
-- “ptr T” means a pointer in a register to Norito‑encoded bytes for T, stored in VM memory; the host decodes it into the corresponding `iroha_data_model` type.
-- Return convention: success sets `x10=1`; failure sets `x10=0` and may raise `VMError::HostRejected` for fatal errors.
+### G. စာတမ်းပြုစုခြင်းနှင့် တီထွင်သူ ergonomics
+- syscall မြေပုံဇယားနှင့် ABI မှတ်စုများဖြင့် `docs/source/data_model_and_isi_spec.md` ကို အပ်ဒိတ်လုပ်ပါ။
+- `crates/ivm/docs/` တွင် `IVMHost` ကို အမှန်တကယ် `StateTransaction` ကို မည်သို့အကောင်အထည်ဖော်ရမည်ကို ဖော်ပြသည့် “IVM Host ပေါင်းစည်းခြင်းလမ်းညွှန်” တွင် doc အသစ်တစ်ခုကို ထည့်ပါ။
+- `README.md` နှင့် Kotodama သည် IVM `.to` bytecode တို့ကို ပစ်မှတ်ထားသည့် သေတ္တာစာရွက်များနှင့် စာရွက်စာတန်းများကို ရှင်းရှင်းလင်းလင်းရှင်းပြပြီး syscall များသည် ကမ္ဘာ့အခြေအနေသို့ ပေါင်းကူးပေးသည်။
 
 ---
 
-## Risks and Rollout Plan
-- Start by wiring host for a narrow set (Assets + Accounts) and add focused tests.
-- Keep native ISI execution as the authoritative path while host semantics mature; run both paths under a “shadow mode” in tests to assert identical end effects and events.
-- Once parity is validated, enable IVM host for IVM triggers in production; later consider routing regular transactions through IVM as well.
+## အကြံပြုထားသော မြေပုံဆွဲဇယား (ကနဦးမူကြမ်း)
+
+ကိုယ်စားလှယ်အဖွဲ့ခွဲ - လက်ခံဆောင်ရွက်ပေးနေစဉ်အတွင်း အပြီးသတ်ပြီး ချဲ့ထွင်ပါ။- SYSCALL_REGISTER_DOMAIN(id: ptr DomainId) → ISI မှတ်ပုံတင်ခြင်း
+- SYSCALL_REGISTER_ACCOUNT(id- ptr AccountId) → ISI မှတ်ပုံတင်ခြင်း
+- SYSCALL_REGISTER_ASSET(id- ptr AssetDefinitionId၊ mintable- u8) → ISI မှတ်ပုံတင်ခြင်း
+- SYSCALL_MINT_ASSET(အကောင့်- ptr AccountId၊ ပိုင်ဆိုင်မှု- ptr AssetDefinitionId၊ ပမာဏ- ptr NoritoBytes(Numeric)) → ISI Mint 
+- SYSCALL_BURN_ASSET(အကောင့်- ptr AccountId၊ ပိုင်ဆိုင်မှု- ptr AssetDefinitionId၊ ပမာဏ- ptr NoritoBytes(Numeric)) → ISI Burn 
+- SYSCALL_TRANSFER_ASSET(မှ- ptr AccountId၊ သို့- ptr AccountId၊ ပိုင်ဆိုင်မှု- ptr AssetDefinitionId၊ ပမာဏ- ptr NoritoBytes(Numeric))) → ISI Transfer
+- SYSCALL_TRANSFER_V1_BATCH_BEGIN() / SYSCALL_TRANSFER_V1_BATCH_END() → ISI TransferAssetBatch (နယ်ပယ်ကိုဖွင့်/ပိတ်၊ တစ်ဦးချင်းထည့်သွင်းမှုများကို `transfer_asset` မှတစ်ဆင့် လျှော့ချသည်)
+- SYSCALL_TRANSFER_V1_BATCH_APPLY(&NoritoBytes) → စာချုပ်များသည် ကွင်းဆက်ပြင်ပတွင် ထည့်သွင်းထားသောစာရင်းများကို အမှတ်အသားပြုပြီးသောအခါတွင် ကြိုတင်ကုဒ်လုပ်ထားသည့်အသုတ်ကို တင်သွင်းပါ
+- SYSCALL_NFT_MINT_ASSET(id- ptr NftId၊ ပိုင်ရှင်- ptr AccountId) → ISI မှတ်ပုံတင်ခြင်း
+- SYSCALL_NFT_TRANSFER_ASSET(မှ- ptr AccountId၊ သို့- ptr AccountId၊ id- ptr NftId) → ISI လွှဲပြောင်း
+- SYSCALL_NFT_SET_METADATA(id- ptr NftId၊ အကြောင်းအရာ- ptr Metadata) → ISI SetKeyValue
+- SYSCALL_NFT_BURN_ASSET(id- ptr NftId) → ISI စာရင်းမသွင်းဘဲ
+- SYSCALL_CREATE_ROLE(id- ptr RoleId၊ အခန်းကဏ္ဍ- ptr Role) → ISI မှတ်ပုံတင်ခြင်း
+- SYSCALL_GRANT_ROLE(အကောင့်- ptr AccountId၊ အခန်းကဏ္ဍ- ptr RoleId) → ISI Grant
+- SYSCALL_REVOKE_ROLE(အကောင့်- ptr အကောင့်အိုင်ဒီ၊ အခန်းကဏ္ဍ- ptr RoleId) → ISI ပြန်လည်ရုပ်သိမ်းရန်
+- SYSCALL_SET_PARAMETER(ဘောင်- ptr ပါရာမီတာ) → ISI သတ်မှတ်ပါရာမီတာ
+
+မှတ်စုများ
+- “ptr T” ဆိုသည်မှာ VM မမ်မိုရီတွင် သိမ်းဆည်းထားသည့် T အတွက် Norito-ကုဒ်လုပ်ထားသော ဘိုက်များသို့ မှတ်ပုံတင်တစ်ခုရှိ pointer တစ်ခု၊ လက်ခံသူက ၎င်းကို သက်ဆိုင်ရာ `iroha_data_model` အမျိုးအစားအဖြစ် ကုဒ်လုပ်သည်။
+- Return convention- အောင်မြင်မှုအစုံ `x10=1`; ချို့ယွင်းချက်သည် `x10=0` ကို သတ်မှတ်ပြီး ဆိုးရွားသော အမှားများအတွက် `VMError::HostRejected` ကို မြှင့်တင်နိုင်သည်။
 
 ---
 
-## Outstanding Work
-- Finalise the Kotodama helpers that pass Norito‑encoded pointers (`crates/ivm/src/kotodama_std.rs`) and surface them through the compiler CLI.
-- Publish the syscall gas table (including helper syscalls) and keep CoreHost enforcement/tests aligned with it.
-- ✅ Added round-trip Norito fixtures covering the pointer-argument ABI; see `crates/iroha_data_model/tests/norito_pointer_abi_roundtrip.rs` for manifest and NFT pointer coverage kept in CI.
+## အန္တရာယ်များနှင့် အကောင်အထည်ဖော်မှု အစီအစဉ်
+- ကျဉ်းမြောင်းသော set (Assets + Accounts) အတွက် ဝါယာကြိုးတပ်ခြင်းဖြင့် စတင်ပြီး အာရုံစူးစိုက်စမ်းသပ်မှုများကို ထည့်ပါ။
+- host semantics ရင့်ကျက်နေချိန်တွင် မူရင်း ISI ကွပ်မျက်မှုကို တရားဝင်လမ်းကြောင်းအဖြစ် ထားရှိပါ။ တူညီသောအဆုံးအကျိုးသက်ရောက်မှုနှင့်ဖြစ်ရပ်များကိုအတည်ပြုရန် စမ်းသပ်မှုများတွင် "အရိပ်မုဒ်" အောက်တွင် လမ်းကြောင်းနှစ်ခုစလုံးကို လုပ်ဆောင်ပါ။
+- တူညီမှုကိုအတည်ပြုပြီးသည်နှင့်၊ ထုတ်လုပ်မှုတွင် IVM အစပျိုးများအတွက် IVM host ကိုဖွင့်ပါ။ နောက်ပိုင်းတွင် IVM မှတဆင့် ပုံမှန်ငွေလွှဲမှုများကို လမ်းကြောင်းပြောင်းရန် စဉ်းစားပါ။
+
+---
+
+## ထူးချွန်သောအလုပ်
+- Kotodama ကို Norito-encoded pointers (`crates/ivm/src/kotodama_std.rs`) ကိုကျော်ဖြတ်ပြီး ၎င်းတို့ကို compiler CLI မှတဆင့် ဖော်ပြပါ။
+- syscall ဓာတ်ငွေ့ဇယား (အကူအညီပေးသူ syscalls များအပါအဝင်) ကိုထုတ်ဝေပြီး CoreHost ကျင့်သုံးမှု/ စမ်းသပ်မှုများကို ၎င်းနှင့် ချိန်ညှိထားပါ။
+- ✅ pointer-argument ABI ကို ဖုံးအုပ်ထားသော Norito အသွားအပြန် အစုံလိုက်၊ `crates/iroha_data_model/tests/norito_pointer_abi_roundtrip.rs` ကို ထင်ရှားစေပြီး CI တွင် သိမ်းဆည်းထားသည့် NFT ညွှန်ပြချက် လွှမ်းခြုံမှုကို ကြည့်ပါ။

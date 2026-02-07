@@ -7,18 +7,19 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 168513edcb6624ab76275b01aaaf6ab9dee310b9d6f5a2960504a9545801c511
 source_last_modified: "2026-01-28T13:08:23.284550+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Kotodama Examples Overview
+# Kotodama Nümunələrə Baxış
 
-This page shows concise Kotodama examples and how they map to IVM syscalls and pointer‑ABI arguments. See also:
-- `examples/` for runnable sources
-- `docs/source/ivm_syscalls.md` for the canonical syscall ABI
-- `kotodama_grammar.md` for the full language specification
+Bu səhifə qısa Kotodama nümunələrini və onların IVM sistem çağırışlarına və göstərici-ABI arqumentlərinə necə uyğunlaşdığını göstərir. Həmçinin bax:
+- İşlənə bilən mənbələr üçün `examples/`
+- ABI kanonik sistem zəngi üçün `docs/source/ivm_syscalls.md`
+- Tam dil spesifikasiyası üçün `kotodama_grammar.md`
 
-## Hello + Account Detail
+## Salam + Hesab Təfərrüatları
 
-Source: `examples/hello/hello.ko`
+Mənbə: `examples/hello/hello.ko`
 
 ```
 seiyaku Hello {
@@ -34,13 +35,13 @@ seiyaku Hello {
 }
 ```
 
-Mapping (pointer‑ABI):
-- `authority()` → `SCALL 0xA4` (host writes `&AccountId` into `r10`)
-- `set_account_detail(a, k, v)` → move `r10=&AccountId`, `r11=&Name`, `r12=&Json`, then `SCALL 0x1A`
+Xəritəçəkmə (göstərici-ABI):
+- `authority()` → `SCALL 0xA4` (host `&AccountId`-i `r10`-ə yazır)
+- `set_account_detail(a, k, v)` → hərəkət `r10=&AccountId`, `r11=&Name`, `r12=&Json`, sonra `SCALL 0x1A`
 
-## Asset Transfer
+## Aktivin Transferi
 
-Source: `examples/transfer/transfer.ko`
+Mənbə: `examples/transfer/transfer.ko`
 
 ```
 seiyaku TransferDemo {
@@ -55,12 +56,12 @@ seiyaku TransferDemo {
 }
 ```
 
-Mapping (pointer‑ABI):
-- `transfer_asset(from, to, def, amt)` → `r10=&AccountId(from)`, `r11=&AccountId(to)`, `r12=&AssetDefinitionId(def)`, `r13=amount`, then `SCALL 0x24`
+Xəritəçəkmə (göstərici-ABI):
+- `transfer_asset(from, to, def, amt)` → `r10=&AccountId(from)`, `r11=&AccountId(to)`, `r12=&AssetDefinitionId(def)`, `r13=amount`, sonra `SCALL 0x24`
 
-## NFT Create + Transfer
+## NFT Yarat + Transfer
 
-Source: `examples/nft/nft.ko`
+Mənbə: `examples/nft/nft.ko`
 
 ```
 seiyaku NftDemo {
@@ -79,16 +80,16 @@ seiyaku NftDemo {
 }
 ```
 
-Mapping (pointer‑ABI):
+Xəritəçəkmə (göstərici-ABI):
 - `nft_mint_asset(id, owner)` → `r10=&NftId`, `r11=&AccountId(owner)`, `SCALL 0x25`
 - `nft_transfer_asset(from, id, to)` → `r10=&AccountId(from)`, `r11=&NftId`, `r12=&AccountId(to)`, `SCALL 0x26`
 
-## Pointer Norito Helpers
+## Göstərici Norito Köməkçiləri
 
-Pointer-valued durable state requires converting typed TLVs to and from the
-`NoritoBytes` envelope that hosts persist. Kotodama now wires these helpers
-directly through the compiler so builders can use pointer defaults and map
-lookups without manual FFI glue:
+Göstərici ilə qiymətləndirilən davamlı vəziyyət tipli TLV-lərin -ə və ya ondan çevrilməsini tələb edir
+Hostlar olan `NoritoBytes` zərf qalır. Kotodama indi bu köməkçiləri bağlayır
+inşaatçılar göstərici standartlarından və xəritədən istifadə edə bilməsi üçün birbaşa tərtibçi vasitəsilə
+əl ilə FFI yapışqansız axtarışlar:
 
 ```
 seiyaku PointerDemo {
@@ -107,21 +108,21 @@ seiyaku PointerDemo {
 }
 ```
 
-Lowering:
+Aşağı salma:
 
-- Pointer defaults emit `POINTER_TO_NORITO` after publishing the typed TLV, so
-  the host receives a canonical `NoritoBytes` payload for storage.
-- Reads perform the reverse operation with `POINTER_FROM_NORITO`, supplying the
-  expected pointer type id in `r11`.
-- Both paths automatically publish literal TLVs into the INPUT region, allowing
-  contracts to mix string literals and runtime pointers transparently.
+- Göstərici defoltları yazılmış TLV-ni dərc etdikdən sonra `POINTER_TO_NORITO` yayır, beləliklə
+  ev sahibi saxlama üçün kanonik `NoritoBytes` faydalı yük alır.
+- Oxumalar `POINTER_FROM_NORITO` ilə əks əməliyyatı yerinə yetirir, təmin edir
+  `r11`-də gözlənilən göstərici növü id.
+- Hər iki yol avtomatik olaraq INPUT bölgəsinə hərfi TLV-ləri dərc etməyə imkan verir
+  string literals və runtime göstəricilərini şəffaf şəkildə qarışdırmaq üçün müqavilələr bağlayır.
 
-See `crates/ivm/tests/kotodama_pointer_args.rs` for a runtime regression that
-exercises the round-trip against the `MockWorldStateView`.
+İş vaxtı reqressiyası üçün `crates/ivm/tests/kotodama_pointer_args.rs`-ə baxın
+`MockWorldStateView`-ə qarşı gediş-gəliş həyata keçirir.
 
-## Deterministic Map Iteration (design)
+## Deterministik Xəritə İterasiyası (dizayn)
 
-Deterministic map for‑each requires a bound. Multi-entry iteration requires a state map; the compiler accepts `.take(n)` or a declared maximum length.
+Hər biri üçün deterministik xəritə sərhəd tələb edir. Çox girişli iterasiya dövlət xəritəsi tələb edir; kompilyator `.take(n)` və ya elan edilmiş maksimum uzunluğu qəbul edir.
 
 ```
 // design example (iteration requires bounds and state storage)
@@ -136,21 +137,21 @@ fn sum_first_two() -> int {
 }
 ```
 
-Semantics:
-- Iteration set is a snapshot at loop entry; order is lexicographic by Norito bytes of the key.
-- Structural mutations to `M` in the loop trap with `E_ITER_MUTATION`.
-- Without a bound the compiler emits `E_UNBOUNDED_ITERATION`.
+Semantika:
+- İterasiya dəsti dövrə girişində anlıq görüntüdür; sıra açarın Norito baytına görə leksikoqrafikdir.
+- `E_ITER_MUTATION` ilə döngə tələsində `M` üçün struktur mutasiyalar.
+- Məhdudiyyət olmadan kompilyator `E_UNBOUNDED_ITERATION` yayır.
 
-## Compiler/host internals (Rust, not Kotodama source)
+## Kompilyator/host daxili (Rust, Kotodama mənbəyi deyil)
 
-The snippets below live on the Rust side of the toolchain. They illustrate compiler helpers and VM lowering mechanics and are **not** valid Kotodama `.ko` source.
+Aşağıdakı fraqmentlər alətlər zəncirinin Rust tərəfində yaşayır. Onlar kompilyator köməkçilərini və VM endirmə mexanikasını təsvir edir və ** etibarlı deyil** Kotodama `.ko` mənbəyidir.
 
-## Wide Opcode Chunked Frame Updates
+## Geniş Əməliyyat Kodu Parçalı Çərçivə Yeniləmələri
 
-Kotodama’s wide opcode helpers target the 8-bit operand layout used by the IVM
-wide encoding. Loads and stores that move 128-bit values reuse the third operand
-slot for the high register, so the base register must already hold the final
-address. Adjust the base with an `ADDI` before issuing the load/store:
+Kotodama-in geniş əməliyyat kodu köməkçiləri IVM tərəfindən istifadə edilən 8 bitlik operand düzümünü hədəfləyir.
+geniş kodlaşdırma. 128-bit dəyərləri daşıyan yüklər və mağazalar üçüncü operanddan yenidən istifadə edir
+yüksək registr üçün yuva, buna görə də əsas registr artıq finalı saxlamalıdır
+ünvanı. Yükü / anbarı verməzdən əvvəl bazanı `ADDI` ilə tənzimləyin:
 
 ```
 use ivm::kotodama::wide::{encode_addi_checked, encode_load128, encode_store128};
@@ -160,40 +161,38 @@ fn emit_store_pair(base: u8, lo: u8, hi: u8) -> [u32; 2] {
     let store = encode_store128(base, lo, hi);
     [adjust, store]
 }
-```
+```Parçalanmış çərçivə yeniləmələri reyestri təmin edərək bazanı 16 baytlıq addımlarla irəliləyir
+`STORE128` tərəfindən törədilən cüt, tələb olunan uyğunlaşma sərhədinə düşür. Eyni
+nümunə `LOAD128`-ə aiddir; əvvəl istədiyiniz addım ilə `ADDI` verilməsi
+hər bir yük üçüncü operand yuvasına bağlı yüksək təyinat registrini saxlayır.
+`VMError::MisalignedAccess` ilə yanlış hizalanmış ünvanlar VM ilə uyğunlaşır
+davranış `crates/ivm/tests/wide_memory128.rs`-də həyata keçirilir.
 
-Chunked frame updates advance the base in 16-byte steps, ensuring the register
-pair committed by `STORE128` lands on the required alignment boundary. The same
-pattern applies to `LOAD128`; issuing an `ADDI` with the desired stride before
-each load keeps the high destination register bound to the third operand slot.
-Misaligned addresses trap with `VMError::MisalignedAccess`, matching the VM
-behaviour exercised in `crates/ivm/tests/wide_memory128.rs`.
+Bu 128-bit köməkçiləri yayan proqramlar vektor qabiliyyətini reklam etməlidir.
+Kotodama kompilyatoru istənilən vaxt avtomatik olaraq `VECTOR` rejim bitini işə salır.
+`LOAD128`/`STORE128` görünür; ilə VM tələlər
+Proqram onları icra etməyə cəhd edərsə, `VMError::VectorExtensionDisabled`
+o bit dəsti olmadan.
 
-Programs that emit these 128-bit helpers must advertise vector capability.
-The Kotodama compiler enables the `VECTOR` mode bit automatically whenever
-`LOAD128`/`STORE128` appear; the VM traps with
-`VMError::VectorExtensionDisabled` if a program attempts to execute them
-without that bit set.
+## Geniş Şərti Şöbənin Azaldılması
 
-## Wide Conditional Branch Lowering
+Kotodama, `if`/`else` və ya üçlü filialı geniş bayt koduna endirdikdə, o,
+sabit `BNE cond, zero, +2` ardıcıllığı və ardından bir cüt `JAL` təlimatı:
 
-When Kotodama lowers an `if`/`else` or ternary branch to wide bytecode it emits a
-fixed `BNE cond, zero, +2` sequence followed by a pair of `JAL` instructions:
+1. Qısa `BNE` şərti budaqı 8 bitlik dərhal zolaqda saxlayır
+   `JAL`-dən tullanaraq.
+2. Birinci `JAL` `else` blokunu hədəfləyir (şərt belə olduqda yerinə yetirilir.
+   yalan).
+3. İkinci `JAL` `then` blokuna tullanır (şərt uyğunlaşdıqda götürülür
+   doğrudur).
 
-1. The short `BNE` keeps the conditional branch within the 8-bit immediate lane
-   by jumping over the fallthrough `JAL`.
-2. The first `JAL` targets the `else` block (executed when the condition is
-   false).
-3. The second `JAL` jumps to the `then` block (taken when the condition is
-   true).
+Bu nümunə şərt yoxlamasının heç vaxt daha böyük ofsetləri kodlaşdırmamasına zəmanət verir
+hələ də `then` üçün özbaşına böyük bədənləri dəstəkləyərkən ±127 sözdən çox
+və geniş `JAL` köməkçisi vasitəsilə `else` blokları. Bax
+`crates/ivm/tests/kotodama.rs::branch_lowering_uses_short_bne_and_dual_jal` üçün
+ardıcıllıqla kilidləyən reqressiya testi.
 
-This pattern guarantees the condition check never needs to encode offsets larger
-than ±127 words while still supporting arbitrarily large bodies for the `then`
-and `else` blocks via the wide `JAL` helper. See
-`crates/ivm/tests/kotodama.rs::branch_lowering_uses_short_bne_and_dual_jal` for
-the regression test that locks in the sequence.
-
-### Example Lowering
+### Aşağı salma nümunəsi
 
 ```
 fn branch(b: bool) -> int {
@@ -201,8 +200,8 @@ fn branch(b: bool) -> int {
 }
 ```
 
-Compiles to the following wide instruction skeleton (register numbers and
-absolute offsets depend on the enclosing function):
+Aşağıdakı geniş təlimat skeletinə (registr nömrələri və
+mütləq ofsetlər əlavə funksiyadan asılıdır):
 
 ```
 BNE cond_reg, x0, +2    # skip the fallthrough jump when the condition is true
@@ -210,6 +209,6 @@ JAL x0, else_offset     # execute when the condition is false
 JAL x0, then_offset     # execute when the condition is true
 ```
 
-Subsequent instructions materialise the constants and write the return value.
-Because the `BNE` jumps over the first `JAL`, the conditional offset is always
-`+2` words, keeping the branch within range even when the block bodies expand.
+Sonrakı təlimatlar sabitləri maddiləşdirir və qaytarılan dəyəri yazır.
+`BNE` ilk `JAL` üzərindən keçdiyi üçün şərti ofset həmişə
+`+2` sözləri, blok gövdələri genişləndikdə belə filialı əhatə dairəsində saxlayır.

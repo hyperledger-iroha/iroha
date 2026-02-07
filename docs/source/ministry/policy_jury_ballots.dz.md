@@ -8,68 +8,67 @@ source_hash: ff3faabda5f1c277f545b7edbbc93f3b58dee65cec943cfd464a026b2984a146
 source_last_modified: "2025-12-29T18:16:35.979378+00:00"
 translation_last_reviewed: 2026-02-07
 title: Policy Jury Sortition & Ballots
+translator: machine-google-reviewed
 ---
 
-Roadmap item **MINFO-5 — Policy jury voting toolkit** requires a portable format
-for deterministic juror selection plus sealed commit → reveal ballots.  The
-`iroha_data_model::ministry::jury` module now ships three Norito payloads that
-cover the entire voting workflow:
+ལམ་སྟོན་རྣམ་གྲངས་ **MINFO-5 — སྲིད་བྱུས་ཀྱི་ ཚོགས་རྒྱན་བཙུགས་ནིའི་ལག་ཆས་** ལུ་ འབག་བཏུབ་པའི་རྩ་སྒྲིག་ཅིག་དགོཔ་ཨིན།
+གཏན་འཁེལ་ཁྲིམས་དཔོན་གདམ་ཁ་དང་ བསྡམས་པའི་དོན་ལུ་ → ཚོགས་རྒྱན་ཚུ་གསལ་སྟོན་འབད།  ཚིག༌ཕྲད
+`iroha_data_model::ministry::jury` ད་ལྟ་ Norito པེ་ལོཌི་ཚུ་ གསུམ་བཏངམ་ཨིན།
+ཚོགས་རྒྱན་བཙུགས་ནིའི་ལཱ་གི་རྒྱུན་རིམ་ཆ་མཉམ་རང་ ཁ་བསྡམས།
 
-1. **`PolicyJurySortitionV1`** – records the draw metadata (proposal id,
-   round id, proof-of-personhood snapshot digest, randomness beacon),
-   committee size, selected jurors, and the waitlist used for automatic
-   failover.  Each primary slot may include a `PolicyJuryFailoverPlan`
-   pointing at the waitlist rank it should escalate to after its grace
-   period lapses.  The structure is intentionally deterministic so auditors
-   can replay the draw and regenerate the manifest from the same POP
-   snapshot + beacon.
-2. **`PolicyJuryBallotCommitV1`** – sealed commitment written before ballots
-   are revealed.  It stores the round/proposal/juror identifiers, the
-   Blake2b‑256 digest of the juror id + vote choice + nonce tuple, the capture
-   timestamp, and the ballot mode (`plaintext` or `zk-envelope` when the
-   `zk-ballot` feature is active).  `PolicyJuryBallotCommitV1::verify_reveal`
-   ensures the stored digest matches the reveal payload.
-3. **`PolicyJuryBallotRevealV1`** – the public reveal object containing the
-   vote choice, the nonce used at commit time, and optional ZK proof URIs.
-   Reveals require a minimum 16-byte nonce so governance can treat the
-   commitment as binding even when jurors operate over insecure channels.
+༡. **`PolicyJurySortitionV1`** – འབྲི་ནིའི་མེ་ཊ་ཌེ་ཊ་ (གྲོས་འཆར་གྱི་ཨའི་ཌི་,
+   round id, མི་ངོ་གི་བདེན་དཔང་པར་ལེན་ བཞུ་ནི་ གང་བྱུང་འོད་མདངས་) དང་།
+   ཚོགས་ཆུང་གི་ཚད་དང་ སེལ་འཐུ་འབད་ཡོད་པའི་ཁྲིམས་དཔོན་ དེ་ལས་ རང་བཞིན་གྱི་དོན་ལུ་ལག་ལེན་འཐབ་མི་ བསྒུག་ཐོ་འདི་ཨིན།
+   འཐུས་ཤོར་.  གཞི་རིམ་གྱི་ས་སྒོ་རེ་རེ་ནང་ `PolicyJuryFailoverPlan` ཚུད་འོང་།
+   བསྒུག་ཐོ་གི་གནས་རིམ་ལུ་སྟོན་མི་འདི་གིས་ དེ་གི་བྱིན་རླབས་གི་ཤུལ་ལས་ ཡར་སེང་འབད་དགོཔ་ཨིན།
+   དུས་ཡུན་ཚུ་འགྱོཝ་ཨིན།  བཀོད་རིས་འདི་ ཤེས་བཞིན་དུ་ གཏན་འབེབས་བཟོ་སྟེ་ རྩིས་ཞིབ་པ་ཚུ།
+   རི་མོ་འདི་ལོག་སྟེ་རྩེད་ཚུགས་ནི་དང་ གསལ་སྟོན་འདི་ POP གཅིག་ལས་ ལོག་བཟོ་ཚུགས།
+   པར་ལེན་ + བེ་ཀོན།
+2. **`PolicyJuryBallotCommitV1`** – ཚོགས་རྒྱན་མ་བཙུགས་པའི་ཧེ་མ་ བསྡམ་བཞག་པའི་ཁས་བླངས་བྲིས་ཡོདཔ།
+   གསལ་སྟོན་འབདཝ་ཨིན།  འདི་གིས་ སྒོར་རིམ་/གྲོས་འཆར་/ཁྲིམས་སྲུང་འགག་པའི་ངོས་འཛིན་ཚུ་ གསོག་འཇོག་འབདཝ་ཨིན།
+   Blake2b‐256 བཞུར་བའི་ འཇུ་བྱེད་ + ཚོགས་རྒྱན་གདམ་ཁ། + nonce tuple, འཛིན་བཟུང་།
+   དུས་ཚོད་བཀག་ཆ་དང་ ཚོགས་རྒྱན་ཐབས་ལམ་ (`plaintext` ཡང་ན་ `zk-envelope` ཡིན་ན།
+   `zk-ballot` ཁྱད་རྣམ་འདི་ཤུགས་ལྡན་ཨིན།  `PolicyJuryBallotCommitV1::verify_reveal`
+   གསོག་འཇོག་འབད་ཡོད་པའི་ ཟས་བཅུད་ཚུ་ གསལ་སྟོན་འབད་མི་ པེ་ལོཌ་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན།
+3. **`PolicyJuryBallotRevealV1`** – མི་མང་གསལ་སྟོན་དངོས་པོ་ནང་ལུ་ ཡོདཔ་ཨིན།
+   ཚོགས་རྒྱན་གདམ་ཁ་དང་ དུས་ཚོད་ཁས་བླངས་ནང་ ལག་ལེན་འཐབ་མི་ ནོན་སི་གིས་ གདམ་ཁ་ཅན་གྱི་ ཛེ་ཀེ་ བདེན་ཁུངས་ ཡུ་ཨར་ཨའི་ཚུ་ཨིན་པས།
+   གསལ་བསྒྲགས། ཉུང་མཐའ་ ༡༦ བཱའིཊ་ ནོན་ དགོས་མཁོ་ཡོད།
+   ཁྲིམས་དཔོན་ཚུ་གིས་ ཉེན་སྲུང་ཅན་གྱི་རྒྱུན་ལམ་ཚུ་གུ་ལཱ་འབད་བའི་སྐབས་ལུ་ཡང་ ཁས་བླངས་འབདཝ་ཨིན།
 
-The `PolicyJurySortitionV1::validate` helper enforces committee sizing,
-duplicate detection (no juror may appear in both the committee and the
-waitlist), ordered waitlist ranks, and valid failover references.  The ballot
-validation routines raise `PolicyJuryBallotError` when proposal or round ids
-drift, when jurors attempt to reveal with an incorrect nonce, or when a
-`zk-envelope` commitment fails to provide matching proof references in its
-reveal.
+`PolicyJurySortitionV1::validate` གྲོགས་རམ་འབད་མི་གིས་ ཚོགས་ཆུང་གི་ཚད་བཟོ་ནི།
+འདྲ་བཤུས་བརྟག་དཔྱད་ (ཚོགས་ཆུང་དང་ གཉིས་ཆ་རའི་ནང་ ཁྲིམས་དཔོན་གཅིག་ཡང་མི་འབྱུང་།
+བསྒུག་ཐོ་ཐོ་ཡིག་) གིས་ བཀོད་སྒྲིག་འབད་ཡོད་པའི་ བསྒུག་ཐོ་ཡིག་གནས་རིམ་ཚུ་ དེ་ལས་ ནུས་ཅན་འཐུས་ཤོར་གཞི་བསྟུན་ཚུ།  ཚོགས་རྒྱན་བཙུགས་ནི།
+བདེན་དཔྱད་ཀྱི་རྒྱུན་ལས་ཚུ་གིས་ གྲོས་འཆར་ཡང་ན་ སྒོར་རིམ་གྱི་ཨའི་ཌི་ཚུ་འབད་བའི་སྐབས་ `PolicyJuryBallotError` ཡར་སེང་འབདཝ་ཨིན།
+འདྲེན་བཀོལ། | ཕྱིར་ལོག |
+`zk-envelope` ཁས་བླངས་ཀྱིས་ དེ་གི་ནང་ མཐུན་སྒྲིག་བདེན་ཁུངས་གཞི་བསྟུན་ཚུ་ འབད་མ་ཚུགས།
+སླབ་ནི།
 
-### Integrating with clients
+### མཁོ་མངགས་འབད་མི་ཚུ་དང་གཅིག་ཁར་མཉམ་བསྡོམ་འབད་དོ།
 
-- Governance tools should persist the sortition manifest and include it in
-  policy packets so observers can recompute the POP snapshot digest and
-  confirm that the randomness beacon plus candidate set lead to the same
-  juror assignments.
-- Juror clients record a `PolicyJuryBallotCommitV1` immediately after
-  generating the nonce for their vote.  The derived commitment bytes can be
-  submitted to Torii as a base64 value or embedded directly into Norito
-  events.
-- During the reveal phase, jurors emit `PolicyJuryBallotRevealV1`.  Operators
-  feed the payload to `PolicyJuryBallotCommitV1::verify_reveal` before
-  accepting the vote, ensuring the reveal was not swapped or tampered with.
-- When the `zk-ballot` feature is enabled, jurors can attach deterministic
-  proof URIs (e.g., `sorafs://proofs/pj-2026-02/juror-5`) so downstream
-  auditors can retrieve the zero-knowledge witness bundle referenced by the
-  commitment.
+- གཞུང་སྐྱོང་ལག་ཆས་ཚུ་གིས་ དབྱེ་སེལ་གསལ་སྟོན་འདི་ རྟག་བརྟན་བཟོ་དགོཔ་དང་ ནང་འདི་བཙུགས།
+  བལྟ་རྟོག་པ་ཚུ་གིས་ POP པར་ཆས་བཞུ་བཅུག་ནི་དང་ བལྟ་རྟོག་པ་ཚུ་གིས་ ལོག་སྟེ་རྩིས་སྟོན་འབད་ཚུགས།
+  གང་བྱུང་བི་ཁོན་དང་འོས་འདེམས་སྒྲིག་འདི་གིས་ དེ་བཟུམ་ཅིག་ལུ་འཁྲིད་ཡོདཔ་ངེས་གཏན་བཟོ།
+  ཁྲིམས་དོན་ལས་འགན།
+- ཁྲིམས་དཔོན་གྱི་མཁོ་མངགས་འབད་མི་ཚུ་གིས་ དེ་འཕྲོ་ལས་ `PolicyJuryBallotCommitV1` འདི་གི་ཤུལ་ལས་ ཐོ་བཀོད་འབདཝ་ཨིན།
+  ཁོང་གི་ཚོགས་རྒྱན་གྱི་དོན་ལུ་ none བཟོཝ་ཨིན།  འབྱུང་ཁུངས་ཁས་བླངས་ཝའིཊི་འདི་འོང་།
+  Torii ལུ་ base64 གནས་གོང་སྦེ་ ཡང་ན་ Norito ལུ་ ཐད་ཀར་དུ་ བཙུགས་ཡོདཔ་ཨིན།
+  བྱུང་ལས་ཚུ།
+- གསལ་སྟོན་གྱི་དུས་ཚོད་ལུ་ ཁྲིམས་དཔོན་ཚུ་གིས་ `PolicyJuryBallotRevealV1` བཏོནམ་ཨིན།  བཀོལ་སྤྱོད་པ།
+  ཧེ་མ་ `PolicyJuryBallotCommitV1::verify_reveal` ལུ་ སྤྲོད་དགོཔ་ཨིན།
+  ཚོགས་རྒྱན་ངོས་ལེན་འབད་དེ་ གསལ་བསྒྲགས་འབད་མི་འདི་ བརྗེ་སོར་འབད་མ་ཚུགསཔ་དང་ ཡང་ན་ བརྡལ་བཤིག་མ་གཏང་པར་བཞག་དགོ།
+- Norito ཁྱད་རྣམ་འདི་ལྕོགས་ཅན་བཟོ་བའི་སྐབས་ ཁྲིམས་དཔོན་ཚུ་གིས་ གཏན་འབེབས་བཟོ་ཚུགས།
+  བདེན་ཁུངས་ཅན་གྱི་ URIs (དཔེར་ན་ `sorafs://proofs/pj-2026-02/juror-5`) དེ་འབདཝ་ལས་ མར་ཁུ།
+  རྩིས་ཞིབ་པ་ཚུ་གིས་ ཤེས་ཡོན་ཀླད་ཀོར་གྱི་ དཔང་པོ་བཱན་ཌལ་འདི་ ཁུངས་གཏུག་འབད་དེ་ ལོག་ཐོབ་ཚུགས།
+  ཁས་ལེན།བཟོ་བཀོད་གསུམ་ཆ་ར་ `Encode` དང་ `Decode` དེ་ལས་ `IntoSchema` ལས་ཐོབ་ཡོདཔ་ཨིན།
+ISI རྒྱུན་འབབ་དང་ CLI ལག་ཆས་ SDKs དེ་ལས་ གཞུང་སྐྱོང་ REST API ཚུ་ལུ་ཐོབ་ཚུགས།
+ཀེན་ནོ་ནིག་རཱསིཊ་གི་དོན་ལུ་ `crates/iroha_data_model/src/ministry/jury.rs` ལུ་བལྟ།
+ངེས་ཚིག་དང་གྲོགས་རམ་གྱི་ཐབས་ལམ།
 
-All three structures derive `Encode`, `Decode`, and `IntoSchema`, meaning they
-are available to ISI flows, CLI tooling, SDKs, and the governance REST API.
-See `crates/iroha_data_model/src/ministry/jury.rs` for the canonical Rust
-definitions and helper methods.
+### དབྱེ་སེལ་གསལ་སྟོན་ཚུ་གི་དོན་ལུ་ སི་ཨེལ་ཨའི་རྒྱབ་སྐྱོར།
 
-### CLI support for sortition manifests
-
-Roadmap item **MINFO-5** also called for reproducible tooling so governance can
-ship verifiable policy-jury rosters before each referendum packet is published.
-The workspace now exposes the `cargo xtask ministry-jury sortition` command:
+ལམ་སྟོན་གྱི་ཅ་ཆས་ **MINFO-5**
+མི་མང་འོས་འཚམ་གྱི་ཐུམ་སྒྲིལ་རེ་རེ་ དཔར་བསྐྲུན་མ་འབད་བའི་ཧེ་མར་ གྲུ་གཟིངས་ བདེན་དཔྱད་འབད་བཏུབ་པའི་ སྲིད་བྱུས་ཁྲིམས་དཔོན་ཚུ་ཨིན་པས།
+ལཱ་གི་ས་སྒོ་འདི་གིས་ ད་ `cargo xtask ministry-jury sortition` བརྡ་བཀོད་འདི་གསལ་སྟོན་འབདཝ་ཨིན།
 
 ```bash
 cargo xtask ministry-jury sortition \
@@ -84,31 +83,31 @@ cargo xtask ministry-jury sortition \
   --out artifacts/ministry/policy_jury_sortition.json
 ```
 
-- `--roster` accepts a deterministic PoP roster (JSON example:
-  `docs/examples/ministry/policy_jury_roster_example.json`).  Each entry
-  declares the `juror_id`, `pop_identity`, weight, and optional
-  `grace_period_secs`.  Ineligible entries are filtered automatically.
-- `--beacon` injects the 32-byte randomness beacon captured in the governance
-  minutes.  The CLI wires the beacon directly into the ChaCha20 RNG so auditors
-  can replay the draw byte-for-byte.
-- `--committee-size`, `--waitlist-size`, and `--waitlist-ttl-hours` control the
-  number of seated jurors, the failover buffer, and the expiry timestamp applied
-  to the waitlist entries.  When a failover rank exists for a slot, the command
-  records a `PolicyJuryFailoverPlan` pointing at the matching waitlist rank.
-- `--drawn-at` records the wall-clock timestamp for the sortition; the tool
-  converts it into Unix milliseconds for the manifest.
+- `--roster` གིས་ གཏན་འཁེལ་གྱི་ པོ་པི་ རོ་སི་ཊར་ (JSON དཔེར་བརྗོད:
+  `docs/examples/ministry/policy_jury_roster_example.json`).  འཛུལ་ཞུགས་རེ་རེ།
+  `juror_id`, `pop_identity`, ལྗིད་ཚད་དང་གདམ་ཁ་ཅན་ཚུ་གསལ་བསྒྲགས་འབདཝ་ཨིན།
+  `grace_period_secs`.  འོས་ལྡན་ཐོ་བཀོད་ཚུ་རང་བཞིན་གྱིས་ཚགས་མ་བཙུགསཔ་ཨིན།
+- `--beacon` གཞུང་སྐྱོང་ནང་ བཟུང་ཡོད་པའི་ ༣༢ བཱའིཊ་ གང་བྱུང་བི་ཀཱོན་ཚུ་ བཙུགསཔ་ཨིན།
+  གྲོས་ཆོད།  CLI གིས་ ཐད་ཀར་དུ་ ChaCha20 RNG ནང་ འོད་རྟགས་འདི་ རྩིས་ཞིབ་པ་ཚུ་ཨིན།
+  བཱའིཊི་གི་དོན་ལུ་ རི་མོ་བྲི་ནི་འདི་ལོག་གཏང་ཚུགས།
+- `--committee-size`, `--waitlist-size`, དང་ `--waitlist-ttl-hours` གིས་ .
+  གནས་སྡོད་པའི་ཁྲིམས་དཔོན་གྱི་གྱངས་ཁ།
+  སྒུག་ཐོ་ཡིག་ཐོ་བཀོད་ཚུ་ལུ།  ས་སྒོ་ཅིག་གི་དོན་ལུ་ འཐུས་ཤོར་གྱི་གནས་རིམ་ཅིག་ཡོད་པའི་སྐབས་ལུ་ བརྡ་བཀོད་འདི།
+  མཐུན་སྒྲིག་བསྒུག་ཐོ་ཡིག་གནས་རིམ་ལུ་ དཔག་བྱེད་འབད་མི་ `PolicyJuryFailoverPlan` ཅིག་ཐོ་བཀོད་འབདཝ་ཨིན།
+- `--drawn-at` གིས་ དབྱེ་སེལ་གྱི་དོན་ལུ་ གྱང་ཆུ་ཚོད་ཀྱི་དུས་ཚོད་མཚོན་རྟགས་འདི་ཐོ་བཀོད་འབདཝ་ཨིན། ལག་ཆ།
+  གསལ་སྟོན་གྱི་དོན་ལུ་ ཡུ་ནིགསི་མི་ལི་སྐར་ཆ་ལུ་བསྒྱུར་བཅོས་འབདཝ་ཨིན།
 
-The generated manifest is a fully validated `PolicyJurySortitionV1` payload.
-Large deployments typically save the output under `artifacts/ministry/` so it
-can be bundled directly into referendum packets alongside the review-panel
-summary.  An illustrative output is available in
-`docs/examples/ministry/policy_jury_sortition_example.json` so SDK teams can
-exercise their Norito decoders without replaying an entire draw locally.
+བཟོ་བཏོན་འབད་ཡོད་པའི་གསལ་སྟོན་འདི་ ཆ་ཚང་བདེན་དཔྱད་འབད་ཡོད་པའི་ `PolicyJurySortitionV1` སྤྲོད་ལེན་ཅིག་ཨིན།
+བཀྲམ་སྤེལ་སྦོམ་ཚུ་གིས་ སྤྱིར་བཏང་ལུ་ `artifacts/ministry/` གི་འོག་ལུ་ ཐོན་འབྲས་འདི་སྲུང་བཞག་འབདཝ་ལས་ དེ་གིས་ དེ་ལུ།
+བསྐྱར་ཞིབ་ཀྱི་ཐིག་ཁྲམ་གྱི་མཉམ་དུ་ཐད་ཀར་དུ་སྤྱི་ཁྱབ་འོས་མོ་ཐུམ་སྒྲིལ་ནང་ལུ་བསྡམས་ཚུགས།
+བཅུད༌བསྡུ།  པར་རིས་ཀྱི་ཐོན་འབྲས་ཅིག་ ༢༠༡༦ ནང་འཐོབ་ཚུགས།
+`docs/examples/ministry/policy_jury_sortition_example.json` དེ་བས་ SDK སྡེ་ཚན་ཚུ་ འབད་ཚུགས།
+ས་གནས་ནང་ རི་མོ་ཆ་མཉམ་རང་ ལོག་སྟེ་རྩེད་མ་དགོ་པར་ ཁོང་གི་ I1NT00000002X decoders ཚུ་ ལག་ལེན་འཐབ།
 
-### Ballot commit/reveal helpers
+### བརྡ་རྟགས་/གསལ་བསྒྲགས།
 
-Juror clients need deterministic tooling for the commit → reveal flow as well.
-The same `cargo xtask ministry-jury` command now exposes the following helpers:
+ཁྲིམས་དཔོན་གྱི་མཁོ་མངགས་འབད་མི་ཚུ་ལུ་ ཁས་བླངས་ཀྱི་དོན་ལུ་ གཏན་འབེབས་བཟོ་ནི་གི་ལག་ཆས་དགོཔ་ཨིན།
+ད་ལྟ་ འོག་གི་གྲོགས་རམ་པ་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན།
 
 ```bash
 cargo xtask ministry-jury ballot commit \
@@ -126,19 +125,44 @@ cargo xtask ministry-jury ballot verify \
   --reveal artifacts/ministry/policy_jury_reveal_ada.json
 ```
 
-- `ballot commit` emits a `PolicyJuryBallotCommitV1` JSON payload.  When
-  `--out` is omitted the command prints the commitment to stdout.  If
-  `--reveal-out` is supplied the tool also writes the matching
-  `PolicyJuryBallotRevealV1`, reusing the provided nonce and applying the
-  optional `--revealed-at` timestamp (defaults to `--committed-at` or the
-  current time).
-- `--nonce-hex` accepts any even-length hex string ≥ 16 bytes.  When omitted the
-  helper generates a 32-byte nonce using `OsRng`, making it easy to script
-  juror workflows without custom randomness plumbing.
-- `--choice` is case-insensitive and accepts `approve`, `reject`, or `abstain`.
+- Torii གིས་ `PolicyJuryBallotCommitV1` JSON པེ་ལོཌི་ཅིག་བཏོན་ཡོདཔ་ཨིན།  ནམ
+  `--out` གིས་ བརྡ་བཀོད་དཔར་བསྐྲུན་ཚུ་ stdout ལུ་ཁས་བླངས་འདི་ བཏོན་བཏང་ཡོདཔ་ཨིན།  གལ་སྲིད
+  `--reveal-out` འདི་ ལག་ཆས་འདི་ཡང་ མཐུན་སྒྲིག་སྦེ་བྲིས་ཡོདཔ་ཨིན།
+  `PolicyJuryBallotRevealV1`, བྱིན་ཡོད་པའི་ནོན་སི་ལོག་ལག་ལེན་འཐབ་སྟེ་ བཀོལ་སྤྱོད་འབད་ནི།
+  གདམ་ཁ་ཅན་ `--revealed-at` དུས་ཚོད་མཚོན་རྟགས་ (`--committed-at` ལུ་སྔོན་སྒྲིག་ཡང་ན་
+  ད་ལྟོའི་དུས་ཚོད།
+- `--nonce-hex` གིས་ རིང་ཚད་ཀྱི་ རིང་ཚད་ཀྱི་ཧེགསི་ཡིག་རྒྱུན་ ≥16bites གང་རུང་ཅིག་ ངོས་ལེན་འབདཝ་ཨིན།  བཀོ་བཞག་པའི་སྐབས།
+  གྲོགས་རམ་འདི་གིས་ Norito ལག་ལེན་འཐབ་སྟེ་ ༣༢-བཱའིཊི་ནོན་ཅིག་བཟོ་བཏོན་འབད་དེ་ ཡིག་ཚུགས་ལུ་འཇམ་ཏོང་ཏོ་བཟོཝ་ཨིན།
+  སྲོལ་སྒྲིག་གང་བྱུང་ཆུ་རྫིང་མེད་པའི་ཁྲིམས་དཔོན་ལཱ་གི་རྒྱུན་རིམ་ཚུ།
+- `--choice` འདི་ གནས་སྟངས་-ཚོར་ཤུགས་མེདཔ་ཨིནམ་དང་ `approve`, ```bash
+cargo xtask ministry-jury sortition \
+  --roster docs/examples/ministry/policy_jury_roster_example.json \
+  --proposal AC-2026-042 \
+  --round PJ-2026-02 \
+  --beacon 22b1e48d47123f5c9e3f0cc0c8e34aa3c5f9c49a2cbb70559d3cb0ddc1a6ef01 \
+  --committee-size 3 \
+  --waitlist-size 2 \
+  --drawn-at 2026-01-15T09:00:00Z \
+  --waitlist-ttl-hours 72 \
+  --out artifacts/ministry/policy_jury_sortition.json
+```, ཡང་ན་ ```bash
+cargo xtask ministry-jury ballot commit \
+  --proposal AC-2026-042 \
+  --round PJ-2026-02 \
+  --juror citizen:ada \
+  --choice approve \
+  --nonce-hex aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899 \
+  --committed-at 2026-02-01T13:00:00Z \
+  --out artifacts/ministry/policy_jury_commit_ada.json \
+  --reveal-out artifacts/ministry/policy_jury_reveal_ada.json
 
-`ballot verify` cross-checks the commitment/reveal pair via
-`PolicyJuryBallotCommitV1::verify_reveal`, guaranteeing that the round id,
-proposal id, juror id, nonce, and vote choice all align before the reveal is
-admitted to Torii.  The helper exits with a non-zero status when validation
-fails, making it safe to wire into CI or local juror portals.
+cargo xtask ministry-jury ballot verify \
+  --commit artifacts/ministry/policy_jury_commit_ada.json \
+  --reveal artifacts/ministry/policy_jury_reveal_ada.json
+```.
+
+`iroha_data_model::ministry::jury` བརྒྱུད་དེ་ ཁས་བླངས་/གསལ་སྟོན་ཆ་ཕྲན་ཚུ་ བརྒྱུད་དེ་ བརྡ་སྟོནམ་ཨིན།
+`PolicyJuryBallotCommitV1::verify_reveal`, སྒོར་ཐིག་འདི་ ངེས་གཏན་བཟོཝ་ཨིན།
+གྲོས་འཆར་གྱི་ཨའི་ཌི་ འཁྲུན་ཆོད་ ཨའི་ཌི་ ནོན་སི་ དེ་ལས་ ཚོགས་རྒྱན་བཙུགས་ནིའི་གདམ་ཁ་ག་ར་ གསལ་སྟོན་མ་འབད་བའི་ཧེ་མ་ ཕྲང་སྒྲིག་འབདཝ་ཨིན།
+ཆ་འཇོག་འབད་ཡོདཔ། Torii.  གྲོགས་རམ་པ་དེ་ བདེན་དཔྱད་འབད་བའི་སྐབས་ ཀླད་ཀོར་མེན་པའི་གནས་རིམ་དང་གཅིག་ཁར་ ཕྱིར་འཐོན་འབདཝ་ཨིན།
+འཐུས་ཤོར་ཚུ་ CI ཡང་ན་ ས་གནས་ཀྱི་ཁྲིམས་སྲུང་འགག་པའི་དྲྭ་ཚིགས་ཚུ་ནང་ གློག་ཐག་བཏང་ནི་ལུ་ ཉེན་སྲུང་ཡོདཔ་ཨིན།

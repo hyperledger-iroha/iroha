@@ -6,40 +6,41 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 89be62d7bb2bb79fd994d207489d310ef4c997be53447fbee8ac1f7b758d3beb
 source_last_modified: "2026-01-03T18:07:57.641039+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Impact Assessment Tooling (MINFO‑4b)
+# כלי להערכת השפעה (MINFO-4b)
 
-Roadmap reference: **MINFO‑4b — Impact assessment tooling.**  
-Owner: Governance Council / Analytics
+התייחסות למפת הדרכים: **MINFO‑4b — כלי להערכת השפעה.**  
+בעלים: מועצת ממשל / אנליטיקה
 
-This note documents the `cargo xtask ministry-agenda impact` command that now
-produces the automated hash-family diff required for referendum packets. The
-tool consumes validated Agenda Council proposals, the duplicate registry, and
-an optional denylist/policy snapshot so reviewers can see exactly which
-fingerprints are new, which collide with existing policy, and how many entries
-each hash family contributes.
+הערה זו מתעדת את הפקודה `cargo xtask ministry-agenda impact` שעכשיו
+מייצר את ה-Hash-family Diff האוטומטי הנדרש עבור מנות משאל עם. ה
+הכלי צורך הצעות מועצת אג'נדה מאומתות, את הרישום הכפול, ו
+תמונת מצב של דחייה/מדיניות אופציונלית כדי שהבודקים יוכלו לראות בדיוק איזה
+טביעות אצבע חדשות, שמתנגשות במדיניות הקיימת, וכמה ערכים
+כל משפחת חשיש תורמת.
 
-## Inputs
+## כניסות
 
-1. **Agenda proposals.** One or more files that follow
+1. **הצעות לסדר יום.** קובץ אחד או יותר שאחריו
    [`docs/source/ministry/agenda_council_proposal.md`](agenda_council_proposal.md).
-   Pass them explicitly with `--proposal <path>` or point the command at a
-   directory via `--proposal-dir <dir>` and every `*.json` file under that path
-   is included.
-2. **Duplicate registry (optional).** A JSON file matching
-   `docs/examples/ministry/agenda_duplicate_registry.json`. Conflicts are
-   reported under `source = "duplicate_registry"`.
-3. **Policy snapshot (optional).** A lightweight manifest that lists every
-   fingerprint already enforced by GAR/Ministry policy. The loader expects the
-   schema shown below (see
+   העבר אותם במפורש עם `--proposal <path>` או כוון את הפקודה ל-a
+   ספרייה דרך `--proposal-dir <dir>` וכל קובץ `*.json` תחת הנתיב הזה
+   כלול.
+2. **רישום כפול (אופציונלי).** התאמה של קובץ JSON
+   `docs/examples/ministry/agenda_duplicate_registry.json`. קונפליקטים הם
+   דווח תחת `source = "duplicate_registry"`.
+3. **תמונת מצב של מדיניות (אופציונלי).** מניפסט קל משקל שמפרט כל
+   טביעת אצבע כבר נאכפת על ידי מדיניות GAR/משרד. המעמיס מצפה ל
+   סכימה המוצגת להלן (ראה
    [`docs/examples/ministry/policy_snapshot_example.json`](../../examples/ministry/policy_snapshot_example.json)
-   for a complete sample):
+   לדוגמא מלאה):
 
 ```json
 {
@@ -56,10 +57,10 @@ each hash family contributes.
 }
 ```
 
-Any entry whose `hash_family:hash_hex` fingerprint matches a proposal target is
-reported under `source = "policy_snapshot"` with the referenced `policy_id`.
+כל ערך שטביעת האצבע שלו `hash_family:hash_hex` תואמת ליעד הצעה הוא
+דווח תחת `source = "policy_snapshot"` עם ה-`policy_id` המוזכר.
 
-## Usage
+## שימוש
 
 ```bash
 cargo xtask ministry-agenda impact \
@@ -69,8 +70,8 @@ cargo xtask ministry-agenda impact \
   --out artifacts/ministry/impact/AC-2026-001.json
 ```
 
-Additional proposals can be appended via repeated `--proposal` flags or by
-supplying a directory that contains an entire referendum batch:
+ניתן לצרף הצעות נוספות באמצעות דגלי `--proposal` חוזרים או על ידי
+אספקת ספרייה המכילה אצווה שלמה של משאל עם:
 
 ```bash
 cargo xtask ministry-agenda impact \
@@ -79,12 +80,12 @@ cargo xtask ministry-agenda impact \
   --out artifacts/ministry/impact/2026-03-31.json
 ```
 
-The command prints the generated JSON to stdout when `--out` is omitted.
+הפקודה מדפיסה את ה-JSON שנוצר ל-stdout כאשר `--out` מושמט.
 
-## Output
+## פלט
 
-The report is a signed-off artefact (record it under the referendum packet’s
-`artifacts/ministry/impact/` directory) with the following structure:
+הדוח הוא חפץ חתום (רשום אותו תחת חבילת משאל העם
+`artifacts/ministry/impact/`) עם המבנה הבא:
 
 ```json
 {
@@ -125,13 +126,13 @@ The report is a signed-off artefact (record it under the referendum packet’s
 }
 ```
 
-Attach this JSON to every referendum dossier alongside the neutral summary so
-panelists, jurors, and governance observers can see the exact blast radius of
-each proposal. The output is deterministic (sorted by hash family) and safe to
-include in CI/runbooks; if the duplicate registry or policy snapshot changes,
-rerun the command and attach the refreshed artefact before the vote opens.
+צרף את ה-JSON הזה לכל תיק משאל עם לצד הסיכום הנייטרלי כך
+חברי פאנל, מושבעים ומשקיפים ממשל יכולים לראות את רדיוס הפיצוץ המדויק של
+כל הצעה. הפלט הוא דטרמיניסטי (ממוין לפי משפחת חשיש) ובטוח
+לכלול בספרי CI/runbooks; אם הרישום הכפול או תמונת המצב של המדיניות משתנה,
+הפעל מחדש את הפקודה וצרף את החפץ המרענן לפני פתיחת ההצבעה.
 
-> **Next step:** feed the generated impact report into
-> [`cargo xtask ministry-panel packet`](referendum_packet.md) so the
-> `ReferendumPacketV1` dossier contains both the hash-family breakdown and the
-> detailed conflict list for the proposal under review.
+> **השלב הבא:** הזינו את דוח ההשפעה שנוצר לתוך
+> [`cargo xtask ministry-panel packet`](referendum_packet.md) אז
+> תיק `ReferendumPacketV1` מכיל גם את פירוט משפחת הגיבוב וגם את
+> רשימת סכסוכים מפורטת עבור ההצעה הנבדקת.

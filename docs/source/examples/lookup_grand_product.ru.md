@@ -6,29 +6,30 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 6f6421d420a704c5c4af335741e309adf641702ddb8c291dce94ea5581557a66
 source_last_modified: "2026-01-03T18:08:00.673232+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Lookup Grand-Product Example
+# Пример поиска общего продукта
 
-This example expands the FASTPQ permission lookup argument mentioned in
-`fastpq_plan.md`.  In the Stage 2 pipeline the prover evaluates the selector
-(`s_perm`) and witness (`perm_hash`) columns on the low-degree extension (LDE)
-domain, updates a running grand product `Z_i`, and finally commits the entire
-sequence with Poseidon.  The hashed accumulator is appended to the transcript
-under the `fastpq:v1:lookup:product` domain, while the final `Z_i` still matches
-the committed permission table product `T`.
+Этот пример расширяет аргумент поиска разрешений FASTPQ, упомянутый в
+`fastpq_plan.md`.  На этапе 2 проверяющий оценивает селектор.
+(`s_perm`) и столбцы-свидетели (`perm_hash`) на расширении низкой степени (LDE).
+домен, обновляет работающий грандиозный продукт `Z_i` и, наконец, фиксирует весь
+эпизод с Посейдоном.  Хешированный аккумулятор добавляется к расшифровке.
+под доменом `fastpq:v1:lookup:product`, в то время как окончательный `Z_i` по-прежнему соответствует
+зафиксированный продукт таблицы разрешений `T`.
 
-We consider a tiny batch with the following selector values:
+Мы рассматриваем небольшую партию со следующими значениями селектора:
 
-| row | `s_perm` | `perm_hash`                                   |
-| --- | -------- | ---------------------------------------------- |
-| 0   | 1        | `0x019a...` (grant role = auditor, perm = transfer_asset) |
-| 1   | 0        | `0xabcd...` (no permission change)                |
-| 2   | 1        | `0x42ff...` (revoke role = auditor, perm = burn_asset) |
+| ряд | `s_perm` | `perm_hash` |
+| --- | -------- | --------------------------------------------- |
+| 0 | 1 | `0x019a...` (роль предоставления = аудитор, разрешение = Transfer_asset) |
+| 1 | 0 | `0xabcd...` (без изменения разрешения) |
+| 2 | 1 | `0x42ff...` (роль отзыва = аудитор, разрешение = Burn_asset) |
 
-Let `gamma = 0xdead...` be the Fiat-Shamir lookup challenge derived from the
-transcript.  The prover initialises `Z_0 = 1` and folds each row:
+Пусть `gamma = 0xdead...` будет задачей поиска Фиата-Шамира, полученной из
+стенограмма.  Доказывающая программа инициализирует `Z_0 = 1` и сворачивает каждую строку:
 
 ```
 Z_0 = 1
@@ -37,27 +38,27 @@ Z_2 = Z_1 * (perm_hash_1 + gamma)^(s_perm_1) = Z_1 (selector is zero)
 Z_3 = Z_2 * (perm_hash_2 + gamma)^(s_perm_2)
 ```
 
-Rows where `s_perm = 0` do not alter the accumulator.  After processing the
-trace, the prover Poseidon-hashes the sequence `[Z_1, Z_2, ...]` for the transcript
-yet also publishes `Z_final = Z_3` (the final running product) to match the table
-boundary condition.
+Строки, в которых `s_perm = 0`, не изменяют аккумулятор.  После обработки
+след, доказывающий Посейдон хэширует последовательность `[Z_1, Z_2, ...]` для транскрипта
+но также публикует `Z_final = Z_3` (конечный работающий продукт), соответствующий таблице.
+граничное условие.
 
-On the table side, the committed permission Merkle tree encodes the deterministic
-set of active permissions for the slot.  The verifier (or the prover during
-witness generation) computes
+На стороне таблицы зафиксированное дерево Меркла кодирует детерминистическую
+набор активных разрешений для слота.  Верификатор (или проверяющий во время
+генерация свидетеля) вычисляет
 
 ```
 T = product over entries: (entry.hash + gamma)
 ```
 
-The protocol enforces the boundary constraint `Z_final / T = 1`.  If the trace
-introduced a permission that is not present in the table (or omitted one that
-is), the grand product ratio diverges from 1 and the verifier rejects.  Because
-both sides multiply by `(value + gamma)` inside the Goldilocks field, the ratio
-remains stable across CPU/GPU backends.
+Протокол применяет граничное ограничение `Z_final / T = 1`.  Если след
+ввел разрешение, которого нет в таблице (или пропустил то, что
+is), коэффициент общего продукта отклоняется от 1, и верификатор отклоняет его.  Потому что
+обе части умножаются на `(value + gamma)` внутри поля Златовласки, соотношение
+остается стабильным на всех процессорах/графических процессорах.
 
-To serialise the example as Norito JSON for fixtures, record the tuple of
-`perm_hash`, selector, and accumulator after each row, for example:
+Чтобы сериализовать пример как Norito JSON для приборов, запишите кортеж
+`perm_hash`, селектор и аккумулятор после каждой строки, например:
 
 ```json
 {
@@ -71,7 +72,7 @@ To serialise the example as Norito JSON for fixtures, record the tuple of
 }
 ```
 
-The hexadecimal placeholders (`0x...`) can be replaced with concrete Goldilocks
-field elements when generating automated tests.  Stage 2 fixtures additionally
-record the Poseidon hash of the running accumulator but keep the same JSON shape,
-so the example can double as a template for future test vectors.
+Шестнадцатеричные заполнители (`0x...`) можно заменить конкретными Златовлаской.
+элементы полей при создании автоматических тестов.  Дополнительно светильники второго этапа
+запишите хэш Poseidon работающего аккумулятора, но сохраните ту же форму JSON,
+поэтому этот пример можно использовать в качестве шаблона для будущих тестовых векторов.

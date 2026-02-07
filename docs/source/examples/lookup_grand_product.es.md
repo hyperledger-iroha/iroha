@@ -6,29 +6,30 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 6f6421d420a704c5c4af335741e309adf641702ddb8c291dce94ea5581557a66
 source_last_modified: "2026-01-03T18:08:00.673232+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Lookup Grand-Product Example
+# Ejemplo de búsqueda de gran producto
 
-This example expands the FASTPQ permission lookup argument mentioned in
-`fastpq_plan.md`.  In the Stage 2 pipeline the prover evaluates the selector
-(`s_perm`) and witness (`perm_hash`) columns on the low-degree extension (LDE)
-domain, updates a running grand product `Z_i`, and finally commits the entire
-sequence with Poseidon.  The hashed accumulator is appended to the transcript
-under the `fastpq:v1:lookup:product` domain, while the final `Z_i` still matches
-the committed permission table product `T`.
+Este ejemplo amplía el argumento de búsqueda de permisos FASTPQ mencionado en
+`fastpq_plan.md`.  En la etapa 2, el probador evalúa al selector.
+(`s_perm`) y columnas testigo (`perm_hash`) en la extensión de bajo grado (LDE)
+dominio, actualiza un gran producto en ejecución `Z_i` y finalmente confirma todo el
+Secuencia con Poseidón.  El acumulador hash se adjunta a la transcripción.
+bajo el dominio `fastpq:v1:lookup:product`, mientras que el `Z_i` final aún coincide
+el producto de la tabla de permisos comprometidos `T`.
 
-We consider a tiny batch with the following selector values:
+Consideramos un lote pequeño con los siguientes valores de selector:
 
-| row | `s_perm` | `perm_hash`                                   |
+| fila | `s_perm` | `perm_hash` |
 | --- | -------- | ---------------------------------------------- |
-| 0   | 1        | `0x019a...` (grant role = auditor, perm = transfer_asset) |
-| 1   | 0        | `0xabcd...` (no permission change)                |
-| 2   | 1        | `0x42ff...` (revoke role = auditor, perm = burn_asset) |
+| 0 | 1 | `0x019a...` (función de concesión = auditor, permanente = transferencia_activo) |
+| 1 | 0 | `0xabcd...` (sin cambio de permiso) |
+| 2 | 1 | `0x42ff...` (revocar rol = auditor, permanente = burn_asset) |
 
-Let `gamma = 0xdead...` be the Fiat-Shamir lookup challenge derived from the
-transcript.  The prover initialises `Z_0 = 1` and folds each row:
+Sea `gamma = 0xdead...` el desafío de búsqueda Fiat-Shamir derivado del
+transcripción.  El probador inicializa `Z_0 = 1` y dobla cada fila:
 
 ```
 Z_0 = 1
@@ -37,27 +38,27 @@ Z_2 = Z_1 * (perm_hash_1 + gamma)^(s_perm_1) = Z_1 (selector is zero)
 Z_3 = Z_2 * (perm_hash_2 + gamma)^(s_perm_2)
 ```
 
-Rows where `s_perm = 0` do not alter the accumulator.  After processing the
-trace, the prover Poseidon-hashes the sequence `[Z_1, Z_2, ...]` for the transcript
-yet also publishes `Z_final = Z_3` (the final running product) to match the table
-boundary condition.
+Las filas donde `s_perm = 0` no alteran el acumulador.  Después de procesar el
+rastro, el demostrador Poseidón codifica la secuencia `[Z_1, Z_2, ...]` para la transcripción
+pero también publica `Z_final = Z_3` (el producto final en ejecución) para que coincida con la tabla
+condición de frontera.
 
-On the table side, the committed permission Merkle tree encodes the deterministic
-set of active permissions for the slot.  The verifier (or the prover during
-witness generation) computes
+En el lado de la tabla, el árbol Merkle de permisos comprometidos codifica el determinista
+conjunto de permisos activos para la ranura.  El verificador (o el probador durante
+generación de testigos) calcula
 
 ```
 T = product over entries: (entry.hash + gamma)
 ```
 
-The protocol enforces the boundary constraint `Z_final / T = 1`.  If the trace
-introduced a permission that is not present in the table (or omitted one that
-is), the grand product ratio diverges from 1 and the verifier rejects.  Because
-both sides multiply by `(value + gamma)` inside the Goldilocks field, the ratio
-remains stable across CPU/GPU backends.
+El protocolo aplica la restricción de límite `Z_final / T = 1`.  si el rastro
+introdujo un permiso que no está presente en la tabla (u omitió uno que
+es), la relación del gran producto diverge de 1 y el verificador la rechaza.  porque
+ambos lados se multiplican por `(value + gamma)` dentro del campo Ricitos de Oro, la relación
+permanece estable en todos los backends de CPU/GPU.
 
-To serialise the example as Norito JSON for fixtures, record the tuple of
-`perm_hash`, selector, and accumulator after each row, for example:
+Para serializar el ejemplo como Norito JSON para aparatos, registre la tupla de
+`perm_hash`, selector y acumulador después de cada fila, por ejemplo:
 
 ```json
 {
@@ -71,7 +72,7 @@ To serialise the example as Norito JSON for fixtures, record the tuple of
 }
 ```
 
-The hexadecimal placeholders (`0x...`) can be replaced with concrete Goldilocks
-field elements when generating automated tests.  Stage 2 fixtures additionally
-record the Poseidon hash of the running accumulator but keep the same JSON shape,
-so the example can double as a template for future test vectors.
+Los marcadores de posición hexadecimales (`0x...`) se pueden reemplazar con Ricitos de Oro concretos.
+elementos de campo al generar pruebas automatizadas.  Accesorios de la etapa 2 además
+registrar el hash Poseidon del acumulador en ejecución pero mantener la misma forma JSON,
+por lo que el ejemplo puede servir como plantilla para futuros vectores de prueba.

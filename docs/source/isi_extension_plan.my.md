@@ -7,94 +7,93 @@ generator: scripts/sync_docs_i18n.py
 source_hash: f3502fc6de75095282d44ce778b00d1b0d554773de1861d1b92f7dc573dfafa2
 source_last_modified: "2025-12-29T18:16:35.969398+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# ISI Extension Plan (v1)
+# ISI တိုးချဲ့မှု အစီအစဉ် (v1)
 
-This note signs off on the priority order for the new Iroha Special Instructions and captures
-non-negotiable invariants for each instruction ahead of implementation. The ordering matches
-security and operability risk first, UX throughput second.
+ဤမှတ်စုသည် Iroha အထူးညွှန်ကြားချက်များနှင့် ဖမ်းယူမှုအသစ်များအတွက် ဦးစားပေးအစီအစဉ်တွင် ဆိုင်းငံ့ထားပါသည်
+အကောင်အထည်ဖော်ခြင်းမပြုမီ ညွှန်ကြားချက်တစ်ခုစီအတွက် ညှိနှိုင်းမရနိုင်သော ပုံစံကွဲများ။ အော်ဒါမှာတာ ဟုတ်လား။
+လုံခြုံရေးနှင့် လုပ်ဆောင်နိုင်မှု အန္တရာယ် ပထမ၊ UX ဖြတ်သန်းမှု ဒုတိယ။
 
-## Priority Stack
+## ဦးစားပေးအစု
 
-1. **RotateAccountSignatory** – Required for hygienic key rotation without destructive migrations.
-2. **DeactivateContractInstance** / **RemoveSmartContractBytes** – Provide deterministic contract
-   kill switches and storage reclamation for compromised deployments.
-3. **SetAssetKeyValue** / **RemoveAssetKeyValue** – Extend metadata parity to concrete asset
-   balances so observability tooling can tag holdings.
-4. **BatchMintAsset** / **BatchTransferAsset** – Deterministic fan-out helpers to keep payload size
-   and VM fallback pressure manageable.
+1. **RotateAccountSignatory** – ပျက်စီးသောရွှေ့ပြောင်းခြင်းမရှိဘဲ တစ်ကိုယ်ရေသန့်ရှင်းသောသော့လှည့်ခြင်းအတွက် လိုအပ်ပါသည်။
+2. **DeactivateContractInstance** / **RemoveSmartContractBytes** – အဆုံးအဖြတ်ပေးသော စာချုပ်ပါ ။
+   အန္တရာယ်ရှိသော ဖြန့်ကျက်မှုများအတွက် ခလုတ်များကို သတ်ပြီး သိုလှောင်မှု ပြန်လည်ထည့်သွင်းခြင်း။
+3. **SetAssetKeyValue** / **RemoveAssetKeyValue** – metadata parity ကို ခိုင်မာသော ပိုင်ဆိုင်မှုသို့ တိုးချဲ့ပါ
+   ဟန်ချက်ညီသောကြောင့် observability tooling သည် ကိုင်ဆောင်မှုများကို tag လုပ်နိုင်သည် ။
+4. **BatchMintAsset** / **BatchTransferAsset** – payload အရွယ်အစားကို ထိန်းသိမ်းရန် ဆုံးဖြတ်ထားသော fan-out helpers
+   နှင့် VM ဖိအားကို စီမံခန့်ခွဲနိုင်သည်။
 
-## Instruction Invariants
+## သင်ကြားမှုပုံစံများ
 
-### SetAssetKeyValue / RemoveAssetKeyValue
-- Reuse the `AssetMetadataKey` namespace (`state.rs`) so canonical WSV keys stay stable.
-- Enforce JSON size and schema limits identically to account metadata helpers.
-- Emit `AssetEvent::MetadataInserted` / `AssetEvent::MetadataRemoved` with the affected `AssetId`.
-- Require the same permission tokens as existing asset metadata edits (definition owner OR
-  `CanModifyAssetMetadata`-style grants).
-- Abort if the asset record is missing (no implicit creation).
+### SetAssetKeyValue/RemoveAssetKeyValue
+- `AssetMetadataKey` namespace (`state.rs`) ကို ပြန်သုံးပါ၊ ထို့ကြောင့် canonical WSV ကီးများသည် တည်ငြိမ်နေပါသည်။
+- အကောင့်မက်တာဒေတာအကူအညီပေးသူများအတွက် JSON အရွယ်အစားနှင့် schema ကန့်သတ်ချက်များကို တူညီစွာအသုံးပြုပါ။
+- ထိခိုက်ထားသော `AssetId` ဖြင့် `AssetEvent::MetadataInserted` / `AssetEvent::MetadataRemoved` ကို ထုတ်လွှတ်ပါ။
+- ရှိပြီးသား ပိုင်ဆိုင်မှု မက်တာဒေတာ တည်းဖြတ်မှုများကဲ့သို့ တူညီသော ခွင့်ပြုချက် တိုကင်များ လိုအပ်သည် (အဓိပ္ပါယ်ဖွင့်ဆိုချက် ပိုင်ရှင် သို့မဟုတ်
+  `CanModifyAssetMetadata` ပုံစံ ထောက်ပံ့ကြေးများ)။
+- ပိုင်ဆိုင်မှုမှတ်တမ်းပျောက်နေပါက ဖျက်သိမ်းပါ (တရားဝင်ဖန်တီးမှုမရှိပါ)။
 
 ### RotateAccountSignatory
-- Atomic swap of the signatory in `AccountId` while preserving account metadata and linked
-  resources (assets, triggers, roles, permissions, pending events).
-- Verify the current signatory matches the caller (or delegated authority via explicit token).
-- Reject if the new public key already backs another account in the same domain.
-- Update all canonical keys that embed the account ID and invalidate caches before commit.
-- Emit a dedicated `AccountEvent::SignatoryRotated` with old/new keys for audit trails.
-- Migration scaffold: introduce `AccountLabel` + `AccountRekeyRecord` (see `account::rekey`) so
-  existing accounts can be mapped to stable labels during a rolling upgrade without hash breaks.
+- အကောင့်မက်တာဒေတာကို ထိန်းသိမ်းထားပြီး လင့်ခ်ချိတ်ထားစဉ် `AccountId` တွင် လက်မှတ်ရေးထိုးသူ၏ အနုမြူ လဲလှယ်ခြင်း
+  အရင်းအမြစ်များ (ပိုင်ဆိုင်မှုများ၊ အစပျိုးမှုများ၊ အခန်းကဏ္ဍများ၊ ခွင့်ပြုချက်များ၊ ဆိုင်းငံ့ထားသော ဖြစ်ရပ်များ)။
+- လက်ရှိပါဝင်သူသည် ခေါ်ဆိုသူ (သို့မဟုတ် တိကျပြတ်သားသော တိုကင်မှတဆင့် လွှဲအပ်ထားသော အခွင့်အာဏာ) နှင့် ကိုက်ညီကြောင်း အတည်ပြုပါ။
+- အများသူငှာသော့အသစ်သည် တူညီသောဒိုမိန်းတွင် အခြားအကောင့်တစ်ခုကို ပံ့ပိုးထားပြီးဖြစ်ပါက ငြင်းပယ်ပါ။
+- အကောင့် ID ကို မြှုပ်နှံပြီး ကက်ရှ်များကို တရားဝင်မဖြစ်စေသော canonical keys အားလုံးကို အပ်ဒိတ်လုပ်ပါ။
+- စာရင်းစစ်လမ်းကြောင်းများအတွက် သော့အဟောင်း/အသစ်ဖြင့် သီးသန့် `AccountEvent::SignatoryRotated` ကို ထုတ်လွှတ်ပါ။
+- ရွှေ့ပြောင်းခြင်းငြမ်း- `AccountLabel` + `AccountRekeyRecord` (`account::rekey` ကိုကြည့်ပါ) ထို့ကြောင့် မိတ်ဆက်ပေးပါ
+  hash ဖြတ်တောက်ခြင်းမရှိဘဲ အရှိန်မြှင့်အဆင့်မြှင့်စဉ်အတွင်း ရှိပြီးသားအကောင့်များကို တည်ငြိမ်သောအညွှန်းများသို့ မြေပုံဆွဲနိုင်ပါသည်။
 
 ### DeactivateContractInstance
-- Remove or tombstone the `(namespace, contract_id)` binding while persisting provenance data
-  (who, when, reason code) for troubleshooting.
-- Require the same governance permission set as activation, with policy hooks to disallow
-  deactivation of core system namespaces without elevated approval.
-- Reject when the instance is already inactive to keep event logs deterministic.
-- Emit a `ContractInstanceEvent::Deactivated` that downstream watchers can consume.
-
-### RemoveSmartContractBytes
-- Allow pruning of stored bytecode by `code_hash` only when no manifests or active instances
-  reference the artifact; otherwise fail with a descriptive error.
-- Permission gate mirrors registration (`CanRegisterSmartContractCode`) plus an operator-level
-  guard (e.g., `CanManageSmartContractStorage`).
-- Verify the provided `code_hash` matches the stored body digest just before deletion to avoid
-  stale handles.
-- Emit `ContractCodeEvent::Removed` with hash and caller metadata.
+- သက်သေအထောက်အထားဒေတာကိုဆက်လက်တည်ရှိနေချိန်တွင် `(namespace, contract_id)` ချည်နှောင်ထားသော `(namespace, contract_id)` ကိုဖယ်ရှားပါ သို့မဟုတ် သင်္ချိုင်းတွင်ကျောက်ချပါ။
+  ပြဿနာဖြေရှင်းခြင်းအတွက် (Who, when, reason code)။
+- ခွင့်မပြုရန် မူဝါဒချိတ်ချက်များပါရှိသည့် တူညီသော အုပ်ချုပ်မှုခွင့်ပြုချက်ကို စတင်လုပ်ဆောင်ရန် သတ်မှတ်ထားသည်။
+  မြင့်မားသောခွင့်ပြုချက်မရှိဘဲ core system namespaces များကိုပိတ်ခြင်း။
+- ဖြစ်ရပ်မှတ်တမ်းများကို အဆုံးအဖြတ်ပေးနိုင်ရန် သာဓကသည် အသက်မဝင်တော့သည့်အခါ ငြင်းပယ်ပါ။
+- အောက်ပိုင်းကြည့်ရှုသူများစားသုံးနိုင်သော `ContractInstanceEvent::Deactivated` ကို ထုတ်လွှတ်ပါ။### RemoveSmartContractBytes
+- Manifests သို့မဟုတ် active instances မရှိမှသာ `code_hash` ဖြင့် သိမ်းဆည်းထားသော bytecode ကို ဖြတ်တောက်ခြင်းအား ခွင့်ပြုပါ
+  ရှေးဟောင်းပစ္စည်းကိုကိုးကား; မဟုတ်ပါက ဖော်ပြချက်အမှားဖြင့် ကျရှုံးသည်။
+- ခွင့်ပြုချက်တံခါးကြေးမုံမှတ်ပုံတင် (`CanRegisterSmartContractCode`) နှင့်အော်ပရေတာအဆင့်
+  အစောင့် (ဥပမာ `CanManageSmartContractStorage`)။
+- ပေးထားသော `code_hash` သည် ဖျက်ခြင်းမပြုမီတွင် သိမ်းဆည်းထားသော ကိုယ်ခန္ဓာအချေအတင်နှင့် ကိုက်ညီကြောင်း အတည်ပြုပါ
+  stale လက်ကိုင်များ။
+- hash နှင့် caller metadata ဖြင့် `ContractCodeEvent::Removed` ကို ထုတ်လွှတ်ပါ။
 
 ### BatchMintAsset / BatchTransferAsset
-- All-or-nothing semantics: either every tuple succeeds or the instruction aborts without side
-  effects.
-- Input vectors must be deterministically ordered (no implicit sorting) and bounded by config
-  (`max_batch_isi_items`).
-- Emit per-item asset events so downstream accounting stays consistent; batch context is additive,
-  not a replacement.
-- Permission checks reuse existing single-item logic per target (asset owner, definition owner,
-  or granted capability) before state mutation.
-- Advisory access sets must union all read/write keys to keep optimistic concurrency correct.
+- အရာအားလုံး သို့မဟုတ် ဘာမှမဟုတ်သော ဝေါဟာရများ- tuple တစ်ခုစီတိုင်း အောင်မြင်သည် သို့မဟုတ် ညွှန်ကြားချက်သည် ဘေးထွက်ခြင်းမရှိပဲ ပျက်သွားသည်
+  ဆိုးကျိုးများ။
+- ထည့်သွင်းသည့် vector များကို အဆုံးအဖြတ်ပေးသော စီစဥ်ထားရပါမည် (သွယ်ဝိုက်သော အမျိုးအစားခွဲခြင်း မရှိပါ) နှင့် config ဖြင့် ကန့်သတ်ထားသည်။
+  (`max_batch_isi_items`)။
+- ပစ္စည်းတစ်ခုချင်း၏ ပိုင်ဆိုင်မှုဖြစ်ရပ်များကို ထုတ်လွှတ်သောကြောင့် ရေအောက်ပိုင်းစာရင်းအင်းသည် တသမတ်တည်းရှိနေမည်ဖြစ်သည်။ batch context သည် additive ဖြစ်ပြီး၊
+  အစားထိုးခြင်းမဟုတ်ပါ။
+- ခွင့်ပြုချက်စစ်ဆေးမှုများသည် ပစ်မှတ်တစ်ခုလျှင် ရှိပြီးသား အကြောင်းအရာတစ်ခုတည်း လော့ဂျစ်ကို ပြန်လည်အသုံးပြုခြင်း (ပိုင်ဆိုင်မှုပိုင်ရှင်၊ အဓိပ္ပါယ်ဖွင့်ဆိုချက်ပိုင်ရှင်၊
+  သို့မဟုတ် ပေးအပ်ထားသော စွမ်းရည်) ပြည်နယ်မပြောင်းမီ။
+- အကြံပေးဝင်ရောက်ခွင့်အစုံများသည် အကောင်းမြင်သဘောတူသော ငွေကြေးကိုမှန်ကန်စေရန်အတွက် ဖတ်ရှုရန်/ရေးသောသော့များအားလုံးကို စုစည်းထားရပါမည်။
 
 ## Implementation Scaffolding
 
-- Data model now carries `SetAssetKeyValue` / `RemoveAssetKeyValue` scaffolds for balance metadata
-  edits (`transparent.rs`).
-- Executor visitors expose placeholders that will gate permissions once host wiring lands
-  (`default/mod.rs`).
-- Rekey prototype types (`account::rekey`) provide a landing zone for rolling migrations.
-- World state includes `account_rekey_records` keyed by `AccountLabel` so we can stage label →
-  signatory migrations without touching the historical `AccountId` encoding.
+- ယခုအခါ ဒေတာမော်ဒယ်သည် လက်ကျန်မက်တာဒေတာအတွက် `SetAssetKeyValue` / `RemoveAssetKeyValue` Scaffold များကို သယ်ဆောင်ပေးပါသည်။
+  တည်းဖြတ်မှု (`transparent.rs`)။
+- Executor မှလာရောက်လည်ပတ်သူများသည် wiring lands ကိုလက်ခံပြီးသည်နှင့် gate permissions ပေးမည့် placeholder ကို ဖော်ထုတ်ပါသည်။
+  (`default/mod.rs`)။
+- Rekey ရှေ့ပြေးပုံစံအမျိုးအစားများ (`account::rekey`) သည် ရွှေ့ပြောင်းသွားလာခြင်းအတွက် ဆင်းသက်သည့်ဇုန်ကို ပေးဆောင်သည်။
+- ကမ္ဘာ့နိုင်ငံတော်တွင် `AccountLabel` ဖြင့်သော့ခတ်ထားသော `account_rekey_records` ပါ၀င်သောကြောင့် ကျွန်ုပ်တို့သည် အဆင့်တံဆိပ် →
+  သမိုင်းဝင် `AccountId` ကုဒ်နံပါတ်ကို မထိဘဲ လက်မှတ်ထိုးထားသော ရွှေ့ပြောင်းမှုများ။
 
 ## IVM Syscall Drafting
 
-- Host shims for `DeactivateContractInstance` / `RemoveSmartContractBytes` ship as
-  `SYSCALL_DEACTIVATE_CONTRACT_INSTANCE` (0x43) and
-  `SYSCALL_REMOVE_SMART_CONTRACT_BYTES` (0x44), both consuming Norito TLVs that mirror the
-  canonical ISI structs.
-- Extend `abi_syscall_list()` only after host handlers mirror `iroha_core` execution paths to keep
-  ABI hashes stable during development.
-- Update Kotodama lowering once syscall numbers stabilize; add golden coverage for the expanded
-  surface at the same time.
+- `DeactivateContractInstance` / `RemoveSmartContractBytes` သင်္ဘောအတွက် လက်ခံဆောင်ရွက်ပေးသူအဖြစ်
+  `SYSCALL_DEACTIVATE_CONTRACT_INSTANCE` (0x43) နှင့်
+  `SYSCALL_REMOVE_SMART_CONTRACT_BYTES` (0x44)၊ Norito TLV များကို စားသုံးသည့် နှစ်မျိုးလုံး၊
+  canonical ISI တည်ဆောက်ပုံများ။
+- ထိန်းသိမ်းထားရန် host handlers များသည် Mirror `iroha_core` ဖြင့်သာ `abi_syscall_list()` ကို တိုးချဲ့ပါ
+  ABI သည် ဖွံ့ဖြိုးတိုးတက်နေစဉ်အတွင်း တည်ငြိမ်သည်။
+- syscall နံပါတ်များတည်ငြိမ်သည်နှင့်တစ်ပြိုင်နက် Kotodama ကို နှိမ့်ချ၍ အပ်ဒိတ်လုပ်ပါ။ တိုးချဲ့မှုအတွက် ရွှေရောင်လွှမ်းခြုံထည့်ပါ။
+  တစ်ချိန်တည်းမှာမျက်နှာပြင်။
 
-## Status
+## အခြေအနေ
 
-The above ordering and invariants are ready for implementation. Follow-up branches should reference
-this document when wiring execution paths and syscall exposure.
+အထက်ဖော်ပြပါ အမိန့်များနှင့် ပုံစံကွဲများသည် အကောင်အထည်ဖော်ရန် အသင့်ဖြစ်နေပါပြီ။ နောက်ဆက်တွဲ အကိုင်းအခက်များကို ကိုးကားသင့်သည်။
+wiring execution paths နှင့် syscall exposure လုပ်သောအခါ ဤစာရွက်စာတမ်း။

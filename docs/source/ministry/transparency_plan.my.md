@@ -9,119 +9,113 @@ source_last_modified: "2025-12-29T18:16:35.983537+00:00"
 translation_last_reviewed: 2026-02-07
 title: Ministry Transparency & Audit Plan
 summary: Implementation plan for roadmap item MINFO-8 covering quarterly transparency reports, privacy guardrails, dashboards, and automation.
+translator: machine-google-reviewed
 ---
 
-# Transparency & Audit Reports (MINFO-8)
+# ပွင့်လင်းမြင်သာမှုနှင့် စာရင်းစစ်အစီရင်ခံစာများ (MINFO-8)
 
-Roadmap reference: **MINFO-8 — Transparency & audit reports** and **MINFO-8a — Privacy-preserving release process**
+လမ်းပြမြေပုံအကိုးအကား- **MINFO-8 — ပွင့်လင်းမြင်သာမှုနှင့် စာရင်းစစ်အစီရင်ခံစာများ** နှင့် **MINFO-8a — ကိုယ်ရေးကိုယ်တာ-ထိန်းသိမ်းထားသော ထုတ်ပြန်ခြင်းလုပ်ငန်းစဉ်**
 
-The Ministry of Information must publish deterministic transparency artefacts so the community can audit moderation efficacy, appeal handling, and blacklist churn. This document defines the scope, artefacts, privacy controls, and operational workflow required to close MINFO-8 before the Q3 2026 target.
+ပြန်ကြားရေး ဝန်ကြီးဌာနသည် အဆုံးအဖြတ်ပေးသော ပွင့်လင်းမြင်သာမှုရှိသော အရာများကို ရပ်ရွာလူထုအား စစ်ဆေးရန် ထိန်းညှိထိရောက်မှု၊ အယူခံဝင်မှုနှင့် အမည်ပျက်စာရင်း လှည့်ဖြားမှုကို ဆောင်ရွက်နိုင်စေရန် ထုတ်ပြန်ရမည်ဖြစ်သည်။ ဤစာရွက်စာတမ်းသည် Q32026 ပစ်မှတ်မတိုင်မီ MINFO-8 ကိုပိတ်ရန် လိုအပ်သော နယ်ပယ်၊ အနုပညာပစ္စည်းများ၊ ကိုယ်ရေးကိုယ်တာ ထိန်းချုပ်မှုများနှင့် လုပ်ငန်းလည်ပတ်မှုဆိုင်ရာ အလုပ်အသွားအလာတို့ကို သတ်မှတ်ပေးပါသည်။
 
-## Goals & Deliverables
+## ရည်မှန်းချက်များ နှင့် ပေးပို့နိုင်မှုများ
 
-- Produce quarterly transparency packets that summarise AI moderation accuracy, appeal outcomes, denylist churn, volunteer panel activity, and treasury movements tied to MINFO budgets.
-- Ship accompanying raw-data bundles (Norito JSON + CSV) plus dashboards so citizens can slice metrics without waiting for static PDFs.
-- Enforce privacy guarantees (differential privacy + minimum-count rules) and signed attestations before any dataset is published.
-- Record each publication in the governance DAG and SoraFS so historical artefacts remain immutable and independently verifiable.
+- AI ထိန်းညှိတိကျမှု၊ အယူခံဝင်မှုရလဒ်များ၊ ငြင်းပယ်စာရင်းလှည့်မှု၊ စေတနာ့ဝန်ထမ်းအဖွဲ့၏ လုပ်ဆောင်ချက်နှင့် MINFO ဘတ်ဂျက်များနှင့် ဆက်စပ်နေသော ငွေတိုက်လှုပ်ရှားမှုများကို အကျဉ်းချုပ်ဖော်ပြသည့် သုံးလတစ်ကြိမ် ပွင့်လင်းမြင်သာမှု အစုံလိုက်များကို ထုတ်လုပ်ပါ။
+- နိုင်ငံသားများသည် static PDFs များကိုမစောင့်ဆိုင်းဘဲ မက်ထရစ်များကို အပိုင်းပိုင်းဖြတ်နိုင်စေရန် - ဒေတာအကြမ်းတွဲများ (Norito JSON + CSV) နှင့် ဒက်ရှ်ဘုတ်များပါရှိသော သင်္ဘော။
+- ကိုယ်ရေးကိုယ်တာအာမခံချက်များ (ကွဲပြားသောကိုယ်ရေးကိုယ်တာ + အနိမ့်ဆုံးအရေအတွက်စည်းမျဉ်းများ) နှင့် အချက်အလက်အစုံကို မထုတ်ဝေမီ လက်မှတ်ရေးထိုးထားသော သက်သေအထောက်အထားများကို လိုက်နာပါ။
+- အုပ်ချုပ်မှု DAG နှင့် SoraFS တွင် ထုတ်ဝေမှုတစ်ခုစီကို မှတ်တမ်းတင်ထားသောကြောင့် သမိုင်းဆိုင်ရာ ရှေးဟောင်းပစ္စည်းများသည် မပြောင်းလဲနိုင်သော၊ အမှီအခိုကင်းစွာဖြင့် အတည်ပြုနိုင်မည်ဖြစ်သည်။
 
 ### Artefact Matrix
 
-| Artefact | Description | Format | Storage |
+| Artefact | ဖော်ပြချက် | ပုံစံ | ထိန် |
 |----------|-------------|--------|---------|
-| Transparency summary | Human-readable report with executive summary, highlights, risk items | Markdown → PDF | `docs/source/ministry/reports/<YYYY-Q>.md` → `artifacts/ministry/transparency/<YYYY-Q>/summary.pdf` |
-| Data appendix | Canonical Norito bundle with sanitized tables (`ModerationLedgerBlockV1`, appeals, blacklist deltas) | `.norito` + `.json` | `artifacts/ministry/transparency/<YYYY-Q>/data` (mirrored to SoraFS CID) |
-| Metrics CSVs | Convenience CSV exports for dashboards (AI FP/FN, appeal SLA, denylist churn) | `.csv` | Same directory, hashed & signed |
-| Dashboard snapshot | Grafana JSON export of `ministry_transparency_overview` panels + alert rules | `.json` | `dashboards/grafana/ministry_transparency_overview.json` / `dashboards/alerts/ministry_transparency_rules.yml` |
-| Provenance manifest | Norito manifest tying digests, SoraFS CID, signatures, release timestamp | `.json` + detached signature | `artifacts/ministry/transparency/<YYYY-Q>/manifest.json(.sig)` (also attached to governance vote) |
+| ပွင့်လင်းမြင်သာမှု အကျဉ်းချုပ် | အမှုဆောင်အကျဉ်းချုပ်၊ မီးမောင်းထိုးပြမှုများ၊ စွန့်စားရသောအရာများ | Markdown → PDF | `docs/source/ministry/reports/<YYYY-Q>.md` → `artifacts/ministry/transparency/<YYYY-Q>/summary.pdf` |
+| ဒေတာနောက်ဆက်တွဲ | Canonical Norito ပိုးသတ်ထားသောဇယားများပါရှိသောအတွဲ (`ModerationLedgerBlockV1`၊ အယူခံဝင်မှု၊ အမည်ပျက်စာရင်းဝင် မြစ်ဝကျွန်းပေါ်ဒေသများ) | `.norito` + `.json` | `artifacts/ministry/transparency/<YYYY-Q>/data` (SoraFS CID သို့ အလင်းပြထားသည်) |
+| မက်ထရစ် CSVs | ဒက်ရှ်ဘုတ်များအတွက် အဆင်ပြေသော CSV တင်ပို့မှု (AI FP/FN၊ အယူခံဝင် SLA၊ ငြင်းဆန်သောစာရင်းကို ငြင်းပယ်ခြင်း) | `.csv` | တူညီသောလမ်းညွှန်၊ hashed & signed |
+| ဒက်ရှ်ဘုတ် လျှပ်တစ်ပြက် ရိုက်ချက် | Grafana JSON ၏ `ministry_transparency_overview` အကန့်များ + သတိပေးချက်စည်းမျဉ်းများ | `.json` | `dashboards/grafana/ministry_transparency_overview.json` / `dashboards/alerts/ministry_transparency_rules.yml` |
+| Provenance manifest | Norito တွဲချိတ်ခြင်းဆိုင်ရာ မှတ်တမ်းများ၊ SoraFS CID၊ လက်မှတ်များ၊ ထုတ်လွှတ်သည့်အချိန်တံဆိပ် | `.json` + သီးခြားလက်မှတ် | `artifacts/ministry/transparency/<YYYY-Q>/manifest.json(.sig)` (အုပ်ချုပ်ရေးမဲနှင့်တွဲထားသည်) |
 
-## Data Sources & Pipeline
+## ဒေတာအရင်းအမြစ်များနှင့် ပိုက်လိုင်း
 
-| Source | Feed | Notes |
+| အရင်းအမြစ် | အစာကျွေး | မှတ်စုများ |
 |--------|------|-------|
-| Moderation ledger (`docs/source/sorafs_transparency_plan.md`) | Hourly `ModerationLedgerBlockV1` exports stored in CAR files | Already live for SFM-4c; reused for quarterly aggregation. |
-| AI calibration + false-positive rates | `docs/source/sorafs_ai_moderation_plan.md` fixtures + calibration manifests (`docs/examples/ai_moderation_calibration_*.json`) | Metrics aggregated per policy, region, and model profile. |
-| Appeal register | Norito `AppealCaseV1` events emitted by MINFO-7 treasury tooling | Contains stake transfers, panel roster, SLA timers. |
-| Denylist churn | `MinistryDenylistChangeV1` events from the Merkle registry (MINFO-6) | Includes hash families, TTL, emergency canon flags. |
-| Treasury flows | `MinistryTreasuryTransferV1` events (appeal deposits, panel rewards) | Balanced against `finance/mminfo_gl.csv`. |
+| ထိန်းညှိ လယ်ဂျာ (`docs/source/sorafs_transparency_plan.md`) | နာရီအလိုက် `ModerationLedgerBlockV1` ထုတ်ယူမှုများ CAR ဖိုင်များ | SFM-4c အတွက် အသက်ရှင်ပြီးဖြစ်သည်။ သုံးလတစ်ကြိမ် စုစည်းမှုအတွက် ပြန်သုံးသည်။ |
+| AI ချိန်ညှိခြင်း + မှားယွင်းသော-အပြုသဘောနှုန်းများ | `docs/source/sorafs_ai_moderation_plan.md` တန်ဆာပလာများ + စံကိုက်ချိန်ညှိခြင်းများ (`docs/examples/ai_moderation_calibration_*.json`) | မူဝါဒ၊ ဒေသနှင့် မော်ဒယ်ပရိုဖိုင်တစ်ခုစီတွင် မက်ထရစ်များကို စုစည်းထားသည်။ |
+| အယူခံဝင် | Norito `AppealCaseV1` MINFO-7 ဘဏ္ဍာတိုက်ကိရိယာမှ ထုတ်လွှတ်သော ဖြစ်ရပ်များ | လောင်းကြေးလွှဲပြောင်းမှုများ၊ အကန့်စာရင်းဇယား၊ SLA တိုင်မာများ ပါရှိသည်။ |
+| ငြင်းဆိုရန်စာရင်း | Merkle မှတ်ပုံတင်ခြင်း (MINFO-6) မှ `MinistryDenylistChangeV1` ဖြစ်ရပ်များ | hash မိသားစုများ၊ TTL၊ အရေးပေါ် canon အလံများ ပါဝင်သည်။ |
+| ဘဏ္ဍာတိုက် | `MinistryTreasuryTransferV1` ဖြစ်ရပ်များ (အယူခံအပ်ငွေများ၊ အကန့်ဆိုင်ရာ ဆုလာဘ်များ) | `finance/mminfo_gl.csv` နှင့် ညီမျှသည်။ |အရေးပေါ် Canon အုပ်ချုပ်မှု၊ TTL ကန့်သတ်ချက်များနှင့် ပြန်လည်သုံးသပ်မှု လိုအပ်ချက်များသည် ယခုနေထိုင်လျက်ရှိပါသည်။
+[`docs/source/ministry/emergency_canon_policy.md`](emergency_canon_policy.md) သေချာစေရန်၊
+churn metrics သည် အဆင့် (`standard`, `emergency`, `permanent`), canon id၊
+Torii သည် load time တွင် ပြဋ္ဌာန်းထားသည့် နောက်ဆုံးရက်များကို ပြန်လည်သုံးသပ်ပါ။
 
-Emergency canon governance, TTL limits, and review requirements now live in
-[`docs/source/ministry/emergency_canon_policy.md`](emergency_canon_policy.md), ensuring
-that the churn metrics capture the tier (`standard`, `emergency`, `permanent`), canon id,
-and review deadlines that Torii enforces at load time.
+ဆောင်ရွက်ဆဲ အဆင့်များ-
+1. **Ingest** အကြမ်းထည်ဖြစ်ရပ်များကို `ministry_transparency_ingest` (ပွင့်လင်းမြင်သာသော လယ်ဂျာထည့်သွင်းသူအား ရောင်ပြန်ဟပ်နေသည့် Rust ဝန်ဆောင်မှု)။ ညတိုင်း ပြေးတယ်၊ အားမပြည့်ဘူး။
+2. `ministry_transparency_builder` ဖြင့် သုံးပုံတစ်ပုံလျှင် **စုစုပေါင်း**။ ကိုယ်ရေးကိုယ်တာစစ်ထုတ်ခြင်းမပြုမီ Norito ဒေတာနောက်ဆက်တွဲနှင့် အတိုင်းအတာတစ်ခုအလိုက် မက်ထရစ်ဇယားများကို ထုတ်သည်။
+3. **Sanitize** မက်ထရစ်များကို `cargo xtask ministry-transparency sanitize` (သို့မဟုတ် `scripts/ministry/dp_sanitizer.py`) မှတစ်ဆင့် မက်တာဒေတာဖြင့် CSV/JSON အချပ်များကို ထုတ်လွှတ်ပါ။
+4. **Package** ပစ္စည်းများ၊ ၎င်းတို့ကို `ministry_release_signer` ဖြင့် လက်မှတ်ထိုးပြီး SoraFS + အုပ်ချုပ်မှု DAG သို့ အပ်လုဒ်လုပ်ပါ။
 
-Processing stages:
-1. **Ingest** raw events into `ministry_transparency_ingest` (Rust service mirroring the transparency ledger ingestor). Runs nightly, idempotent.
-2. **Aggregate** per quarter with `ministry_transparency_builder`. Outputs the Norito data appendix plus per-metric tables before privacy filters.
-3. **Sanitize** metrics via `cargo xtask ministry-transparency sanitize` (or `scripts/ministry/dp_sanitizer.py`) and emit CSV/JSON slices with metadata.
-4. **Package** artefacts, sign them with `ministry_release_signer`, and upload to SoraFS + governance DAG.
+## 2026-Q3 အကိုးအကား ဖြန့်ချိမှု
 
-## 2026-Q3 Reference Release
+- စတင်သော အုပ်ချုပ်မှု-တံခါးပိတ်အတွဲ (2026-Q3) ကို `make check-ministry-transparency` မှတစ်ဆင့် 2026-10-07 တွင် ထုတ်လုပ်ခဲ့သည်။ Artefacts များသည် `artifacts/ministry/transparency/2026-Q3/` တွင်နေထိုင်သည်—`sanitized_metrics.json`, `dp_report.json`, `summary.md`, `checksums.sha256`, `transparency_manifest.json`, နှင့် I10180180X နှင့် I100180X တို့ အပါအဝင် SoraFS CID `7f4c2d81a6b13579ccddeeff00112233`။
+- ထုတ်ဝေမှုအသေးစိတ်များ၊ မက်ထရစ်ဇယားများနှင့် အတည်ပြုချက်များကို `docs/source/ministry/reports/2026-Q3.md` တွင် ဖမ်းယူထားပြီး၊ ယခု Q3 ဝင်းဒိုးကို ပြန်လည်သုံးသပ်သည့် စာရင်းစစ်များအတွက် Canonical ကိုးကားချက်အဖြစ် ဆောင်ရွက်ပါသည်။
+- CI သည် `ci/check_ministry_transparency.sh` / `make check-ministry-transparency` ကို သက်ရောက်မှုရှိပြီး ထုတ်ဝေမှုများ မထွက်ခွာမီ အဆင့်သတ်မှတ်ခြင်း၊ artefact digests၊ Grafana/သတိပေးချက် hashes နှင့် metadata တို့ကို ထင်ရှားစေသောကြောင့် အနာဂတ်သုံးလပတ်တိုင်းတွင် တူညီသောအထောက်အထားလမ်းကြောင်းကို လိုက်နာပါ။
 
-- The inaugural governance-gated bundle (2026-Q3) was produced on 2026‑10‑07 via `make check-ministry-transparency`. Artefacts live in `artifacts/ministry/transparency/2026-Q3/`—including `sanitized_metrics.json`, `dp_report.json`, `summary.md`, `checksums.sha256`, `transparency_manifest.json`, and `transparency_release_action.json`—and were mirrored to SoraFS CID `7f4c2d81a6b13579ccddeeff00112233`.
-- Publication details, metrics tables, and approvals are captured in `docs/source/ministry/reports/2026-Q3.md`, which now serves as the canonical reference for auditors reviewing the Q3 window.
-- CI applies `ci/check_ministry_transparency.sh` / `make check-ministry-transparency` before releases leave staging, verifying the artefact digests, Grafana/alert hashes, and manifest metadata so every future quarter follows the same evidence trail.
+## မက်ထရစ်များနှင့် ဒက်ရှ်ဘုတ်များ
 
-## Metrics & Dashboards
+Grafana ဒိုင်ခွက် (`dashboards/grafana/ministry_transparency_overview.json`) သည် အောက်ပါအကန့်များကို ဖော်ထုတ်ပေးသည်-
 
-The Grafana dashboard (`dashboards/grafana/ministry_transparency_overview.json`) exposes the following panels:
+- AI ထိန်းညှိမှု တိကျမှု- မော်ဒယ်တစ်ခုစီအလိုက် FP/FN နှုန်း၊ ပျံကျနှင့် ချိန်ညှိခြင်းပစ်မှတ်၊ နှင့် `docs/source/sorafs/reports/ai_moderation_calibration_*.md` နှင့် ချိတ်ဆက်ထားသော သတိပေးချက်အဆင့်များ။
+- အယူခံမှုဘဝသံသရာ- တင်ပြချက်များ၊ SLA လိုက်နာမှု၊ ပြောင်းပြန်လှန်မှုများ၊ ငွေချေးစာချုပ်များ လောင်ကျွမ်းမှု၊ တစ်ဆင့်ပြီးတစ်ဆင့် မှတ်တမ်းများ။
+- Denylist အလှည့်အပြောင်း- hash မိသားစုအလိုက် ထပ်တိုး/ဖယ်ရှားမှုများ၊ TTL သက်တမ်းကုန်ဆုံးမှု၊ အရေးပေါ် canon တောင်းခံမှုများ။
+- စေတနာ့ဝန်ထမ်း အတိုချုံးများနှင့် ကွဲပြားမှု- ဘာသာစကားအလိုက် တင်ပြမှုများ၊ အကျိုးစီးပွားဆိုင်ရာ ထုတ်ဖော်မှုများ၊ ထုတ်ဝေမှု နောက်ကျခြင်း။ ဟန်ချက်ညီသော အတိုချုံးအကွက်များကို `docs/source/ministry/volunteer_brief_template.md` တွင် သတ်မှတ်ထားသည်၊၊ အချက်အလက်ဇယားများနှင့် စိစစ်ရေးတဂ်များကို စက်ဖြင့်ဖတ်နိုင်စေရန် သေချာစေသည်။
+- ငွေတိုက်လက်ကျန်များ- အပ်ငွေများ၊ ပေးချေမှုများ၊ ထူးထူးခြားခြား တာဝန်ယူမှု (MINFO-7 ကို ကျွေးမွေးသည်)။
 
-- AI moderation accuracy: per-model FP/FN rate, drift vs calibration target, and alert thresholds tied to `docs/source/sorafs/reports/ai_moderation_calibration_*.md`.
-- Appeal lifecycle: submissions, SLA compliance, reversals, bond burns, per-tier backlog.
-- Denylist churn: additions/removals per hash family, TTL expirations, emergency canon invocations.
-- Volunteer briefs & panel diversity: submissions per language, conflict-of-interest disclosures, publication lag. Balanced brief fields are specified in `docs/source/ministry/volunteer_brief_template.md`, ensuring fact tables and moderation tags are machine readable.
-- Treasury balances: deposits, payouts, outstanding liability (feeds MINFO-7).
+သတိပေးချက်စည်းမျဉ်းများ (`dashboards/alerts/ministry_transparency_rules.yml` တွင်ဖော်ပြထားသည်) အဖုံး-
+- FP/FN သွေဖည်မှု > 25% နှင့် ချိန်ညှိခြင်း အခြေခံလိုင်း။
+- လေးပုံတစ်ပုံလျှင် SLA အယူခံဝင်နှုန်း > 5%။
+- မူဝါဒထက် အရေးပေါ် canon TTL များ။
+- သုံးလပတ်ပိတ်ပြီးနောက် ထုတ်ဝေမှု နောက်ကျခြင်း။
 
-Alert rules (codified in `dashboards/alerts/ministry_transparency_rules.yml`) cover:
-- FP/FN deviation >25% versus calibration baseline.
-- Appeal SLA miss rate >5% per quarter.
-- Emergency canon TTLs older than policy.
-- Publication lag >14 days after quarter close.
+## ကိုယ်ရေးကိုယ်တာနှင့် ဖြန့်ချိရေး Guardrails (MINFO-8a)| မက်ထရစ်အတန်း | ယန္တရား | ကန့်သတ်ချက်များ | ထပ်လောင်းစောင့် |
+|-----------------|-----------|-----------------|--------------------|
+| အရေအတွက်များ (အယူခံဝင်မှု၊ အမည်ပျက်စာရင်း အပြောင်းအလဲများ၊ စေတနာ့ဝန်ထမ်း အကျဉ်းချုပ်များ) | Laplace ဆူညံသံ | လေးပုံတစ်ပုံလျှင် ε=0.75, δ=1e-6 | ဆူညံသံလွန်တန်ဖိုး <5 ဖြင့် ပုံးများကို ဖိနှိပ်ပါ။ အပိုင်းတစ်ပိုင်းလျှင် သရုပ်ဆောင်တစ်ဦးလျှင် 1 ဦးအတွက် အပိုင်းကို ပံ့ပိုးပေးပါသည်။ |
+| AI တိကျမှု | ပိုင်းဝေ/ပိုင်းခြေ | ε=0.5, δ=1e-6 | သန့်စင်ထားသောနမူနာအရေအတွက် ≥50 (`min_accuracy_samples` ကြမ်းပြင်) နှင့် ယုံကြည်မှုကြားကာလကို ထုတ်ပြန်သည့်အခါမှသာ ထုတ်ဝေပါ။ |
+| ဘဏ္ဍာတိုက် | ဆူညံသံမရှိ (အများပြည်သူပေါ်ရှိနေပြီ) | — | ငွေတိုက် ID များမှလွဲ၍ အကောင့်အမည်များကို ဖုံးအုပ်ထားသည်။ Merkle အထောက်အထားများပါဝင်သည်။ |
 
-## Privacy & Release Guardrails (MINFO-8a)
+ထုတ်ဝေရန် လိုအပ်ချက်များ-
+- ကွဲပြားသောကိုယ်ရေးကိုယ်တာအစီရင်ခံစာများတွင် epsilon/delta လယ်ဂျာနှင့် RNG မျိုးစေ့ကတိကဝတ် (`blake3(seed)`) ပါဝင်သည်။
+- အများသူငှာ Merkle ပြေစာများတွင် မပါဝင်ပါက ထိလွယ်ရှလွယ်သော ဥပမာများ (အထောက်အထား hashes) ကို ပြန်လည်ပြင်ဆင်ထားသည်။
+- ဖယ်ရှားလိုက်သော အကွက်များနှင့် မျှတမှုရှိကြောင်း ဖော်ပြသည့် အကျဉ်းချုပ်တွင် ပြန်လည်ပြုပြင်ခြင်းမှတ်တမ်းကို ထပ်လောင်းထားသည်။
 
-| Metric class | Mechanism | Parameters | Additional guards |
-|--------------|-----------|------------|-------------------|
-| Counts (appeals, blacklist changes, volunteer briefs) | Laplace noise | ε = 0.75 per quarter, δ = 1e-6 | Suppress buckets with post-noise value <5; clip contributions to 1 per actor per quarter. |
-| AI accuracy | Gaussian noise on numerator/denominator | ε = 0.5, δ = 1e-6 | Release only when sanitized sample count ≥ 50 (the `min_accuracy_samples` floor) and publish the confidence interval. |
-| Treasury flows | No noise (already public on-chain) | — | Mask account names except treasury IDs; include Merkle proofs. |
+## အလုပ်အသွားအလာနှင့် အချိန်ဇယားကို ထုတ်ဝေခြင်း။
 
-Release requirements:
-- Differential privacy reports include the epsilon/delta ledger and RNG seed commitment (`blake3(seed)`).
-- Sensitive examples (evidence hashes) redacted unless already in public Merkle receipts.
-- Redaction log appended to the summary describing all removed fields and justification.
+| T-Window | တာဝန် | ပိုင်ရှင်(များ) | အထောက်အထား |
+|----------|------|----------------|----------|
+| ကွာတားပိတ် |ပြီးနောက် T+3d ကုန်ကြမ်းတင်ပို့မှုများကို အေးခဲစေပြီး စုစည်းမှုအလုပ် | ဓမ္မ Observability TL | `ministry_transparency_ingest.log`၊ ပိုက်လိုင်းအလုပ် ID |
+| T+7d | ကုန်ကြမ်းမက်ထရစ်များကို ပြန်လည်သုံးသပ်ပါ၊ DP sanitizer အခြောက်ပြေး | ဒေတာယုံကြည်မှုအဖွဲ့ | သန့်စင်ဆေးအစီရင်ခံစာ (`artifacts/.../dp_report.json`) |
+| T+10d | မူကြမ်း အနှစ်ချုပ် + ဒေတာ နောက်ဆက်တွဲ | Docs/DevRel + မူဝါဒလေ့လာသုံးသပ်သူ | `docs/source/ministry/reports/<YYYY-Q>.md` |
+| T+12d | ရှေးဟောင်းပစ္စည်းများကို လက်မှတ်ရေးထိုးပါ၊ ထင်ရှားစွာထုတ်လုပ်ပါ၊ SoraFS | သို့ အပ်လုဒ်လုပ်ပါ။ Ops/Governance Secretariat | `manifest.json(.sig)`, SoraFS CID |
+| T+14d | ဒက်ရှ်ဘုတ်များ + သတိပေးချက်များ၊ အုပ်ချုပ်ရေးဆိုင်ရာ ကြေငြာချက် ထုတ်ပြန်ခြင်း | Observability + Comms | Grafana ပို့ကုန်၊ သတိပေးချက် စည်းမျဉ်း hash၊ အုပ်ချုပ်မှုမဲလင့်ခ် |
 
-## Publishing Workflow & Timeline
+ထုတ်ဝေမှုတစ်ခုစီကို အတည်ပြုရပါမည်-
+1. Ministry Observability TL (ဒေတာခိုင်မာမှု)
+2. အုပ်ချုပ်ရေးကောင်စီဆက်ဆံရေးရုံး (မူဝါဒ)၊
+3. Docs/Comms ဦးဆောင် (အများပြည်သူသုံး စကားလုံး)
 
-| T‑Window | Task | Owner(s) | Evidence |
-|----------|------|----------|----------|
-| T + 3 d after quarter close | Freeze raw exports, trigger aggregation job | Ministry Observability TL | `ministry_transparency_ingest.log`, pipeline job ID |
-| T + 7 d | Review raw metrics, run DP sanitizer dry run | Data Trust team | Sanitizer report (`artifacts/.../dp_report.json`) |
-| T + 10 d | Draft summary + data appendix | Docs/DevRel + Policy analyst | `docs/source/ministry/reports/<YYYY-Q>.md` |
-| T + 12 d | Sign artefacts, produce manifest, upload to SoraFS | Ops / Governance Secretariat | `manifest.json(.sig)`, SoraFS CID |
-| T + 14 d | Publish dashboards + alerts, post governance announcement | Observability + Comms | Grafana export, alert rule hash, governance vote link |
+## အလိုအလျောက်စနစ်နှင့် အထောက်အထား သိုလှောင်မှု- ကုန်ကြမ်းဖိဒ်များ (လယ်ဂျာ၊ အယူခံဝင်မှု၊ ငြင်းပယ်စာရင်း၊ ဘဏ္ဍာတိုက်၊ စေတနာ့ဝန်ထမ်း)တို့မှ သုံးလတစ်ကြိမ် လျှပ်တစ်ပြက်ရိုက်ချက်အား တည်ဆောက်ရန် `cargo xtask ministry-transparency ingest` ကို အသုံးပြုပါ။ ဒက်ရှ်ဘုတ်မက်ထရစ်များ JSON နှင့် ထုတ်ဝေခြင်းမပြုမီ လက်မှတ်ထိုးထားသော မန်နီးဖက်စ်ကို ထုတ်လွှတ်ရန် `cargo xtask ministry-transparency build` ဖြင့် လိုက်နာပါ။
+- Red-team ချိတ်ဆက်မှု- `--red-team-report docs/source/ministry/reports/<YYYY-MM>-mod-red-team-<scenario>.md` ဖိုင်များကို တစ်ခု သို့မဟုတ် တစ်ခုထက်ပိုသော `--red-team-report docs/source/ministry/reports/<YYYY-MM>-mod-red-team-<scenario>.md` ကို ထည့်သွင်းသည့်အဆင့်သို့ လွှဲပြောင်းပေးခြင်းဖြင့် ပွင့်လင်းမြင်သာမှုလျှပ်တစ်ပြက်ရိုက်ချက်များနှင့် သန့်ရှင်းရေးပြုလုပ်ထားသော မက်ထရစ်များသည် တူး ID များ၊ ဇာတ်လမ်းအမျိုးအစားများ၊ အထောက်အထားအစုအဝေးလမ်းကြောင်းများနှင့် လယ်ဂျာ/အယူခံဝင်/ငြင်းဆိုစာရင်းဒေတာတို့နှင့်အတူ သယ်ဆောင်သွားပါသည်။ ၎င်းသည် MINFO-9 လေ့ကျင့်မှုပုံစံကို လက်ဖြင့် တည်းဖြတ်ခြင်းမရှိဘဲ ပွင့်လင်းမြင်သာမှု အစုံလိုက်တိုင်းတွင် ထင်ဟပ်စေပါသည်။
+- စေတနာ့ဝန်ထမ်း တင်ပြချက်များသည် `docs/source/ministry/volunteer_brief_template.md` (ဥပမာ- `docs/examples/ministry/volunteer_brief_template.json`) ကို လိုက်နာရပါမည်။ ထည့်သွင်းသည့်အဆင့်သည် ထိုအရာဝတ္ထုများ၏ JSON အခင်းအကျင်းကို မျှော်လင့်ထားပြီး၊ `moderation.off_topic` တို့ကို အလိုအလျောက် စစ်ထုတ်ကာ ထုတ်ဖော်အတည်ပြုချက်များကို တွန်းအားပေးကာ အချက်အလက်ဇယားလွှမ်းခြုံမှုကို မှတ်တမ်းတင်ထားသောကြောင့် ဒက်ရှ်ဘုတ်များသည် ပျောက်ဆုံးနေသောကိုးကားချက်များကို မီးမောင်းထိုးပြနိုင်မည်ဖြစ်သည်။
+- နောက်ထပ် အလိုအလျောက်စနစ်သည် `scripts/ministry/` အောက်တွင် နေထိုင်သည်။ `dp_sanitizer.py` သည် `cargo xtask ministry-transparency sanitize` ကွန်မန်းကို ခြုံစေပြီး `transparency_release.py` (သက်သေပြကိရိယာနှင့်အတူ ထည့်ထားသည်) ယခု ထုပ်ပိုးထားသော ပစ္စည်းများကို ထုပ်ပိုးထားပြီး SoraFS CID ကို Grafana (expressitit) မှ ဆင်းသက်လာသည်။ `--sorafs-cid`) နှင့် `transparency_manifest.json` နှင့် `transparency_release_action.json` (ရှင်းလင်းစွာဖော်ပြချက်ကိုဖမ်းယူသည့် `TransparencyReleaseV1` အုပ်ချုပ်မှုပေးချေမှုတစ်ခု၊ SoraFS CID နှင့် ဒက်ရှ်ဘုတ်များ)။ `--governance-dir <path>` သို့ `transparency_release.py` (သို့မဟုတ် `cargo xtask ministry-transparency anchor --action artifacts/.../transparency_release_action.json --governance-dir <path>` ကို run) သို့ Norito payload ကို ကုဒ်သွင်းပြီး မထုတ်ဝေမီ အုပ်ချုပ်မှု DAG လမ်းညွှန်ထဲသို့ ချလိုက်ပါ။ တူညီသောအလံသည် `<governance-dir>/publisher/head_requests/ministry_transparency/` အောက်တွင် `MinistryTransparencyHeadUpdateV1` တောင်းဆိုချက်ကိုလည်း ထုတ်လွှတ်ပြီး လေးပုံတပုံ၊ SoraFS CID၊ ထင်ရှားသောလမ်းကြောင်းများနှင့် IPNS သော့အမည်တူများ (`--ipns-key` မှတဆင့် ကျော်လွှားနိုင်သည်)။ `--auto-head-update` ကို `publisher_head_updater.py` မှတစ်ဆင့် ချက်ချင်းလုပ်ဆောင်ရန် `--auto-head-update` ကို ပံ့ပိုးပေးပြီး IPNS ကို တစ်ချိန်တည်းထုတ်ဝေရန်လိုအပ်သောအခါတွင် `--head-update-ipns-template '/usr/local/bin/ipfs name publish --key {ipns_key} /ipfs/{cid}'` ကို ရွေးချယ်နိုင်သည်။ မဟုတ်ပါက၊ တန်းစီခြင်းကို ဖယ်ရှားရန်၊ `publisher/head_updates.log` ကို ပေါင်းထည့်ရန်၊ `publisher/ipns_heads/<key>.json` ကို အပ်ဒိတ်လုပ်ရန်နှင့် `head_requests/ministry_transparency/processed/` အောက်တွင် စီမံဆောင်ရွက်ထားသော JSON ကို သိမ်းဆည်းရန် နောက်မှ `scripts/ministry/publisher_head_updater.py --governance-dir <path>` ကို သိမ်းဆည်းပါ။
+- ထုတ်လွှတ်မှုသော့ဖြင့် လက်မှတ်ထိုးထားသော `checksums.sha256` ဖိုင်ဖြင့် `artifacts/ministry/transparency/<YYYY-Q>/` အောက်တွင် သိမ်းဆည်းထားသည့် အနုပညာပစ္စည်းများ။ ယခုအခါ သစ်ပင်သည် `artifacts/ministry/transparency/2026-Q3/` တွင် ရည်ညွှန်းအစုအစည်းတစ်ခု (သန့်ရှင်းရေးပြုလုပ်ထားသော မက်ထရစ်များ၊ DP အစီရင်ခံစာ၊ အကျဉ်းချုပ်၊ သရုပ်ဖော်ပြချက်၊ အုပ်ချုပ်မှုလုပ်ဆောင်ချက်) ပါရှိသောကြောင့် အင်ဂျင်နီယာများသည် ကိရိယာကို အော့ဖ်လိုင်းစမ်းသပ်နိုင်ပြီး `scripts/ministry/check_transparency_release.py` သည် `scripts/ministry/check_transparency_release.py` တွင် အချေအတင်များ/လေးပုံတပုံ မက်တာဒေတာကို ဒေသတွင်းတွင် I1010CI00X မတိုင်မီ မှန်ကန်ကြောင်း အတည်ပြုပေးပါသည်။ တင်ထားသည်။ စစ်ဆေးသူသည် ယခုအခါ မှတ်တမ်းတင်ထားသော DP ဘတ်ဂျက်များ (အရေတွက်များအတွက်ε≤0.75၊ တိကျမှုအတွက် ε≤0.5၊ δ≤1e−6) ကို တွန်းအားပေးပြီး `min_accuracy_samples` သို့မဟုတ် ဖိနှိပ်မှုအဆင့်များ ပျံ့သွားသည့်အခါတိုင်း သို့မဟုတ် ပုံးတစ်ပုံးသည် ယင်းအထပ်များအောက်ရှိ တန်ဖိုးတစ်ခု ပေါက်ကြားသည့်အခါတိုင်း တည်ဆောက်မှုကို ပျက်ကွက်ပါသည်။ ဇာတ်ညွှန်းကို လမ်းပြမြေပုံ (MINFO‑8) နှင့် CI အကြား စာချုပ်အဖြစ် သဘောထားပါ- privacy parameters များ အမြဲပြောင်းလဲပါက အထက်ဇယားနှင့် checker နှစ်ခုလုံးကို အတူတကွ ချိန်ညှိပါ။- အုပ်ချုပ်မှုကျောက်ဆူး- manifest digest ကိုရည်ညွှန်းသော `TransparencyReleaseV1` လုပ်ဆောင်ချက်ကိုဖန်တီးပါ၊ SoraFS CID နှင့် dashboard git SHA (`iroha_data_model::ministry::TransparencyReleaseV1` သည် canonical payload ကိုသတ်မှတ်သည်)။
 
-Each release must be approved by:
-1. Ministry Observability TL (data integrity)
-2. Governance Council liaison (policy)
-3. Docs/Comms lead (public wording)
+## Tasks & Next Steps ကိုဖွင့်ပါ။
 
-## Automation & Evidence Storage
-
-- Use `cargo xtask ministry-transparency ingest` to build the quarterly snapshot from the raw feeds (ledger, appeals, denylist, treasury, volunteer). Follow up with `cargo xtask ministry-transparency build` to emit the dashboard metrics JSON plus the signed manifest before publishing.
-- Red-team linkage: pass one or more `--red-team-report docs/source/ministry/reports/<YYYY-MM>-mod-red-team-<scenario>.md` files to the ingest step so the transparency snapshot and sanitized metrics carry drill IDs, scenario classes, evidence bundle paths, and dashboard SHAs alongside the ledger/appeal/denylist data. This keeps MINFO-9 drill cadence reflected in every transparency packet without manual edits.
-- Volunteer submissions must follow `docs/source/ministry/volunteer_brief_template.md` (example: `docs/examples/ministry/volunteer_brief_template.json`). The ingest step expects a JSON array of those objects, automatically filters `moderation.off_topic` entries, enforces disclosure attestations, and records fact-table coverage so dashboards can highlight missing citations.
-- Additional automation lives under `scripts/ministry/`. `dp_sanitizer.py` wraps the `cargo xtask ministry-transparency sanitize` command, while `transparency_release.py` (added alongside the provenance tooling) now packages artefacts, derives the SoraFS CID from the `sorafs_cli car pack|proof verify` summary (or an explicit `--sorafs-cid`), and writes both `transparency_manifest.json` and `transparency_release_action.json` (a `TransparencyReleaseV1` governance payload capturing the manifest digest, SoraFS CID, and dashboards git SHA). Pass `--governance-dir <path>` to `transparency_release.py` (or run `cargo xtask ministry-transparency anchor --action artifacts/.../transparency_release_action.json --governance-dir <path>`) to encode the Norito payload and drop it (plus the JSON summary) into the governance DAG directory before publishing. The same flag also emits a `MinistryTransparencyHeadUpdateV1` request under `<governance-dir>/publisher/head_requests/ministry_transparency/`, referencing the quarter, SoraFS CID, manifest paths, and IPNS key alias (overridable via `--ipns-key`). Provide `--auto-head-update` to process that request immediately via `publisher_head_updater.py`, optionally passing `--head-update-ipns-template '/usr/local/bin/ipfs name publish --key {ipns_key} /ipfs/{cid}'` when IPNS needs to be published at the same time. Otherwise, run `scripts/ministry/publisher_head_updater.py --governance-dir <path>` later (with the same template if needed) to drain the queue, append `publisher/head_updates.log`, update `publisher/ipns_heads/<key>.json`, and archive the processed JSON under `head_requests/ministry_transparency/processed/`.
-- Artefacts stored under `artifacts/ministry/transparency/<YYYY-Q>/` with a `checksums.sha256` file signed by the release key. The tree now carries a reference bundle at `artifacts/ministry/transparency/2026-Q3/` (sanitized metrics, DP report, summary, manifest, governance action) so engineers can test the tooling offline, and `scripts/ministry/check_transparency_release.py` verifies the digests/quarter metadata locally while `ci/check_ministry_transparency.sh` runs the same validation in CI before evidence is uploaded. The checker now enforces the documented DP budgets (ε≤0.75 for counts, ε≤0.5 for accuracy, δ≤1e−6) and fails the build whenever `min_accuracy_samples` or the suppression threshold drift, or when a bucket leaks a value below those floors without being suppressed. Treat the script as the contract between the roadmap (MINFO‑8) and CI: adjust both the table above and the checker together if the privacy parameters ever change.
-- Governance anchor: create `TransparencyReleaseV1` action referencing the manifest digest, SoraFS CID, and dashboard git SHA (`iroha_data_model::ministry::TransparencyReleaseV1` defines the canonical payload).
-
-## Open Tasks & Next Steps
-
-| Task | Status | Notes |
+| တာဝန် | အဆင့်အတန်း | မှတ်စုများ |
 |------|--------|-------|
-| Implement `ministry_transparency_ingest` + builder jobs | 🈺 In Progress | `cargo xtask ministry-transparency ingest|build` now stitches ledger/appeal/denylist/treasury feeds; remaining work wires the DP sanitizer + release script pipeline. |
-| Publish Grafana dashboard + alert pack | 🈴 Completed | Dashboard + alert files live under `dashboards/grafana/ministry_transparency_overview.json` and `dashboards/alerts/ministry_transparency_rules.yml`; wire them into PagerDuty `ministry-transparency` during rollout. |
-| Automate DP sanitizer + provenance manifest | 🈴 Completed | `cargo xtask ministry-transparency sanitize` (wrapper: `scripts/ministry/dp_sanitizer.py`) emits the sanitized metrics + DP report, and `scripts/ministry/transparency_release.py` now writes `checksums.sha256` plus `transparency_manifest.json` for provenance. |
-| Create quarterly report template (`reports/<YYYY-Q>.md`) | 🈴 Completed | Template added at `docs/source/ministry/reports/2026-Q3-template.md`; copy/rename per quarter and replace the `{{...}}` tokens before publishing. |
-| Wire governance DAG anchoring | 🈴 Completed | `TransparencyReleaseV1` lives in `iroha_data_model::ministry`, `scripts/ministry/transparency_release.py` emits the JSON payload, and `cargo xtask ministry-transparency anchor` encodes the `.to` artefact into the configured governance DAG directory so the publisher can ingest releases automatically. |
+| `ministry_transparency_ingest` + တည်ဆောက်သူ အလုပ်များ | 🈺 တိုးတက်မှု | ယခု `cargo xtask ministry-transparency ingest|build` သည် လယ်ဂျာ/အယူခံဝင်/ငြင်းဆန်သောစာရင်း/ဘဏ္ဍာတိုက်ဖိဒ်များကို ချုပ်ထားသည်။ ကျန်ရှိသောအလုပ်သည် DP sanitizer + release script pipeline ကို ကြိုးပေးသည်။ |
+| Grafana ဒက်ရှ်ဘုတ် + သတိပေးချက် ပက်ကေ့ | 🈴 ပြီးစီး | ဒက်ရှ်ဘုတ် + သတိပေးချက်ဖိုင်များသည် `dashboards/grafana/ministry_transparency_overview.json` နှင့် `dashboards/alerts/ministry_transparency_rules.yml` အောက်တွင် အသက်ရှင်နေပါသည်။ ထုတ်လွှင့်နေစဉ်အတွင်း ၎င်းတို့ကို PagerDuty `ministry-transparency` သို့ ကြိုးပေးလိုက်ပါ။ |
+| DP သန့်စင်ဆေး + သက်သေပြချက် | အလိုအလျောက်လုပ်ပါ။ 🈴 ပြီးစီး | `cargo xtask ministry-transparency sanitize` (ထုပ်ပိုး- `scripts/ministry/dp_sanitizer.py`) သည် သန့်စင်ထားသော မက်ထရစ်များ + DP အစီရင်ခံစာကို ထုတ်လွှတ်ပြီး `scripts/ministry/transparency_release.py` သည် သက်သေပြရန်အတွက် ယခု `checksums.sha256` နှင့် `transparency_manifest.json` တို့ကို ရေးထားသည်။ |
+| သုံးလတစ်ကြိမ် အစီရင်ခံစာ နမူနာပုံစံ (`reports/<YYYY-Q>.md`) | ဖန်တီးပါ။ 🈴 ပြီးစီး | နမူနာပုံစံကို `docs/source/ministry/reports/2026-Q3-template.md` တွင် ထည့်သွင်းထားသည်။ လေးပုံတစ်ပုံလျှင် မိတ္တူ/အမည်ပြောင်းပြီး မထုတ်ဝေမီ `{{...}}` တိုကင်များကို အစားထိုးပါ။ |
+| ဝိုင်ယာအုပ်ချုပ်မှု DAG ကိုယ်ထူကိုယ်ထ | 🈴 ပြီးစီး | `TransparencyReleaseV1` သည် `iroha_data_model::ministry` တွင်နေထိုင်သည်၊ `scripts/ministry/transparency_release.py` သည် JSON payload ကိုထုတ်လွှတ်ပြီး `cargo xtask ministry-transparency anchor` သည် `.to` ကို configure လုပ်ထားသော အုပ်ချုပ်မှုစနစ်သို့ အလိုအလျောက်ထုတ်ပြန်ပေးပါသည်။ |
 
-Delivering the document, dashboard spec, and workflow moves MINFO-8 from 🈳 to 🈺. Remaining engineering tasks (jobs, scripts, alert wiring) are tracked in the table above and should close before the first Q3 2026 publication.
+စာရွက်စာတမ်း၊ ဒက်ရှ်ဘုတ် spec နှင့် အလုပ်အသွားအလာကို ပေးပို့ခြင်းသည် MINFO-8 ကို 🈳 မှ 🈺 သို့ ရွှေ့သည်။ လက်ကျန်အင်ဂျင်နီယာလုပ်ငန်းတာဝန်များ (အလုပ်များ၊ ဇာတ်ညွှန်းများ၊ သတိပေးချက်ဝိုင်ယာကြိုးများ) ကို အထက်ဇယားတွင် ခြေရာခံပြီး ပထမ Q32026 မထုတ်ဝေမီ ပိတ်သင့်သည်။

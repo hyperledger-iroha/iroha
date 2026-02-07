@@ -7,62 +7,63 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 44f1c681730f1c94d9d00e8f829a0134374ce6cb29f21727a27685e096f0da40
 source_last_modified: "2026-01-17T06:10:29.077000+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Merge Ledger Design — Lane Finality and Global Reduction
+# 合并账本设计 — 通道最终性和全局缩减
 
-This note finalises the merge-ledger design for Milestone 5. It explains the
-non-empty block policy, cross-lane QC merge semantics, and the finality workflow
-that binds lane-level execution to the global world state commitment.
+本说明最终确定了 Milestone 5 的合并账本设计。它解释了
+非空块策略、跨通道 QC 合并语义和最终工作流程
+这将车道级执行与全球世界状态承诺联系起来。
 
-The design extends the Nexus architecture described in `nexus.md`. Terms such as
-"lane block", "lane QC", "merge hint", and "merge ledger" inherit their
-definition from that document; this note focuses on behavioural rules and
-implementation guidance that must be enforced by the runtime, storage, and WSV
-layers.
+该设计扩展了 `nexus.md` 中描述的 Nexus 架构。术语如
+“车道块”、“车道QC”、“合并提示”和“合并分类账”继承它们的
+该文件中的定义；本说明重点关注行为规则和
+必须由运行时、存储和 WSV 强制执行的实施指南
+层。
 
-## 1. Non-Empty Block Policy
+## 1. 非空块策略
 
-**Rule (MUST):** A lane proposer issues a block only when the block contains at
-least one executed transaction fragment, time-based trigger, or deterministic
-artifact update (e.g., DA artifact roll-up). Empty blocks are forbidden.
+**规则（必须）：** 仅当块包含 at 时，车道提议者才发出块
+至少一个已执行的事务片段、基于时间的触发器或确定性的
+工件更新（例如，DA 工件汇总）。禁止空块。
 
-**Implications:**
+**影响：**
 
-- Slot keep-alive: when no transaction meets its deterministic commit window,
-the lane emits no block and simply advances to the next slot. The merge ledger
-remains on the previous tip for that lane.
-- Trigger batching: background triggers that produce no state transition (e.g.,
-cron that reaffirms invariants) are considered empty and MUST be skipped or
-bundled with other work before producing a block.
-- Telemetry: `pipeline_detached_merged` and follow-up metrics treat skipped
-slots explicitly—operators can distinguish "no work" from "pipeline stalled".
-- Replay: block storage does not insert synthetic empty placeholders. The Kura
-replay loop simply observes the same parent hash for consecutive slots if no
-block was emitted.
+- Slot keep-alive：当没有事务满足其确定性提交窗口时，
+该车道不发出任何方块，只是前进到下一个槽位。合并账本
+仍保留在该车道的前一个提示上。
+- 触发器批处理：不产生状态转换的后台触发器（例如，
+重申不变量的 cron）被认为是空的并且必须被跳过或者
+在生成块之前与其他工作捆绑在一起。
+- 遥测：`pipeline_detached_merged` 和后续指标处理被跳过
+明确的插槽——操作员可以区分“无工作”和“管道停滞”。
+- 重播：块存储不会插入合成的空占位符。库拉
+如果没有，重播循环只是观察连续插槽的相同父哈希值
+块被发射。
 
-**Canonical Check:** During block proposal and validation, `ValidBlock::commit`
-asserts that the associated `StateBlock` carries at least one committed overlay
-(delta, artifact, trigger). This aligns with the `StateBlock::is_empty` guard
-that already ensures no-op writes are elided. Enforcement happens before
-signatures are requested so committees never vote on empty payloads.
+**规范检查：** 在区块提案和验证期间，`ValidBlock::commit`
+断言关联的 `StateBlock` 至少携带一个已提交的覆盖
+（增量、工件、触发器）。这与 `StateBlock::is_empty` 防护一致
+这已经确保了无操作写入被省略。强制执行发生在之前
+要求签名，以便委员会永远不会对空有效负载进行投票。
 
-## 2. Cross-Lane QC Merge Semantics
+## 2. 跨通道 QC 合并语义
 
-Each lane block `B_i` finalised by its committee produces:
+由其委员会最终确定的每个车道块 `B_i` 产生：
 
-- `lane_state_root_i`: Poseidon2-SMT commitment over per-DS state roots touched
-in the block.
-- `merge_hint_root_i`: rolling candidate for the merge ledger (`tag =
+- `lane_state_root_i`：Poseidon2-SMT 对每个 DS 状态根源的承诺已触及
+在街区里。
+- `merge_hint_root_i`：合并分类账的滚动候选者（`tag =
 "iroha:merge:candidate:v1\0"`).
-- `lane_qc_i`: aggregated signatures from the lane committee over the
-  execution-vote preimage (block hash, `parent_state_root`,
-  `post_state_root`, height/view/epoch, chain_id, and mode tag).
+- `lane_qc_i`：车道委员会在
+  执行投票原像（块哈希，`parent_state_root`，
+  `post_state_root`、高度/视图/纪元、chain_id 和模式标签）。
 
-Merge nodes collect the latest tips `{(B_i, lane_qc_i, merge_hint_root_i)}` for
-all lanes `i ∈ [0, K)`.
+合并节点收集最新提示`{(B_i, lane_qc_i, merge_hint_root_i)}`
+所有车道 `i ∈ [0, K)`。
 
-**Merge Entry (MUST):**
+**合并条目（必须）：**
 
 ```
 MergeLedgerEntry {
@@ -72,23 +73,21 @@ MergeLedgerEntry {
     global_state_root: Hash32,
     merge_qc: QuorumCertificate,
 }
-```
+```- `lane_tips[i]` 是通道块的哈希值，通道的合并条目密封
+  `i`。如果自上一个合并条目以来车道没有发出任何块，则该值为
+  重复。
+- `merge_hint_root[i]` 是对应通道的 `merge_hint_root`
+  块。当 `lane_tips[i]` 重复时，它会重复。
+- `global_state_root` 等于 `ReduceMergeHints(merge_hint_root[0..K-1])`，
+  Poseidon2 折叠与域分离标签
+  `"iroha:merge:reduce:v1\0"`。减少是确定性的并且必须
+  在同行之间重建相同的价值。
+- `merge_qc` 是合并委员会颁发的 BFT 法定人数证书
+  序列化条目。
 
-- `lane_tips[i]` is the hash of the lane block the merge entry seals for lane
-  `i`. If a lane emitted no block since the previous merge entry, this value is
-  repeated.
-- `merge_hint_root[i]` is the `merge_hint_root` from the corresponding lane
-  block. It is repeated when `lane_tips[i]` repeats.
-- `global_state_root` equals `ReduceMergeHints(merge_hint_root[0..K-1])`, a
-  Poseidon2 fold with domain separation tag
-  `"iroha:merge:reduce:v1\0"`. The reduction is deterministic and MUST
-  reconstruct the same value across peers.
-- `merge_qc` is a BFT quorum certificate from the merge committee over the
-  serialized entry.
+**合并 QC 有效负载（必须）：**
 
-**Merge QC Payload (MUST):**
-
-Merge committee members sign a deterministic digest:
+合并委员会成员签署确定性摘要：
 
 ```
 merge_qc_digest = blake2b32(
@@ -104,110 +103,106 @@ merge_qc_digest = blake2b32(
 )
 ```
 
-- `view` is the merge-committee view derived from the lane tips (max
-  `view_change_index` across the lane headers sealed by the entry).
-- `chain_id` is the configured chain identifier string (UTF-8 bytes).
-- The payload uses Norito encoding with the field order shown above.
+- `view` 是源自车道提示的合并委员会视图（最大
+  `view_change_index` 穿过由入口密封的车道标头）。
+- `chain_id` 是配置的链标识符字符串（UTF-8 字节）。
+- 有效负载使用 Norito 编码，字段顺序如上所示。
 
-The resulting digest is stored in `merge_qc.message_digest` and is the message
-verified by BLS signatures.
+生成的摘要存储在 `merge_qc.message_digest` 中，并且是消息
+由 BLS 签名验证。
 
-**Merge QC Construction (MUST):**
+**合并 QC 构建（必须）：**
 
-- The merge committee roster is the current commit-topology validator set.
-- Required quorum = `commit_quorum_from_len(roster_len)`.
-- `merge_qc.signers_bitmap` encodes participating validator indices (LSB-first)
-  in commit-topology order.
-- `merge_qc.aggregate_signature` is the BLS-normal aggregate for the digest
-  above.
+- 合并委员会花名册是当前提交拓扑验证者集。
+- 所需法定人数 = `commit_quorum_from_len(roster_len)`。
+- `merge_qc.signers_bitmap` 对参与验证者索引进行编码（LSB优先）
+  按照提交拓扑顺序。
+- `merge_qc.aggregate_signature` 是摘要的 BLS 正常聚合
+  上面。
 
-**Validation (MUST):**
+**验证（必须）：**
 
-1. Verify each `lane_qc_i` against `lane_tips[i]` and confirm the block headers
-   include the matching `merge_hint_root_i`.
-2. Ensure no `lane_qc_i` points to an `Invalid` or unexecuted block. The
-   non-empty policy above ensures the header includes state overlays.
-3. Recompute `ReduceMergeHints` and compare with `global_state_root`.
-4. Recompute the merge QC digest and verify the signer bitmap, quorum threshold,
-   and aggregate signature against the commit-topology roster.
+1. 对照 `lane_tips[i]` 验证每个 `lane_qc_i` 并确认块头
+   包括匹配的 `merge_hint_root_i`。
+2. 确保没有 `lane_qc_i` 指向 `Invalid` 或未执行的块。的
+   上面的非空策略确保标头包含状态覆盖。
+3. 重新计算 `ReduceMergeHints` 并与 `global_state_root` 进行比较。
+4. 重新计算合并QC摘要并验证签名者位图、仲裁阈值、
+   并根据提交拓扑名册聚合签名。
 
-**Observability:** Merge nodes emit Prometheus counters for
-`merge_entry_lane_repeats_total{i}` to highlight lanes that skipped slots for
-operational visibility.
+**可观察性：** 合并节点发出 Prometheus 计数器
+`merge_entry_lane_repeats_total{i}` 突出显示跳过插槽的通道
+运营可见性。
 
-## 3. Finality Workflow
+## 3. 最终确定工作流程
 
-### 3.1 Lane-Level Finality
+### 3.1 车道级最终确定性
 
-1. Transactions are scheduled per lane in deterministic slots.
-2. The executor applies overlays into `StateBlock`, producing deltas and
-artifacts.
-3. Upon validation, the lane committee signs the execution-vote preimage that
-   binds the block hash, state roots, and height/view/epoch. The tuple
-   `(block_hash, lane_qc_i, merge_hint_root_i)` is considered lane-final.
-4. Light clients MAY treat the lane tip as final for DS-limited proofs, but
-must record the associated `merge_hint_root` to reconcile with the merge ledger
-later.
+1. 事务在确定性时隙中按通道进行调度。
+2. 执行器将覆盖应用到 `StateBlock` 中，生成增量和
+文物。
+3. 验证后，车道委员会签署执行投票原像，
+   绑定区块哈希、状态根和高度/视图/纪元。元组
+   `(block_hash, lane_qc_i, merge_hint_root_i)` 被认为是车道最终的。
+4. 轻客户端可以将车道提示视为 DS 限制证明的最终结果，但是
+必须记录关联的 `merge_hint_root` 以与合并分类账进行核对
+稍后。通道委员会是针对每个数据空间的，不会取代全局提交
+拓扑。委员会大小固定为 `3f+1`，其中 `f` 来自
+数据空间目录 (`fault_tolerance`)。验证器池是数据空间的
+验证器（管理员管理的通道或公共通道的通道治理清单
+权益选出的车道的权益记录）。委员会成员是
+使用绑定的 VRF 纪元种子每个纪元确定性采样一次
+`dataspace_id` 和 `lane_id`。如果池小于 `3f+1`，则通道最终确定
+暂停，直到恢复仲裁（紧急恢复单独处理）。
 
-Lane committees are per-dataspace and do not replace the global commit
-topology. Committee size is fixed at `3f+1`, where `f` comes from the
-dataspace catalog (`fault_tolerance`). The validator pool is the dataspace's
-validators (lane governance manifests for admin-managed lanes, or public-lane
-staking records for stake-elected lanes). Committee membership is
-deterministically sampled once per epoch using the VRF epoch seed bound with
-`dataspace_id` and `lane_id`. If the pool is smaller than `3f+1`, lane finality
-pauses until quorum is restored (emergency recovery is handled separately).
+### 3.2 合并账本最终性
 
-### 3.2 Merge-Ledger Finality
+1. 合并委员会收集最新的车道提示，验证每个`lane_qc_i`，并
+构造如上定义的 `MergeLedgerEntry`。
+2. 验证确定性约简后，合并委员会签署
+条目（`merge_qc`）。
+3. 节点将条目追加到合并分类账日志中，并将其与
+车道块参考。
+4. `global_state_root`成为权威的世界国家承诺
+纪元/时段。完整节点更新其 WSV 检查点元数据以反映此情况
+价值；确定性重放必须重现相同的减少。
 
-1. Merge committee collects the latest lane tips, verifies each `lane_qc_i`, and
-constructs the `MergeLedgerEntry` as defined above.
-2. After verifying the deterministic reduction, the merge committee signs the
-entry (`merge_qc`).
-3. Nodes append the entry to the merge ledger log and persist it alongside the
-lane block references.
-4. `global_state_root` becomes the authoritative world state commitment for the
-epoch/slot. Full nodes update their WSV checkpoint metadata to mirror this
-value; deterministic replay must reproduce the same reduction.
+### 3.3 WSV 和存储集成
 
-### 3.3 WSV and Storage Integration
+- `State::commit_merge_entry` 记录每通道状态根和
+  最终 `global_state_root`，使用全局校验和桥接通道执行。
+- Kura 坚持 `MergeLedgerEntry` 与车道块伪影相邻，因此
+  重播可以重建车道级和全局最终性序列。
+- 当通道跳过一个槽位时，存储仅保留前一个提示；不
+  创建占位符合并条目，直到至少一个通道产生新的
+  块。
+- API表面（Torii，遥测）公开车道提示和最新合并
+  入口，以便运营商和客户可以协调每车道和全局视图。
 
-- `State::commit_merge_entry` records the per-lane state roots and the
-  final `global_state_root`, bridging lane execution with the global checksum.
-- Kura persists `MergeLedgerEntry` adjacent to the lane block artifacts so a
-  replay can reconstruct both lane-level and global finality sequences.
-- When a lane skips a slot, storage simply retains the previous tip; no
-  placeholder merge entries are created until at least one lane produces a new
-  block.
-- API surfaces (Torii, telemetry) expose both lane tips and the latest merge
-  entry so operators and clients can reconcile per-lane and global views.
-
-## 4. Implementation Notes
-
-- `crates/iroha_core/src/state.rs`: `State::commit_merge_entry` validates the
-  reduction and wires the lane/global metadata into the world state so queries
-  and observers can access the merge hints and the authoritative global hash.
-- `crates/iroha_core/src/kura.rs`: `Kura::store_block_with_merge_entry` enqueues
-  the block and persists the associated merge entry in one step, rolling back
-  the in-memory block when the append fails so storage never records a block
-  without its sealing metadata. The merge-ledger log is pruned in lock-step
-  with the validated block height during startup recovery, and cached in memory
-  with a bounded window (`kura.merge_ledger_cache_capacity`, default 256) to
-  avoid unbounded growth on long-running nodes. Recovery truncates partial or
-  oversized merge-ledger tail entries, and append rejects entries above the
-  maximum payload size guard to cap allocations.
-- `crates/iroha_core/src/block.rs`: block validation rejects blocks without
-  entrypoints (external transactions or time triggers) and without deterministic
-  artifacts such as DA bundles (`BlockValidationError::EmptyBlock`), ensuring
-  the non-empty policy is enforced before signatures are requested and carried
-  into the merge ledger.
-- Deterministic reduction helper lives in the merge service: `reduce_merge_hint_roots`
-  (`crates/iroha_core/src/merge.rs`) implements the Poseidon2 fold described above.
-  Hardware acceleration hooks remain future work, but the scalar path now enforces
-  the canonical reduction deterministically.
-- Telemetry integration: exposing per-lane merge repeats and the
-  `global_state_root` gauge remains tracked in the observability backlog so the
-  dashboard work can ship alongside the merge service rollout.
-- Cross-component tests: golden replay coverage for the merge reduction is
-  tracked with the integration-test backlog to ensure future changes to
-  `reduce_merge_hint_roots` keep the recorded roots stable.
+## 4. 实施注意事项- `crates/iroha_core/src/state.rs`：`State::commit_merge_entry` 验证
+  减少并将车道/全局元数据连接到世界状态中，以便查询
+  观察者可以访问合并提示和权威的全局哈希。
+- `crates/iroha_core/src/kura.rs`：`Kura::store_block_with_merge_entry` 入队
+  块并在一步中保留关联的合并条目，回滚
+  追加失败时内存中的块，因此存储永远不会记录块
+  没有其密封元数据。合并账本日志被同步修剪
+  在启动恢复期间验证块高度，并缓存在内存中
+  使用有界窗口（`kura.merge_ledger_cache_capacity`，默认 256）
+  避免长时间运行的节点上无限制的增长。恢复截断部分或
+  过大的合并账本尾部条目，并且附加拒绝上面的条目
+  最大有效负载大小保护以限制分配。
+- `crates/iroha_core/src/block.rs`：块验证拒绝没有块
+  入口点（外部事务或时间触发器）并且没有确定性
+  诸如 DA 捆绑包 (`BlockValidationError::EmptyBlock`) 等工件，确保
+  在请求和携带签名之前强制执行非空策略
+  进入合并分类账。
+- 确定性缩减助手位于合并服务中：`reduce_merge_hint_roots`
+  (`crates/iroha_core/src/merge.rs`) 实现了上述 Poseidon2 折叠。
+  硬件加速钩子仍然是未来的工作，但标量路径现在强制执行
+  确定性的规范约简。
+- 遥测集成：公开每车道合并重复和
+  `global_state_root` 仪表仍在可观测性积压中进行跟踪，因此
+  仪表板工作可以与合并服务的推出一起进行。
+- 跨组件测试：合并减少的黄金重播覆盖率是
+  与集成测试待办事项进行跟踪，以确保未来的更改
+  `reduce_merge_hint_roots` 保持记录的根稳定。

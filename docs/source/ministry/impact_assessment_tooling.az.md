@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 89be62d7bb2bb79fd994d207489d310ef4c997be53447fbee8ac1f7b758d3beb
 source_last_modified: "2025-12-29T18:16:35.978367+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Impact Assessment Tooling (MINFO‑4b)
+# Təsirin Qiymətləndirilməsi Alətləri (MINFO‑4b)
 
-Roadmap reference: **MINFO‑4b — Impact assessment tooling.**  
-Owner: Governance Council / Analytics
+Yol xəritəsi arayışı: **MINFO‑4b — Təsirin qiymətləndirilməsi aləti.**  
+Sahib: İdarəetmə Şurası / Analitika
 
-This note documents the `cargo xtask ministry-agenda impact` command that now
-produces the automated hash-family diff required for referendum packets. The
-tool consumes validated Agenda Council proposals, the duplicate registry, and
-an optional denylist/policy snapshot so reviewers can see exactly which
-fingerprints are new, which collide with existing policy, and how many entries
-each hash family contributes.
+Bu qeyd indi `cargo xtask ministry-agenda impact` əmrini sənədləşdirir
+referendum paketləri üçün tələb olunan avtomatlaşdırılmış hash-ailə fərqini yaradır. The
+alət təsdiqlənmiş Gündəlik Şurasının təkliflərini, dublikat reyestri və istehlak edir
+isteğe bağlı rədd siyahısı/siyasət snapshot, belə ki, rəyçilər dəqiq hansını görə bilsinlər
+barmaq izləri yenidir, mövcud siyasətlə toqquşur və neçə giriş
+hər bir hash ailəsi öz töhfəsini verir.
 
-## Inputs
+## Girişlər
 
-1. **Agenda proposals.** One or more files that follow
+1. **Gündəm təklifləri.** Sonrakı bir və ya daha çox fayl
    [`docs/source/ministry/agenda_council_proposal.md`](agenda_council_proposal.md).
-   Pass them explicitly with `--proposal <path>` or point the command at a
-   directory via `--proposal-dir <dir>` and every `*.json` file under that path
-   is included.
-2. **Duplicate registry (optional).** A JSON file matching
-   `docs/examples/ministry/agenda_duplicate_registry.json`. Conflicts are
-   reported under `source = "duplicate_registry"`.
-3. **Policy snapshot (optional).** A lightweight manifest that lists every
-   fingerprint already enforced by GAR/Ministry policy. The loader expects the
-   schema shown below (see
+   Onları açıq şəkildə `--proposal <path>` ilə ötürün və ya əmri a-a yönəldin
+   `--proposal-dir <dir>` və bu yolun altındakı hər `*.json` faylı vasitəsilə kataloq
+   daxildir.
+2. **Dublikat reyestr (istəyə görə).** Uyğun olan JSON faylı
+   `docs/examples/ministry/agenda_duplicate_registry.json`. Münaqişələr var
+   `source = "duplicate_registry"` altında bildirildi.
+3. **Siyasət snapşotu (istəyə görə).** Hər şeyi sadalayan yüngül manifest
+   barmaq izi artıq GAR/Nazirlik siyasəti ilə tətbiq edilib. Yükləyici gözləyir
+   sxem aşağıda göstərilmişdir (bax
    [`docs/examples/ministry/policy_snapshot_example.json`](../../examples/ministry/policy_snapshot_example.json)
-   for a complete sample):
+   tam nümunə üçün):
 
 ```json
 {
@@ -56,10 +57,10 @@ each hash family contributes.
 }
 ```
 
-Any entry whose `hash_family:hash_hex` fingerprint matches a proposal target is
-reported under `source = "policy_snapshot"` with the referenced `policy_id`.
+`hash_family:hash_hex` barmaq izi təklif hədəfinə uyğun gələn hər hansı giriş
+istinad edilən `policy_id` ilə `source = "policy_snapshot"` altında məlumat verilmişdir.
 
-## Usage
+## İstifadəsi
 
 ```bash
 cargo xtask ministry-agenda impact \
@@ -69,8 +70,8 @@ cargo xtask ministry-agenda impact \
   --out artifacts/ministry/impact/AC-2026-001.json
 ```
 
-Additional proposals can be appended via repeated `--proposal` flags or by
-supplying a directory that contains an entire referendum batch:
+Əlavə təkliflər təkrarlanan `--proposal` bayraqları vasitəsilə və ya
+bütün referendum partiyasını ehtiva edən bir kataloq təmin edir:
 
 ```bash
 cargo xtask ministry-agenda impact \
@@ -79,12 +80,12 @@ cargo xtask ministry-agenda impact \
   --out artifacts/ministry/impact/2026-03-31.json
 ```
 
-The command prints the generated JSON to stdout when `--out` is omitted.
+`--out` buraxıldıqda komanda yaradılan JSON-u stdout-a çap edir.
 
-## Output
+## Çıxış
 
-The report is a signed-off artefact (record it under the referendum packet’s
-`artifacts/ministry/impact/` directory) with the following structure:
+Hesabat imzalanmış artefaktdır (onu referendum paketinin altında qeyd edin
+`artifacts/ministry/impact/` kataloqu) aşağıdakı quruluşla:
 
 ```json
 {
@@ -125,13 +126,13 @@ The report is a signed-off artefact (record it under the referendum packet’s
 }
 ```
 
-Attach this JSON to every referendum dossier alongside the neutral summary so
-panelists, jurors, and governance observers can see the exact blast radius of
-each proposal. The output is deterministic (sorted by hash family) and safe to
-include in CI/runbooks; if the duplicate registry or policy snapshot changes,
-rerun the command and attach the refreshed artefact before the vote opens.
+Bu JSON-u neytral xülasə ilə yanaşı hər referendum faylına əlavə edin
+panelistlər, münsiflər və idarəetmə müşahidəçiləri dəqiq partlayış radiusunu görə bilərlər
+hər bir təklif. Çıxış deterministikdir (hash ailəsinə görə sıralanır) və təhlükəsizdir
+CI/runbooks-a daxil edin; dublikat reyestr və ya siyasət snapshot dəyişirsə,
+əmri təkrar yerinə yetirin və səsvermə başlamazdan əvvəl təzələnmiş artefaktı əlavə edin.
 
-> **Next step:** feed the generated impact report into
-> [`cargo xtask ministry-panel packet`](referendum_packet.md) so the
-> `ReferendumPacketV1` dossier contains both the hash-family breakdown and the
-> detailed conflict list for the proposal under review.
+> **Növbəti addım:** yaradılan təsir hesabatını daxil edin
+> [`cargo xtask ministry-panel packet`](referendum_packet.md) beləliklə
+> `ReferendumPacketV1` dosyesində həm hash ailəsinin parçalanması, həm də
+> nəzərdən keçirilən təklif üçün ətraflı münaqişə siyahısı.

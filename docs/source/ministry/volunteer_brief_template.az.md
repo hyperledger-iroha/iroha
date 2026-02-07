@@ -9,70 +9,69 @@ source_last_modified: "2025-12-29T18:16:35.984008+00:00"
 translation_last_reviewed: 2026-02-07
 title: Volunteer Brief Template
 summary: Structured template for roadmap item MINFO-3a covering balanced briefs, fact tables, conflict disclosures, and moderation tags.
+translator: machine-google-reviewed
 ---
 
-# Volunteer Brief Template (MINFO-3a)
+# Könüllü Qısa Şablonu (MINFO-3a)
 
-Roadmap reference: **MINFO-3a — Balanced brief templates & conflict disclosure.**
+Yol xəritəsi arayışı: **MINFO-3a — Balanslaşdırılmış qısa şablonlar və münaqişənin açıqlanması.**
 
-Volunteer brief submissions summarise positions that citizen panels want governance to review when blacklist changes or other Ministry enforcement motions are proposed. MINFO-3a requires that every brief follows a deterministic structure so the transparency pipeline can (1) render comparable fact tables, (2) confirm that conflicts-of-interest are disclosed, and (3) drop or flag off-topic submissions automatically. This page defines the canonical fields, CSV-style fact table layout, and moderation tags expected by the tooling shipped in `cargo xtask ministry-transparency`.
+Könüllülərin qısa təqdimatları qara siyahıya dəyişikliklər və ya digər Nazirlik tətbiqi təklifləri təklif edildikdə vətəndaş panellərinin idarəçiliyin nəzərdən keçirilməsini istədikləri mövqeləri ümumiləşdirir. MINFO-3a tələb edir ki, şəffaflıq kəməri (1) müqayisə edilə bilən fakt cədvəlləri təqdim edə, (2) maraqların toqquşmasının açıqlandığını təsdiq edə və (3) mövzudan kənar təqdimatları avtomatik olaraq buraxa və ya qeyd edə bilsin. Bu səhifə `cargo xtask ministry-transparency`-də göndərilən alətlər tərəfindən gözlənilən kanonik sahələri, CSV-stil fakt cədvəlinin tərtibatını və moderasiya teqlərini müəyyən edir.
 
-> **Norito schema:** the `iroha_data_model::ministry::VolunteerBriefV1` struct (version `1`) is now the authoritative schema for all submissions. Tooling and portal validators call `VolunteerBriefV1::validate` before publishing a brief or referencing it in panel summaries.
+> **Norito sxemi:** `iroha_data_model::ministry::VolunteerBriefV1` strukturu (`1` versiyası) indi bütün təqdimatlar üçün səlahiyyətli sxemdir. Alətlər və portal təsdiqləyiciləri brifinqi dərc etməzdən və ya panel xülasələrində ona istinad etməzdən əvvəl `VolunteerBriefV1::validate`-ə zəng edirlər.
 
-## Submission payload structure
+## Təqdimat yükü strukturu
 
-| Section | Fields | Requirements |
+| Bölmə | Sahələr | Tələblər |
 |---------|--------|--------------|
-| **Envelope** | `version` (u16) | Must be `1`. The version guard allows the Ministry to evolve the schema without ambiguity. |
-| **Identity & stance** | `brief_id` (string, unique per calendar year), `proposal_id` (links to the blacklist or policy motion), `language` (BCP-47), `stance` (`support`/`oppose`/`context`), `submitted_at` (RFC 3339) | All fields required. `stance` feeds dashboards and must match the allowed vocabulary. |
-| **Author info** | `author.name`, `author.organization` (optional), `author.contact`, `author.no_conflicts_certified` (bool) | `author.contact` is redacted from public dashboards but stored in the raw artefact. Set `no_conflicts_certified: true` only if the author attests that no disclosures apply. |
-| **Summary** | `summary.title`, `summary.abstract`, `summary.requested_action` | Textual overview surfaced beside the fact table. Limit `summary.abstract` to ≤2 000 characters. |
-| **Fact table** | `fact_table` array (see next section) | Required even for short briefs. The CLI and transparency ingest job reject submissions without a fact table. |
-| **Disclosures** | `disclosures` array OR `author.no_conflicts_certified: true` | Each disclosure row must include `type` (`financial`, `employment`, `governance`, `family`, `other`), `entity`, `relationship`, and `details`. |
-| **Moderation metadata** | `moderation.off_topic` (bool), `moderation.tags` (array of enum strings), `moderation.notes` | Used by reviewers to suppress astroturfing or unrelated submissions. Off-topic entries do not contribute to dashboards. |
+| **Zərf** | `version` (u16) | `1` olmalıdır. Versiya qoruyucusu Nazirliyə qeyri-müəyyənlik olmadan sxemi təkmilləşdirməyə imkan verir. |
+| **Şəxsiyyət və mövqe** | `brief_id` (sətir, təqvim ili üçün unikal), `proposal_id` (qara siyahıya və ya siyasət hərəkətinə keçidlər), `language` (BCP-47), `stance` (`support`/`oppose`/`context`), `submitted_at` (RFC3339) | Bütün sahələr tələb olunur. `stance` idarə panellərini təqdim edir və icazə verilən lüğətə uyğun olmalıdır. |
+| **Müəllif məlumatı** | `author.name`, `author.organization` (isteğe bağlı), `author.contact`, `author.no_conflicts_certified` (bool) | `author.contact` ictimai idarə panellərindən redaktə olunub, lakin xam artefaktda saxlanılır. `no_conflicts_certified: true` yalnız müəllif heç bir açıqlamanın tətbiq olunmadığını təsdiqlədikdə təyin edin. |
+| **Xülasə** | `summary.title`, `summary.abstract`, `summary.requested_action` | Mətn icmalı faktlar cədvəlinin yanında görünür. `summary.abstract`-i ≤2000 simvolla məhdudlaşdırın. |
+| **Fakt cədvəli** | `fact_table` massivi (növbəti bölməyə bax) | Hətta qısa brifinqlər üçün də tələb olunur. CLI və şəffaflıq işi fakt cədvəli olmadan təqdim etməyi rədd edir. |
+| **Açıqlamalar** | `disclosures` massivi VEYA `author.no_conflicts_certified: true` | Hər bir açıqlama sırasına `type` (`financial`, `employment`, `governance`, `family`, `other`), `other`, Norito, Norito daxil edilməlidir. `relationship` və `details`. |
+| **Moderasiya metadata** | `moderation.off_topic` (bool), `moderation.tags` (enum sətirləri massivi), `moderation.notes` | Rəyçilər tərəfindən astroturfing və ya əlaqəli olmayan təqdimatların qarşısını almaq üçün istifadə olunur. Mövzudan kənar girişlər tablosuna kömək etmir. |
 
-## Fact table specification
+## Fakt cədvəlinin spesifikasiyası
 
-Each `fact_table` row captures a machine-readable claim. Store the rows as JSON objects with the following fields:
-
-| Field | Description |
+Hər bir `fact_table` cərgəsi maşın tərəfindən oxuna bilən iddianı əks etdirir. Sətirləri JSON obyektləri kimi aşağıdakı sahələrlə saxlayın:| Sahə | Təsvir |
 |-------|-------------|
-| `claim_id` | Stable identifier (e.g., `VB-2026-04-F1`). |
-| `claim` | Single-sentence statement of fact or impact. |
-| `status` | One of `corroborated`, `disputed`, `context-only`. |
-| `impact` | Array containing one or more of `governance`, `technical`, `compliance`, `community`. |
-| `citations` | Non-empty array of strings. URLs, Torii case IDs, or CID references are accepted. |
-| `evidence_digest` | Optional BLAKE3 checksum of supporting documents. |
+| `claim_id` | Stabil identifikator (məsələn, `VB-2026-04-F1`). |
+| `claim` | Bir cümlədən ibarət fakt və ya təsir ifadəsi. |
+| `status` | `corroborated`, `disputed`, `context-only`-dən biri. |
+| `impact` | `governance`, `technical`, `compliance`, `community`-dən bir və ya daha çoxunu ehtiva edən massiv. |
+| `citations` | Sətirlərin boş olmayan massivi. URL-lər, Torii iş ID-ləri və ya CID arayışları qəbul edilir. |
+| `evidence_digest` | Əlavə sənədlərin BLAKE3 yoxlama cəmi. |
 
-Automation notes:
-- The ingest job counts `fact_rows` and `fact_rows_with_citation` to build publication scorecards. Rows without citations still appear in the human-readable table but are tracked as missing evidence.
-- Keep claims concise and reference the same identifiers used in governance proposals so cross-linking is deterministic.
+Avtomatlaşdırma qeydləri:
+- Nəşr kartlarını yaratmaq üçün qəbul edilən iş `fact_rows` və `fact_rows_with_citation`-ni hesablayır. Sitatsız sətirlər hələ də insan tərəfindən oxuna bilən cədvəldə görünür, lakin itkin sübut kimi izlənir.
+- İddiaları qısa saxlayın və idarəetmə təkliflərində istifadə edilən eyni identifikatorlara istinad edin ki, çarpaz əlaqə deterministik olsun.
 
-## Conflict disclosure requirements
+## Münaqişənin açıqlanması tələbləri
 
-1. Provide at least one disclosure entry when a financial, employment, governance, or familial tie exists.
-2. Use `author.no_conflicts_certified: true` to assert “no known conflicts.” Submissions must include either a disclosure entry or a `true` certification; otherwise, they’re flagged during ingest.
-3. Include `disclosures[i].evidence` whenever public documentation exists (e.g., corporate filings, DAO votes). Evidence is optional for “none” certifications but strongly recommended.
+1. Maliyyə, məşğulluq, idarəetmə və ya ailə əlaqəsi mövcud olduqda, ən azı bir açıqlama qeydini təqdim edin.
+2. `author.no_conflicts_certified: true`-dən istifadə edərək “məlum münaqişə yoxdur”. Təqdimatlar ya açıqlama girişini, ya da `true` sertifikatını daxil etməlidir; əks halda, qəbul zamanı onlar işarələnir.
+3. İctimai sənədlər mövcud olduqda (məsələn, korporativ sənədlər, DAO səsləri) `disclosures[i].evidence` daxil edin. Sübut “heç biri” sertifikatları üçün isteğe bağlıdır, lakin şiddətlə tövsiyə olunur.
 
-## Moderation tags & off-topic handling
+## Moderasiya teqləri və mövzudan kənar işləmə
 
-Moderation reviewers can label submissions before they enter the transparency pipeline:
+Moderasiya rəyçiləri şəffaflıq xəttinə daxil olmamışdan əvvəl təqdimatları etiketləyə bilərlər:
 
-- `moderation.off_topic: true` removes the entry from aggregate counts while incrementing an `off_topic_rejections` counter. The row is still available in raw archives for audit.
-- `moderation.tags` accepts enum values: `duplicate`, `needs-translation`, `needs-follow-up`, `spam`, `astroturf`, `policy-escalation`. Tags help downstream reviewers triage without re-reading the full brief.
-- `moderation.notes` stores a short justification for the moderation decision (≤512 characters).
+- `moderation.off_topic: true` `off_topic_rejections` sayğacını artırarkən girişi ümumi saylardan silir. Sətir hələ də audit üçün xam arxivlərdə mövcuddur.
+- `moderation.tags` enum dəyərlərini qəbul edir: `duplicate`, `needs-translation`, `needs-follow-up`, `spam`, `astroturf`, `astroturf`, Norito. Teqlər tam brifinqi yenidən oxumadan aşağı istiqamətli rəyçilərə sınaqdan keçməyə kömək edir.
+- `moderation.notes` moderasiya qərarı üçün qısa əsaslandırma saxlayır (≤512 simvol).
 
-## Submission checklist
+## Təqdimat siyahısı
 
-1. Fill out the JSON payload using this template or the helper CLI described below.
-2. Populate at least one fact table row; include citations for each row.
-3. Provide disclosures or explicitly set `author.no_conflicts_certified: true`.
-4. Attach moderation metadata (default `off_topic: false`) so reviewers can triage quickly.
-5. Validate the payload with `cargo xtask ministry-transparency ingest --volunteer <file>` or any Norito validator before uploading.
+1. Bu şablondan və ya aşağıda təsvir edilən köməkçi CLI-dən istifadə edərək JSON yükünü doldurun.
+2. Ən azı bir fakt cədvəli sırasını doldurun; hər sətir üçün sitatlar daxil edin.
+3. Açıqlamalar təqdim edin və ya açıq şəkildə `author.no_conflicts_certified: true` təyin edin.
+4. Rəyçilər tez sınaqdan keçirə bilməsi üçün moderasiya metadatasını (defolt `off_topic: false`) əlavə edin.
+5. Yükləmədən əvvəl faydalı yükü `cargo xtask ministry-transparency ingest --volunteer <file>` və ya hər hansı Norito təsdiqləyicisi ilə yoxlayın.
 
-## Validation CLI (MINFO-3)
+## Validasiya CLI (MINFO-3)
 
-The repository now ships a dedicated validator for volunteer briefs:
+Anbar indi könüllü brifinqlər üçün xüsusi təsdiqləyici göndərir:
 
 ```bash
 cargo xtask ministry-transparency volunteer-validate \
@@ -80,32 +79,30 @@ cargo xtask ministry-transparency volunteer-validate \
   --json-output artifacts/ministry/volunteer_lint_report.json
 ```
 
-Key behaviour:
+Əsas davranış:- Fərdi JSON obyektlərini *və ya* brifinq massivlərini qəbul edir; bir qaçışda bir neçə faylı silmək üçün `--input`-dən bir neçə dəfə keçin.
+- Səhvlərin və xəbərdarlıqların sayını göstərən qısa xülasə verir; xəbərdarlıqlar boş sitat siyahılarını və ya həddən artıq uzun qeydləri vurğulayır, səhvlər isə nəşri bloklayır.
+- Tələb olunan sahələrin (`brief_id`, `proposal_id`, `stance`, faktlar cədvəlinin məzmunu, açıqlamalar və ya `no_conflicts_certified`) bu şablona uyğun olmasını və enum dəyərlərinin sənədləşdirilmiş lüğətlər daxilində qalmasını təmin edir.
+- `--json-output <path>` qurulduqda, validator hər bir brifinqi (təklif identifikatoru, mövqe, status, səhvlər/xəbərdarlıqlar) ümumiləşdirən maşın tərəfindən oxuna bilən manifest yazır. Portalın `npm run generate:volunteer-lint` əmri hər bir təklif səhifəsinin yanında lint statusunu göstərmək üçün bu manifestdən istifadə edir.
 
-- Accepts individual JSON objects *or* arrays of briefs; pass `--input` multiple times to lint several files in one run.
-- Emits a per-brief summary showing the number of errors and warnings; warnings highlight empty citation lists or overlong notes, while errors block publication.
-- Ensures required fields (`brief_id`, `proposal_id`, `stance`, fact table contents, disclosures or `no_conflicts_certified`) match this template and that enum values stay within the documented vocabularies.
-- When `--json-output <path>` is set the validator writes a machine-readable manifest summarising every brief (proposal id, stance, status, errors/warnings). The portal’s `npm run generate:volunteer-lint` command consumes this manifest to display lint status next to each proposal page.
+Könüllü təqdimatları şəffaflığın qəbulu işinə çatmazdan əvvəl **MINFO-3**-ə uyğun saxlamaq üçün əmri portal iş axınlarına və ya CI-yə inteqrasiya edin.
 
-Integrate the command into portal workflows or CI to keep volunteer submissions compliant with **MINFO-3** before they reach the transparency ingest job.
+## Nümunə yükü
 
-## Example payload
+Fakt cədvəli sətirləri, açıqlamalar və moderasiya teqləri daxil olmaqla, tam doldurulmuş nümunə üçün `docs/examples/ministry/volunteer_brief_template.json`-ə baxın. Aşağı axın panelləri xam JSON-u istehlak edir və avtomatik olaraq hesablayır:
 
-See `docs/examples/ministry/volunteer_brief_template.json` for a fully populated example, including fact table rows, disclosures, and moderation tags. Downstream dashboards consume the raw JSON and automatically calculate:
-
-- `total_briefs` (off-topic submissions excluded)
+- `total_briefs` (mövzudan kənar təqdimatlar istisna olunur)
 - `fact_rows` / `fact_rows_with_citation`
 - `disclosures_missing`
 - `off_topic_rejections`
 
-If new fields are required, update this document and the ingest summariser (`xtask/src/ministry.rs`) in the same change so the governance evidence remains reproducible.
+Yeni sahələr tələb olunarsa, bu sənədi və qəbul edilmiş xülasəni (`xtask/src/ministry.rs`) eyni dəyişikliklə yeniləyin ki, idarəetmə sübutları təkrarlana bilsin.
 
-## Publication SLA & portal surfacing (MINFO-3)
+## Nəşr SLA və portal səthi (MINFO-3)
 
-To keep citizen submissions transparent, the portal now publishes briefs on a fixed cadence once they pass validation:
+Vətəndaş müraciətlərini şəffaf saxlamaq üçün portal indi təsdiqləmədən keçdikdən sonra sabit kadans haqqında qısa məlumat dərc edir:
 
-1. **T+0–6 hours:** submissions land via the volunteer intake form or `cargo xtask ministry-transparency ingest`. Validators run `VolunteerBriefV1::validate`, reject malformed payloads, and emit lint reports (missing disclosures, duplicate fact IDs, etc.).
-2. **T+6–24 hours:** accepted briefs are queued for translation/triage. Moderation tags (`needs-translation`, `duplicate`, `policy-escalation`, …) are applied, and off-topic entries are archived but excluded from aggregate counts.
-3. **T+24–48 hours:** the portal publishes the brief alongside the corresponding proposal page. Each published proposal now links to “Volunteer Opinions” so reviewers can read support/oppose/context briefs without opening raw JSON.
+1. **T+0–6saat:** təqdimatlar könüllü qəbul forması və ya `cargo xtask ministry-transparency ingest` vasitəsilə verilir. Təsdiqləyicilər `VolunteerBriefV1::validate`-i işə salır, səhv formalaşmış faydalı yükləri rədd edir və lint hesabatları (çatışmayan açıqlamalar, dublikat fakt identifikatorları və s.) yayır.
+2. **T+6–24saat:** qəbul edilən brifinqlər tərcümə/triaj üçün növbəyə qoyulur. Moderasiya teqləri (`needs-translation`, `duplicate`, `policy-escalation`, …) tətbiq edilir və mövzudan kənar qeydlər arxivləşdirilir, lakin ümumi saylardan xaric edilir.
+3. **T+24–48saat:** portal müvafiq təklif səhifəsinin yanında qısa məlumatı dərc edir. Hər dərc edilmiş təklif indi “Könüllülərin Rəyləri” ilə əlaqələndirilir ki, rəyçilər xam JSON açmadan dəstək/müxalifət/kontekst brifinqlərini oxuya bilsinlər.
 
-If a submission is marked `policy-escalation` or `astroturf`, the SLA tightens to **12 hours** so governance can respond quickly. Operators can audit the SLA via the **Volunteer Briefs** page in the docs portal (`docs/portal/docs/ministry/volunteer-briefs.md`), which lists the latest publication windows, lint status, and links to Norito artefacts.
+Təqdimat `policy-escalation` və ya `astroturf` olaraq qeyd edilirsə, SLA **12 saat** müddətinə sərtləşir ki, idarəetmə tez cavab verə bilsin. Operatorlar sənədlər portalında (`docs/portal/docs/ministry/volunteer-briefs.md`) ən son nəşr pəncərələrini, lint statusunu və Norito artefaktlarına keçidləri sadalayan **Könüllülük haqqında qısa məlumat** səhifəsi vasitəsilə SLA-nı yoxlaya bilərlər.

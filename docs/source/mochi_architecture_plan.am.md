@@ -9,82 +9,79 @@ source_last_modified: "2026-01-05T09:28:12.023255+00:00"
 translation_last_reviewed: 2026-02-07
 title: MOCHI Architecture Plan
 description: High-level design for the MOCHI local-network GUI supervisor.
+translator: machine-google-reviewed
 ---
 
-# MOCHI Architecture Plan
+# MOCHI አርክቴክቸር እቅድ
 
 
-## Goals
+# ግቦች
 
-- Bootstrap single-peer or multi-peer (four-node BFT) local networks quickly.
-- Wrap `kagami`, `irohad`, and supporting binaries in a friendly GUI workflow.
-- Surface live block, event, and state data through Torii HTTP/WebSocket endpoints.
-- Provide structured builders for transactions and Iroha Special Instructions (ISI), with local signing and submission.
-- Manage snapshots, re-genesis flows, and configuration tweaks without editing files manually.
-- Ship as a single cross-platform Rust binary with no webview or Docker dependency.
+- ነጠላ-አቻ ወይም ባለብዙ-አቻ (ባለአራት-መስቀለኛ BFT) የአካባቢ አውታረ መረቦችን በፍጥነት ይጫኑ።
+- `kagami`፣ `irohad` መጠቅለል እና ሁለትዮሽዎችን በወዳጃዊ GUI የስራ ፍሰት መደገፍ።
+- በTorii HTTP/WebSocket የመጨረሻ ነጥቦች በኩል የገጽታ የቀጥታ ብሎክ፣ ክስተት እና የግዛት ውሂብ።
+- የተዋቀሩ ግንበኞችን ለግብይቶች እና ለ Iroha ልዩ መመሪያዎች (አይኤስአይ) ያቅርቡ ፣ በአገር ውስጥ መፈረም እና ማስረከብ።
+- በእጅ ፋይሎችን ሳያርትዑ ቅጽበተ-ፎቶዎችን፣ የዳግም-ዘፍጥረት ፍሰቶችን እና የውቅረት ማስተካከያዎችን ያቀናብሩ።
+- ምንም የድር እይታ ወይም Docker ጥገኝነት ጋር እንደ ነጠላ-መድረክ Rust ሁለትዮሽ ላክ.
 
-## Architecture Overview
+## አርክቴክቸር አጠቃላይ እይታ
 
-MOCHI is split into two primary crates housed in a new `/mochi` directory (see the
-[MOCHI Quickstart](mochi/quickstart.md) for build and usage instructions):
+MOCHI በአዲስ `/mochi` ማውጫ ውስጥ በተቀመጡ ሁለት ዋና ሳጥኖች ተከፍሏል (ይመልከቱ)
+[MOCHI Quickstart](mochi/quickstart.md) ለግንባታ እና የአጠቃቀም መመሪያዎች፡-
 
-1. `mochi-core`: a headless library responsible for configuration templating, key and genesis material generation, supervising child processes, driving Torii clients, and managing filesystem state.
-2. `mochi-ui-egui`: a desktop application built on `egui`/`eframe` that renders the user interface and delegates all orchestration through the `mochi-core` API.
+1. `mochi-core`፡ ለማዋቀር፣ ለቁልፍ እና ለዘፍጥረት ቁስ ማፍለቅ፣ የልጅ ሂደቶችን የመቆጣጠር፣ የTorii ደንበኞችን ለማሽከርከር እና የፋይል ሲስተም ሁኔታን ለማስተዳደር ሃላፊነት ያለው ጭንቅላት የሌለው ቤተ-መጽሐፍት።
+2. `mochi-ui-egui`፡ በ`egui`/`eframe` ላይ የተገነባ የዴስክቶፕ አፕሊኬሽን የተጠቃሚ በይነገጹን የሚያቀርብ እና ሁሉንም ኦርኬስትራ በ`mochi-core` ኤፒአይ ነው።
 
-Additional front ends (for example a Tauri shell) can hook into `mochi-core` later without reworking the supervisor logic.
+ተጨማሪ የፊት ጫፎች (ለምሳሌ ታውሪ ሼል) በኋላ ላይ የተቆጣጣሪውን አመክንዮ ሳይሰሩ ወደ `mochi-core` ሊጣበቁ ይችላሉ።
 
-## Process Model
+## የሂደት ሞዴል
 
-- Peer nodes run as separate `irohad` child processes. MOCHI never links the peer as a library, avoiding unstable internal APIs and matching production deployment topologies.
-- Genesis and key material are created through `kagami` invocations with user provided inputs (chain ID, initial accounts, assets).
-- Configuration files are generated from TOML templates, filling in Torii and P2P ports, storage paths, snapshot settings, and trusted peer lists. Generated configs are stored beneath a per-network workspace directory.
-- The supervisor tracks process lifecycles, streams stdout/stderr for log surfaces, and polls `/status`, `/metrics`, and `/configuration` endpoints for health.
-- A thin Torii client layer wraps HTTP and WebSocket calls, leaning on the Iroha Rust client crates where possible to avoid reimplementing SCALE encoding/decoding.
+- የአቻ አንጓዎች እንደ የተለየ `irohad` የልጅ ሂደቶች ይሰራሉ። MOCHI እኩዮቹን እንደ ቤተ-መጽሐፍት በፍጹም አያገናኝም፣ ያልተረጋጋ ውስጣዊ ኤፒአይዎችን እና ተዛማጅ የምርት ማሰማራት ቶፖሎጂዎችን በማስቀረት።
+- ዘፍጥረት እና ቁልፍ ቁሶች የተፈጠሩት በ`kagami` ጥሪዎች በተጠቃሚ የቀረቡ ግብአቶች (ሰንሰለት መታወቂያ፣ የመጀመሪያ መለያዎች፣ ንብረቶች) ነው።
+- የማዋቀር ፋይሎች የሚመነጩት ከTOML አብነቶች ነው፣ Torii እና P2P ወደቦች፣ የማከማቻ መንገዶች፣ ቅጽበተ-ፎቶ ቅንጅቶች እና የታመኑ የአቻ ዝርዝሮችን ይሞላሉ። የመነጩ ውቅሮች በኔትወርክ የስራ ቦታ ማውጫ ስር ይቀመጣሉ።
+- ተቆጣጣሪው የህይወት ዑደቶችን ሂደት ይከታተላል፣ STdout/stderr ለሎግ ወለል ያሰራጫል፣ እና ምርጫዎች `/status`፣ `/metrics`፣ እና `/configuration` የጤና የመጨረሻ ነጥቦችን ይከታተላል።
+- ቀጭን የTorii የደንበኛ ንብርብር የኤችቲቲፒ እና የዌብሶኬት ጥሪዎችን ያጠቃልላል፣ በ Iroha Rust ደንበኛ ሳጥኖች ላይ በመደገፍ SCALE ኢንኮዲንግ/ዲኮዲንግ እንዳይሰራ ማድረግ።
 
-## User Flows Backed by `mochi-core`
+## የተጠቃሚ ፍሰቶች በ`mochi-core` የተደገፈ** የአውታረ መረብ ፍጥረት አዋቂ**፡ ነጠላ ወይም ባለአራት-አቻ መገለጫ ይምረጡ፣ ማውጫዎችን ይምረጡ እና ማንነቶችን እና ዘፍጥረትን ለማመንጨት `kagami` ይደውሉ።
+- ** የሕይወት ዑደት መቆጣጠሪያዎች ***: መጀመር, ማቆም, እኩዮችን እንደገና ማስጀመር; የወለል ቀጥታ መለኪያዎች; የሎግ ጭራዎችን ያጋልጡ; የአሂድ ጊዜ ውቅረት የመጨረሻ ነጥቦችን (ለምሳሌ፣ የምዝግብ ማስታወሻ ደረጃዎች) ቀይር።
+- ** አግድ እና የክስተት ዥረቶች ***፡ ለ UI ፓነሎች የማህደረ ትውስታ ጥቅል ቋት በማጠራቀም ለ`/block/stream` እና `/events` ይመዝገቡ።
+- **ስቴት ኤክስፕሎረር**፡ በNorito የሚደገፉ የ`/query` ጥሪዎችን ጎራዎችን፣ መለያዎችን፣ ንብረቶችን እና የንብረት መግለጫዎችን በፓጂኔሽን አጋዥ እና በዲበ ውሂብ ማጠቃለያዎች ያሂዱ።
+- ** የግብይት አቀናባሪ**፡ የመድረክ ሚንት/የማስተማሪያ ረቂቆችን ማስተላለፍ፣ ወደ ፊርማ ግብይቶች መደብደብ፣ የNorito ክፍያን አስቀድመው ማየት፣ በ`/transaction` በኩል ማስገባት እና የተከሰቱትን ክስተቶች መከታተል፣ የቮልት ፊርማ መንጠቆዎች የወደፊት ድግግሞሾች ናቸው.
+- ** ቅጽበተ-ፎቶዎች እና ድጋሚ ዘፍጥረት ***፡ ኦርኬስትራ የኩራ ቅጽበታዊ ገጽ እይታ ወደ ውጪ መላክ/ማስመጣት፣ መሸጫዎችን መጥረግ እና ለፈጣን ዳግም ማስጀመሪያ የዘፍጥረት ቁሳቁሶችን እንደገና ማመንጨት።
 
-- **Network Creation Wizard**: choose single or four-peer profile, pick directories, and call `kagami` to generate identities plus genesis.
-- **Lifecycle Controls**: start, stop, restart peers; surface live metrics; expose log tails; toggle runtime configuration endpoints (e.g., log levels).
-- **Block and Event Streams**: subscribe to `/block/stream` and `/events`, storing an in-memory rolling buffer for UI panels.
-- **State Explorer**: run Norito-backed `/query` calls to list domains, accounts, assets, and asset definitions with pagination helpers and metadata summaries.
-- **Transaction Composer**: stage mint/transfer instruction drafts, batch them into signed transactions, preview the Norito payload, submit via `/transaction`, and monitor the resulting events; vault signing hooks remain a future iteration.
-- **Snapshots and Re-Genesis**: orchestrate Kura snapshot export/import, wipe stores, and regenerate genesis material for quick resets.
+## UI ንብርብር (`mochi-ui-egui`)
 
-## UI Layer (`mochi-ui-egui`)
+- ያለ ውጫዊ የሩጫ ጊዜዎች ተፈፃሚ የሆነ ነጠላ ተወላጅ ለመላክ `egui`/`eframe` ይጠቀማል።
+- አቀማመጥ የሚከተሉትን ያጠቃልላል
+  - ** የአውታረ መረብ ዳሽቦርድ ** ከአቻ ካርዶች ፣ የጤና አመልካቾች እና ፈጣን እርምጃዎች ጋር።
+  - ** ያግዳል *** የፓነል ዥረት የቅርብ ጊዜ ድርጊቶችን እና የከፍታ ፍለጋን ይፈቅዳል።
+  - **ክስተቶች** የፓነል የግብይት ሁኔታዎችን በሃሽ ወይም መለያ ማጣራት።
+  - **ስቴት ኤክስፕሎረር** ትሮች ለጎራዎች፣ መለያዎች፣ ንብረቶች እና የንብረት መግለጫዎች ከገጽታ የወጡ Norito ውጤቶች እና ጥሬ ቆሻሻዎች ለምርመራ።
+- **አቀናባሪ** ቅፅ በትልልቅ ሚንት/ማስተላለፊያ ፓሌቶች፣ ወረፋ አስተዳደር (አክል/አስወግድ/ግልጽ)፣ ጥሬ Norito ቅድመ እይታ፣ እና የማስረከቢያ አስተያየት በፈራሚው ቮልት የተደገፈ ኦፕሬተሮች በዴቭ እና በእውነተኛ ባለስልጣናት መካከል እንዲለዋወጡ።
+- ** ዘፍጥረት እና ቅጽበተ-ፎቶዎች *** የአስተዳደር እይታ።
+- ** ቅንጅቶች** ለአሂድ ጊዜ መቀየሪያዎች እና የውሂብ ማውጫ አቋራጮች።
+- UI ከ `mochi-core` በሰርጦች በኩል ለተመሳሰሉ ዝማኔዎች ተመዝግቧል; ኮር የተደራጁ ክስተቶችን (የአቻ ሁኔታን፣ የአግድ ራስጌዎችን፣ የግብይት ማሻሻያዎችን) የሚያሰራጭ `SupervisorHandle` ያጋልጣል።
 
-- Uses `egui`/`eframe` to ship a single native executable without external runtimes.
-- Layout includes:
-  - **Network Dashboard** with peer cards, health indicators, and quick actions.
-  - **Blocks** panel streaming recent commits and allowing height search.
-  - **Events** panel filtering transaction statuses by hash or account.
-  - **State Explorer** tabs for domains, accounts, assets, and asset definitions with paginated Norito results plus raw dumps for inspection.
-- **Composer** form with batchable mint/transfer palettes, queue management (add/remove/clear), raw Norito preview, and submission feedback backed by the signer vault so operators can swap between dev and real authorities.
-- **Genesis & Snapshots** management view.
-- **Settings** for runtime toggles and data directory shortcuts.
-- UI subscribes to asynchronous updates from `mochi-core` via channels; the core exposes a `SupervisorHandle` that streams structured events (peer status, block headers, transaction updates).
+## የአካባቢ ልማት ማስታወሻዎች
 
-## Local Development Notes
+- የመሥሪያ ቦታ ውቅረት `ZSTD_SYS_USE_PKG_CONFIG=1` ያዘጋጃል ስለዚህ `zstd-sys` ከአስተናጋጁ `libzstd` ጋር የሚያገናኝ የተሸጡ መዛግብትን ከማምጣት ይልቅ። ይህ pqcrypto-ጥገኛ ግንባታዎችን (እና MOCHI ሙከራዎችን) ከመስመር ውጭ ወይም ማጠሪያ ውስጥ እንዲሰሩ ያደርጋቸዋል።
 
-- The workspace config sets `ZSTD_SYS_USE_PKG_CONFIG=1` so `zstd-sys` links against the host `libzstd` instead of fetching vendored archives. This keeps pqcrypto-dependent builds (and MOCHI tests) running inside offline or sandboxed environments.
+## ማሸግ እና ማከፋፈል
 
-## Packaging and Distribution
+- MOCHI ጥቅሎችን (ወይም በ`PATH` ላይ ያገኘው) `irohad`፣ `iroha_cli` እና `kagami` ሁለትዮሽ።
+- የSSL ጥገኞችን ለማስቀረት `rustls` ለወጪ HTTPS ይጠቀማል።
+- ሁሉንም የመነጩ ቅርሶች በልዩ የመተግበሪያ ውሂብ ስር (ለምሳሌ፣ `~/.local/share/mochi` ወይም መድረክ አቻ) በየአውታረ መረብ ንዑስ ማውጫዎች ያከማቻል። GUI "በፈላጊ/አሳሽ ውስጥ መገለጥ" ረዳቶችን ያቀርባል።
+- ግጭቶችን ለመከላከል እኩዮችን ከመጀመርዎ በፊት Torii (8080+) እና P2P (1337+) ወደቦችን በራስ ሰር ፈልጎ ያቆያል።
 
-- MOCHI bundles (or discovers on `PATH`) the `irohad`, `iroha_cli`, and `kagami` binaries.
-- Uses `rustls` for outbound HTTPS to avoid OpenSSL dependencies.
-- Stores all generated artifacts in a dedicated application data root (e.g., `~/.local/share/mochi` or platform equivalent) with per-network subdirectories. GUI provides “reveal in Finder/Explorer” helpers.
-- Auto-detects and reserves Torii (8080+) and P2P (1337+) ports before launching peers to prevent conflicts.
+## የወደፊት ቅጥያዎች (ከኤምቪፒ ወሰን ውጪ)- አማራጭ የፊት ጫፎች (ታውሪ፣ CLI ጭንቅላት የሌለው ሁነታ) `mochi-core` መጋራት።
+- ብዙ አስተናጋጅ ኦርኬስትራ ለተከፋፈሉ የሙከራ ስብስቦች።
+- የስምምነት የውስጥ አካላት እይታ ሰሪዎች (Sumeragi ዙር ግዛቶች ፣ የሐሜት ጊዜዎች)።
+- ለአውቶሜትድ የኢፌመር አውታረመረብ ቅጽበተ-ፎቶዎች ከ ​​CI ቧንቧዎች ጋር ውህደት።
+- ለብጁ ዳሽቦርዶች ወይም ጎራ-ተኮር ተቆጣጣሪዎች ተሰኪ ስርዓት።
 
-## Future Extensions (Out of Scope for MVP)
+## ዋቢዎች
 
-- Alternate front ends (Tauri, CLI headless mode) sharing `mochi-core`.
-- Multi-host orchestration for distributed testing clusters.
-- Visualizers for consensus internals (Sumeragi round states, gossip timings).
-- Integration with CI pipelines for automated ephemeral network snapshots.
-- Plug-in system for custom dashboards or domain-specific inspectors.
-
-## References
-
-- [Torii Endpoints](https://docs.iroha.tech/reference/torii-endpoints.html)
-- [Peer Configuration Parameters](https://docs.iroha.tech/reference/peer-config/params.html)
-- [`kagami` repository documentation](https://github.com/hyperledger-iroha/iroha)
-- [Iroha Special Instructions](https://iroha-test.readthedocs.io/en/iroha2-dev/references/isi/)
+- [Torii የመጨረሻ ነጥቦች](https://docs.iroha.tech/reference/torii-endpoints.html)
+- [የአቻ ውቅር መለኪያዎች](https://docs.iroha.tech/reference/peer-config/params.html)
+- [`kagami` ማከማቻ ሰነድ](https://github.com/hyperledger-iroha/iroha)
+- [Iroha ልዩ መመሪያዎች](https://iroha-test.readthedocs.io/en/iroha2-dev/references/isi/)

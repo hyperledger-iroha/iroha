@@ -7,19 +7,20 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5e0e4f16000f6a578fe9c9d6e204c01087e987ac3b46d70537a15b072df48a13
 source_last_modified: "2025-12-29T18:16:35.974178+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Kotodama Compiler Error Codes
+# Kotodama Хөрвүүлэгчийн алдааны кодууд
 
-The Kotodama compiler emits stable error codes so that tooling and CLI users can
-quickly understand the cause of a failure. Use `koto_compile --explain <code>`
-to print the corresponding hint.
+Kotodama хөрвүүлэгч нь тогтвортой алдааны кодуудыг гаргадаг бөгөөд ингэснээр багаж хэрэгсэл болон CLI хэрэглэгчид
+бүтэлгүйтлийн шалтгааныг хурдан ойлгох. `koto_compile --explain <code>` ашиглана уу
+харгалзах зөвлөмжийг хэвлэх.
 
-| Code  | Description | Typical Fix |
+| Код | Тодорхойлолт | Ердийн засвар |
 |-------|-------------|-------------|
-| `E0001` | Branch target is out of range for the IVM jump encoding. | Split very large functions or reduce inlining so basic block distances stay within ±1 MiB. |
-| `E0002` | Call sites reference a function that was never defined. | Check for typos, visibility modifiers, or feature flags that removed the callee. |
-| `E0003` | Durable state syscalls were emitted without ABI v1 enabled. | Set `CompilerOptions::abi_version = 1` or add `meta { abi_version: 1 }` inside the `seiyaku` contract. |
-| `E0004` | Asset-related syscalls received non-literal pointers. | Use `account_id(...)`, `asset_definition(...)`, etc., or pass 0 sentinels for host defaults. |
-| `E0005` | `for`-loop initializer is more complex than supported today. | Move complex setup before the loop; only simple `let`/expression initialisers are currently accepted. |
-| `E0006` | `for`-loop step clause is more complex than supported today. | Update the loop counter with a simple expression (e.g. `i = i + 1`). |
+| `E0001` | Салбарын зорилт нь IVM үсрэлтийн кодчилолын хүрээнээс гадуур байна. | Маш том функцуудыг хуваах эсвэл доторлогоог багасгахын тулд блокийн үндсэн зай ±1МБ дотор байх болно. |
+| `E0002` | Дуудлагын сайтууд хэзээ ч тодорхойлогдоогүй функцийг иш татдаг. | Дуудлага хүлээн авагчийг устгасан үсгийн алдаа, харагдац тохируулагч эсвэл онцлог шинж тэмдгийг шалгана уу. |
+| `E0003` | ABI v1-ийг идэвхжүүлэхгүйгээр удаан эдэлгээтэй төлөвийн системийн дуудлагууд гарсан. | `CompilerOptions::abi_version = 1`-г тохируулах эсвэл `seiyaku` гэрээний дотор `meta { abi_version: 1 }`-г нэмнэ үү. |
+| `E0004` | Өмчтэй холбоотой системүүд нь шууд бус заагч хүлээн авсан. | `account_id(...)`, `asset_definition(...)` гэх мэтийг ашиглах эсвэл хостын өгөгдмөл байдалд 0 харуул дамжуулна. |
+| `E0005` | `for` давталт эхлүүлэгч нь өнөөдрийн дэмжигдсэнээс илүү төвөгтэй юм. | Нарийн төвөгтэй тохиргоог давталтын өмнө шилжүүлэх; Одоогоор зөвхөн энгийн `let`/илэрхийлэл эхлүүлэгчийг хүлээн авч байна. |
+| `E0006` | `for` давталтын алхам нь өнөөдрийн дэмжигдсэнээс илүү төвөгтэй юм. | Давталтын тоолуурыг энгийн илэрхийллээр шинэчилнэ үү (жишээ нь, `i = i + 1`). |

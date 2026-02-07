@@ -6,95 +6,94 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: f3502fc6de75095282d44ce778b00d1b0d554773de1861d1b92f7dc573dfafa2
 source_last_modified: "2026-01-03T18:07:57.214581+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# ISI Extension Plan (v1)
+# ISI توسیع کا منصوبہ (V1)
 
-This note signs off on the priority order for the new Iroha Special Instructions and captures
-non-negotiable invariants for each instruction ahead of implementation. The ordering matches
-security and operability risk first, UX throughput second.
+یہ نوٹ نئی Iroha خصوصی ہدایات اور گرفتاری کے لئے ترجیحی آرڈر پر دستخط کرتا ہے
+عمل درآمد سے پہلے ہر ہدایت کے لئے غیر گفت و شنید حملہ آور۔ آرڈرنگ میچز
+سیکیورٹی اور آپریٹیبلٹی کا خطرہ پہلے ، UX تھرو پٹ دوسرا۔
 
-## Priority Stack
+## ترجیحی اسٹیک
 
-1. **RotateAccountSignatory** – Required for hygienic key rotation without destructive migrations.
-2. **DeactivateContractInstance** / **RemoveSmartContractBytes** – Provide deterministic contract
-   kill switches and storage reclamation for compromised deployments.
-3. **SetAssetKeyValue** / **RemoveAssetKeyValue** – Extend metadata parity to concrete asset
-   balances so observability tooling can tag holdings.
-4. **BatchMintAsset** / **BatchTransferAsset** – Deterministic fan-out helpers to keep payload size
-   and VM fallback pressure manageable.
+1.
+2
+   سمجھوتہ کرنے والی تعیناتیوں کے لئے سوئچز اور اسٹوریج کی بحالی کو مار ڈالیں۔
+3.
+   توازن تاکہ مشاہدہ کرنے والی ٹولنگ ہولڈنگز کو ٹیگ کرسکتی ہے۔
+4.
+   اور VM فال بیک پریشر قابل انتظام۔
 
-## Instruction Invariants
+## ہدایات پر حملہ
 
-### SetAssetKeyValue / RemoveAssetKeyValue
-- Reuse the `AssetMetadataKey` namespace (`state.rs`) so canonical WSV keys stay stable.
-- Enforce JSON size and schema limits identically to account metadata helpers.
-- Emit `AssetEvent::MetadataInserted` / `AssetEvent::MetadataRemoved` with the affected `AssetId`.
-- Require the same permission tokens as existing asset metadata edits (definition owner OR
-  `CanModifyAssetMetadata`-style grants).
-- Abort if the asset record is missing (no implicit creation).
+### سیٹاسٹکی ویلیو / ریمسٹسیٹکی ویلیو
+- `AssetMetadataKey` نام کی جگہ (`state.rs`) کو دوبارہ استعمال کریں تاکہ کیننیکل WSV کیز مستحکم رہیں۔
+- JSON سائز اور اسکیما کی حدود کو میٹا ڈیٹا کے مددگاروں کا حساب کتاب کرنے کے لئے یکساں طور پر نافذ کریں۔
+- متاثرہ `AssetId` کے ساتھ `AssetEvent::MetadataInserted` / `AssetEvent::MetadataRemoved` EMIT۔
+- موجودہ اثاثہ میٹا ڈیٹا میں ترمیم کی طرح اجازت والے ٹوکن کی ضرورت ہوتی ہے (تعریف کے مالک یا
+  `CanModifyAssetMetadata` طرز کے گرانٹ)۔
+- اگر اثاثہ کا ریکارڈ غائب ہے (کوئی مضمر تخلیق نہیں)۔
 
-### RotateAccountSignatory
-- Atomic swap of the signatory in `AccountId` while preserving account metadata and linked
-  resources (assets, triggers, roles, permissions, pending events).
-- Verify the current signatory matches the caller (or delegated authority via explicit token).
-- Reject if the new public key already backs another account in the same domain.
-- Update all canonical keys that embed the account ID and invalidate caches before commit.
-- Emit a dedicated `AccountEvent::SignatoryRotated` with old/new keys for audit trails.
-- Migration scaffold: introduce `AccountLabel` + `AccountRekeyRecord` (see `account::rekey`) so
-  existing accounts can be mapped to stable labels during a rolling upgrade without hash breaks.
+### rotateaccountSignatory
+- `AccountId` میں دستخطی کا جوہری تبادلہ اکاؤنٹ میٹا ڈیٹا کو محفوظ رکھتے ہوئے اور لنکڈ
+  وسائل (اثاثے ، محرکات ، کردار ، اجازت ، زیر التواء واقعات)۔
+- موجودہ دستخطی کی تصدیق کریں کہ کال کرنے والے (یا واضح ٹوکن کے ذریعہ تفویض کردہ اتھارٹی) سے ملتے ہیں۔
+- اگر نئی عوامی کلید پہلے ہی اسی ڈومین میں کسی اور اکاؤنٹ کی پشت پناہی کرتی ہے تو اسے مسترد کریں۔
+- تمام کیننیکل کیز کو اپ ڈیٹ کریں جو اکاؤنٹ کی شناخت کو سرایت کرتی ہیں اور کمٹ سے پہلے کیچز کو باطل کرتی ہیں۔
+- آڈٹ ٹریلس کے لئے پرانی/نئی چابیاں کے ساتھ ایک سرشار `AccountEvent::SignatoryRotated` کا اخراج کریں۔
+- ہجرت کا سہارا: `AccountLabel` + `AccountRekeyRecord` متعارف کروائیں (`account::rekey` دیکھیں)
+  موجودہ اکاؤنٹس کو بغیر ہیش وقفے کے رولنگ اپ گریڈ کے دوران مستحکم لیبلوں میں نقش کیا جاسکتا ہے۔
 
-### DeactivateContractInstance
-- Remove or tombstone the `(namespace, contract_id)` binding while persisting provenance data
-  (who, when, reason code) for troubleshooting.
-- Require the same governance permission set as activation, with policy hooks to disallow
-  deactivation of core system namespaces without elevated approval.
-- Reject when the instance is already inactive to keep event logs deterministic.
-- Emit a `ContractInstanceEvent::Deactivated` that downstream watchers can consume.
+### deactivatecontractinstance
+- پروویژن ڈیٹا کو برقرار رکھتے ہوئے `(namespace, contract_id)` بائنڈنگ کو ہٹا دیں یا ٹامسٹون کریں
+  (کون ، جب ، استدلال کوڈ) خرابیوں کا سراغ لگانے کے لئے۔
+- اسی گورننس کی اجازت کی ضرورت ہے جس کو چالو کرنے کے طور پر سیٹ کیا جائے ، جس کی اجازت نہیں ہے پالیسی ہکس کے ساتھ
+  بلند منظوری کے بغیر بنیادی نظام کے نام کی جگہوں کو غیر فعال کرنا۔
+- جب واقعہ کے نوشتہ جات کو تعی .ن رکھنے کے لئے مثال پہلے سے ہی غیر فعال ہو تو مسترد کریں۔
+- ایک `ContractInstanceEvent::Deactivated` خارج کریں جو بہاو نگاہ رکھنے والے استعمال کرسکتے ہیں۔### ہٹایا گیا
+- `code_hash` کے ذریعہ ذخیرہ شدہ بائٹ کوڈ کی کٹائی کی اجازت دیں جب کوئی ظاہر نہیں ہوتا ہے یا فعال واقعات
+  نمونے کا حوالہ ؛ بصورت دیگر وضاحتی غلطی سے ناکام ہوجاتے ہیں۔
+- اجازت گیٹ آئینہ رجسٹریشن (`CanRegisterSmartContractCode`) کے علاوہ آپریٹر کی سطح
+  گارڈ (جیسے ، `CanManageSmartContractStorage`)۔
+- فراہم کردہ `code_hash` کی تصدیق کریں ذخیرہ شدہ باڈی ڈائجسٹ سے بچنے کے لئے حذف کرنے سے قبل
+  باسی ہینڈلز
+- ہیش اور کالر میٹا ڈیٹا کے ساتھ `ContractCodeEvent::Removed` emit.
 
-### RemoveSmartContractBytes
-- Allow pruning of stored bytecode by `code_hash` only when no manifests or active instances
-  reference the artifact; otherwise fail with a descriptive error.
-- Permission gate mirrors registration (`CanRegisterSmartContractCode`) plus an operator-level
-  guard (e.g., `CanManageSmartContractStorage`).
-- Verify the provided `code_hash` matches the stored body digest just before deletion to avoid
-  stale handles.
-- Emit `ContractCodeEvent::Removed` with hash and caller metadata.
+### بیچ منینٹاسیٹ / بیچ ٹرانسفیرسیٹ
+-آل یا کچھ بھی نہیں الفاظ: یا تو ہر ٹوپل کامیاب ہوجاتا ہے یا ہدایت کے بغیر اس کا خاتمہ ہوتا ہے
+  اثرات
+- ان پٹ ویکٹروں کو عین مطابق ترتیب دیا جانا چاہئے (کوئی مضمر چھانٹ نہیں) اور تشکیل کے ذریعہ پابند ہے
+  (`max_batch_isi_items`)۔
+- فی آئٹم اثاثوں کے واقعات کو خارج کریں تاکہ بہاو اکاؤنٹنگ مستقل رہتی ہے۔ بیچ کا سیاق و سباق شامل ہے ،
+  متبادل نہیں۔
+- اجازت چیک ہر ہدف (اثاثہ مالک ، تعریف کے مالک ، کے مطابق ، موجودہ واحد آئٹم منطق کو دوبارہ استعمال کریں
+  یا ریاست کی تغیر سے پہلے) صلاحیت)
+- مشاورتی رسائی کے سیٹوں کو امید کی ہم آہنگی کو درست رکھنے کے ل all تمام پڑھنے/لکھنا ضروری ہے۔
 
-### BatchMintAsset / BatchTransferAsset
-- All-or-nothing semantics: either every tuple succeeds or the instruction aborts without side
-  effects.
-- Input vectors must be deterministically ordered (no implicit sorting) and bounded by config
-  (`max_batch_isi_items`).
-- Emit per-item asset events so downstream accounting stays consistent; batch context is additive,
-  not a replacement.
-- Permission checks reuse existing single-item logic per target (asset owner, definition owner,
-  or granted capability) before state mutation.
-- Advisory access sets must union all read/write keys to keep optimistic concurrency correct.
+## نفاذ کا سہاروں
 
-## Implementation Scaffolding
+- ڈیٹا ماڈل میں اب `SetAssetKeyValue` / `RemoveAssetKeyValue` توازن میٹا ڈیٹا کے لئے سکافولڈس ہے
+  ترمیم (`transparent.rs`)۔
+- ایگزیکٹر زائرین پلیس ہولڈرز کو بے نقاب کرتے ہیں جو ایک بار میزبان وائرنگ لینڈز کی میزبانی کرتے ہیں۔
+  (`default/mod.rs`)۔
+- رکی پروٹو ٹائپ اقسام (`account::rekey`) رولنگ ہجرت کے لئے لینڈنگ زون فراہم کرتے ہیں۔
+- ورلڈ اسٹیٹ میں `account_rekey_records` میں `AccountLabel` کے ذریعہ کلید شامل ہے تاکہ ہم لیبل اسٹیج کرسکیں →
+  تاریخی `AccountId` انکوڈنگ کو چھوئے بغیر دستخطی ہجرت۔
 
-- Data model now carries `SetAssetKeyValue` / `RemoveAssetKeyValue` scaffolds for balance metadata
-  edits (`transparent.rs`).
-- Executor visitors expose placeholders that will gate permissions once host wiring lands
-  (`default/mod.rs`).
-- Rekey prototype types (`account::rekey`) provide a landing zone for rolling migrations.
-- World state includes `account_rekey_records` keyed by `AccountLabel` so we can stage label →
-  signatory migrations without touching the historical `AccountId` encoding.
+## IVM syscall ڈرافٹنگ
 
-## IVM Syscall Drafting
+- `DeactivateContractInstance` / `RemoveSmartContractBytes` شپ کے لئے میزبان شمس
+  `SYSCALL_DEACTIVATE_CONTRACT_INSTANCE` (0x43) اور
+  `SYSCALL_REMOVE_SMART_CONTRACT_BYTES` (0x44) ، دونوں استعمال کرنے والے Norito TLVs جو آئینہ دار ہیں
+  کیننیکل آئی ایس آئی ڈھانچے۔
+- `abi_syscall_list()` کو صرف میزبان ہینڈلرز آئینہ `iroha_core` عملدرآمد کے راستے رکھنے کے بعد رکھیں
+  ترقی کے دوران ابی ہیش مستحکم ہے۔
+- ایک بار سیسکل کی تعداد مستحکم ہونے کے بعد Kotodama کو اپ ڈیٹ کریں۔ توسیع کے لئے سنہری کوریج شامل کریں
+  ایک ہی وقت میں سطح.
 
-- Host shims for `DeactivateContractInstance` / `RemoveSmartContractBytes` ship as
-  `SYSCALL_DEACTIVATE_CONTRACT_INSTANCE` (0x43) and
-  `SYSCALL_REMOVE_SMART_CONTRACT_BYTES` (0x44), both consuming Norito TLVs that mirror the
-  canonical ISI structs.
-- Extend `abi_syscall_list()` only after host handlers mirror `iroha_core` execution paths to keep
-  ABI hashes stable during development.
-- Update Kotodama lowering once syscall numbers stabilize; add golden coverage for the expanded
-  surface at the same time.
+## کی حیثیت
 
-## Status
-
-The above ordering and invariants are ready for implementation. Follow-up branches should reference
-this document when wiring execution paths and syscall exposure.
+مذکورہ بالا آرڈر اور حملہ آور عمل درآمد کے لئے تیار ہیں۔ فالو اپ شاخوں کا حوالہ دینا چاہئے
+یہ دستاویز جب عملدرآمد کے راستے اور سیسکل کی نمائش کو وائرنگ کرتے ہیں۔

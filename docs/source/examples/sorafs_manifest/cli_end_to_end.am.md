@@ -8,25 +8,26 @@ source_hash: a8209e602132efb6c29962bf09aea8cd74f972fa956ea8a7a1dbac08a7f6f00f
 source_last_modified: "2026-01-05T09:28:12.006380+00:00"
 translation_last_reviewed: 2026-02-07
 title: "SoraFS Manifest CLI End-to-End Example"
+translator: machine-google-reviewed
 ---
 
-# SoraFS Manifest CLI End-to-End Example
+# SoraFS አንጸባራቂ CLI ከመጨረሻ እስከ መጨረሻ ምሳሌ
 
-This example walks through publishing a documentation build to SoraFS using the
-`sorafs_manifest_stub` CLI together with the deterministic chunking fixtures
-described in the SoraFS Architecture RFC. The flow covers manifest generation,
-expectation checks, fetch-plan validation, and proof-of-retrieval rehearsal so
-teams can embed the same steps in CI.
+ይህ ምሳሌ የሰነድ ግንባታን ወደ SoraFS በማተም ያልፋል
+`sorafs_manifest_stub` CLI ከወሳኝ መቆራረጥ ዕቃዎች ጋር
+በ SoraFS Architecture RFC ውስጥ ተገልጿል. ፍሰቱ አንጸባራቂ ትውልድን ይሸፍናል,
+የሚጠበቁ ፍተሻዎች፣ የማምጣት-ዕቅድ ማረጋገጫ፣ እና የማገገም ማረጋገጫ ልምምዶች እንዲሁ
+ቡድኖች በ CI ውስጥ ተመሳሳይ ደረጃዎችን መክተት ይችላሉ.
 
-## Prerequisites
+## ቅድመ ሁኔታዎች
 
-- Workspace cloned and toolchain ready (`cargo`, `rustc`).
-- Fixtures from `fixtures/sorafs_chunker` available so expectation values can be
-  derived (for production runs, pull the values from the migration ledger entry
-  associated with the artifact).
-- Sample payload directory to publish (this example uses `docs/book`).
+- የስራ ቦታ ክሎድ እና የመሳሪያ ሰንሰለት ዝግጁ (`cargo`፣ `rustc`)።
+- ከ `fixtures/sorafs_chunker` የሚጠበቁ እሴቶች ሊኖሩ የሚችሉ ዕቃዎች ይገኛሉ
+  የተገኘ (ለምርት ስራዎች እሴቶቹን ከስደት ደብተር ግቤት ይጎትቱ
+  ከቅርስ ጋር የተያያዘ).
+- ለማተም የናሙና የመጫኛ ማውጫ (ይህ ምሳሌ `docs/book` ይጠቀማል)።
 
-## Step 1 — Generate manifest, CAR, signatures, and fetch plan
+## ደረጃ 1 — አንጸባራቂ፣ CAR፣ ፊርማዎችን እና እቅድ ማውጣት
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
@@ -41,15 +42,15 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
   --chunker-profile=sorafs.sf1@1.0.0
 ```
 
-The command:
+ትዕዛዙ፡-
 
-- Streams the payload through `ChunkProfile::DEFAULT`.
-- Emits a CARv2 archive plus chunk-fetch plan.
-- Builds a `ManifestV1` record, verifies manifest signatures (if provided), and
-  writes the envelope.
-- Enforces expectation flags so the run fails if bytes drift.
+- ክፍያውን በ `ChunkProfile::DEFAULT` በኩል ያሰራጫል።
+- CARv2 ማህደር እና ቸንክ-ማምጣት እቅድ ያወጣል።
+- የ`ManifestV1` መዝገብ ይገነባል፣ አንጸባራቂ ፊርማዎችን ያረጋግጣል (ከቀረበ) እና
+  ፖስታውን ይጽፋል.
+- ባይት ከተንሳፈፈ ሩጫው እንዳይሳካ የሚጠበቁ ባንዲራዎችን ያስገድዳል።
 
-## Step 2 — Verify outputs with chunk store + PoR rehearsal
+## ደረጃ 2 — ውጽዓቶችን በ chunk store + PoR ልምምድ ያረጋግጡ
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
@@ -59,11 +60,11 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   --por-json-out target/sorafs/docs.por.json
 ```
 
-This replays the CAR through the deterministic chunk store, derives the
-Proof-of-Retrievability sampling tree, and emits a manifest report suitable for
-governance review.
+ይህ CAR ን በ deterministic chunk ማከማቻ በኩል እንደገና ያሰራጫል።
+መልሶ ማግኘት የሚቻልበት የናሙና ዛፍ፣ እና ተስማሚ የሆነ አንጸባራቂ ሪፖርት ያወጣል።
+የአስተዳደር ግምገማ.
 
-## Step 3 — Simulate multi-provider retrieval
+## ደረጃ 3 - የባለብዙ አቅራቢ መልሶ ማግኛን አስመስለው
 
 ```bash
 cargo run -p sorafs_car --bin sorafs_fetch -- \
@@ -73,21 +74,21 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
   --json-out=target/sorafs/docs.fetch_report.json
 ```
 
-For CI environments, provide separate payload paths per provider (e.g., mounted
-fixtures) to exercise range scheduling and failure handling.
+ለCI አካባቢዎች፣ በየአቅራቢው የተለየ የመክፈያ መንገዶችን ያቅርቡ (ለምሳሌ፣ የተገጠመ
+መጫዎቻዎች) የክልሎችን መርሐግብር እና ውድቀት አያያዝን ለመለማመድ።
 
-## Step 4 — Record ledger entry
+## ደረጃ 4 - የመመዝገቢያ ደብተርን ይመዝግቡ
 
-Log the publication in `docs/source/sorafs/migration_ledger.md`, capturing:
+በመያዝ ህትመቱን በ`docs/source/sorafs/migration_ledger.md` ውስጥ ያስገቡ
 
-- Manifest CID, CAR digest, and council signature hash.
-- Status (`Draft`, `Staging`, `Pinned`).
-- Links to CI runs or governance tickets.
+- CID፣ CAR መፈጨት እና የምክር ቤት ፊርማ ሃሽ አሳይ።
+- ሁኔታ (`Draft`፣ `Staging`፣ `Pinned`)።
+- ወደ CI ሩጫዎች ወይም የአስተዳደር ትኬቶች አገናኞች።
 
-## Step 5 — Pin via governance tooling (when registry is live)
+## ደረጃ 5 - በአስተዳደር መሣሪያ በኩል ይሰኩ (መዝገቡ በቀጥታ ሲሰራ)
 
-Once the Pin Registry is deployed (Milestone M2 in the migration roadmap),
-submit the manifest through the CLI:
+አንዴ የፒን መዝገብ ቤት ከተሰማራ (በፍልሰት ፍኖተ ካርታ ውስጥ ወሳኝ ምዕራፍ 2)
+አንጸባራቂውን በCLI በኩል ያስገቡ፡-
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
@@ -102,11 +103,11 @@ cargo run -p sorafs_cli --bin sorafs_pin -- propose \
   --manifest-signatures target/sorafs/docs.manifest_signatures.json
 ```
 
-The proposal identifier and subsequent approval transaction hashes should be
-captured in the migration ledger entry for auditability.
+የፕሮፖዛል ለዪው እና ተከታዩ የተፈቀደ የግብይት ሃሽ መሆን አለባቸው
+ለኦዲትነት በፍልሰት ደብተር ግቤት ተይዟል።
 
-## Cleanup
+## ማፅዳት
 
-Artifacts under `target/sorafs/` can be archived or uploaded to staging nodes.
-Keep the manifest, signatures, CAR, and fetch plan together so downstream
-operators and SDK teams can validate the deployment deterministically.
+በ`target/sorafs/` ስር ያሉ ቅርሶች በማህደር ሊቀመጡ ወይም ወደ የዝግጅት ኖዶች ሊሰቀሉ ይችላሉ።
+አንጸባራቂውን፣ ፊርማዎችን፣ CARን እና እቅድን አንድ ላይ በማምጣት ወደ ታች ያኑሩ
+ኦፕሬተሮች እና የኤስዲኬ ቡድኖች ስምምነቱን በቁርጠኝነት ማረጋገጥ ይችላሉ።

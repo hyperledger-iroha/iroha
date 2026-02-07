@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 89be62d7bb2bb79fd994d207489d310ef4c997be53447fbee8ac1f7b758d3beb
 source_last_modified: "2025-12-29T18:16:35.978367+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Impact Assessment Tooling (MINFO‑4b)
+# Нөлөөллийн үнэлгээний хэрэгсэл (MINFO‑4b)
 
-Roadmap reference: **MINFO‑4b — Impact assessment tooling.**  
-Owner: Governance Council / Analytics
+Замын зургийн лавлагаа: **MINFO‑4b — Нөлөөллийн үнэлгээний хэрэгсэл.**  
+Эзэмшигч: Засаглалын зөвлөл / Аналитик
 
-This note documents the `cargo xtask ministry-agenda impact` command that now
-produces the automated hash-family diff required for referendum packets. The
-tool consumes validated Agenda Council proposals, the duplicate registry, and
-an optional denylist/policy snapshot so reviewers can see exactly which
-fingerprints are new, which collide with existing policy, and how many entries
-each hash family contributes.
+Энэхүү тэмдэглэл нь одоо `cargo xtask ministry-agenda impact` командыг баримтжуулж байна
+бүх нийтийн санал асуулгын багцад шаардлагатай автоматжуулсан хэш-гэр бүлийн ялгааг гаргадаг. The
+хэрэгсэл нь мөрийн хөтөлбөрийн баталгаажуулсан санал, давхардсан бүртгэл, болон
+нэмэлт үгүйсгэх жагсаалт/бодлогын агшин агшин нь тоймчид яг аль нь болохыг харах боломжтой
+хурууны хээ шинэ, аль нь одоо байгаа бодлоготой зөрчилдөж, хэдэн оруулгатай
+хэш гэр бүл бүр хувь нэмрээ оруулдаг.
 
-## Inputs
+## оролт
 
-1. **Agenda proposals.** One or more files that follow
+1. **Хэлэлцэх асуудлын санал.** Дараах нэг буюу хэд хэдэн файл
    [`docs/source/ministry/agenda_council_proposal.md`](agenda_council_proposal.md).
-   Pass them explicitly with `--proposal <path>` or point the command at a
-   directory via `--proposal-dir <dir>` and every `*.json` file under that path
-   is included.
-2. **Duplicate registry (optional).** A JSON file matching
-   `docs/examples/ministry/agenda_duplicate_registry.json`. Conflicts are
-   reported under `source = "duplicate_registry"`.
-3. **Policy snapshot (optional).** A lightweight manifest that lists every
-   fingerprint already enforced by GAR/Ministry policy. The loader expects the
-   schema shown below (see
+   Тэдгээрийг `--proposal <path>`-ээр тодорхой дамжуулж эсвэл командыг a дээр зааж өгнө үү
+   `--proposal-dir <dir>` болон тэр замын доорх `*.json` файл бүрээр дамжуулан лавлах
+   орсон байна.
+2. **Давхардсан бүртгэл (заавал биш).** таарч байгаа JSON файл
+   `docs/examples/ministry/agenda_duplicate_registry.json`. Зөрчилдөөн байдаг
+   `source = "duplicate_registry"` дор мэдээлсэн.
+3. **Бодлогын агшин зураг (заавал биш).** Бүх зүйлийг жагсаасан хөнгөн манифест
+   хурууны хээг ГАР/Яамны бодлогоор аль хэдийн хэрэгжүүлсэн. Ачаалагч хүлээж байна
+   схемийг доор харуулав (харна уу
    [`docs/examples/ministry/policy_snapshot_example.json`](../../examples/ministry/policy_snapshot_example.json)
-   for a complete sample):
+   бүрэн дээжийн хувьд):
 
 ```json
 {
@@ -56,10 +57,10 @@ each hash family contributes.
 }
 ```
 
-Any entry whose `hash_family:hash_hex` fingerprint matches a proposal target is
-reported under `source = "policy_snapshot"` with the referenced `policy_id`.
+`hash_family:hash_hex` хурууны хээ нь саналын зорилттой таарч байгаа аливаа оруулга
+`source = "policy_snapshot"` дор мэдээлсэн нь `policy_id` иш татсан.
 
-## Usage
+## Хэрэглээ
 
 ```bash
 cargo xtask ministry-agenda impact \
@@ -69,8 +70,8 @@ cargo xtask ministry-agenda impact \
   --out artifacts/ministry/impact/AC-2026-001.json
 ```
 
-Additional proposals can be appended via repeated `--proposal` flags or by
-supplying a directory that contains an entire referendum batch:
+Нэмэлт саналыг давтан `--proposal` тугуудаар эсвэл дараах байдлаар хавсаргаж болно.
+Бүх нийтийн санал асуулгын багцыг агуулсан лавлахыг нийлүүлж байна:
 
 ```bash
 cargo xtask ministry-agenda impact \
@@ -79,12 +80,12 @@ cargo xtask ministry-agenda impact \
   --out artifacts/ministry/impact/2026-03-31.json
 ```
 
-The command prints the generated JSON to stdout when `--out` is omitted.
+`--out`-г орхигдуулсан үед энэ тушаал нь үүсгэсэн JSON-г stdout руу хэвлэдэг.
 
-## Output
+## Гаралт
 
-The report is a signed-off artefact (record it under the referendum packet’s
-`artifacts/ministry/impact/` directory) with the following structure:
+Тайлан нь гарын үсэг зурсан олдвор юм (үүнийг бүх нийтийн санал асуулгын багцын дор тэмдэглэнэ үү
+`artifacts/ministry/impact/` лавлах) дараах бүтэцтэй:
 
 ```json
 {
@@ -125,13 +126,13 @@ The report is a signed-off artefact (record it under the referendum packet’s
 }
 ```
 
-Attach this JSON to every referendum dossier alongside the neutral summary so
-panelists, jurors, and governance observers can see the exact blast radius of
-each proposal. The output is deterministic (sorted by hash family) and safe to
-include in CI/runbooks; if the duplicate registry or policy snapshot changes,
-rerun the command and attach the refreshed artefact before the vote opens.
+Энэ JSON-ийг бүх нийтийн санал асуулгын материал болгонд төвийг сахисан хураангуйтай хамт хавсаргана уу
+Хэлэлцүүлэгт оролцогчид, тангарагтны шүүгчид, засаглалын ажиглагчид яг тэсэлгээний радиусыг харж болно
+санал бүр. Гаралт нь тодорхой (хэш гэр бүлээр эрэмблэгдсэн) бөгөөд аюулгүй
+CI/runbook-д оруулах; Хэрэв давхардсан бүртгэл эсвэл бодлогын агшин зуурын зураг өөрчлөгдсөн бол,
+тушаалыг дахин ажиллуулж, санал хураалт эхлэхээс өмнө шинэчлэгдсэн олдворыг хавсаргана уу.
 
-> **Next step:** feed the generated impact report into
-> [`cargo xtask ministry-panel packet`](referendum_packet.md) so the
-> `ReferendumPacketV1` dossier contains both the hash-family breakdown and the
-> detailed conflict list for the proposal under review.
+> **Дараагийн алхам:** үүсгэсэн нөлөөллийн тайланг оруулах
+> [`cargo xtask ministry-panel packet`](referendum_packet.md) тиймээс
+> `ReferendumPacketV1` файл нь хэш-гэр бүлийн задаргаа болон
+> хянагдаж буй саналын зөрчлийн нарийвчилсан жагсаалт.

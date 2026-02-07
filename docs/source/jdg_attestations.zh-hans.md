@@ -7,33 +7,34 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 459e8ed4612da7cfa68053e4e299b2f68e7620d4f3b98a8a721ebf8327829ea1
 source_last_modified: "2026-01-08T21:57:18.412403+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# JDG Attestations: Guard, Rotation, and Retention
+# JDG 证明：保护、轮换和保留
 
-This note documents the v1 JDG attestation guard that now ships in `iroha_core`.
+本说明记录了现在在 `iroha_core` 中提供的 v1 JDG 证明防护。
 
-- **Committee manifests:** Norito-encoded `JdgCommitteeManifest` bundles carry per-dataspace rotation
-  schedules (`committee_id`, ordered members, threshold, `activation_height`, `retire_height`).
-  Manifests are loaded with `JdgCommitteeSchedule::from_path` and enforce strictly increasing
-  activation heights with an optional grace overlap (`grace_blocks`) between retiring/activating
-  committees.
-- **Attestation guard:** `JdgAttestationGuard` enforces dataspace binding, expiry, stale bounds,
-  committee id/threshold matching, signer membership, supported signature schemes, and optional
-  SDN validation via `JdgSdnEnforcer`. Size caps, max lag, and allowed signature schemes are
-  constructor parameters; `validate(attestation, dataspace, current_height)` returns the active
-  committee or a structured error.
-  - `scheme_id = 1` (`simple_threshold`): per-signer signatures, optional signer bitmap.
-  - `scheme_id = 2` (`bls_normal_aggregate`): single pre-aggregated BLS-normal signature over the
-    attestation hash; signer bitmap optional, defaults to all signers in the attestation. BLS
-    aggregate validation requires a valid PoP per committee member in the manifest; missing or
-    invalid PoPs reject the attestation.
-  Configure the allow-list via `governance.jdg_signature_schemes`.
-- **Retention store:** `JdgAttestationStore` tracks attestations per dataspace with a configurable
-  per-dataspace cap, pruning oldest entries on insert. Call `for_dataspace` or
-  `for_dataspace_and_epoch` to retrieve audit/replay bundles.
-- **Tests:** Unit coverage now exercises valid committee selection, unknown signer rejection, stale
-  attestation rejection, unsupported scheme ids, and retention pruning. See
-  `crates/iroha_core/src/jurisdiction.rs`.
+- **委员会清单：** Norito 编码的 `JdgCommitteeManifest` 捆绑包携带每个数据空间轮换
+  计划（`committee_id`、有序成员、阈值、`activation_height`、`retire_height`）。
+  清单加载了 `JdgCommitteeSchedule::from_path` 并强制严格递增
+  退休/激活之间具有可选宽限重叠 (`grace_blocks`) 的激活高度
+  委员会。
+- **证明防护：** `JdgAttestationGuard` 强制执行数据空间绑定、过期、陈旧边界，
+  委员会 ID/阈值匹配、签名者成员资格、支持的签名方案以及可选
+  通过 `JdgSdnEnforcer` 进行 SDN 验证。大小上限、最大延迟和允许的签名方案是
+  构造函数参数； `validate(attestation, dataspace, current_height)` 返回活动的
+  委员会或结构性错误。
+  - `scheme_id = 1` (`simple_threshold`)：每个签名者签名，可选签名者位图。
+  - `scheme_id = 2` (`bls_normal_aggregate`)：单个预聚合的 BLS-正常签名
+    证明哈希；签名者位图可选，默认为证明中的所有签名者。劳工统计局
+    聚合验证需要清单中每个委员会成员的有效 PoP；缺失或
+    无效的 PoP 拒绝证明。
+  通过 `governance.jdg_signature_schemes` 配置允许列表。
+- **保留存储：** `JdgAttestationStore` 使用可配置的跟踪每个数据空间的证明
+  每个数据空间上限，在插入时修剪最旧的条目。致电 `for_dataspace` 或
+  `for_dataspace_and_epoch` 用于检索审核/重播包。
+- **测试：** 单位覆盖范围现在执行有效的委员会选择、未知签名者拒绝、陈旧
+  证明拒绝、不支持的方案 ID 和保留修剪。参见
+  `crates/iroha_core/src/jurisdiction.rs`。
 
-The guard rejects schemes outside the configured allow-list.
+警卫拒绝配置的允许列表之外的方案。

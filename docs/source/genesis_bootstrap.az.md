@@ -7,31 +7,32 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 6feb2b03bd8f6a41de693a0c3f3c4ffc058072bc7942e2bc50b3fd9770aa56d4
 source_last_modified: "2025-12-29T18:16:35.962003+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Genesis Bootstrap from Trusted Peers
+Etibarlı həmyaşıdlardan # Genesis Bootstrap
 
-Iroha peers without a local `genesis.file` can fetch a signed genesis block from trusted peers
-using the Norito-encoded bootstrap protocol.
+Yerli `genesis.file` olmayan Iroha həmyaşıdları etibarlı həmyaşıdlarından imzalanmış genezis blokunu əldə edə bilər
+Norito kodlu bootstrap protokolundan istifadə etməklə.
 
-- **Protocol:** peers exchange `GenesisRequest` (`Preflight` for metadata, `Fetch` for payload) and
-  `GenesisResponse` frames keyed by `request_id`. Responders include the chain id, signer pubkey,
-  hash, and an optional size hint; payloads are returned only on `Fetch`, and duplicate request ids
-  receive `DuplicateRequest`.
-- **Guards:** responders enforce an allowlist (`genesis.bootstrap_allowlist` or the trusted peers
-  set), chain-id/pubkey/hash matching, rate limits (`genesis.bootstrap_response_throttle`), and a
-  size cap (`genesis.bootstrap_max_bytes`). Requests outside the allowlist receive `NotAllowed`, and
-  payloads signed by the wrong key receive `MismatchedPubkey`.
-- **Requester flow:** when storage is empty and `genesis.file` is unset (and
-  `genesis.bootstrap_enabled=true`), the node preflights trusted peers with the optional
-  `genesis.expected_hash`, then fetches the payload, validates signatures via `validate_genesis_block`,
-  and persists `genesis.bootstrap.nrt` alongside Kura before applying the block. Bootstrap retries
-  honor `genesis.bootstrap_request_timeout`, `genesis.bootstrap_retry_interval`, and
+- **Protokol:** həmyaşıdları mübadiləsi `GenesisRequest` (metadata üçün `Preflight`, faydalı yük üçün `Fetch`) və
+  `GenesisResponse` çərçivələri `request_id` tərəfindən açar. Cavab verənlərə zəncirvari id, imzalayan pubkey,
+  hash və isteğe bağlı ölçü işarəsi; faydalı yüklər yalnız `Fetch` və dublikat sorğu id-lərində qaytarılır
+  `DuplicateRequest` qəbul edin.
+- **Mühafizəçilər:** cavab verənlər icazə siyahısını tətbiq edir (`genesis.bootstrap_allowlist` və ya etibarlı həmyaşıdlar
+  set), zəncirvari id/pubkey/hesh uyğunluğu, dərəcə limitləri (`genesis.bootstrap_response_throttle`) və
+  ölçü qapağı (`genesis.bootstrap_max_bytes`). İcazə siyahısından kənar sorğular `NotAllowed` alır və
+  yanlış düymə ilə imzalanmış faydalı yüklər `MismatchedPubkey` alır.
+- **Tələb axını:** yaddaş boş olduqda və `genesis.file` ayarlanmadıqda (və
+  `genesis.bootstrap_enabled=true`), node isteğe bağlı olan etibarlı həmyaşıdları əvvəlcədən idarə edir
+  `genesis.expected_hash`, sonra faydalı yükü götürür, `validate_genesis_block` vasitəsilə imzaları təsdiqləyir,
+  və blok tətbiq etməzdən əvvəl Kür ilə yanaşı `genesis.bootstrap.nrt`-ni saxlayır. Bootstrap yenidən cəhd edir
+  honor `genesis.bootstrap_request_timeout`, `genesis.bootstrap_retry_interval` və
   `genesis.bootstrap_max_attempts`.
-- **Failure modes:** requests are rejected for allowlist misses, chain/pubkey/hash mismatches, size
-  cap violations, rate limits, missing local genesis, or duplicate request ids. Conflicting hashes
-  across peers abort the fetch; no responders/timeouts fall back to local configuration.
-- **Operator steps:** ensure at least one trusted peer is reachable with a valid genesis, configure
-  `bootstrap_allowlist`/`bootstrap_max_bytes`/`bootstrap_response_throttle` and the retry knobs, and
-  optionally pin `expected_hash` to avoid accepting mismatched payloads. Persisted payloads can be
-  reused on subsequent boots by pointing `genesis.file` to `genesis.bootstrap.nrt`.
+- **Uğursuzluq rejimləri:** sorğular icazə verilən siyahıların buraxılması, zəncir/pubkey/hesh uyğunsuzluğu, ölçü üçün rədd edilir
+  limit pozuntuları, tarif limitləri, çatışmayan yerli genezis və ya dublikat sorğu id-ləri. Ziddiyyətli hashlər
+  həmyaşıdları arasında gətirməni dayandırın; yerli konfiqurasiyaya cavab verənlər/taym-autları geri qayıtmır.
+- **Operator addımları:** etibarlı genezisi olan ən azı bir etibarlı həmyaşıdın əlçatan olmasını təmin edin, konfiqurasiya edin
+  `bootstrap_allowlist`/`bootstrap_max_bytes`/`bootstrap_response_throttle` və təkrar cəhd düymələri və
+  uyğun olmayan faydalı yükləri qəbul etməmək üçün isteğe bağlı olaraq `expected_hash`-i bağlayın. Davamlı yüklər ola bilər
+  `genesis.file`-i `genesis.bootstrap.nrt`-ə göstərərək sonrakı çəkmələrdə təkrar istifadə olunur.

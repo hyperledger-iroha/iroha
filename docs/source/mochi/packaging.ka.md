@@ -7,71 +7,72 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c7ab0877a6f43402d6ec13a44c4a7c2b68e4a49e6103bb50d7469d9e71aaa953
 source_last_modified: "2025-12-29T18:16:35.984945+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# MOCHI Packaging Guide
+# MOCHI შეფუთვის გზამკვლევი
 
-This guide explains how to build the MOCHI desktop supervisor bundle, inspect
-the generated artefacts, and tune the runtime overrides that ship with the
-bundle. It complements the quickstart by focusing on reproducible packaging
-and CI usage.
+ეს სახელმძღვანელო განმარტავს, თუ როგორ უნდა ავაშენოთ MOCHI დესკტოპის ზედამხედველის ნაკრები, შეამოწმეთ
+გენერირებული არტეფაქტები, და დააკონკრეტეთ გაშვების დრო უგულებელყოფს, რომ გემი ერთად
+შეკვრა. ის ავსებს სწრაფ დაწყებას რეპროდუცირებადი შეფუთვაზე ფოკუსირებით
+და CI გამოყენება.
 
-## Prerequisites
+## წინაპირობები
 
-- Rust toolchain (edition 2024 / Rust 1.82+) with workspace dependencies
-  already built.
-- `irohad`, `iroha_cli`, and `kagami` compiled for the desired target. The
-  bundler reuses binaries from `target/<profile>/`.
-- Sufficient disk space for the bundle output under `target/` or a custom
-  destination.
+- Rust toolchain (გამოცემა 2024 / Rust 1.82+) სამუშაო სივრცის დამოკიდებულებით
+  უკვე აშენებული.
+- სასურველი სამიზნისთვის შედგენილი `irohad`, `iroha_cli` და `kagami`. The
+  Bundler ხელახლა იყენებს ბინარებს `target/<profile>/`-დან.
+- საკმარისი ადგილი დისკზე პაკეტის გამოსასვლელად `target/` ან მორგებული
+  დანიშნულების ადგილი.
 
-Build the dependencies once before running the bundler:
+შექმენით დამოკიდებულებები ბანდლერის გაშვებამდე ერთხელ:
 
 ```bash
 cargo build -p irohad -p iroha_cli -p iroha_kagami
 ```
 
-## Building the bundle
+## შეკვრის აგება
 
-Invoke the dedicated `xtask` command from the repository root:
+გამოიძახეთ გამოყოფილი `xtask` ბრძანება საცავის ფესვიდან:
 
 ```bash
 cargo xtask mochi-bundle
 ```
 
-By default this produces a release bundle under `target/mochi-bundle/` with a
-filename derived from the host OS and architecture (for example,
-`mochi-macos-aarch64-release.tar.gz`). Use the following flags to customise
-the build:
+ნაგულისხმევად ეს აწარმოებს გამოშვების პაკეტს `target/mochi-bundle/` ქვეშ a
+ფაილის სახელი მიღებული მასპინძელი OS-დან და არქიტექტურიდან (მაგალითად,
+`mochi-macos-aarch64-release.tar.gz`). გამოიყენეთ შემდეგი დროშები მორგებისთვის
+აშენება:
 
-- `--profile <name>` – choose a Cargo profile (`release`, `debug`, or a
-  custom profile).
-- `--no-archive` – keep the expanded directory without creating a `.tar.gz`
-  archive (useful for local testing).
-- `--out <path>` – write bundles to a custom directory instead of
+- `--profile <name>` - აირჩიეთ ტვირთის პროფილი (`release`, `debug`, ან
+  მორგებული პროფილი).
+- `--no-archive` - შეინახეთ გაფართოებული დირექტორია `.tar.gz`-ის შექმნის გარეშე
+  არქივი (გამოდგება ადგილობრივი ტესტირებისთვის).
+- `--out <path>` – ჩაწერეთ პაკეტები მორგებულ დირექტორიაში ამის ნაცვლად
   `target/mochi-bundle/`.
-- `--kagami <path>` – supply a prebuilt `kagami` executable to include in the
-  archive. When omitted, the bundler reuses (or builds) the binary from the
-  selected profile.
-- `--matrix <path>` – append bundle metadata to a JSON matrix file (created if
-  missing) so CI pipelines can record every host/profile artefact produced in a
-  run. Entries include the bundle directory, manifest path and SHA-256, optional
-  archive location, and the latest smoke-test result.
-- `--smoke` – execute the packaged `mochi --help` as a lightweight smoke gate
-  after bundling; failures surface missing dependencies before publishing an
-  artefact.
-- `--stage <path>` – copy the finished bundle (and archive when produced) into
-  a staging directory so multi-platform builds can deposit artefacts in one
-  location without extra scripting.
+- `--kagami <path>` – მიაწოდეთ წინასწარ აშენებული `kagami` შესრულებადი, რომ შეიტანოთ
+  არქივი. როდესაც გამოტოვებულია, bundler ხელახლა იყენებს (ან აშენებს) ორობითს
+  შერჩეული პროფილი.
+- `--matrix <path>` - ნაკრების მეტამონაცემების დამატება JSON მატრიცის ფაილს (შეიქმნება თუ
+  აკლია) ასე რომ, CI მილსადენებს შეუძლიათ ჩაიწერონ ყველა ჰოსტის/პროფილის არტეფაქტი, რომელიც წარმოებულია a
+  გაშვება. ჩანაწერებში შედის პაკეტის დირექტორია, მანიფესტის გზა და SHA-256, სურვილისამებრ
+  არქივის ადგილმდებარეობა და კვამლის ტესტის უახლესი შედეგი.
+- `--smoke` - შეასრულეთ შეფუთული `mochi --help`, როგორც მსუბუქი კვამლის კარიბჭე
+  შეფუთვის შემდეგ; წარუმატებლობის გამოქვეყნებამდე გამოტოვებული დამოკიდებულებები გამოჩნდება
+  არტეფაქტი.
+- `--stage <path>` - დააკოპირეთ მზა ნაკრები (და დაარქივეთ, როდესაც წარმოიქმნება)
+  ინსცენირების დირექტორია, რომლითაც მრავალ პლატფორმის ნაგებობებს შეუძლიათ არტეფაქტების ერთში დეპონირება
+  მდებარეობა დამატებითი სკრიპტის გარეშე.
 
-The command copies `mochi-ui-egui`, `kagami`, `LICENSE`, the sample
-configuration, and `mochi/BUNDLE_README.md` into the bundle. A deterministic
-`manifest.json` is generated alongside the binaries so CI jobs can track file
-hashes and sizes.
+ბრძანება აკოპირებს `mochi-ui-egui`, `kagami`, `LICENSE`, ნიმუშს
+კონფიგურაცია და `mochi/BUNDLE_README.md` პაკეტში. დეტერმინისტული
+`manifest.json` იქმნება ბინარებთან ერთად, რათა CI სამუშაოებმა შეძლონ ფაილის თვალყურის დევნება
+ჰეშები და ზომები.
 
-## Bundle layout and verification
+## პაკეტის განლაგება და გადამოწმება
 
-An expanded bundle follows the layout documented in `BUNDLE_README.md`:
+გაფართოებული ნაკრები მიჰყვება `BUNDLE_README.md`-ში დოკუმენტირებულ განლაგებას:
 
 ```
 bin/mochi
@@ -82,56 +83,54 @@ manifest.json
 LICENSE
 ```
 
-The `manifest.json` file lists every artefact with its SHA-256 hash. Verify
-the bundle after copying it to another system:
+`manifest.json` ფაილი ჩამოთვლის ყველა არტეფაქტს თავისი SHA-256 ჰეშით. გადაამოწმეთ
+პაკეტი სხვა სისტემაში კოპირების შემდეგ:
 
 ```bash
 jq -r '.files[] | "\(.sha256)  \(.path)"' manifest.json | sha256sum --check
 ```
 
-CI pipelines can cache the expanded directory, sign the archive, or publish
-the manifest alongside release notes. The manifest includes the generator
-profile, target triple, and creation timestamp to aid provenance tracking.
+CI მილსადენებს შეუძლიათ გაფართოებული დირექტორია, ხელი მოაწერონ არქივს ან გამოაქვეყნონ
+მანიფესტი გამოშვების ნოტებთან ერთად. მანიფესტი მოიცავს გენერატორს
+პროფილი, სამიზნე სამმაგი და შექმნის დროის შტამპი, რათა ხელი შეუწყოს წარმოშობის მიკვლევას.
 
 ## Runtime overrides
 
-MOCHI discovers helper binaries and runtime locations through CLI flags or
-environment variables:
-
-- `--data-root` / `MOCHI_DATA_ROOT` – override the workspace used for peer
-  configs, storage, and logs.
-- `--profile` – switch between topology presets (`single-peer`,
+MOCHI აღმოაჩენს დამხმარე ორობით და გაშვების ადგილებს CLI დროშებით ან
+გარემოს ცვლადები:- `--data-root` / `MOCHI_DATA_ROOT` - გადალახეთ თანატოლებისთვის გამოყენებული სამუშაო ადგილი
+  კონფიგურაციები, საცავი და ჟურნალები.
+- `--profile` – გადართვა ტოპოლოგიის წინასწარ დაყენებებს შორის (`single-peer`,
   `four-peer-bft`).
-- `--torii-start`, `--p2p-start` – change the base ports used when allocating
-  services.
-- `--irohad` / `MOCHI_IROHAD` – point at a specific `irohad` binary.
-- `--kagami` / `MOCHI_KAGAMI` – override the bundled `kagami`.
-- `--iroha-cli` / `MOCHI_IROHA_CLI` – override the optional CLI helper.
-- `--restart-mode <never|on-failure>` – disable automatic restarts or force the
-  exponential backoff policy.
-- `--restart-max <attempts>` – override the number of restart attempts when
-  running in `on-failure` mode.
-- `--restart-backoff-ms <millis>` – set the base backoff for automatic restarts.
-- `MOCHI_CONFIG` – provide a custom `config/local.toml` path.
+- `--torii-start`, `--p2p-start` - შეცვალეთ ბაზის პორტები, რომლებიც გამოიყენება განაწილებისას
+  მომსახურება.
+- `--irohad` / `MOCHI_IROHAD` – მიუთითეთ კონკრეტულ `irohad` ბინარზე.
+- `--kagami` / `MOCHI_KAGAMI` – უგულებელყოთ შეფუთული `kagami`.
+- `--iroha-cli` / `MOCHI_IROHA_CLI` - არჩევითი CLI დამხმარის უგულებელყოფა.
+- `--restart-mode <never|on-failure>` - გამორთეთ ავტომატური გადატვირთვა ან აიძულეთ
+  ექსპონენციური უკან დახევის პოლიტიკა.
+- `--restart-max <attempts>` – გადატვირთეთ გადატვირთვის მცდელობების რაოდენობა, როდესაც
+  მუშაობს `on-failure` რეჟიმში.
+- `--restart-backoff-ms <millis>` – დააყენეთ საბაზისო უკანა ჩართვა ავტომატური გადატვირთვისთვის.
+- `MOCHI_CONFIG` – უზრუნველყოს მორგებული `config/local.toml` გზა.
 
-The CLI help (`mochi --help`) prints the full flag list. Environment overrides
-take effect on launch and can be combined with the Settings dialog inside the
+CLI დახმარება (`mochi --help`) ბეჭდავს დროშის სრულ სიას. გარემო აჭარბებს
+ამოქმედდეს გაშვებისთანავე და შეიძლება გაერთიანდეს პარამეტრების დიალოგთან შიგნით
 UI.
 
-## CI usage hints
+## CI გამოყენების მინიშნებები
 
-- Run `cargo xtask mochi-bundle --no-archive` to generate a directory that can
-  be zipped with platform-specific tooling (ZIP for Windows, tarballs for
+- გაუშვით `cargo xtask mochi-bundle --no-archive` დირექტორიის გენერირებისთვის, რომელსაც შეუძლია
+  დახურული იყოს პლატფორმისთვის სპეციფიკური ხელსაწყოებით (ZIP Windows-ისთვის, tarballs for
   Unix).
-- Capture bundle metadata with `cargo xtask mochi-bundle --matrix dist/matrix.json`
-  so release jobs can publish a single JSON index listing every host/profile
-  artefact produced in the pipeline.
-- Use `cargo xtask mochi-bundle --stage /mnt/staging/mochi` (or similar) on each
-  build agent to upload the bundle and archive into a shared directory that the
-  publishing job can consume.
-- Publish both the archive and `manifest.json` so operators can verify bundle
-  integrity.
-- Store the generated directory as a build artefact to seed smoke tests that
-  exercise the supervisor with deterministically packaged binaries.
-- Record bundle hashes in release notes or in the `status.md` log for future
-  provenance checks.
+- გადაიღეთ ნაკრების მეტამონაცემები `cargo xtask mochi-bundle --matrix dist/matrix.json`-ით
+  ასე რომ, გამოშვების სამუშაოებს შეუძლიათ გამოაქვეყნონ ერთი JSON ინდექსი, რომელშიც ჩამოთვლილია ყველა ჰოსტი/პროფილი
+  მილსადენში წარმოებული არტეფაქტი.
+- გამოიყენეთ `cargo xtask mochi-bundle --stage /mnt/staging/mochi` (ან მსგავსი) თითოეულზე
+  build აგენტი პაკეტის ატვირთვისა და არქივის საზიარო დირექტორიაში, რომელიც
+  საგამომცემლო სამუშაო შეიძლება მოიხმაროს.
+- გამოაქვეყნეთ როგორც არქივი, ასევე `manifest.json`, რათა ოპერატორებმა შეძლონ პაკეტის გადამოწმება
+  მთლიანობას.
+- შეინახეთ გენერირებული დირექტორია, როგორც კონსტრუქციის არტეფაქტი თესლის კვამლის შესამოწმებლად
+  განახორციელოს ზედამხედველი დეტერმინისტულად შეფუთული ბინარებით.
+- ჩაწერეთ ნაკრების ჰეშები გამოშვების ნოტებში ან `status.md` ჟურნალში მომავლისთვის
+  წარმოშობის შემოწმებები.

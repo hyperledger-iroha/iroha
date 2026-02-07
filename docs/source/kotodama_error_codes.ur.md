@@ -6,20 +6,21 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 5e0e4f16000f6a578fe9c9d6e204c01087e987ac3b46d70537a15b072df48a13
 source_last_modified: "2026-01-03T18:08:01.373878+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Kotodama Compiler Error Codes
+# Kotodama مرتب غلطی کوڈز
 
-The Kotodama compiler emits stable error codes so that tooling and CLI users can
-quickly understand the cause of a failure. Use `koto_compile --explain <code>`
-to print the corresponding hint.
+Kotodama مرتب مستحکم غلطی والے کوڈز کو خارج کرتا ہے تاکہ ٹولنگ اور سی ایل آئی صارفین کرسکیں
+ناکامی کی وجہ کو جلدی سے سمجھیں۔ `koto_compile --explain <code>` استعمال کریں
+متعلقہ اشارے پرنٹ کرنے کے لئے۔
 
-| Code  | Description | Typical Fix |
-|-------|-------------|-------------|
-| `E0001` | Branch target is out of range for the IVM jump encoding. | Split very large functions or reduce inlining so basic block distances stay within ±1 MiB. |
-| `E0002` | Call sites reference a function that was never defined. | Check for typos, visibility modifiers, or feature flags that removed the callee. |
-| `E0003` | Durable state syscalls were emitted without ABI v1 enabled. | Set `CompilerOptions::abi_version = 1` or add `meta { abi_version: 1 }` inside the `seiyaku` contract. |
-| `E0004` | Asset-related syscalls received non-literal pointers. | Use `account_id(...)`, `asset_definition(...)`, etc., or pass 0 sentinels for host defaults. |
-| `E0005` | `for`-loop initializer is more complex than supported today. | Move complex setup before the loop; only simple `let`/expression initialisers are currently accepted. |
-| `E0006` | `for`-loop step clause is more complex than supported today. | Update the loop counter with a simple expression (e.g. `i = i + 1`). |
+| کوڈ | تفصیل | عام فکس |
+| ------- | ------------- | ------------- |
+| `E0001` | IVM جمپ انکوڈنگ کے لئے برانچ کا ہدف حد سے باہر ہے۔ | بہت بڑے افعال کو تقسیم کریں یا inlining کو کم کریں لہذا بنیادی بلاک فاصلوں ± 1MIB کے اندر اندر رہتے ہیں۔ |
+| `E0002` | کال سائٹیں ایک ایسے فنکشن کا حوالہ دیتے ہیں جس کی کبھی تعریف نہیں کی گئی تھی۔ | ٹائپوز ، مرئیت میں ترمیم کرنے والے ، یا فیچر جھنڈوں کی جانچ پڑتال کریں جس نے کالے کو ہٹا دیا۔ |
+| `E0003` | پائیدار ریاستی سیسکلز کو ABI V1 فعال کیے بغیر خارج کیا گیا تھا۔ | `CompilerOptions::abi_version = 1` سیٹ کریں یا `seiyaku` معاہدے کے اندر `meta { abi_version: 1 }` شامل کریں۔ |
+| `E0004` | اثاثوں سے متعلق سیسکلز کو غیر لیٹرل پوائنٹرز موصول ہوئے۔ | `account_id(...)` ، `asset_definition(...)` ، وغیرہ استعمال کریں ، یا میزبان ڈیفالٹس کے لئے 0 سینٹینلز پاس کریں۔ |
+| `E0005` | `for`-LOOP ابتدائی آج کی حمایت سے کہیں زیادہ پیچیدہ ہے۔ | لوپ سے پہلے پیچیدہ سیٹ اپ منتقل کریں۔ فی الحال صرف آسان `let`/اظہاراتی ابتدائی سازوں کو قبول کیا گیا ہے۔ |
+| `E0006` | `for`-LOOP مرحلہ شق آج کی حمایت سے کہیں زیادہ پیچیدہ ہے۔ | ایک سادہ اظہار (جیسے `i = i + 1`) کے ساتھ لوپ کاؤنٹر کو اپ ڈیٹ کریں۔ |

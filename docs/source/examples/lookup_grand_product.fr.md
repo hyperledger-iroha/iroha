@@ -6,29 +6,30 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 6f6421d420a704c5c4af335741e309adf641702ddb8c291dce94ea5581557a66
 source_last_modified: "2026-01-03T18:08:00.673232+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Lookup Grand-Product Example
+# Exemple de grand-produit de recherche
 
-This example expands the FASTPQ permission lookup argument mentioned in
-`fastpq_plan.md`.  In the Stage 2 pipeline the prover evaluates the selector
-(`s_perm`) and witness (`perm_hash`) columns on the low-degree extension (LDE)
-domain, updates a running grand product `Z_i`, and finally commits the entire
-sequence with Poseidon.  The hashed accumulator is appended to the transcript
-under the `fastpq:v1:lookup:product` domain, while the final `Z_i` still matches
-the committed permission table product `T`.
+Cet exemple développe l'argument de recherche d'autorisation FASTPQ mentionné dans
+`fastpq_plan.md`.  Dans le pipeline de l'étape 2, le prouveur évalue le sélecteur
+(`s_perm`) et colonnes témoins (`perm_hash`) sur l'extension bas degré (LDE)
+domaine, met à jour un grand produit en cours d'exécution `Z_i` et valide enfin l'intégralité
+séquence avec Poséidon.  L'accumulateur haché est annexé à la transcription
+sous le domaine `fastpq:v1:lookup:product`, tandis que le `Z_i` final correspond toujours
+le produit de table d'autorisations validées `T`.
 
-We consider a tiny batch with the following selector values:
+Nous considérons un petit lot avec les valeurs de sélecteur suivantes :
 
-| row | `s_perm` | `perm_hash`                                   |
+| rangée | `s_perm` | `perm_hash` |
 | --- | -------- | ---------------------------------------------- |
-| 0   | 1        | `0x019a...` (grant role = auditor, perm = transfer_asset) |
-| 1   | 0        | `0xabcd...` (no permission change)                |
-| 2   | 1        | `0x42ff...` (revoke role = auditor, perm = burn_asset) |
+| 0 | 1 | `0x019a...` (rôle d'attribution = auditeur, perm = transfer_asset) |
+| 1 | 0 | `0xabcd...` (aucune modification d'autorisation) |
+| 2 | 1 | `0x42ff...` (rôle de révocation = auditeur, perm = burn_asset) |
 
-Let `gamma = 0xdead...` be the Fiat-Shamir lookup challenge derived from the
-transcript.  The prover initialises `Z_0 = 1` and folds each row:
+Soit `gamma = 0xdead...` le défi de recherche Fiat-Shamir dérivé du
+transcription.  Le prouveur initialise `Z_0 = 1` et plie chaque ligne :
 
 ```
 Z_0 = 1
@@ -37,27 +38,27 @@ Z_2 = Z_1 * (perm_hash_1 + gamma)^(s_perm_1) = Z_1 (selector is zero)
 Z_3 = Z_2 * (perm_hash_2 + gamma)^(s_perm_2)
 ```
 
-Rows where `s_perm = 0` do not alter the accumulator.  After processing the
-trace, the prover Poseidon-hashes the sequence `[Z_1, Z_2, ...]` for the transcript
-yet also publishes `Z_final = Z_3` (the final running product) to match the table
-boundary condition.
+Les lignes où `s_perm = 0` ne modifient pas l'accumulateur.  Après avoir traité le
+trace, le prouveur Poséidon hache la séquence `[Z_1, Z_2, ...]` pour la transcription
+mais publie également `Z_final = Z_3` (le produit final en cours d'exécution) pour correspondre au tableau
+condition aux limites.
 
-On the table side, the committed permission Merkle tree encodes the deterministic
-set of active permissions for the slot.  The verifier (or the prover during
-witness generation) computes
+Du côté de la table, l'arbre Merkle des autorisations validées code le déterministe
+ensemble d'autorisations actives pour l'emplacement.  Le vérificateur (ou le prouveur lors
+génération de témoins) calcule
 
 ```
 T = product over entries: (entry.hash + gamma)
 ```
 
-The protocol enforces the boundary constraint `Z_final / T = 1`.  If the trace
-introduced a permission that is not present in the table (or omitted one that
-is), the grand product ratio diverges from 1 and the verifier rejects.  Because
-both sides multiply by `(value + gamma)` inside the Goldilocks field, the ratio
-remains stable across CPU/GPU backends.
+Le protocole applique la contrainte de limite `Z_final / T = 1`.  Si la trace
+introduit une autorisation qui n'est pas présente dans le tableau (ou en a omis une qui
+est), le rapport du grand produit s'écarte de 1 et le vérificateur rejette.  Parce que
+les deux côtés se multiplient par `(value + gamma)` à l'intérieur du champ Boucle d'or, le rapport
+reste stable sur les backends CPU/GPU.
 
-To serialise the example as Norito JSON for fixtures, record the tuple of
-`perm_hash`, selector, and accumulator after each row, for example:
+Pour sérialiser l'exemple en tant que Norito JSON pour les appareils, enregistrez le tuple de
+`perm_hash`, sélecteur et accumulateur après chaque ligne, par exemple :
 
 ```json
 {
@@ -71,7 +72,7 @@ To serialise the example as Norito JSON for fixtures, record the tuple of
 }
 ```
 
-The hexadecimal placeholders (`0x...`) can be replaced with concrete Goldilocks
-field elements when generating automated tests.  Stage 2 fixtures additionally
-record the Poseidon hash of the running accumulator but keep the same JSON shape,
-so the example can double as a template for future test vectors.
+Les espaces réservés hexadécimaux (`0x...`) peuvent être remplacés par des boucles d'or en béton
+éléments de terrain lors de la génération de tests automatisés.  Calendrier de l'étape 2 également
+enregistrer le hachage Poséidon de l'accumulateur en cours d'exécution mais conserver la même forme JSON,
+l'exemple peut donc servir de modèle pour les futurs vecteurs de test.

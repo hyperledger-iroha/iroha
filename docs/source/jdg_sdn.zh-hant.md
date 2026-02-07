@@ -7,85 +7,84 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 1ee87ee60e2e8c9d9636b282231b33de3cf1fd7240c8d31d0a0a1673651dcef1
 source_last_modified: "2025-12-29T18:16:35.972838+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% JDG-SDN attestations and rotation
+% JDG-SDN 證明和輪換
 
-This note captures the enforcement model for Secret Data Node (SDN) attestations
-used by the Jurisdiction Data Guardian (JDG) flow.
+本說明捕獲了秘密數據節點 (SDN) 證明的執行模型
+由司法管轄區數據監護人 (JDG) 流程使用。
 
-## Commitment format
-- `JdgSdnCommitment` binds the scope (`JdgAttestationScope`), the encrypted
-  payload hash, and the SDN public key. Seals are typed signatures
-  (`SignatureOf<JdgSdnCommitmentSignable>`) over the domain-tagged payload
-  `iroha:jurisdiction:sdn:commitment:v1\x00 || norito(signable)`.
-- Structural validation (`validate_basic`) enforces:
+## 承諾格式
+- `JdgSdnCommitment` 綁定範圍（`JdgAttestationScope`），加密
+  有效負載哈希和 SDN 公鑰。印章是打字簽名
+  (`SignatureOf<JdgSdnCommitmentSignable>`) 通過域標記的有效負載
+  `iroha:jurisdiction:sdn:commitment:v1\x00 || norito(signable)`。
+- 結構驗證 (`validate_basic`) 強制執行：
   - `version == JDG_SDN_COMMITMENT_VERSION_V1`
-  - valid block ranges
-  - non-empty seals
-  - scope equality against the attestation when run via
+  - 有效的塊範圍
+  - 非空密封件
+  - 通過運行時與證明的範圍相等
     `JdgAttestation::validate_with_sdn`/`validate_with_sdn_registry`
-- Deduplication is handled by the attestation validator (signer+payload hash
-  uniqueness) to prevent withheld/duplicate commitments.
+- 重複數據刪除由證明驗證器處理（簽名者+有效負載哈希
+  唯一性）以防止隱瞞/重複承諾。
 
-## Registry and rotation policy
-- SDN keys live in `JdgSdnRegistry`, keyed by `(Algorithm, public_key_bytes)`.
-- `JdgSdnKeyRecord` records the activation height, optional retirement height,
-  and optional parent key.
-- Rotation is governed by `JdgSdnRotationPolicy` (currently: `dual_publish_blocks`
-  overlap window). Registering a child key updates the parent retirement to
-  `child.activation + dual_publish_blocks`, with guardrails:
-  - missing parents are rejected
-  - activations must be strictly increasing
-  - overlaps that exceed the grace window are rejected
-- Registry helpers surface the installed records (`record`, `keys`) for status
-  and API exposure.
+## 註冊和輪換政策
+- SDN 密鑰位於 `JdgSdnRegistry` 中，由 `(Algorithm, public_key_bytes)` 加密。
+- `JdgSdnKeyRecord`記錄激活高度，可選退役高度，
+  和可選的父密鑰。
+- 旋轉由 `JdgSdnRotationPolicy` 控制（當前：`dual_publish_blocks`
+  重疊窗口）。註冊子密鑰會將父密鑰更新為
+  `child.activation + dual_publish_blocks`，帶護欄：
+  - 失踪的父母被拒絕
+  - 激活必須嚴格增加
+  - 超過寬限窗口的重疊被拒絕
+- 註冊表助手顯示已安裝記錄（`record`、`keys`）以了解狀態
+  和 API 暴露。
 
-## Validation flow
-- `JdgAttestation::validate_with_sdn_registry` wraps the structural
-  attestation checks and SDN enforcement. `JdgSdnPolicy` threads:
-  - `require_commitments`: enforce presence for PII/secret payloads
-  - `rotation`: grace window used when updating parent retirement
-- Each commitment is checked for:
-  - structural validity + attestation-scope match
-  - registered key presence
-  - active window covering the attested block range (retirement bounds already
-    include the dual-publish grace)
-  - valid seal over the domain-tagged commitment body
-- Stable errors surface the index for operator evidence:
-  `MissingSdnCommitments`, `UnknownSdnKey`, `InactiveSdnKey`, `InvalidSeal`,
-  or structural `Commitment`/`ScopeMismatch` failures.
+## 驗證流程
+- `JdgAttestation::validate_with_sdn_registry` 包含結構
+  認證檢查和 SDN 實施。 `JdgSdnPolicy` 線程：
+  - `require_commitments`：強制存在 PII/秘密有效負載
+  - `rotation`：更新父退休時使用的寬限期
+- 每項承諾均經過檢查：
+  - 結構有效性+證明範圍匹配
+  - 註冊關鍵存在
+  - 活動窗口覆蓋已證明的區塊範圍（退休範圍已經
+    包括雙重發布寬限期）
+  - 域名標記承諾主體上的有效印章
+- 穩定誤差顯示操作員證據索引：
+  `MissingSdnCommitments`、`UnknownSdnKey`、`InactiveSdnKey`、`InvalidSeal`、
+  或結構性 `Commitment`/`ScopeMismatch` 故障。
 
-## Operator runbook
-- **Provision:** register the first SDN key with `activated_at` at or before the
-  first secret block height. Publish the key fingerprint to JDG operators.
-- **Rotate:** generate the successor key, register it with `rotation_parent`
-  pointing at the current key, and confirm the parent retirement equals
-  `child_activation + dual_publish_blocks`. Re-seal payload commitments with
-  the active key during the overlap window.
-- **Audit:** expose registry snapshots (`record`, `keys`) via Torii/status
-  surfaces so auditors can confirm the active key and retirement windows. Alert
-  if the attested range falls outside the active window.
-- **Recovery:** `UnknownSdnKey` → ensure the registry includes the sealing key;
-  `InactiveSdnKey` → rotate or adjust activation heights; `InvalidSeal` →
-  re-seal payloads and refresh attestations.
+## 操作手冊
+- **規定：** 在以下時間或之前使用 `activated_at` 註冊第一個 SDN 密鑰
+  第一個秘密區塊高度。將密鑰指紋發布給 JDG 運營商。
+- **旋轉：**生成後繼密鑰，用 `rotation_parent` 註冊
+  指向當前鍵，並確認父退休等於
+  `child_activation + dual_publish_blocks`。重新密封有效負載承諾
+  重疊窗口期間的活動鍵。
+- **審核：**通過 Torii/status 公開註冊表快照（`record`、`keys`）
+  以便審計員可以確認活動密鑰和報廢窗口。警報
+  如果證明的範圍落在活動窗口之外。
+- **恢復：** `UnknownSdnKey` → 確保註冊表包含密封密鑰；
+  `InactiveSdnKey` → 旋轉或調整激活高度； `InvalidSeal` →
+  重新密封有效負載並刷新證明。## 運行時助手
+- `JdgSdnEnforcer` (`crates/iroha_core/src/jurisdiction.rs`) 套餐保單 +
+  通過 `validate_with_sdn_registry` 註冊並驗證證明。
+- 可以從 Norito 編碼的 `JdgSdnKeyRecord` 捆綁包加載註冊表（請參閱
+  `JdgSdnEnforcer::from_reader`/`from_path`) 或組裝
+  `from_records`，在註冊過程中應用旋轉護欄。
+- 運營商可以保留 Norito 捆綁包作為 Torii/狀態的證據
+  浮出水面，同時相同的有效負載為准入和使用的執行器提供信息
+  共識守護者。單個全局執行器可以在啟動時通過以下方式初始化
+  `init_enforcer_from_path` 和 `enforcer()`/`registry_snapshot()`/`sdn_registry_status()`
+  公開狀態/Torii 表面的實時策略+關鍵記錄。
 
-## Runtime helper
-- `JdgSdnEnforcer` (`crates/iroha_core/src/jurisdiction.rs`) packages a policy +
-  registry and validates attestations via `validate_with_sdn_registry`.
-- Registries can be loaded from Norito-encoded `JdgSdnKeyRecord` bundles (see
-  `JdgSdnEnforcer::from_reader`/`from_path`) or assembled with
-  `from_records`, which applies the rotation guardrails during registration.
-- Operators can persist the Norito bundle as evidence for Torii/status
-  surfacing while the same payload feeds the enforcer used by admission and
-  consensus guards. A single global enforcer can be initialised at startup via
-  `init_enforcer_from_path`, and `enforcer()`/`registry_snapshot()`/`sdn_registry_status()`
-  expose the live policy + key records for status/Torii surfaces.
-
-## Tests
-- Regression coverage in `crates/iroha_data_model/src/jurisdiction.rs`:
-  `sdn_registry_accepts_active_commitment`, `sdn_registry_rejects_unknown_key`,
-  `sdn_registry_rejects_inactive_key`, `sdn_registry_rejects_bad_signature`,
-  `sdn_registry_sets_parent_retirement_window`,
-  `sdn_registry_rejects_overlap_beyond_policy`, alongside the existing
-  structural attestation/SDN validation tests.
+## 測試
+- `crates/iroha_data_model/src/jurisdiction.rs` 中的回歸覆蓋率：
+  `sdn_registry_accepts_active_commitment`，`sdn_registry_rejects_unknown_key`，
+  `sdn_registry_rejects_inactive_key`、`sdn_registry_rejects_bad_signature`、
+  `sdn_registry_sets_parent_retirement_window`，
+  `sdn_registry_rejects_overlap_beyond_policy`，以及現有的
+  結構證明/SDN 驗證測試。

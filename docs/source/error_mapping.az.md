@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: cba8780bcec4ebf562dc9c5725f328b0ea2d9009517efa5b5a504e2fb6be81fe
 source_last_modified: "2026-01-11T04:52:11.136647+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Error Mapping Guide
+# Xəta Xəritəçəkmə Bələdçisi
 
-Last updated: 2025-08-21
+Son yenilənmə: 21-08-2025
 
-This guide maps common failure modes in Iroha to stable error categories surfaced by the data model. Use it to design tests and to make client error handling predictable.
+Bu bələdçi Iroha-də ümumi uğursuzluq rejimlərini məlumat modelinin aşkar etdiyi sabit xəta kateqoriyalarına uyğunlaşdırır. Testləri tərtib etmək və müştəri səhvlərinin idarə edilməsini proqnozlaşdırıla bilən etmək üçün ondan istifadə edin.
 
-Principles
-- Instruction and query paths emit structured enums. Avoid panics; report a specific category wherever possible.
-- Categories are stable, messages may evolve. Clients should match on categories, not on free‑form strings.
+Prinsiplər
+- Təlimat və sorğu yolları strukturlaşdırılmış nömrələr buraxır. Paniklərdən çəkinin; Mümkünsə, müəyyən bir kateqoriya haqqında məlumat verin.
+- Kateqoriyalar sabitdir, mesajlar inkişaf edə bilər. Müştərilər sərbəst forma sətirlərində deyil, kateqoriyalar üzrə uyğun olmalıdır.
 
-Categories
-- InstructionExecutionError::Find: Entity missing (asset, account, domain, NFT, role, trigger, permission, public key, block, transaction). Example: removing a non‑existent metadata key yields Find(MetadataKey).
-- InstructionExecutionError::Repetition: Duplicate registration or conflicting ID. Contains the instruction type and the repeated IdBox.
-- InstructionExecutionError::Mintability: Mintability invariant violated (`Once` exhausted twice, `Limited(n)` overdrawn, or attempts to disable `Infinitely`). Examples: minting an asset defined as `Once` twice yields `Mintability(MintUnmintable)`; configuring `Limited(0)` yields `Mintability(InvalidMintabilityTokens)`.
-- InstructionExecutionError::Math: Numeric domain errors (overflow, divide‑by‑zero, negative value, not enough quantity). Example: burning more than available amount yields Math(NotEnoughQuantity).
-- InstructionExecutionError::InvalidParameter: Invalid instruction parameter or configuration (e.g., time trigger in the past). Use for malformed contract payloads.
-- InstructionExecutionError::Evaluate: DSL/spec mismatch for instruction shape or types. Example: wrong numeric spec for an asset value yields Evaluate(Type(AssetNumericSpec(..))).
-- InstructionExecutionError::InvariantViolation: Violation of a system invariant that cannot be expressed in other categories. Example: attempting to remove the last signatory.
-- InstructionExecutionError::Query: Wrapping of QueryExecutionFail when a query fails during instruction execution.
+Kateqoriyalar
+- InstructionExecutionError::Find: Müəssisə çatışmır (aktiv, hesab, domen, NFT, rol, tetikleyici, icazə, açıq açar, blok, əməliyyat). Nümunə: mövcud olmayan metadata açarının silinməsi Find(MetadataKey) verir.
+- InstructionExecutionError::Repetition: Dublikat qeydiyyat və ya ziddiyyətli ID. Təlimat tipini və təkrarlanan IdBox-u ehtiva edir.
+- InstructionExecutionError::Mintability: Mintability invariant pozuldu (`Once` iki dəfə tükəndi, `Limited(n)` həddən artıq çəkildi və ya `Infinitely`-i söndürməyə cəhd etdi). Nümunələr: `Once` kimi müəyyən edilmiş aktivin iki dəfə zərb edilməsi `Mintability(MintUnmintable)` gəliri; `Limited(0)` konfiqurasiyası `Mintability(InvalidMintabilityTokens)` verir.
+- InstructionExecutionError::Riyaziyyat: Rəqəmsal domen xətaları (daşmaq, sıfıra bölmək, mənfi dəyər, kifayət qədər kəmiyyət deyil). Nümunə: mövcud məbləğdən daha çox yandırmaq Math(NotEnoughQuantity) verir.
+- InstructionExecutionError::InvalidParameter: Yanlış təlimat parametri və ya konfiqurasiyası (məsələn, keçmişdə vaxt tetikleyicisi). Səhv tərtib edilmiş müqavilə yükləri üçün istifadə edin.
+- InstructionExecutionError::Qiymətləndirin: təlimat forması və ya növləri üçün DSL/spec uyğunsuzluğu. Nümunə: aktivin dəyəri üçün səhv rəqəmli spesifikasiya Qiymətləndirmə (Type(AssetNumericSpec(...))) verir.
+- InstructionExecutionError::InvariantViolation: Digər kateqoriyalarda ifadə edilə bilməyən sistem invariantının pozulması. Misal: sonuncu imzalayanı silməyə cəhd.
+- InstructionExecutionError::Query: Təlimatın icrası zamanı sorğu uğursuz olduqda QueryExecutionFail-in paketlənməsi.
 
 QueryExecutionFail
-- Find: Missing entity in query context.
-- Conversion: Wrong type expected by a query.
-- NotFound: Missing live query cursor.
-- CursorMismatch / CursorDone: Cursor protocol errors.
-- FetchSizeTooBig: Server‑enforced limit exceeded.
-- GasBudgetExceeded: Query execution exceeded the gas/materialization budget.
-- InvalidSingularParameters: Unsupported parameters for singular queries.
-- CapacityLimit: Live query store capacity reached.
+- Tap: Sorğu kontekstində çatışmayan obyekt.
+- Dönüşüm: Sorğu tərəfindən gözlənilən səhv növ.
+- Tapılmadı: Canlı sorğu kursoru yoxdur.
+- CursorMismatch / CursorDone: Kursor protokol xətaları.
+- FetchSizeTooBig: Server tərəfindən tətbiq edilən limiti keçdi.
+- GasBudgetExceeded: Sorğunun icrası qaz/materiallaşdırma büdcəsini keçib.
+- InvalidSingularParameters: Tək sorğular üçün dəstəklənməyən parametrlər.
+- CapacityLimit: Canlı sorğu anbarının tutumu çatdı.
 
-Testing Tips
-- Prefer unit tests close to the origin of an error. For example, asset numeric spec mismatch can be generated in data‑model tests.
-- Integration tests should cover end‑to‑end mapping for representative cases (e.g., duplicate register, missing key on remove, transfer without ownership).
-- Keep assertions resilient by matching enum variants instead of message substrings.
+Test göstərişləri
+- Xətanın mənşəyinə yaxın vahid testlərə üstünlük verin. Məsələn, data-model testlərində aktivin rəqəmli spesifik uyğunsuzluğu yaradıla bilər.
+- İnteqrasiya testləri nümayəndəli hallar üçün (məsələn, dublikat reyestr, silinmə zamanı çatışmayan açar, sahiblik olmadan köçürmə) başdan-başa xəritələşdirməni əhatə etməlidir.
+- Mesaj alt sətirləri əvəzinə enum variantlarını uyğunlaşdırmaqla təsdiqləri möhkəm saxlayın.

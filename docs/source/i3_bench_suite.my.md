@@ -7,16 +7,17 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a3158cd70a42104bacaafc520fdcc10e20e3bc347d895be448fcb10da4f668bd
 source_last_modified: "2025-12-29T18:16:35.965528+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Iroha 3 Bench Suite
+#Iroha 3 Bench Suite
 
-The Iroha 3 bench suite times the hot paths we rely on during staking, fee
-charging, proof verification, scheduling, and proof endpoints. It runs as an
-`xtask` command with deterministic fixtures (fixed seeds, fixed key material,
-and stable request payloads) so results are reproducible across hosts.
+Iroha 3 ခုံတန်းရှည် suite သည် လောင်းကြေးကစားစဉ်တွင် ကျွန်ုပ်တို့မှီခိုအားထားရသော ပူသောလမ်းများထက် အခကြေးငွေ
+အားသွင်းခြင်း၊ အထောက်အထားစိစစ်ခြင်း၊ အချိန်ဇယားဆွဲခြင်းနှင့် အထောက်အထားအဆုံးအချက်များ။ တစ်ခုအနေနဲ့ လုပ်ဆောင်နေပါတယ်။
+`xtask` အမိန့်ဖြင့် အဆုံးအဖြတ်ပေးသော ပစ္စည်းများ (ပုံသေမျိုးစေ့များ၊ ပုံသေသော့ပစ္စည်း၊
+နှင့် တည်ငြိမ်သော တောင်းဆိုမှု payloads) ထို့ကြောင့် ရလဒ်များကို hosts များတွင် ပြန်ထုတ်ပေးနိုင်သည်။
 
-## Running the suite
+## အပြေးအစုံ
 
 ```bash
 cargo xtask i3-bench-suite \
@@ -29,41 +30,41 @@ cargo xtask i3-bench-suite \
   --allow-overwrite
 ```
 
-Flags:
+အလံများ
 
-- `--iterations` controls iterations per scenario sample (default: 64).
-- `--sample-count` repeats each scenario to compute the median (default: 5).
-- `--json-out|--csv-out|--markdown-out` choose output artifacts (all optional).
-- `--threshold` compares medians against the baseline bounds (set `--no-threshold`
-  to skip).
-- `--flamegraph-hint` annotates the Markdown report with the `cargo flamegraph`
-  command to profile a scenario.
+- `--iterations` သည် ဇာတ်လမ်းနမူနာအလိုက် ထပ်တလဲလဲလုပ်ဆောင်မှုများကို ထိန်းချုပ်သည် (မူလ- 64)။
+- `--sample-count` သည် ပျမ်းမျှ (မူလ- 5) ကိုတွက်ချက်ရန် မြင်ကွင်းတစ်ခုစီကို ပြန်လုပ်သည်။
+- `--json-out|--csv-out|--markdown-out` ထုတ်ပေးသည့် ပစ္စည်းများကို ရွေးပါ (အားလုံးရွေးချယ်နိုင်သည်)။
+- `--threshold` သည် အခြေခံမျဉ်းစည်းများနှင့် မီဒီယာများကို နှိုင်းယှဉ်သည် (သတ်မှတ်ထားသော `--no-threshold`
+  ကျော်ရန်)။
+- `--flamegraph-hint` သည် `cargo flamegraph` ဖြင့် Markdown အစီရင်ခံစာကို မှတ်သားထားသည်။
+  ဇာတ်ညွှန်းကို ပရိုဖိုင်ပြုလုပ်ရန် အမိန့်ပေးသည်။
 
-CI glue lives in `ci/i3_bench_suite.sh` and defaults to the paths above; set
-`I3_BENCH_ITERATIONS`/`I3_BENCH_SAMPLES` to tune runtime in nightlies.
+CI ကော်သည် `ci/i3_bench_suite.sh` တွင်နေထိုင်ပြီး အထက်လမ်းများကို ပုံသေသတ်မှတ်ထားသည်။ သတ်မှတ်
+ညအချိန်များတွင် runtime ကိုချိန်ညှိရန် `I3_BENCH_ITERATIONS`/`I3_BENCH_SAMPLES`။
 
-## Scenarios
+## ဇာတ်လမ်းများ
 
-- `fee_payer` / `fee_sponsor` / `fee_insufficient` — payer vs sponsor debit
-  and shortfall rejection.
-- `staking_bond` / `staking_slash` — bond/unbond queue with and without
-  slashing.
+- `fee_payer` / `fee_sponsor` / `fee_insufficient` — ပေးဆောင်သူ နှင့် စပွန်ဆာ ငွေထုတ်ခြင်း
+  ငြင်းပယ်ခံရမှု နည်းပါးခြင်း။
+- `staking_bond` / `staking_slash` — ငွေချေးစာချုပ်/အဆက်ဖြတ်ခြင်း တန်းစီခြင်း
+  ခုတ်ထစ်ခြင်း။
 - `commit_cert_verify` / `jdg_attestation_verify` / `bridge_proof_verify` —
-  signature verification over commit certificates, JDG attestations, and bridge
-  proof payloads.
-- `commit_cert_assembly` — digest assembly for commit certificates.
-- `access_scheduler` — conflict-aware access-set scheduling.
-- `torii_proof_endpoint` — Axum proof endpoint parsing + verification round trip.
+  ကတိပြုလက်မှတ်များ၊ JDG သက်သေအထောက်အထားများနှင့် တံတားပေါ်တွင် လက်မှတ်အတည်ပြုခြင်း
+  သက်သေအထောက်အထားများ။
+- `commit_cert_assembly` — ကတိပြုလက်မှတ်များအတွက် အချေအတင်စုဝေးမှု။
+- `access_scheduler` — ပဋ္ဋိပက္ခ-သတိရှိသောဝင်ရောက်ခွင့်-သတ်မှတ်အချိန်ဇယား။
+- `torii_proof_endpoint` — Axum အထောက်အထား အဆုံးမှတ် ပိုင်းခြားစိတ်ဖြာခြင်း + အတည်ပြုခြင်း အသွားအပြန် ခရီး။
 
-Every scenario records median nanoseconds per iteration, throughput, and a
-deterministic allocation counter for quick regressions. Thresholds live in
-`benchmarks/i3/thresholds.json`; bump bounds there when hardware changes and
-commit the new artifact alongside a report.
+ဇာတ်ညွှန်းတိုင်းသည် အထပ်ထပ်၊ ဖြတ်သန်းမှုတစ်ခုနှင့် a
+အမြန်ဆုတ်ယုတ်မှုများအတွက် အဆုံးအဖြတ်ပေးဝေမှု တန်ပြန်။ အဆင့်သတ်မှတ်ချက်များတွင် နေထိုင်ပါသည်။
+`benchmarks/i3/thresholds.json`; ဟာ့ဒ်ဝဲ အပြောင်းအလဲနှင့် ကြုံလာသောအခါ ထိုနေရာတွင် အကျုံးဝင်သည်။
+အစီရင်ခံစာတစ်ခုနှင့်အတူ ရှေးဟောင်းပစ္စည်းအသစ်ကို အပ်နှံပါ။
 
-## Troubleshooting
+## ပြဿနာဖြေရှင်းခြင်း။
 
-- Pin CPU frequency/governor when collecting evidence to avoid noisy regressions.
-- Use `--no-threshold` for exploratory runs, then re-enable once the baseline is
-  refreshed.
-- To profile a single scenario, set `--iterations 1` and re-run under
-  `cargo flamegraph -p xtask -- i3-bench-suite --iterations 128 --sample-count 1 --no-threshold --flamegraph-hint`.
+- ဆူညံသောနောက်ပြန်ဆုတ်ခြင်းကိုရှောင်ရှားရန်သက်သေအထောက်အထားစုဆောင်းသောအခါ CPU ကြိမ်နှုန်း / အုပ်ချုပ်ရေးမှူးကိုထိုးပါ။
+- စူးစမ်းလေ့လာရေးလုပ်ဆောင်မှုများအတွက် `--no-threshold` ကိုသုံးပါ၊ ထို့နောက် အခြေခံလိုင်းဖြစ်သည်နှင့် ပြန်ဖွင့်ပါ။
+  လန်းဆန်းစေပါသည်။
+- မြင်ကွင်းတစ်ခုတည်းကို ပရိုဖိုင်းရယူရန်၊ `--iterations 1` ကို သတ်မှတ်ပြီး အောက်တွင် ပြန်လည်လုပ်ဆောင်ပါ။
+  `cargo flamegraph -p xtask -- i3-bench-suite --iterations 128 --sample-count 1 --no-threshold --flamegraph-hint`။

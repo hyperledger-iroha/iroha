@@ -7,73 +7,72 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 4cbbc93e4212320422b8cbfcd8c563419d5ddaf5dad9e84a7878a439892ed081
 source_last_modified: "2025-12-29T18:16:35.955568+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Poseidon Metal Shared Constants
+# 波塞冬金屬共享常數
 
-Metal kernels, CUDA kernels, the Rust prover, and every SDK fixture must share
-the exact same Poseidon2 parameters in order to keep hardware-accelerated
-hashing deterministic. This document records the canonical snapshot, how to
-regenerate it, and how GPU pipelines are expected to ingest the data.
+Metal 內核、CUDA 內核、Rust 證明器和每個 SDK 固定裝置必須共享
+完全相同的 Poseidon2 參數以保持硬件加速
+散列確定性。本文檔記錄了規範快照，如何
+重新生成它，以及 GPU 管道如何攝取數據。
 
-## Snapshot Manifest
+## 快照清單
 
-The parameters are published as a `PoseidonSnapshot` RON document. Copies are
-kept under version control so GPU toolchains and SDKs do not rely on build-time
-code generation.
+這些參數以 `PoseidonSnapshot` RON 文檔的形式發布。副本有
+保持版本控制，因此 GPU 工具鍊和 SDK 不依賴於構建時
+代碼生成。
 
-| Path | Purpose | SHA-256 |
+|路徑|目的| SHA-256 |
 |------|---------|---------|
-| `artifacts/offline_poseidon/constants.ron` | Canonical snapshot generated from `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}`; source of truth for GPU builds. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `IrohaSwift/Fixtures/offline_poseidon/constants.ron` | Mirrors the canonical snapshot so Swift unit tests and the XCFramework smoke harness load the same constants the Metal kernels expect. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `java/iroha_android/src/test/resources/offline_poseidon/constants.ron` | Android/Kotlin fixtures share the identical manifest for parity and serialization tests. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/offline_poseidon/constants.ron` |從 `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}` 生成的規範快照； GPU 構建的真實來源。 | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `IrohaSwift/Fixtures/offline_poseidon/constants.ron` |鏡像規範快照，以便 Swift 單元測試和 XCFramework 煙霧線束加載 Metal 內核期望的相同常量。 | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `java/iroha_android/src/test/resources/offline_poseidon/constants.ron` | Android/Kotlin 設備共享相同的奇偶校驗和序列化測試清單。 | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
 
-Every consumer must verify the hash before wiring the constants into a GPU
-pipeline. When the manifest changes (new parameter set or profile), the SHA and
-the downstream mirrors must be updated in lock-step.
+每個消費者在將常量連接到 GPU 之前都必須驗證哈希值
+管道。當清單發生更改（新的參數集或配置文件）時，SHA 和
+下游鏡像必須同步更新。
 
-## Regeneration
+## 再生
 
-The manifest is generated from the Rust sources by running the `xtask`
-helper. The command writes both the canonical file and the SDK mirrors:
+該清單是通過運行 `xtask` 從 Rust 源生成的
+幫手。該命令寫入規範文件和 SDK 鏡像：
 
 ```bash
 cargo xtask offline-poseidon-fixtures --tag iroha.offline.receipt.merkle.v1
 ```
 
-Use `--constants <path>`/`--vectors <path>` to override the destinations or
-`--no-sdk-mirror` when regenerating only the canonical snapshot. The helper will
-mirror the artefacts into the Swift and Android trees when the flag is omitted,
-which keeps the hashes aligned for CI.
+使用 `--constants <path>`/`--vectors <path>` 覆蓋目標或
+僅重新生成規範快照時的 `--no-sdk-mirror`。幫手會
+當省略該標誌時，將工件鏡像到 Swift 和 Android 樹中，
+這使得 CI 的哈希值保持一致。
 
-## Feeding Metal/CUDA Builds
+## 提供 Metal/CUDA 構建
 
-- `crates/fastpq_prover/metal/kernels/poseidon2.metal` and
-  `crates/fastpq_prover/cuda/fastpq_cuda.cu` must be regenerated from the
-  manifest whenever the table changes.
-- Rounded and MDS constants are staged into contiguous `MTLBuffer`/`__constant`
-  segments that match the manifest layout: `round_constants[round][state_width]`
-  followed by the 3x3 MDS matrix.
-- `fastpq_prover::poseidon_manifest()` loads and validates the snapshot at
-  runtime (during Metal warm-up) so diagnostic tooling can assert that the
-  shader constants match the published hash via
-  `fastpq_prover::poseidon_manifest_sha256()`.
-- SDK fixture readers (Swift `PoseidonSnapshot`, Android `PoseidonSnapshot`) and
-  the Norito offline tooling rely on the same manifest, which prevents GPU-only
-  parameter forks.
+- `crates/fastpq_prover/metal/kernels/poseidon2.metal` 和
+  `crates/fastpq_prover/cuda/fastpq_cuda.cu` 必須從
+  每當表發生變化時就會顯示出來。
+- 舍入和 MDS 常量被分級為連續的 `MTLBuffer`/`__constant`
+  與清單佈局匹配的段：`round_constants[round][state_width]`
+  接下來是 3x3 MDS 矩陣。
+- `fastpq_prover::poseidon_manifest()` 加載並驗證快照
+  運行時（Metal 預熱期間），因此診斷工具可以斷言
+  著色器常量通過以下方式匹配發布的哈希值
+  `fastpq_prover::poseidon_manifest_sha256()`。
+- SDK 夾具讀取器（Swift `PoseidonSnapshot`、Android `PoseidonSnapshot`）和
+  Norito 離線工具依賴於相同的清單，這會阻止僅使用 GPU
+  參數叉。
 
-## Validation
+## 驗證
 
-1. After regenerating the manifest, run `cargo test -p xtask` to exercise the
-   Poseidon fixture generation unit tests.
-2. Record the new SHA-256 in this document and in any dashboards that monitor
-   GPU artefacts.
-3. `cargo test -p fastpq_prover poseidon_manifest_consistency` parses
-   `poseidon2.metal` and `fastpq_cuda.cu` at build time and asserts that their
-   serialized constants match the manifest, keeping the CUDA/Metal tables and
-   the canonical snapshot in lock-step.
-
-Keeping the manifest alongside the GPU build instructions gives the Metal/CUDA
-workflows a deterministic handshake: kernels are free to optimize their memory
-layout as long as they ingest the shared constants blob and expose the hash in
-telemetry for parity checks.
+1. 重新生成清單後，運行 `cargo test -p xtask` 來執行
+   Poseidon 夾俱生成單元測試。
+2. 在本文檔以及任何監控的儀表板中記錄新的 SHA-256
+   GPU 文物。
+3. `cargo test -p fastpq_prover poseidon_manifest_consistency`解析
+   `poseidon2.metal` 和 `fastpq_cuda.cu` 在構建時並斷言它們
+   序列化常量與清單匹配，保留 CUDA/Metal 表和
+   鎖步的規範快照。將清單與 GPU 構建指令放在一起可以提供 Metal/CUDA
+工作流程確定性握手：內核可以自由優化其內存
+佈局，只要它們攝取共享常量 blob 並公開散列
+用於奇偶校驗的遙測。

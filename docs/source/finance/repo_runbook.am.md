@@ -7,19 +7,20 @@ generator: scripts/sync_docs_i18n.py
 source_hash: d5dd8e1b666be34bb9101898d355fe5e3c6efc32500c238c72a6ef9228c157f0
 source_last_modified: "2026-01-22T16:26:46.568155+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 # Repo Settlement Runbook
 
-This guide documents the deterministic flow for repo and reverse-repo agreements in Iroha.
-It covers CLI orchestration, SDK helpers, and the expected governance knobs so operators can
-initiate, margin, and unwind agreements without writing raw Norito payloads. For governance
-checklists, evidence capture, and fraud/rollback procedures see
-[`repo_ops.md`](./repo_ops.md), which satisfies roadmap item F1.
+ይህ መመሪያ በIroha ውስጥ የሪፖ እና የተገላቢጦሽ ስምምነቶችን የመወሰን ፍሰትን ይመዘግባል።
+ኦፕሬተሮች እንዲችሉ የCLI ኦርኬስትራን፣ የኤስዲኬ ረዳቶችን እና የሚጠበቁትን የአስተዳደር ቁልፎችን ይሸፍናል።
+ጥሬ የNorito ክፍያ ጭነቶችን ሳይጽፉ ስምምነቶችን ይጀምሩ፣ ህዳግ እና መፍታት። ለአስተዳደር
+የማረጋገጫ ዝርዝሮች፣ የማስረጃ ቀረጻ እና ማጭበርበር/መመለሻ ሂደቶችን ያያሉ።
+[`repo_ops.md`](./repo_ops.md)፣ ይህም የመንገድ ካርታ ንጥል F1 ያሟላል።
 
-## CLI commands
+## CLI ያዛል
 
-The `iroha app repo` command groups repo-specific helpers:
+የ `iroha app repo` ትዕዛዝ ቡድኖች ልዩ ረዳቶች፡-
 
 ```bash
 # Stage an initiation instruction without submitting
@@ -57,17 +58,17 @@ iroha --config client.toml repo margin --agreement-id daily_repo
 iroha --config client.toml repo margin-call --agreement-id daily_repo
 ```
 
-* `repo initiate` and `repo unwind` respect `--input/--output` so the generated `InstructionBox`
-  payloads can be piped into other CLI flows or submitted immediately.
-* Pass `--custodian <account>` to route collateral to a tri-party custodian. When omitted, the
-  counterparty receives the pledge directly (bilateral repo).
-* `repo margin` queries the ledger via `FindRepoAgreements` and reports the next expected margin
-  timestamp (in milliseconds) alongside whether a margin callback is currently due.
-* `repo margin-call` appends a `RepoMarginCallIsi` instruction, recording the margin checkpoint and
-  emitting events for all participants. Calls are rejected if the cadence has not elapsed or if the
-  instruction is submitted by a non-participant.
+* `repo initiate` እና `repo unwind` አክብሮት `--input/--output` ስለዚህ የመነጨው `InstructionBox`
+  ጭነት ወደ ሌሎች የ CLI ፍሰቶች ሊገባ ወይም ወዲያውኑ ማስገባት ይችላል።
+* ለባለሶስት ወገን ጠባቂ ለማስያዝ `--custodian <account>` ይለፉ። ሲቀር፣ የ
+  counterparty ቃል ኪዳኑን በቀጥታ ይቀበላል (bilateral repo)።
+* `repo margin` የሂሳብ መዝገብን በ`FindRepoAgreements` በኩል ጠይቆ ቀጣዩን የሚጠበቀውን ህዳግ ሪፖርት ያደርጋል
+  የጊዜ ማህተም (በሚሊሰከንዶች) በአሁኑ ጊዜ የኅዳግ መልሶ መደወል ካለመሆኑ ጋር።
+* `repo margin-call` የ `RepoMarginCallIsi` መመሪያን በማያያዝ የኅዳግ ፍተሻ ነጥቡን በመመዝገብ እና
+  ለሁሉም ተሳታፊዎች ክስተቶችን ማሰራጨት. ጥሪው ካላለፈ ወይም የ
+  መመሪያው ተሳታፊ ባልሆነ ሰው ነው የሚቀርበው።
 
-## Python SDK helpers
+## Python SDK ረዳቶች
 
 ```python
 from iroha_python import (
@@ -111,13 +112,13 @@ record = RepoAgreementRecord.from_payload(agreements[0])
 next_margin = record.next_margin_check_after(at_timestamp_ms=now_ms)
 ```
 
-* Both helpers normalise numeric quantities and metadata fields before invoking the PyO3 bindings.
-* `RepoAgreementRecord` mirrors the runtime schedule calculation so off-ledger automation can
-  determine when callbacks are due without recomputing the cadence manually.
+* ሁለቱም ረዳቶች የ PyO3 ማሰሪያዎችን ከመጥራታቸው በፊት የቁጥር መጠኖችን እና የሜታዳታ መስኮችን መደበኛ ያደርጋሉ።
+* `RepoAgreementRecord` የሩጫ ጊዜ መርሐግብር ስሌትን ያንፀባርቃል ስለዚህ ከደብዳቤ ውጭ አውቶማቲክ ማድረግ ይችላል
+  የድጋሚ ጥሪውን በእጅ ሳያስሉት መቼ እንደሆነ ይወስኑ።
 
-## DvP / PvP settlements
+## DvP/PvP ሰፈራዎች
 
-The `iroha app settlement` command stages delivery-versus-payment and payment-versus-payment instructions:
+የ`iroha app settlement` ትእዛዝ መላኪያ-ከክፍያ እና ከክፍያ ጋር-የክፍያ መመሪያዎችን ደረጃ ይሰጣል፡-
 
 ```bash
 # Delivery leg first, then payment
@@ -153,20 +154,20 @@ iroha --config client.toml --output \
   --iso-xml-out trade_pvp.xml
 ```
 
-* Leg quantities accept integral or decimal values and are validated against the asset precision.
-* `--atomicity` accepts `all-or-nothing`, `commit-first-leg`, or `commit-second-leg`. Use these modes
-  with `--order` to express which leg remains committed if subsequent processing fails (`commit-first-leg`
-  keeps the first leg applied; `commit-second-leg` retains the second).
-* CLI invocations emit empty instruction metadata today; use the Python helpers when settlement-level
-  metadata needs to be attached.
-* See [`settlement_iso_mapping.md`](./settlement_iso_mapping.md) for the ISO 20022 field mapping that
-  backs these instructions (`sese.023`, `sese.025`, `colr.007`, `pacs.009`, `camt.054`).
-* Pass `--iso-xml-out <path>` to have the CLI emit a canonical XML preview alongside the Norito
-  instruction; the file follows the mapping above (`sese.023` for DvP, `sese.025` for PvP`). Pair the
-  flag with `--iso-reference-crosswalk <path>` so the CLI verifies `--delivery-instrument-id` against the
-  same snapshot Torii uses during runtime admission.
+* የእግር መጠኖች የተዋሃዱ ወይም የአስርዮሽ እሴቶችን ይቀበላሉ እና በንብረቱ ትክክለኛነት የተረጋገጡ ናቸው።
+* `--atomicity` `all-or-nothing`፣ `commit-first-leg`፣ ወይም `commit-second-leg` ይቀበላል። እነዚህን ሁነታዎች ተጠቀም
+  ከ`--order` ጋር የሚቀጥለው ሂደት ካልተሳካ የትኛው እግር እንደሚቆይ ለመግለፅ (`commit-first-leg`)
+  የመጀመሪያውን እግር እንዲተገበር ያቆያል; `commit-second-leg` ሁለተኛውን ይይዛል).
+* የ CLI ጥሪዎች ዛሬ ባዶ የመመሪያ ሜታዳታ ያወጣሉ። በሰፈራ ደረጃ የ Python አጋዥዎችን ይጠቀሙ
+  ሜታዳታ መያያዝ አለበት።
+* ለ ISO 20022 የመስክ ካርታ ስራ [`settlement_iso_mapping.md`](./settlement_iso_mapping.md) ይመልከቱ
+  እነዚህን መመሪያዎች ይደግፋል (`sese.023`፣ `sese.025`፣ `colr.007`፣ `pacs.009`፣ `camt.054`)።
+* CLI ከ Norito ጎን ለጎን ቀኖናዊ የኤክስኤምኤል ቅድመ እይታ እንዲያወጣ `--iso-xml-out <path>` ይለፉ
+  መመሪያ; ፋይሉ ከላይ ያለውን ካርታ (`sese.023` ለDvP፣ `sese.025` ለ PvP`) ይከተላል። ያጣምሩ
+  ባንዲራ ከ `--iso-reference-crosswalk <path>` ጋር ስለዚህ CLI `--delivery-instrument-id`ን ከ
+  ተመሳሳይ ቅጽበተ-ፎቶ Torii በሂደት መግቢያ ጊዜ ይጠቀማል።
 
-Python helpers mirror the CLI surface:
+የፓይዘን ረዳቶች የ CLI ገጽን ያንፀባርቃሉ፡
 
 ```python
 from iroha_python import (
@@ -211,21 +212,19 @@ draft.settlement_pvp(
 )
 ```
 
-## Determinism & Governance Expectations
+## ቆራጥነት እና የአስተዳደር ተስፋዎች
 
-Repo instructions rely exclusively on Norito-encoded numeric types and the shared
-`RepoGovernance::with_defaults` logic. Keep the following invariants in mind:
-
-* Quantities are serialised with deterministic `NumericSpec` values: cash legs use
-  `fractional(2)` (two decimal places), collateral legs use `integer()`. Do not submit
-  values with greater precision—runtime guards will reject them and peers would diverge.
-* Tri-party repos persist the custodian account id in `RepoAgreement`. Lifecycle and margin events
-  emit a `RepoAccountRole::Custodian` payload so custodians can subscribe and reconcile inventory.
-* Haircuts are clamped to 10 000 bps (100 %) and margin frequencies are whole seconds. Provide
-  governance parameters in those canonical units to stay aligned with runtime expectations.
-* Timestamps are always unix milliseconds. All helpers forward them unchanged to the Norito
-  payload so peers derive identical schedules.
-* Initiation and unwind instructions reuse the same agreement identifier. The runtime rejects
-  duplicate IDs and unwinds for unknown agreements; CLI/SDK helpers surface those errors early.
-* `repo margin`/`RepoAgreementRecord::next_margin_check_after` return the canonical cadence. Always
-  consult this snapshot before triggering callbacks to avoid replaying stale schedules.
+የሪፖ መመሪያዎች በNorito የተመሰጠሩ የቁጥር አይነቶች እና በተጋሩ ላይ ብቻ ይተማመናሉ።
+`RepoGovernance::with_defaults` አመክንዮ. የሚከተሉትን ልዩነቶች ግምት ውስጥ ያስገቡ፦* መጠኖች በቆራጥነት `NumericSpec` እሴቶች ተከታታይ ናቸው፡ የገንዘብ እግሮች አጠቃቀም
+  `fractional(2)` (ሁለት አስርዮሽ ቦታዎች)፣ የዋስትና እግሮች `integer()` ይጠቀማሉ። አታቅርቡ
+  የበለጠ ትክክለኛነት ያላቸው እሴቶች - የአሂድ ጊዜ ጠባቂዎች ውድቅ ያደርጋቸዋል እና እኩዮችም ይለያያሉ።
+* የሶስትዮሽ ወገኖች የመጠባበቂያ መለያ መታወቂያ በ`RepoAgreement` እንደቀጠለ ነው። የሕይወት ዑደት እና የኅዳግ ክስተቶች
+  አሳዳጊዎች በደንበኝነት እንዲመዘገቡ እና ክምችትን እንዲያስታርቁ የ`RepoAccountRole::Custodian` ክፍያ ያቅርቡ።
+* የፀጉር መቆራረጥ ወደ 10000bps (100%) እና የኅዳግ ድግግሞሾች ሙሉ ሴኮንዶች ናቸው። ያቅርቡ
+  በእነዚያ ቀኖናዊ ክፍሎች ውስጥ የአስተዳደር መለኪያዎች ከአሂድ ጊዜ ከሚጠበቁት ጋር እንዲጣጣሙ።
+* የጊዜ ማህተሞች ሁል ጊዜ ዩኒክስ ሚሊሰከንዶች ናቸው። ሁሉም ረዳቶች ሳይለወጡ ወደ Norito ያስተላልፋሉ
+  ሸክም ስለዚህ እኩዮች ተመሳሳይ መርሃግብሮችን ያገኛሉ።
+* የማስጀመር እና የመፍታት መመሪያዎች ተመሳሳዩን የስምምነት መለያ እንደገና ይጠቀሙ። የሩጫ ሰዓቱ ውድቅ ያደርጋል
+  ለማይታወቁ ስምምነቶች የተባዙ መታወቂያዎች እና ዊንድስ; የCLI/SDK ረዳቶች እነዚያን ስህተቶች ቀደም ብለው ያሳያሉ።
+* `repo margin`/`RepoAgreementRecord::next_margin_check_after` ቀኖናዊውን ቃና ይመልሳል። ሁሌም
+  የቆዩ መርሃ ግብሮችን ላለመድገም መልሶ ጥሪዎችን ከማስነሳትዎ በፊት ይህንን ቅጽበታዊ ገጽ እይታ ይመልከቱ።

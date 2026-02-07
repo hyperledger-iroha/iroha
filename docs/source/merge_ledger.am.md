@@ -7,62 +7,63 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 44f1c681730f1c94d9d00e8f829a0134374ce6cb29f21727a27685e096f0da40
 source_last_modified: "2026-01-17T06:10:29.077000+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Merge Ledger Design — Lane Finality and Global Reduction
+# የመመዝገቢያ ንድፍ አዋህድ - የሌይን የመጨረሻነት እና የአለም አቀፍ ቅነሳ
 
-This note finalises the merge-ledger design for Milestone 5. It explains the
-non-empty block policy, cross-lane QC merge semantics, and the finality workflow
-that binds lane-level execution to the global world state commitment.
+ይህ ማስታወሻ ለMilestone 5 የውህደት-መሪ ንድፉን ያጠናቅቃል። ያብራራል።
+ባዶ ያልሆነ የማገጃ ፖሊሲ፣ መስቀለኛ መንገድ QC ውህደት ትርጉም እና የመጨረሻው የስራ ሂደት
+የሌይን ደረጃ አፈጻጸምን ከዓለም አቀፉ የዓለም መንግሥት ቁርጠኝነት ጋር የሚያገናኝ።
 
-The design extends the Nexus architecture described in `nexus.md`. Terms such as
-"lane block", "lane QC", "merge hint", and "merge ledger" inherit their
-definition from that document; this note focuses on behavioural rules and
-implementation guidance that must be enforced by the runtime, storage, and WSV
-layers.
+ዲዛይኑ በ`nexus.md` የተገለጸውን Nexus አርክቴክቸርን ያራዝመዋል። እንደ
+"ሌይን ብሎክ"፣ "ሌይን QC"፣ "የማዋሃድ ፍንጭ" እና "መዋሃድ ደብተር" ይወርሳሉ
+ከዚያ ሰነድ ትርጉም; ይህ ማስታወሻ በባህሪ ህጎች ላይ ያተኩራል እና
+በአሂድ ጊዜ፣ ማከማቻ እና WSV መተግበር ያለበት የአተገባበር መመሪያ
+ንብርብሮች.
 
-## 1. Non-Empty Block Policy
+## 1. ባዶ ያልሆነ እገዳ ፖሊሲ
 
-**Rule (MUST):** A lane proposer issues a block only when the block contains at
-least one executed transaction fragment, time-based trigger, or deterministic
-artifact update (e.g., DA artifact roll-up). Empty blocks are forbidden.
+** ደንብ (አለበት):** የሌይን ፕሮፖሰር እገዳውን የሚያወጣው እገዳው ሲይዝ ብቻ ነው።
+ቢያንስ አንድ የተፈፀመ የግብይት ቁርጥራጭ፣ በጊዜ ላይ የተመሰረተ ቀስቅሴ ወይም መወሰኛ
+የቅርስ ማሻሻያ (ለምሳሌ፣ DA artifact roll-up)። ባዶ ብሎኮች የተከለከሉ ናቸው።
 
-**Implications:**
+**አንድምታዎች:**
 
-- Slot keep-alive: when no transaction meets its deterministic commit window,
-the lane emits no block and simply advances to the next slot. The merge ledger
-remains on the previous tip for that lane.
-- Trigger batching: background triggers that produce no state transition (e.g.,
-cron that reaffirms invariants) are considered empty and MUST be skipped or
-bundled with other work before producing a block.
-- Telemetry: `pipeline_detached_merged` and follow-up metrics treat skipped
-slots explicitly—operators can distinguish "no work" from "pipeline stalled".
-- Replay: block storage does not insert synthetic empty placeholders. The Kura
-replay loop simply observes the same parent hash for consecutive slots if no
-block was emitted.
+- ማስገቢያ በሕይወት ይቆዩ: ምንም ግብይት የራሱ deterministic መስኮቱን ሲያሟላ,
+መስመሩ ምንም ብሎክ አያወጣም እና በቀላሉ ወደ ቀጣዩ ማስገቢያ ይሄዳል። የውህደት ደብተር
+ለዚያ መስመር በቀድሞው ጫፍ ላይ ይቆያል.
+- ቀስቅሴ ባንግ፡ ምንም አይነት የግዛት ሽግግር የማይፈጥሩ የጀርባ ቀስቅሴዎች (ለምሳሌ፡-
+ተለዋዋጮችን እንደገና የሚያረጋግጥ cron) ባዶ ተደርገው ይወሰዳሉ እና መዝለል አለባቸው ወይም
+ብሎክ ከማምረትዎ በፊት ከሌላ ሥራ ጋር ተጣብቋል።
+- ቴሌሜትሪ፡ `pipeline_detached_merged` እና የክትትል መለኪያዎች ሕክምና ተዘሏል
+ክፍተቶች በግልጽ - ኦፕሬተሮች "ምንም ስራ" ከ "የቧንቧ መስመር ዝርጋታ" መለየት ይችላሉ.
+- ድጋሚ አጫውት: የማገጃ ማከማቻ ሰው ሠራሽ ባዶ ቦታ ያዢዎችን አያስገባውም። ኩራ
+ዳግም አጫውት loop በቀላሉ አይደለም ከሆነ ለተከታታይ ክፍተቶች ተመሳሳይ የወላጅ hashን ይመለከታል
+ብሎክ ተለቀቀ።
 
-**Canonical Check:** During block proposal and validation, `ValidBlock::commit`
-asserts that the associated `StateBlock` carries at least one committed overlay
-(delta, artifact, trigger). This aligns with the `StateBlock::is_empty` guard
-that already ensures no-op writes are elided. Enforcement happens before
-signatures are requested so committees never vote on empty payloads.
+** ቀኖናዊ ቼክ፡** በብሎክ ፕሮፖዛል እና ማረጋገጫ ጊዜ፣ `ValidBlock::commit`
+የተቆራኘው `StateBlock` ቢያንስ አንድ ቁርጠኛ ተደራቢ እንደሚይዝ ያስረግጣል
+(ዴልታ፣ አርቲፊክት፣ ቀስቅሴ)። ይህ ከ `StateBlock::is_empty` ጠባቂ ጋር ይጣጣማል
+ቀድሞውንም ምንም-op የተጻፈው መሰረዙን ያረጋግጣል። ማስፈጸም ከዚህ በፊት ይከሰታል
+ኮሚቴዎች በባዶ ጭነት ላይ በጭራሽ ድምጽ እንዳይሰጡ ፊርማዎች ተጠይቀዋል።
 
-## 2. Cross-Lane QC Merge Semantics
+## 2. ክሮስ-ሌይን QC ውህደት ትርጉም
 
-Each lane block `B_i` finalised by its committee produces:
+በኮሚቴው የተጠናቀቀ እያንዳንዱ መስመር Norito
 
-- `lane_state_root_i`: Poseidon2-SMT commitment over per-DS state roots touched
-in the block.
-- `merge_hint_root_i`: rolling candidate for the merge ledger (`tag =
-"iroha:merge:candidate:v1\0"`).
-- `lane_qc_i`: aggregated signatures from the lane committee over the
-  execution-vote preimage (block hash, `parent_state_root`,
-  `post_state_root`, height/view/epoch, chain_id, and mode tag).
+- `lane_state_root_i`: Poseidon2-SMT ቁርጠኝነት በእያንዳንዱ-DS ግዛት ሥር ተነካ
+በብሎክ ውስጥ.
+- `merge_hint_root_i`፡ ለውህደት ደብተር የሚሽከረከር እጩ (`መለያ =
+"iroha: ውህደት: እጩ: v1 \ 0" `).
+- `lane_qc_i`፡ ከሌይን ኮሚቴ የተውጣጡ ፊርማዎች በ
+  የማስፈጸሚያ-ድምጽ ቅድመ-ምስል (ሃሽ አግድ፣ `parent_state_root`፣
+  `post_state_root`፣ ቁመት/እይታ/epoch፣ chain_id እና mode tag)።
 
-Merge nodes collect the latest tips `{(B_i, lane_qc_i, merge_hint_root_i)}` for
-all lanes `i ∈ [0, K)`.
+የተዋሃዱ አንጓዎች ለ `{(B_i, lane_qc_i, merge_hint_root_i)}` የቅርብ ጊዜ ምክሮችን ይሰበስባሉ
+ሁሉም መስመሮች `i ∈ [0, K)`.
 
-**Merge Entry (MUST):**
+**የማዋሃድ ግቤት (የግድ):**
 
 ```
 MergeLedgerEntry {
@@ -72,23 +73,21 @@ MergeLedgerEntry {
     global_state_root: Hash32,
     merge_qc: QuorumCertificate,
 }
-```
+```- `lane_tips[i]` የሌይኑ ሃሽ ነው ለመንገድ የውህደት መግቢያ ማህተሞች
+  `i`. ከቀደምት የውህደት ግቤት ጀምሮ አንድ መስመር ምንም ብሎክ ያልተለቀቀ ከሆነ ይህ ዋጋ ነው።
+  ተደግሟል።
+- `merge_hint_root[i]` `merge_hint_root` ነው ከተዛማጅ መስመር
+  አግድ `lane_tips[i]` ሲደግም ይደገማል።
+- `global_state_root` `ReduceMergeHints(merge_hint_root[0..K-1])` እኩል ነው፣ ሀ
+  Poseidon2 ከጎራ መለያየት መለያ ጋር መታጠፍ
+  `"iroha:merge:reduce:v1\0"`. ቅነሳው የሚወስነው እና የግድ ነው።
+  በእኩዮች መካከል ያለውን ተመሳሳይ እሴት እንደገና ይገንቡ።
+- `merge_qc` በውህደት ኮሚቴው የ BFT ምልአተ ጉባኤ የምስክር ወረቀት ነው።
+  ተከታታይ ግቤት.
 
-- `lane_tips[i]` is the hash of the lane block the merge entry seals for lane
-  `i`. If a lane emitted no block since the previous merge entry, this value is
-  repeated.
-- `merge_hint_root[i]` is the `merge_hint_root` from the corresponding lane
-  block. It is repeated when `lane_tips[i]` repeats.
-- `global_state_root` equals `ReduceMergeHints(merge_hint_root[0..K-1])`, a
-  Poseidon2 fold with domain separation tag
-  `"iroha:merge:reduce:v1\0"`. The reduction is deterministic and MUST
-  reconstruct the same value across peers.
-- `merge_qc` is a BFT quorum certificate from the merge committee over the
-  serialized entry.
+** የQC ክፍያን አዋህድ ( MUST):**
 
-**Merge QC Payload (MUST):**
-
-Merge committee members sign a deterministic digest:
+የውህደት ኮሚቴ አባላት የሚወስን የምግብ መፈጨትን ይፈርማሉ፡-
 
 ```
 merge_qc_digest = blake2b32(
@@ -104,110 +103,106 @@ merge_qc_digest = blake2b32(
 )
 ```
 
-- `view` is the merge-committee view derived from the lane tips (max
-  `view_change_index` across the lane headers sealed by the entry).
-- `chain_id` is the configured chain identifier string (UTF-8 bytes).
-- The payload uses Norito encoding with the field order shown above.
+- `view` ከሌይን ምክሮች የተገኘ የውህደት ኮሚቴ እይታ ነው (ከፍተኛ
+  `view_change_index` በመግቢያው በታሸገው የሌይን ራስጌዎች ላይ)።
+- `chain_id` የተዋቀረው ሰንሰለት መለያ ሕብረቁምፊ (UTF-8 ባይት) ነው።
+- ክፍያው ከላይ ከሚታየው የመስክ ቅደም ተከተል ጋር Norito ኢንኮዲንግ ይጠቀማል።
 
-The resulting digest is stored in `merge_qc.message_digest` and is the message
-verified by BLS signatures.
+የተገኘው መፍጨት በ `merge_qc.message_digest` ውስጥ ተከማችቷል እና መልእክቱ ነው።
+በ BLS ፊርማዎች የተረጋገጠ.
 
-**Merge QC Construction (MUST):**
+** QC ኮንስትራክሽን አዋህድ ( MUST):**
 
-- The merge committee roster is the current commit-topology validator set.
-- Required quorum = `commit_quorum_from_len(roster_len)`.
-- `merge_qc.signers_bitmap` encodes participating validator indices (LSB-first)
-  in commit-topology order.
-- `merge_qc.aggregate_signature` is the BLS-normal aggregate for the digest
-  above.
+- የውህደት ኮሚቴው ዝርዝር የአሁኑ የኮሚቴ-ቶፖሎጂ አረጋጋጭ ስብስብ ነው።
+- የሚያስፈልግ ኮረም = `commit_quorum_from_len(roster_len)`.
+- `merge_qc.signers_bitmap` ተሳታፊ አረጋጋጭ ኢንዴክሶች (LSB-መጀመሪያ)
+  በቃል-ቶፖሎጂ ቅደም ተከተል.
+- `merge_qc.aggregate_signature` ለምግብ መፍጫ BLS-መደበኛ ድምር ነው
+  በላይ።
 
-**Validation (MUST):**
+**ማረጋገጫ (የግድ):**
 
-1. Verify each `lane_qc_i` against `lane_tips[i]` and confirm the block headers
-   include the matching `merge_hint_root_i`.
-2. Ensure no `lane_qc_i` points to an `Invalid` or unexecuted block. The
-   non-empty policy above ensures the header includes state overlays.
-3. Recompute `ReduceMergeHints` and compare with `global_state_root`.
-4. Recompute the merge QC digest and verify the signer bitmap, quorum threshold,
-   and aggregate signature against the commit-topology roster.
+1. እያንዳንዱን `lane_qc_i` በ `lane_tips[i]` ላይ ያረጋግጡ እና የብሎክ ራስጌዎችን ያረጋግጡ
+   ተዛማጅ `merge_hint_root_i` ያካትቱ.
+2. ወደ `Invalid` ወይም ያልተፈፀመ ብሎክ `lane_qc_i` ነጥብ አለመኖሩን ያረጋግጡ። የ
+   ከላይ ባዶ ያልሆነ ፖሊሲ ራስጌው የግዛት ተደራቢዎችን እንደሚያካትት ያረጋግጣል።
+3. `ReduceMergeHints` እንደገና አስላ እና ከ `global_state_root` ጋር አወዳድር።
+4. የውህደቱን QC መፍጨት እንደገና ያሰሉ እና የፈራሚውን ቢትማፕ፣ የስብስብ ብዛት ገደብ፣
+   እና በኮሚቶ-ቶፖሎጂ ዝርዝር ላይ ድምር ፊርማ።
 
-**Observability:** Merge nodes emit Prometheus counters for
-`merge_entry_lane_repeats_total{i}` to highlight lanes that skipped slots for
-operational visibility.
+** ታዛቢነት፡** የውህደት አንጓዎች Prometheus ቆጣሪዎችን ያመነጫሉ
+`merge_entry_lane_repeats_total{i}` ቦታዎችን የተዘለሉ መስመሮችን ለማድመቅ
+ተግባራዊ ታይነት.
 
-## 3. Finality Workflow
+## 3. የመጨረሻ የስራ ሂደት
 
-### 3.1 Lane-Level Finality
+### 3.1 የሌይን ደረጃ የመጨረሻ
 
-1. Transactions are scheduled per lane in deterministic slots.
-2. The executor applies overlays into `StateBlock`, producing deltas and
-artifacts.
-3. Upon validation, the lane committee signs the execution-vote preimage that
-   binds the block hash, state roots, and height/view/epoch. The tuple
-   `(block_hash, lane_qc_i, merge_hint_root_i)` is considered lane-final.
-4. Light clients MAY treat the lane tip as final for DS-limited proofs, but
-must record the associated `merge_hint_root` to reconcile with the merge ledger
-later.
+1. ግብይቶች በአንድ መስመር በ deterministic ክፍተቶች ውስጥ መርሐግብር ተይዞላቸዋል።
+2. አስፈፃሚው ዴልታዎችን በማምረት በ `StateBlock` ላይ ተደራቢዎችን ይጠቀማል።
+ቅርሶች.
+3. ከተረጋገጠ በኋላ፣ የሌይን ኮሚቴው የማስፈጸሚያ-ድምጽ ቅድመ-ግምቱን ይፈርማል
+   የማገጃውን ሃሽ፣ የስቴት ስሮች እና ቁመት/እይታ/ኢፖክን ያስራል። ቱፕል
+   `(block_hash, lane_qc_i, merge_hint_root_i)` ሌይን-የመጨረሻ እንደሆነ ይቆጠራል።
+4. ቀላል ደንበኞች የሌይን ጫፍን ለዲኤስ-ውሱን ማረጋገጫዎች እንደ መጨረሻ ሊይዙት ይችላሉ፣ ነገር ግን
+ከተዋሃደ ደብተር ጋር ለማስታረቅ የተያያዘውን `merge_hint_root` መመዝገብ አለበት
+በኋላ።የሌይን ኮሚቴዎች በዳታ ቦታ የተቀመጡ ናቸው እና የአለም አቀፍ ቃል ኪዳንን አይተኩም።
+ቶፖሎጂ የኮሚቴው መጠን በ `3f+1` ላይ ተስተካክሏል, `f` የሚመጣው ከ
+የውሂብ ቦታ ካታሎግ (`fault_tolerance`)። አረጋጋጭ ገንዳው የውሂብ ቦታው ነው።
+አረጋጋጮች (የሌይን አስተዳደር በአስተዳዳሪ ለሚተዳደሩ መስመሮች ወይም የሕዝብ መስመር ይገለጻል።
+በካስማ ለተመረጡት መስመሮች መዝገቦች)። የኮሚቴ አባልነት ነው።
+ከ ጋር የተያያዘውን የVRF epoch ዘርን በመጠቀም በየዘመኑ አንድ ጊዜ በናሙና ተወስዷል
+`dataspace_id` እና `lane_id`። ገንዳው ከ`3f+1` ያነሰ ከሆነ የሌይን መጨረሻ
+ምልአተ ጉባኤው እስኪመለስ ድረስ ባለበት ይቆማል (የአደጋ ጊዜ ማገገም ለብቻው ነው የሚስተናገደው)።
 
-Lane committees are per-dataspace and do not replace the global commit
-topology. Committee size is fixed at `3f+1`, where `f` comes from the
-dataspace catalog (`fault_tolerance`). The validator pool is the dataspace's
-validators (lane governance manifests for admin-managed lanes, or public-lane
-staking records for stake-elected lanes). Committee membership is
-deterministically sampled once per epoch using the VRF epoch seed bound with
-`dataspace_id` and `lane_id`. If the pool is smaller than `3f+1`, lane finality
-pauses until quorum is restored (emergency recovery is handled separately).
+### 3.2 ውህደት-ሊጀር የመጨረሻ
 
-### 3.2 Merge-Ledger Finality
+1. የውህደት ኮሚቴ የቅርብ ጊዜውን የሌይን ምክሮችን ይሰበስባል፣ እያንዳንዱን `lane_qc_i` ያረጋግጣል፣ እና
+ከላይ እንደተገለጸው `MergeLedgerEntry` ይገነባል።
+2. የመወሰኛ ቅነሳውን ካረጋገጠ በኋላ የውህደት ኮሚቴው ይፈርማል
+ማስገቢያ (`merge_qc`).
+3. አንጓዎች ግቤቱን ወደ የውህደት መዝገብ መዝገብ ያያይዙት እና ከጎኑ ያቆዩት።
+ሌይን የማገጃ ማጣቀሻዎች.
+4. `global_state_root` የስልጣን የአለም መንግስት ቁርጠኝነት ይሆናል።
+epoch / ማስገቢያ. ይህንን ለማንጸባረቅ ሙሉ አንጓዎች የ WSV ፍተሻ ነጥብ ዲበ ዳታቸውን ያዘምኑታል።
+ዋጋ; deterministic ድጋሚ መጫወት ተመሳሳይ ቅነሳ ማባዛት አለበት.
 
-1. Merge committee collects the latest lane tips, verifies each `lane_qc_i`, and
-constructs the `MergeLedgerEntry` as defined above.
-2. After verifying the deterministic reduction, the merge committee signs the
-entry (`merge_qc`).
-3. Nodes append the entry to the merge ledger log and persist it alongside the
-lane block references.
-4. `global_state_root` becomes the authoritative world state commitment for the
-epoch/slot. Full nodes update their WSV checkpoint metadata to mirror this
-value; deterministic replay must reproduce the same reduction.
+### 3.3 WSV እና የማከማቻ ውህደት
 
-### 3.3 WSV and Storage Integration
+- `State::commit_merge_entry` የየሌይን ግዛት ሥር እና የ
+  የመጨረሻው `global_state_root`፣ የሌይን አፈፃፀምን ከአለምአቀፉ ቼክሰም ጋር በማገናኘት።
+- ኩራ `MergeLedgerEntry` ከሌይን ብሎክ ቅርሶች አጠገብ ይቆያል።
+  ድጋሚ ማጫወት ሁለቱንም የሌይን ደረጃ እና ዓለም አቀፋዊ የመጨረሻ ቅደም ተከተሎችን እንደገና መገንባት ይችላል።
+- አንድ ሌይን አንድ ማስገቢያ ሲዘለል, ማከማቻ በቀላሉ የቀደመውን ጫፍ ይይዛል; አይደለም
+  ቢያንስ አንድ መስመር አዲስ እስኪፈጥር ድረስ የቦታ ያዥ ውህደት ግቤቶች ይፈጠራሉ።
+  አግድ
+- የኤፒአይ ወለሎች (Torii፣ ቴሌሜትሪ) ሁለቱንም የሌይን ምክሮችን እና የቅርብ ጊዜ ውህደትን ያጋልጣሉ
+  ኦፕሬተሮች እና ደንበኞች በሌይን እና አለምአቀፍ እይታዎችን ማስታረቅ እንዲችሉ መግቢያ።
 
-- `State::commit_merge_entry` records the per-lane state roots and the
-  final `global_state_root`, bridging lane execution with the global checksum.
-- Kura persists `MergeLedgerEntry` adjacent to the lane block artifacts so a
-  replay can reconstruct both lane-level and global finality sequences.
-- When a lane skips a slot, storage simply retains the previous tip; no
-  placeholder merge entries are created until at least one lane produces a new
-  block.
-- API surfaces (Torii, telemetry) expose both lane tips and the latest merge
-  entry so operators and clients can reconcile per-lane and global views.
-
-## 4. Implementation Notes
-
-- `crates/iroha_core/src/state.rs`: `State::commit_merge_entry` validates the
-  reduction and wires the lane/global metadata into the world state so queries
-  and observers can access the merge hints and the authoritative global hash.
-- `crates/iroha_core/src/kura.rs`: `Kura::store_block_with_merge_entry` enqueues
-  the block and persists the associated merge entry in one step, rolling back
-  the in-memory block when the append fails so storage never records a block
-  without its sealing metadata. The merge-ledger log is pruned in lock-step
-  with the validated block height during startup recovery, and cached in memory
-  with a bounded window (`kura.merge_ledger_cache_capacity`, default 256) to
-  avoid unbounded growth on long-running nodes. Recovery truncates partial or
-  oversized merge-ledger tail entries, and append rejects entries above the
-  maximum payload size guard to cap allocations.
-- `crates/iroha_core/src/block.rs`: block validation rejects blocks without
-  entrypoints (external transactions or time triggers) and without deterministic
-  artifacts such as DA bundles (`BlockValidationError::EmptyBlock`), ensuring
-  the non-empty policy is enforced before signatures are requested and carried
-  into the merge ledger.
-- Deterministic reduction helper lives in the merge service: `reduce_merge_hint_roots`
-  (`crates/iroha_core/src/merge.rs`) implements the Poseidon2 fold described above.
-  Hardware acceleration hooks remain future work, but the scalar path now enforces
-  the canonical reduction deterministically.
-- Telemetry integration: exposing per-lane merge repeats and the
-  `global_state_root` gauge remains tracked in the observability backlog so the
-  dashboard work can ship alongside the merge service rollout.
-- Cross-component tests: golden replay coverage for the merge reduction is
-  tracked with the integration-test backlog to ensure future changes to
-  `reduce_merge_hint_roots` keep the recorded roots stable.
+## 4. የትግበራ ማስታወሻዎች- `crates/iroha_core/src/state.rs`: `State::commit_merge_entry` ያረጋግጣል
+  በመቀነስ ሌይን/አለም አቀፋዊ ሜታዳታን ወደ አለም ሁኔታ በማገናኘት ጥያቄዎችን ይጠይቃል
+  እና ታዛቢዎች የውህደት ፍንጮችን እና ስልጣን ያለውን ዓለም አቀፍ ሃሽ ማግኘት ይችላሉ።
+- `crates/iroha_core/src/kura.rs`: `Kura::store_block_with_merge_entry` ወረፋዎች
+  ማገድ እና የተጎዳኘውን የውህደት ግቤት በአንድ እርምጃ ወደ ኋላ እየተንከባለል ይቀጥላል
+  የውስጠ-ማህደረ ትውስታ እገዳው ተጨማሪው ሲወድቅ ስለዚህ ማከማቻ በጭራሽ ብሎክን አይመዘግብም።
+  ያለ ማኅተም ሜታዳታ። የውህደት-መሪ መዝገብ በመቆለፊያ ደረጃ ተቆርጧል
+  በጅማሬ ማገገሚያ ወቅት ከተረጋገጠ የማገጃ ቁመት ጋር እና በማህደረ ትውስታ ውስጥ ተደብቋል
+  ከታሰረ መስኮት ጋር (`kura.merge_ledger_cache_capacity`፣ ነባሪ 256) ወደ
+  ለረጅም ጊዜ በሚሄዱ አንጓዎች ላይ ያልተገደበ እድገትን ያስወግዱ። ማግኛ በከፊል ወይም
+  ከመጠን በላይ የተዋሃዱ የጅራት ምዝግቦች እና ከሱ በላይ ግቤቶችን አይቀበልም።
+  ከፍተኛው የክፍያ መጠን ጠባቂ እስከ ቆብ ምደባዎች።
+- `crates/iroha_core/src/block.rs`: የማገጃ ማረጋገጫ ያለ ብሎኮች ውድቅ
+  የመግቢያ ነጥቦች (ውጫዊ ግብይቶች ወይም የጊዜ ቀስቅሴዎች) እና ያለ ቆራጥነት
+  እንደ DA ጥቅሎች (`BlockValidationError::EmptyBlock`) ያሉ ቅርሶች፣ የሚያረጋግጡ
+  ባዶ ያልሆነ ፖሊሲ ፊርማዎች ከመጠየቃቸው እና ከመያዙ በፊት ተፈጻሚ ይሆናል።
+  ወደ ውህደት መዝገብ.
+- ቆራጥ ቅነሳ ረዳት በውህደት አገልግሎት ውስጥ ይኖራል፡ `reduce_merge_hint_roots`
+  (`crates/iroha_core/src/merge.rs`) ከላይ የተገለጸውን የPoseidon2 እጥፋትን ይተገብራል።
+  የሃርድዌር ማጣደፍ መንጠቆዎች የወደፊት ስራ ሆነው ይቆያሉ፣ ነገር ግን ስኬር መንገዱ አሁን ተግባራዊ ይሆናል።
+  ቀኖናዊው ቅነሳ በቁርጠኝነት.
+- የቴሌሜትሪ ውህደት፡ የየሌይን ውህደት ድግግሞሾችን እና የ
+  `global_state_root` መለኪያ በታዛቢነት የኋላ መዝገብ ውስጥ ተከታትሏል ስለዚህ
+  ዳሽቦርድ ስራ ከውህደት አገልግሎት ልቀት ጎን ለጎን መላክ ይችላል።
+- የተሻገሩ ክፍሎች ሙከራዎች፡ ውህደቱን ለመቀነስ ወርቃማ ድጋሚ አጫውት ሽፋን ነው።
+  የወደፊት ለውጦችን ለማረጋገጥ በውህደት-ሙከራ የኋላ መዝገብ ተከታትሏል።
+  `reduce_merge_hint_roots` የተቀዳውን ሥሮች እንዲረጋጋ ያድርጉ።

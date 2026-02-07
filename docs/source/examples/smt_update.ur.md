@@ -6,52 +6,51 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 788902cfafc6c7db6d52d4237b46ffe78193efd57852bc3427a16d7f3cda2f9c
 source_last_modified: "2026-01-03T18:08:00.438859+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Sparse Merkle Update Example
+# ویرل مرکل کی تازہ کاری کی مثال
 
-This worked example illustrates how the FASTPQ Stage 2 trace encodes a
-non-membership witness using the `neighbour_leaf` column. The sparse Merkle tree
-is binary over Poseidon2 field elements. Keys are converted to canonical
-32-byte little-endian strings, hashed to a field element, and the most
-significant bits select the branch at each level.
+یہ کام کرنے والی مثال واضح کرتی ہے کہ کس طرح فاسٹ پی کیو اسٹیج 2 ٹریس انکوڈ کرتا ہے a
+`neighbour_leaf` کالم کا استعمال کرتے ہوئے غیر ممبرشپ گواہ۔ ویرل مرکل کا درخت
+پوسیڈون 2 فیلڈ عناصر سے زیادہ بائنری ہے۔ چابیاں کیننیکل میں تبدیل کردی گئیں
+32-بائٹ لٹل اینڈین ڈور ، ایک فیلڈ عنصر کی طرف بڑھ گیا ، اور سب سے زیادہ
+اہم بٹس ہر سطح پر شاخ کا انتخاب کرتے ہیں۔
 
-## Scenario
+## منظر
 
-- Pre-state leaves
-  - `asset::alice::rose` -> hashed key `0x12b7...` with value `0x0000_0000_0000_0005`.
-  - `asset::bob::rose`   -> hashed key `0x1321...` with value `0x0000_0000_0000_0003`.
-- Update request: insert `asset::carol::rose` with value 2.
-- The canonical key hash for Carol expands to the 5-bit prefix `0b01011`. The
-  existing neighbours have prefixes `0b01010` (Alice) and `0b01101` (Bob).
+- ریاست سے پہلے کے پتے
+  - `asset::alice::rose` -> headed key `0x12b7...` کی قیمت `0x0000_0000_0000_0005` کے ساتھ۔
+  - `asset::bob::rose` -> headed key `0x1321...` ویلیو `0x0000_0000_0000_0003` کے ساتھ۔
+- اپ ڈیٹ کی درخواست: قیمت 2 کے ساتھ `asset::carol::rose` داخل کریں۔
+- کیرول کے لئے کیننیکل کلید ہیش 5 بٹ پریفکس `0b01011` تک پھیلتی ہے۔
+  موجودہ ہمسایہ ممالک میں `0b01010` (ایلس) اور `0b01101` (BOB) کے سابقہ ​​ہیں۔
 
-Because there is no leaf whose prefix matches `0b01011`, the prover must provide
-additional evidence that the interval `(alice, bob)` is empty. Stage 2 populates
-the trace row across the columns `path_bit_{level}`, `sibling_{level}`,
-`node_in_{level}`, and `node_out_{level}` (with `level` in `[0, 31]`). All values
-are Poseidon2 field elements encoded in little-endian form:
+چونکہ کوئی پتی نہیں ہے جس کا سابقہ ​​`0b01011` سے ملتا ہے ، لہذا پروور کو لازمی طور پر فراہم کرنا چاہئے
+اضافی ثبوت جو وقفہ `(alice, bob)` خالی ہے۔ اسٹیج 2 پاپولیٹس
+کالموں میں ٹریس قطار `path_bit_{level}` ، `sibling_{level}` ،
+`node_in_{level}` ، اور `node_out_{level}` (`level` کے ساتھ `[0, 31]` میں)۔ تمام اقدار
+پوسیڈون 2 فیلڈ عناصر کو لٹل اینڈین شکل میں انکوڈ کیا گیا ہے:
 
-| level | `path_bit_level` | `sibling_level`             | `node_in_level`                      | `node_out_level`                     | Notes |
-| ----- | ---------------- | --------------------------- | ------------------------------------ | ------------------------------------ | ----- |
-| 0 | 1             | `0x241f...` (Alice leaf hash) | `0x0000...`                          | `0x4b12...` (`value_2 = 2`)          | Insert: start from zero, store new value. |
-| 1 | 1             | `0x7d45...` (empty right)     | Poseidon2(`node_out_0`, `sibling_0`) | Poseidon2(`sibling_1`, `node_out_1`) | Follow prefix bit 1. |
-| 2 | 0             | `0x03ae...` (Bob branch)      | Poseidon2(`node_out_1`, `sibling_1`) | Poseidon2(`node_in_2`, `sibling_2`)  | Branch flips because bit = 0. |
-| 3 | 1             | `0x9bc4...`                   | Poseidon2(`node_out_2`, `sibling_2`) | Poseidon2(`sibling_3`, `node_out_3`) | Higher levels continue hashing upward. |
-| 4 | 0             | `0xe112...`                   | Poseidon2(`node_out_3`, `sibling_3`) | Poseidon2(`node_in_4`, `sibling_4`)  | Root level; result is the post-state root. |
+| سطح | `path_bit_level` | `sibling_level` | `node_in_level` | `node_out_level` | نوٹ |
+| ----- | ------------------ | ----------------------------- | ---------------------------------------- | ---------------------------------------- | ----- |
+| 0 | 1 | `0x241f...` (ایلس لیف ہیش) | `0x0000...` | `0x4b12...` (`value_2 = 2`) | داخل کریں: صفر سے شروع کریں ، نئی قیمت اسٹور کریں۔ |
+| 1 | 1 | `0x7d45...` (خالی دائیں) | پوسیڈون 2 (`node_out_0` ، `sibling_0`) | پوسیڈون 2 (`sibling_1` ، `node_out_1`) | پریفکس بٹ 1 پر عمل کریں۔ |
+| 2 | 0 | `0x03ae...` (باب برانچ) | پوسیڈون 2 (`node_out_1` ، `sibling_1`) | پوسیڈون 2 (`node_in_2` ، `sibling_2`) | برانچ پلٹ جاتی ہے کیونکہ بٹ = 0. |
+| 3 | 1 | `0x9bc4...` | پوسیڈون 2 (`node_out_2` ، `sibling_2`) | پوسیڈون 2 (`sibling_3` ، `node_out_3`) | اونچی سطح اوپر کی طرف بڑھتی رہتی ہے۔ |
+| 4 | 0 | `0xe112...` | پوسیڈون 2 (`node_out_3` ، `sibling_3`) | پوسیڈون 2 (`node_in_4` ، `sibling_4`) | جڑ کی سطح ؛ نتیجہ ریاست کے بعد کی جڑ ہے۔ |
 
-The `neighbour_leaf` column for this row is populated with Bob's leaf
-(`key = 0x1321...`, `value = 3`, `hash = Poseidon2(key, value) = 0x03ae...`). When
-verifying, the AIR checks that:
+اس قطار کے لئے `neighbour_leaf` کالم باب کے لیف کے ساتھ آباد ہے
+(`key = 0x1321...` ، `value = 3` ، `hash = Poseidon2(key, value) = 0x03ae...`)۔ جب
+تصدیق کرنا ، ہوا کی جانچ پڑتال کرتی ہے کہ:
 
-1. The supplied neighbour corresponds to the sibling used at level 2.
-2. The neighbour key is lexicographically greater than the inserted key and the
-   left sibling (Alice) is lexicographically smaller.
-3. Replacing the inserted leaf with the neighbour reproduces the pre-state root.
-
-Together these checks prove that no leaf existed for the interval `(0b01010,
-0b01101)` before the update. Implementations generating FASTPQ traces can use
-this layout verbatim; the numerical constants above are illustrative. For a full
-JSON witness, emit the columns exactly as they appear in the table above (with
-numeric suffixes per level), using little-endian byte strings serialized with
-Norito JSON helpers.
+1. فراہم کردہ پڑوسی سطح 2 پر استعمال ہونے والے بہن بھائی سے مطابقت رکھتا ہے۔
+2. پڑوسی کی کلید داخل کردہ کلید اور اس سے زیادہ لغت ہے
+   بائیں بہن (ایلس) لغت کے لحاظ سے چھوٹا ہے۔
+3. پڑوسی کے ساتھ داخل کردہ پتے کی جگہ لینے سے ریاست سے پہلے کی جڑ کو دوبارہ پیش کیا جاتا ہے۔یہ چیک ایک ساتھ مل کر یہ ثابت کرتے ہیں کہ وقفہ کے لئے کوئی پتی موجود نہیں ہے `(0B01010 ،
+0B01101) `اپ ڈیٹ سے پہلے۔ فاسٹ پی کیو کے نشانات پیدا کرنے والے نفاذ استعمال کرسکتے ہیں
+یہ ترتیب زبانی ؛ مذکورہ بالا عددی استحکام مثال کے ہیں۔ ایک مکمل کے لئے
+JSON گواہ ، کالموں کو بالکل اسی طرح خارج کریں جیسے وہ اوپر والے جدول میں دکھائی دیتے ہیں (کے ساتھ)
+ہر سطح کے عددی لاحقہ) ، لٹل اینڈین بائٹ ڈوروں کا استعمال کرتے ہوئے سیریلائزڈ
+Norito JSON مددگار۔

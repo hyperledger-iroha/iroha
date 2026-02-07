@@ -9,67 +9,65 @@ source_last_modified: "2025-12-29T18:16:35.981105+00:00"
 translation_last_reviewed: 2026-02-07
 title: Red-Team Drill — Operation SeaGlass
 summary: Evidence and remediation log for the Operation SeaGlass moderation drill (gateway smuggling, governance replay, alert brownout).
+translator: machine-google-reviewed
 ---
 
-# Red-Team Drill — Operation SeaGlass
+# የቀይ ቡድን ቁፋሮ - ኦፕሬሽን የባህር መስታወት
 
-- **Drill ID:** `20260818-operation-seaglass`
-- **Date & window:** `2026-08-18 09:00Z – 11:00Z`
-- **Scenario class:** `smuggling`
-- **Operators:** `Miyu Sato, Liam O'Connor`
-- **Dashboards frozen from commit:** `364f9573b`
-- **Evidence bundle:** `artifacts/ministry/red-team/2026-08/operation-seaglass/`
-- **SoraFS CID (optional):** `not pinned (local bundle only)`
-- **Related roadmap items:** `MINFO-9`, plus linked follow-ups `MINFO-RT-17` / `MINFO-RT-18`.
+- ** የመሰርሰሪያ መታወቂያ፡** `20260818-operation-seaglass`
+- ** ቀን እና መስኮት: *** `2026-08-18 09:00Z – 11:00Z`
+- ** ትዕይንት ክፍል: ** `smuggling`
+- ** ኦፕሬተሮች: *** `Miyu Sato, Liam O'Connor`
+- ** ዳሽቦርዶች ከቁርጠኝነት የቀዘቀዙ:** `364f9573b`
+- ** የማስረጃ ጥቅል:** `artifacts/ministry/red-team/2026-08/operation-seaglass/`
+- **SoraFS CID (አማራጭ):** `not pinned (local bundle only)`
+- ** ተዛማጅ የመንገድ ካርታ እቃዎች:** `MINFO-9` እና የተገናኙ ክትትሎች `MINFO-RT-17` / `MINFO-RT-18`።
 
-## 1. Objectives & Entry Conditions
+## 1. ዓላማዎች እና የመግቢያ ሁኔታዎች
 
-- **Primary objectives**
-  - Validate denylist TTL enforcement and gateway quarantine during a smuggling attempt while load-shedding alerts.
-  - Confirm governance replay detection and alert brownout handling in the moderation runbook.
-- **Prerequisites confirmed**
-  - `emergency_canon_policy.md` version `v2026-08-seaglass`.
-  - `dashboards/grafana/ministry_moderation_overview.json` digest `sha256:ef5210b5b08d219242119ec4ceb61cb68ee4e42ce2eea8a67991fbff95501cc8`.
-  - Override authority on-call: `Kenji Ito (GovOps pager)`.
+- ** ዋና ዓላማዎች ***
+  - የማንቂያዎችን ጭነት በሚጭኑበት ጊዜ በኮንትሮባንድ ሙከራ ወቅት የውክልና ሊስት የቲቲኤል ማስፈጸሚያ እና የጌት ኳራንቲንን ያረጋግጡ።
+  - የአስተዳደር ድጋሚ ማወቂያን ያረጋግጡ እና በመጠኑ የሩጫ ደብተር ውስጥ የብሩክ መውጣት አያያዝን ያስጠነቅቁ።
+- ** ቅድመ-ሁኔታዎች ተረጋግጠዋል ***
+  - `emergency_canon_policy.md` ስሪት `v2026-08-seaglass`።
+  - `dashboards/grafana/ministry_moderation_overview.json` መፍጨት `sha256:ef5210b5b08d219242119ec4ceb61cb68ee4e42ce2eea8a67991fbff95501cc8`.
+  - በጥሪ ላይ ባለስልጣንን ይሽሩ፡ `Kenji Ito (GovOps pager)`።
 
-## 2. Execution Timeline
+## 2. የአፈፃፀም የጊዜ መስመር
 
-| Timestamp (UTC) | Actor | Action / Command | Result / Notes |
-|-----------------|-------|------------------|----------------|
-| 09:00:12 | Miyu Sato | Froze dashboards/alerts at `364f9573b` via `scripts/ministry/export_red_team_evidence.py --freeze-only` | Baseline captured and stored under `dashboards/` |
-| 09:07:44 | Liam O'Connor | Published denylist snapshot + GAR override to staging with `sorafs_cli ... gateway update-denylist --policy-tier emergency` | Snapshot accepted; override window recorded in Alertmanager |
-| 09:17:03 | Miyu Sato | Injected smuggling payload + governance replay using `moderation_payload_tool.py --scenario seaglass` | Alert fired after 3m12s; governance replay flagged |
-| 09:31:47 | Liam O'Connor | Ran evidence export and sealed manifest `seaglass_evidence_manifest.json` | Evidence bundle plus hashes stored under `manifests/` |
+| የጊዜ ማህተም (UTC) | ተዋናይ | ድርጊት / ትዕዛዝ | ውጤት / ማስታወሻዎች |
+|-------------|
+| 09:00:12 | ሚዩ ሳቶ | በ`364f9573b` በኩል ዳሽቦርዶች/ማስጠንቀቂያዎች በ`scripts/ministry/export_red_team_evidence.py --freeze-only` | የመነሻ መስመር በ `dashboards/` ተይዟል እና ተከማችቷል |
+| 09:07:44 | Liam O'Connor | የታተመ የ denylist ቅጽበታዊ + GAR መሻር በ`sorafs_cli ... gateway update-denylist --policy-tier emergency` | ቅጽበተ-ፎቶ ተቀባይነት አግኝቷል; በአለርትማኔጀር ውስጥ የተቀዳውን መስኮት መሻር |
+| 09:17:03 | ሚዩ ሳቶ | የተከተተ ኮንትሮባንድ ጭነት + `moderation_payload_tool.py --scenario seaglass` በመጠቀም የአስተዳደር መልሶ ማጫወት | ማንቂያ ከ 3m12s በኋላ ተኩስ; የአስተዳደር ድጋሚ ታይቷል |
+| 09:31:47 | Liam O'Connor | ማስረጃ ወደ ውጭ መላክ እና የታሸገ ማኒፌክት `seaglass_evidence_manifest.json` | በ`manifests/` ስር የተከማቹ የማስረጃ ጥቅል እና ሃሽ |
 
-## 3. Observations & Metrics
+## 3. ምልከታዎች እና መለኪያዎች
 
-| Metric | Target | Observed | Pass/Fail | Notes |
-|--------|--------|----------|-----------|-------|
-| Alert response latency | <= 5 min | 3.2 min | ✅ | Alert runbook executed without paging churn |
-| Moderation detection rate | >= 0.98 | 0.992 | ✅ | Detected both smuggling and replay payloads |
-| Gateway anomaly detection | Alert fired | Alert fired + automatic quarantine | ✅ | Quarantine applied before retry budget exhausted |
+| መለኪያ | ዒላማ | ተስተውሏል | ማለፍ/ውድቀት | ማስታወሻ |
+|--------|--------|----------|-----------|---|
+| የማንቂያ ምላሽ መዘግየት | = 0.98 | 0.992 | ✅ | በኮንትሮባንድ እና በድጋሚ ጭነት ተገኝቷል |
+| የጌትዌይ anomaly ማወቂያ | ማንቂያ ተባረረ | ማንቂያ ተባረረ + አውቶማቲክ ማቆያ | ✅ | ድጋሚ ከመሞከርዎ በፊት በኳራንቲን ተተግብሯል በጀት ተሟጦ |
 
 - `Grafana export:` `artifacts/ministry/red-team/2026-08/operation-seaglass/dashboards/ministry_moderation_overview.json`
 - `Alert bundle:` `artifacts/ministry/red-team/2026-08/operation-seaglass/alerts/ministry_moderation_rules.yml`
 - `Norito manifests:` `artifacts/ministry/red-team/2026-08/operation-seaglass/manifests/seaglass_evidence_manifest.json`
 
-## 4. Findings & Remediation
+## 4. ግኝቶች እና ማሻሻያዎች
 
-| Severity | Finding | Owner | Target Date | Status / Link |
-|----------|---------|-------|-------------|---------------|
-| High | Governance replay alert fired, but SoraFS seal was delayed by 2m when the waitlist failover triggered | Governance Ops (Liam O'Connor) | 2026-09-05 | `MINFO-RT-17` open — add replay seal automation to the failover path |
-| Medium | Dashboard freeze not pinned to SoraFS; operators relied on local bundle | Observability (Miyu Sato) | 2026-08-25 | `MINFO-RT-18` open — pin `dashboards/*` to SoraFS with signed CID before next drill |
-| Low | CLI logbook omitted Norito manifest hash in first pass | Ministry Ops (Kenji Ito) | 2026-08-22 | Fixed during drill; template updated in logbook |
+| ከባድነት | ማግኘት | ባለቤት | የዒላማ ቀን | ሁኔታ / አገናኝ |
+|-------|--------|--------|------------|
+| ከፍተኛ | የአስተዳደር ድጋሚ ማጫወት ማንቂያ ተሰራ፣ነገር ግን SoraFS ማህተም የተጠባባቂ ዝርዝሩ ውድቀት ሲቀሰቀስ በ2ሚ ዘግይቷል | ገቨርናንስ ኦፕስ (ሊያም ኦኮነር) | 2026-09-05 | `MINFO-RT-17` ክፍት — የድጋሚ ማኅተም አውቶማቲክን ወደ ውድቀት መንገድ ይጨምሩ |
+| መካከለኛ | ዳሽቦርድ በረዶ በ SoraFS አልተሰካም; ኦፕሬተሮች በአካባቢው ጥቅል ላይ ተመርኩዘዋል | ታዛቢነት (ሚዩ ሳቶ) | 2026-08-25 | `MINFO-RT-18` ክፍት — ፒን `dashboards/*` ወደ SoraFS ከተፈረመ CID ጋር ከሚቀጥለው ልምምድ በፊት |
+| ዝቅተኛ | CLI መዝገብ ደብተር Norito አንጸባራቂ ሃሽን በመጀመሪያ ማለፊያ ተተወ | ሚኒስቴር ኦፕስ (ኬንጂ ኢቶ) | 2026-08-22 | በመሰርሰሪያ ጊዜ ቋሚ; አብነት በማስታወሻ ደብተር ውስጥ ዘምኗል |መለካት እንዴት እንደሚገለጥ፣የመካድ ፖሊሲዎች ወይም ኤስዲኬ/መሳሪያ መቀየር እንዳለበት መመዝገብ። ከ GitHub/Jira ጉዳዮች ጋር አገናኝ እና የታገዱ/ያልታገዱ ግዛቶች ማስታወሻ።
 
-Document how calibration manifests, denylist policies, or SDK/tooling must change. Link to GitHub/Jira issues and note blocked/unblocked states.
+## 5. አስተዳደር እና ማፅደቂያዎች
 
-## 5. Governance & Approvals
+- ** የክስተት አዛዥ መፈረም: ** `Miyu Sato @ 2026-08-18T11:22Z`
+- **የመንግስት ምክር ቤት ግምገማ ቀን፡** `GovOps-2026-08-22`
+- ** የክትትል ዝርዝር፡** `[x] status.md updated`፣ `[x] roadmap row updated`፣ `[x] transparency packet annotated`
 
-- **Incident commander sign-off:** `Miyu Sato @ 2026-08-18T11:22Z`
-- **Governance council review date:** `GovOps-2026-08-22`
-- **Follow-up checklist:** `[x] status.md updated`, `[x] roadmap row updated`, `[x] transparency packet annotated`
-
-## 6. Attachments
+## 6. ማያያዣዎች
 
 - `[x] CLI logbook (logs/operation_seaglass.log)`
 - `[x] Dashboard JSON export`
@@ -77,8 +75,8 @@ Document how calibration manifests, denylist policies, or SDK/tooling must chang
 - `[x] SoraFS manifest / CAR`
 - `[ ] Override audit log`
 
-Mark each attachment with `[x]` once uploaded to the evidence bundle and SoraFS snapshot.
+እያንዳንዱን ዓባሪ በ`[x]` አንድ ጊዜ ወደ የማስረጃ ጥቅል ከተሰቀለ እና SoraFS ቅጽበታዊ ፎቶ ጋር ምልክት ያድርጉ።
 
 ---
 
-_Last updated: 2026-08-18_
+ለመጨረሻ ጊዜ የተሻሻለው: 2026-08-18_

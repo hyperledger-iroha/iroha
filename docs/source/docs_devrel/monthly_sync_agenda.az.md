@@ -7,102 +7,101 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a2f89131efc0c79ddf63d71a25c04029014ba58393fb6336e676181322bc5066
 source_last_modified: "2025-12-29T18:16:35.952009+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Docs/DevRel Monthly Sync Agenda
+# Sənədlər/DevRel Aylıq Sinxronizasiya Gündəliyi
 
-This agenda formalizes the monthly Docs/DevRel sync that is referenced across
-`roadmap.md` (see “Add localization staffing review to monthly Docs/DevRel
-sync”) and the Android AND5 i18n plan. Use it as the canonical checklist, and
-update it whenever roadmap deliverables add or retire agenda items.
+Bu gündəm, istinad edilən aylıq Sənədlər/DevRel sinxronizasiyasını rəsmiləşdirir
+`roadmap.md` (bax: “Aylıq Sənədlərə/DevRel-ə lokalizasiya üzrə kadr icmalı əlavə et”
+sync”) və Android AND5 i18n planı. Onu kanonik yoxlama siyahısı kimi istifadə edin və
+yol xəritəsi çıxışları gündəmə maddələr əlavə etdikdə və ya ləğv etdikdə onu yeniləyin.
 
 ## Cadence & Logistics
 
-- **Frequency:** monthly (typically the second Thursday, 16:00 UTC)
-- **Duration:** 45 minutes + optional 15 minute hang-back for deep dives
-- **Location:** Zoom (`https://meet.sora.dev/docs-devrel-sync`) with shared
-  notes in HackMD or `docs/source/docs_devrel/minutes/<yyyy-mm>.md`
-- **Audience:** Docs/DevRel manager (chair), Docs engineers, localization
-  program manager, SDK DX TLs (Android, Swift, JS), Product Docs, Release
-  Engineering delegate, Support/QA observers
-- **Facilitator:** Docs/DevRel manager; appoint a rotating scribe who will
-  commit the minutes into the repo within 24 hours
+- **Tezlik:** aylıq (adətən ikinci cümə axşamı, 16:00UTC)
+- **Müddət:** 45 dəqiqə + dərin dalışlar üçün isteğe bağlı 15 dəqiqə geri çəkilmə
+- **Yer:** Paylaşılan ilə böyütmə (`https://meet.sora.dev/docs-devrel-sync`).
+  HackMD və ya `docs/source/docs_devrel/minutes/<yyyy-mm>.md`-də qeydlər
+- **Auditoriya:** Sənədlər/DevRel meneceri (sədr), Sənəd mühəndisləri, lokalizasiya
+  proqram meneceri, SDK DX TLs (Android, Swift, JS), Məhsul Sənədləri, Buraxılış
+  Mühəndislik nümayəndəsi, Dəstək/QA müşahidəçiləri
+- **Fasilitator:** Sənədlər/DevRel meneceri; fırlanan bir katib təyin etsin
+  dəqiqələri 24 saat ərzində repoya köçürün
 
-## Pre-Work Checklist
+## İşdən əvvəl yoxlama siyahısı
 
-| Owner | Task | Artefact |
+| Sahibi | Tapşırıq | Artefakt |
 |-------|------|----------|
-| Scribe | Create the month’s notes file (`docs/source/docs_devrel/minutes/<yyyy-mm>.md`) using the template below. | Notes file |
-| Localization PM | Refresh `docs/source/sdk/android/i18n_plan.md#translation-status` and the staffing log; pre-fill proposed decisions. | i18n plan |
-| DX TLs | Run `ci/check_android_docs_i18n.sh` or `scripts/sync_docs_i18n.py --dry-run` and attach digests for discussion. | CI artefacts |
-| Docs tooling | Export `docs/i18n/manifest.json` digests + outstanding ticket list from `docs/source/sdk/android/i18n_requests/`. | Manifest & ticket summary |
-| Support/Release | Gather any escalations that require Docs/DevRel action (e.g., pending preview invites, blocking reviewer feedback). | Status.md or escalation doc |
+| Yazı | Aşağıdakı şablondan istifadə edərək ayın qeydləri faylını (`docs/source/docs_devrel/minutes/<yyyy-mm>.md`) yaradın. | Qeydlər faylı |
+| Lokallaşdırma PM | `docs/source/sdk/android/i18n_plan.md#translation-status` və kadr jurnalını yeniləyin; təklif olunan qərarları əvvəlcədən doldurun. | i18n planı |
+| DX TLs | `ci/check_android_docs_i18n.sh` və ya `scripts/sync_docs_i18n.py --dry-run`-i işə salın və müzakirə üçün həzmlər əlavə edin. | CI artefaktları |
+| Sənəd alətləri | `docs/i18n/manifest.json` həzmlərini + `docs/source/sdk/android/i18n_requests/`-dən görkəmli bilet siyahısını ixrac edin. | Manifest və bilet xülasəsi |
+| Dəstək / Buraxılış | Docs/DevRel əməliyyatını tələb edən hər hansı eskalasiyaları toplayın (məsələn, gözləyən ilk baxış dəvətləri, rəyçi rəyini bloklamaq). | Status.md və ya eskalasiya sənədi |
 
-## Agenda Blocks
-
-1. **Roll call & objectives (5 min)**
-   - Confirm quorum, scribe, and logistics.
-   - Highlight any urgent incidents (docs preview outage, localization block).
-2. **Localization staffing review (15 min)**
-   - Review the staffing decision log in
+## Gündəlik Blokları1. **Vəkilli zəng və məqsədlər (5 dəq)**
+   - Yetərsay, katib və logistikanı təsdiqləyin.
+   - Hər hansı təcili insidentləri vurğulayın (sənədlərin önizləməsinin dayandırılması, lokalizasiya bloku).
+2. **Lokallaşdırma işçi heyətinin nəzərdən keçirilməsi (15 dəqiqə)**
+   - Kadr qərarları ilə bağlı girişi nəzərdən keçirin
      `docs/source/sdk/android/i18n_plan.md#staffing-decision-log`.
-   - Confirm status of open POs (`DOCS-L10N-*`) and interim coverage.
-   - Compare CI freshness output vs. the translation status table; call out any
-     doc whose locale SLA (>5 business days) will be breached before the next
-     sync.
-   - Decide whether escalation is required (Product Ops, Finance, contractor
-     management). Record the decision in both the staffing log and the monthly
-     minutes, including owner + due date.
-   - If staffing is healthy, document the confirmation so the roadmap action can
-     move back to 🈺/🈴 with evidence.
-3. **Docs/roadmap updates (10 min)**
-   - Status of DOCS-SORA portal work, Try-It proxy, and SoraFS publication
-     readiness.
-   - Highlight doc debt or reviewers needed for current release trains.
-4. **SDK highlights (10 min)**
-   - Android AND5/AND7 doc readiness, Swift IOS5 parity, JS GA progress.
-   - Capture shared fixtures or schema diffs that will affect docs.
-5. **Action review & parking lot (5 min)**
-   - Revisit open items from the previous sync; confirm closures.
-   - Record new actions in the notes file with explicit owners and deadlines.
+   - Açıq PO-ların statusunu (`DOCS-L10N-*`) və aralıq əhatə dairəsini təsdiqləyin.
+   - CI təzəlik çıxışını tərcümə statusu cədvəli ilə müqayisə edin; hər hansı bir zəng edin
+     yerli SLA (>5 iş günü) növbəti gündən əvvəl pozulacaq sənəd
+     sinxronizasiya.
+   - Artırmanın tələb edilib-edilməməsinə qərar verin (Məhsul Əməliyyatları, Maliyyə, podratçı
+     idarəetmə). Qərarı həm kadr jurnalında, həm də aylıq qeyd edin
+     dəqiqə, o cümlədən sahibi + son tarix.
+   - Əgər işçi heyəti sağlamdırsa, yol xəritəsi hərəkəti mümkün olması üçün təsdiqi sənədləşdirin
+     dəlillərlə 🈺/🈴-a qayıdın.
+3. **Sənəd/yol xəritəsi yeniləmələri (10 dəqiqə)**
+   - DOCS-SORA portal işinin statusu, Try-It proksisi və SoraFS nəşri
+     hazırlıq.
+   - Cari buraxılış qatarları üçün lazım olan sənəd borcunu və ya rəyçiləri vurğulayın.
+4. **SDK məqamları (10 dəq)**
+   - Android AND5/AND7 sənəd hazırlığı, Swift IOS5 pariteti, JS GA tərəqqi.
+   - Sənədlərə təsir edəcək paylaşılan qurğuları və ya sxem fərqlərini çəkin.
+5. **Fəaliyyətə baxış və dayanacaq (5 dəq)**
+   - Əvvəlki sinxronizasiyadan açıq elementlərə yenidən baxın; bağlanmasını təsdiqləyin.
+   - Açıq sahibləri və son tarixləri ilə qeydlər faylında yeni hərəkətləri qeyd edin.
 
-## Localization Staffing Review Template
+## Lokallaşdırma Kadrlarının İcmal Şablonu
 
-Include the following table in each month’s minutes:
+Aşağıdakı cədvəli hər ayın protokoluna daxil edin:
 
-| Locale | Capacity (FTE) | Commitments & POs | Risks / Escalations | Decision & Owner |
+| Yerli | Tutum (FTE) | Öhdəliklər və PO-lar | Risklər / Eskalasiyalar | Qərar və Sahib |
 |--------|----------------|-------------------|---------------------|------------------|
-| JP | e.g., 0.5 contractor + 0.1 Docs backup | PO `DOCS-L10N-4901` (awaiting signature) | “Contract not signed by 2026-03-04” | “Escalate to Product Ops — @docs-devrel, due 2026-03-02” |
-| HE | e.g., 0.1 Docs engineer | Rotation enters PTO 2026-03-18 | “Need backup reviewer” | “@docs-lead to identify backup by 2026-03-05” |
+| JP | məsələn, 0,5 podratçı + 0,1 Sənəd ehtiyat nüsxəsi | PO `DOCS-L10N-4901` (imza gözləyir) | “Müqavilə 2026-03-04 tarixində imzalanmamışdır” | “Məhsul əməliyyatlarına yüksəldin — @docs-devrel, 2026-03-02 tarixinə qədər” |
+| HE | məsələn, 0.1 Sənəd mühəndisi | Rotasiya PTO-ya daxil olur 2026-03-18 | “Yedək rəyçi lazımdır” | “@docs-lead 2026-03-05 tarixinədək ehtiyat nüsxəsini müəyyən etməyə imkan verir” |
 
-Also log a short narrative covering:
+Həm də əhatə edən qısa hekayəni qeyd edin:
 
-- **SLA outlook:** Any doc expected to miss the five-business-day SLA and the
-  mitigation (swap priority, enlist backup vendor, etc.).
-- **Ticket & asset health:** Outstanding entries in
-  `docs/source/sdk/android/i18n_requests/` and whether screenshots/assets are
-  ready for translators.
+- **SLA proqnozu:** Hər hansı bir sənədin beş iş günü SLA və
+  azaldılması (mübadilə prioriteti, ehtiyat nüsxə satıcısını cəlb etmək və s.).
+- **Bilet və aktivlərin sağlamlığı:** Görkəmli girişlər
+  `docs/source/sdk/android/i18n_requests/` və ekran görüntülərinin/aktivlərin olub-olmaması
+  tərcüməçilər üçün hazırdır.
 
-### Localization Staffing Review Logging
+### Lokallaşdırma İşçilərinin Baxış Qeydi
 
-- **Minutes:** Copy the staffing table + narrative into
-  `docs/source/docs_devrel/minutes/<yyyy-mm>.md` (all locales mirror the
-  English minutes via localized files under the same directory). Link the entry
-  back to the agenda (`docs/source/docs_devrel/monthly_sync_agenda.md`) so
-  governance can trace evidence.
-- **i18n plan:** Update the staffing decision log and translation status table
-  in `docs/source/sdk/android/i18n_plan.md` immediately after the meeting.
-- **Status:** When staffing decisions affect roadmap gates, add a short entry in
-  `status.md` (Docs/DevRel section) referencing the minute file and i18n plan
-  update.
+- **Dəqiqələr:** Ştat cədvəlini + hekayəni kopyalayın
+  `docs/source/docs_devrel/minutes/<yyyy-mm>.md` (bütün yerlilər
+  Eyni qovluq altında lokallaşdırılmış fayllar vasitəsilə ingilis dili dəqiqələri). Girişi əlaqələndirin
+  yenidən gündəmə (`docs/source/docs_devrel/monthly_sync_agenda.md`) belə
+  idarəetmə sübutları izləyə bilər.
+- **i18n planı:** Kadr qərarları jurnalını və tərcümə statusu cədvəlini yeniləyin
+  görüşdən dərhal sonra `docs/source/sdk/android/i18n_plan.md`-də.
+- **Status:** Kadr qərarları yol xəritəsi qapılarına təsir etdikdə, qısa bir giriş əlavə edin
+  Dəqiqə faylına və i18n planına istinad edən `status.md` (Sənədlər/DevRel bölməsi)
+  yeniləmə.
 
-## Minutes Template
+## Dəqiqə Şablonu
 
-Copy this skeleton into `docs/source/docs_devrel/minutes/<yyyy-mm>.md`:
+Bu skeleti `docs/source/docs_devrel/minutes/<yyyy-mm>.md`-ə kopyalayın:
 
 ```markdown
 <!-- SPDX-License-Identifier: Apache-2.0 -->
@@ -125,22 +124,20 @@ Copy this skeleton into `docs/source/docs_devrel/minutes/<yyyy-mm>.md`:
 | Item | Owner | Due | Notes |
 |------|-------|-----|-------|
 | JP contractor PO follow-up | @docs-devrel-manager | 2026-03-02 | Example entry |
-```
+```Görüşdən dərhal sonra qeydləri PR vasitəsilə dərc edin və onları `status.md`-dən əlaqələndirin
+risk və ya kadr qərarlarına istinad edərkən.
 
-Publish the notes via PR soon after the meeting and link them from `status.md`
-when referencing risk or staffing decisions.
+## Təqib Gözləntiləri
 
-## Follow-Up Expectations
+1. **Təqdim olunan dəqiqələr:** 24 saat ərzində (`docs/source/docs_devrel/minutes/`).
+2. **i18n planı yeniləndi:** kadr jurnalını və tərcümə cədvəlini uyğunlaşdırın
+   yeni öhdəlikləri və ya eskalasiyaları əks etdirir.
+3. **Status.md girişi:** yol xəritəsini saxlamaq üçün yüksək riskli qərarları ümumiləşdirin
+   sinxronizasiyada.
+4. **Ekkalasiyalar təqdim edildi:** baxış eskalasiya tələb etdikdə, yaradın/yeniləyin
+   müvafiq bilet (məsələn, Məhsul Əməliyyatları, Maliyyə təsdiqi, satıcının işə qəbulu)
+   və həm dəqiqələrdə, həm də i18n planında istinad edin.
 
-1. **Minutes committed:** within 24 hours (`docs/source/docs_devrel/minutes/`).
-2. **i18n plan updated:** adjust the staffing log and translation table to
-   reflect new commitments or escalations.
-3. **Status.md entry:** summarize any high-risk decisions to keep the roadmap
-   in sync.
-4. **Escalations filed:** when the review calls for escalation, create/refresh
-   the relevant ticket (e.g., Product Ops, Finance approval, vendor onboarding)
-   and reference it in both the minutes and the i18n plan.
-
-By following this agenda, the roadmap requirement to include localization
-staffing reviews in the Docs/DevRel monthly sync stays auditable, and downstream
-teams always know where to find the evidence.
+Bu gündəmi təqib edərək, yol xəritəsinin yerliləşdirmə tələbini ehtiva edir
+Sənədlər/DevRel aylıq sinxronizasiyada kadr icmalı yoxlanıla və aşağı axın olaraq qalır
+komandalar həmişə sübutları haradan tapacaqlarını bilirlər.

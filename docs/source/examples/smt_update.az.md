@@ -7,51 +7,50 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 788902cfafc6c7db6d52d4237b46ffe78193efd57852bc3427a16d7f3cda2f9c
 source_last_modified: "2025-12-29T18:16:35.954370+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Sparse Merkle Update Example
+# Seyrək Merkle Yeniləmə Nümunəsi
 
-This worked example illustrates how the FASTPQ Stage 2 trace encodes a
-non-membership witness using the `neighbour_leaf` column. The sparse Merkle tree
-is binary over Poseidon2 field elements. Keys are converted to canonical
-32-byte little-endian strings, hashed to a field element, and the most
+Bu işlənmiş nümunə FASTPQ Mərhələ 2 izinin necə kodladığını göstərir a
+`neighbour_leaf` sütunundan istifadə edərək üzv olmayan şahid. Seyrək Merkle ağacı
+Poseidon2 sahə elementləri üzərində binardır. Açarlar kanonikə çevrilir
+32 baytlıq kiçik endian sətirlər, sahə elementinə hashed və ən çoxu
 significant bits select the branch at each level.
 
-## Scenario
+## Ssenari
 
-- Pre-state leaves
-  - `asset::alice::rose` -> hashed key `0x12b7...` with value `0x0000_0000_0000_0005`.
-  - `asset::bob::rose`   -> hashed key `0x1321...` with value `0x0000_0000_0000_0003`.
-- Update request: insert `asset::carol::rose` with value 2.
-- The canonical key hash for Carol expands to the 5-bit prefix `0b01011`. The
-  existing neighbours have prefixes `0b01010` (Alice) and `0b01101` (Bob).
+- Əvvəlcədən yarpaqlar
+  - `asset::alice::rose` -> `0x0000_0000_0000_0005` dəyəri ilə hashed açarı `0x12b7...`.
+  - `asset::bob::rose` -> `0x0000_0000_0000_0003` dəyəri ilə hashed açarı `0x1321...`.
+- Yeniləmə sorğusu: 2 dəyəri ilə `asset::carol::rose` daxil edin.
+- Carol üçün kanonik açar hash 5 bitlik `0b01011` prefiksinə qədər genişlənir. The
+  mövcud qonşuların `0b01010` (Alice) və `0b01101` (Bob) prefiksləri var.
 
-Because there is no leaf whose prefix matches `0b01011`, the prover must provide
-additional evidence that the interval `(alice, bob)` is empty. Stage 2 populates
-the trace row across the columns `path_bit_{level}`, `sibling_{level}`,
-`node_in_{level}`, and `node_out_{level}` (with `level` in `[0, 31]`). All values
-are Poseidon2 field elements encoded in little-endian form:
+Prefiksi `0b01011` ilə uyğun gələn heç bir yarpaq olmadığı üçün prover təmin etməlidir.
+`(alice, bob)` intervalının boş olduğuna dair əlavə sübut. Mərhələ 2 doldurulur
+`path_bit_{level}`, `sibling_{level}` sütunları arasında izləmə sırası,
+`node_in_{level}` və `node_out_{level}` (`level` ilə `[0, 31]`). Bütün dəyərlər
+kiçik endian formasında kodlanmış Poseidon2 sahə elementləridir:
 
-| level | `path_bit_level` | `sibling_level`             | `node_in_level`                      | `node_out_level`                     | Notes |
-| ----- | ---------------- | --------------------------- | ------------------------------------ | ------------------------------------ | ----- |
-| 0 | 1             | `0x241f...` (Alice leaf hash) | `0x0000...`                          | `0x4b12...` (`value_2 = 2`)          | Insert: start from zero, store new value. |
-| 1 | 1             | `0x7d45...` (empty right)     | Poseidon2(`node_out_0`, `sibling_0`) | Poseidon2(`sibling_1`, `node_out_1`) | Follow prefix bit 1. |
-| 2 | 0             | `0x03ae...` (Bob branch)      | Poseidon2(`node_out_1`, `sibling_1`) | Poseidon2(`node_in_2`, `sibling_2`)  | Branch flips because bit = 0. |
-| 3 | 1             | `0x9bc4...`                   | Poseidon2(`node_out_2`, `sibling_2`) | Poseidon2(`sibling_3`, `node_out_3`) | Higher levels continue hashing upward. |
-| 4 | 0             | `0xe112...`                   | Poseidon2(`node_out_3`, `sibling_3`) | Poseidon2(`node_in_4`, `sibling_4`)  | Root level; result is the post-state root. |
+| səviyyə | `path_bit_level` | `sibling_level` | `node_in_level` | `node_out_level` | Qeydlər |
+| ----- | ---------------- | ----------------------------------- | ----------------------------------- | ----------------------------------- | ----- |
+| 0 | 1 | `0x241f...` (Alice yarpağı hash) | `0x0000...` | `0x4b12...` (`value_2 = 2`) | Daxil edin: sıfırdan başlayın, yeni dəyəri saxlayın. |
+| 1 | 1 | `0x7d45...` (boş sağ) | Poseidon2(`node_out_0`, `sibling_0`) | Poseidon2(`sibling_1`, `node_out_1`) | Prefiks bit 1-i izləyin. |
+| 2 | 0 | `0x03ae...` (Bob filialı) | Poseidon2(`node_out_1`, `sibling_1`) | Poseidon2(`node_in_2`, `sibling_2`) | Filial fırlanır, çünki bit = 0. |
+| 3 | 1 | `0x9bc4...` | Poseidon2(`node_out_2`, `sibling_2`) | Poseidon2(`sibling_3`, `node_out_3`) | Daha yüksək səviyyələr yuxarıya doğru hashing davam edir. |
+| 4 | 0 | `0xe112...` | Poseidon2(`node_out_3`, `sibling_3`) | Poseidon2(`node_in_4`, `sibling_4`) | Kök səviyyəsi; nəticə post-dövlət köküdür. |
 
-The `neighbour_leaf` column for this row is populated with Bob's leaf
-(`key = 0x1321...`, `value = 3`, `hash = Poseidon2(key, value) = 0x03ae...`). When
-verifying, the AIR checks that:
+Bu sıra üçün `neighbour_leaf` sütunu Bob yarpağı ilə doldurulub
+(`key = 0x1321...`, `value = 3`, `hash = Poseidon2(key, value) = 0x03ae...`). Nə vaxt
+yoxlayaraq, AIR aşağıdakıları yoxlayır:
 
-1. The supplied neighbour corresponds to the sibling used at level 2.
-2. The neighbour key is lexicographically greater than the inserted key and the
-   left sibling (Alice) is lexicographically smaller.
-3. Replacing the inserted leaf with the neighbour reproduces the pre-state root.
-
-Together these checks prove that no leaf existed for the interval `(0b01010,
-0b01101)` before the update. Implementations generating FASTPQ traces can use
-this layout verbatim; the numerical constants above are illustrative. For a full
-JSON witness, emit the columns exactly as they appear in the table above (with
-numeric suffixes per level), using little-endian byte strings serialized with
-Norito JSON helpers.
+1. Təchiz edilən qonşu 2-ci səviyyədə istifadə edilən bacı-qardaşa uyğun gəlir.
+2. Qonşu açar leksikoqrafik cəhətdən daxil edilmiş açardan və açardan böyükdür
+   sol bacı (Alice) leksikoqrafik cəhətdən daha kiçikdir.
+3. Daxil edilmiş yarpağı qonşu ilə əvəz etmək əvvəlcədən dövlət kökünü çoxaldır.Bu yoxlamalar birlikdə sübut edir ki, `(0b01010,) intervalı üçün heç bir yarpaq mövcud deyil.
+0b01101)` yeniləmədən əvvəl. FASTPQ izlərini yaradan tətbiqlər istifadə edə bilər
+bu layout sözbəsöz; yuxarıdakı ədədi sabitlər illüstrativdir. Tam üçün
+JSON şahidi, sütunları yuxarıdakı cədvəldə göründüyü kimi buraxın (ile
+ilə seriallaşdırılmış kiçik endian bayt sətirlərindən istifadə edərək, hər səviyyə üçün rəqəmli şəkilçilər
+Norito JSON köməkçiləri.

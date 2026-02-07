@@ -10,6 +10,7 @@ translation_last_reviewed: 2026-02-07
 title: Ministry Transparency Report — 2026 Q3 (Template)
 summary: Scaffold for the MINFO-8 quarterly transparency packet; replace all tokens before publication.
 quarter: 2026-Q3
+translator: machine-google-reviewed
 ---
 
 <!--
@@ -19,126 +20,124 @@ quarter: 2026-Q3
     3. Attach supporting artefacts (data appendix, CSVs, manifest, Grafana export) under artifacts/ministry/transparency/<YYYY-Q>/.
 -->
 
-# Executive Summary
+# İcra Xülasəsi
 
-> Provide a one-paragraph summary of moderation accuracy, appeal outcomes, denylist churn, and treasury highlights. Mention whether release met the T+14 deadline.
+> Moderasiyanın dəqiqliyi, müraciətin nəticələri, rədd cavabı və xəzinədarlıq məqamlarının bir paraqrafdan ibarət xülasəsini təqdim edin. Buraxılışın T+14 son tarixinə uyğun olub-olmadığını qeyd edin.
 
-## Quarter in Review
+## Rüb Baxılır
 
-### Highlights
+### Əsas məqamlar
 - {{HIGHLIGHT_1}}
 - {{HIGHLIGHT_2}}
 - {{HIGHLIGHT_3}}
 
-### Risks & Mitigations
+### Risklər və azaldılması
 
-| Risk | Impact | Mitigation | Owner | Status |
+| Risk | Təsir | Azaldılması | Sahibi | Status |
 |------|--------|------------|-------|--------|
-| {{RISK_1}} | {{Impact}} | {{Mitigation}} | {{Owner}} | {{Status}} |
-| {{RISK_2}} | {{Impact}} | {{Mitigation}} | {{Owner}} | {{Status}} |
+| {{RISK_1}} | {{Təsir}} | {{Yunaltma}} | {{Sahibi}} | {{Status}} |
+| {{RISK_2}} | {{Təsir}} | {{Yunaltma}} | {{Sahibi}} | {{Status}} |
 
-## Metrics Overview
+## Metriklərə İcmal
 
-All metrics originate from `ministry_transparency_builder` (Norito bundle) after the DP sanitizer runs. Attach corresponding CSV slices referenced below.
+Bütün ölçülər DP dezinfeksiyaedicisi işlədikdən sonra `ministry_transparency_builder` (Norito paketi) əsasında yaranır. Aşağıda istinad edilən müvafiq CSV dilimlərini əlavə edin.
 
-### AI Moderation Accuracy
+### AI Moderasiya Dəqiqliyi
 
-| Model Profile | Region | FP Rate (Target) | FN Rate (Target) | Drift vs Calibration | Sample Size | Notes |
-|---------------|--------|------------------|------------------|----------------------|-------------|-------|
-| {{profile}} | {{region}} | {{fp_rate}} ({{fp_target}}) | {{fn_rate}} ({{fn_target}}) | {{drift}} | {{samples}} | {{notes}} |
+| Model Profili | Region | FP Rate (Hədəf) | FN Rate (Hədəf) | Drift vs Kalibrləmə | Nümunə Ölçüsü | Qeydlər |
+|-------------|--------|------------------|------------------|----------------------|-------------|-------|
+| {{profil}} | {{region}} | {{fp_rate}} ({{fp_target}}) | {{fn_rate}} ({{fn_target}}) | {{drift}} | {{nümunələr}} | {{qeydlər}} |
 
-### Appeals & Panel Activity
+### Apellyasiya və Panel Fəaliyyəti
 
-| Metric | Value | SLA Target | Trend vs Q-1 | Notes |
+| Metrik | Dəyər | SLA Hədəfi | Trend vs Q-1 | Qeydlər |
 |--------|-------|------------|--------------|-------|
-| Appeals received | {{appeals_received}} | {{sla}} | {{delta}} | {{notes}} |
-| Median resolution time | {{median_resolution}} | {{sla}} | {{delta}} | {{notes}} |
-| Reversal rate | {{reversal_rate}} | {{target}} | {{delta}} | {{notes}} |
-| Panel utilization | {{panel_utilization}} | {{target}} | {{delta}} | {{notes}} |
+| Qəbul edilən müraciətlər | {{müraciətlər_qəbul edildi}} | {{sla}} | {{delta}} | {{qeydlər}} |
+| Median həlletmə vaxtı | {{median_qətnamə}} | {{sla}} | {{delta}} | {{qeydlər}} |
+| Geri dönüş dərəcəsi | {{reversal_rate}} | {{hədəf}} | {{delta}} | {{qeydlər}} |
+| Paneldən istifadə | {{panel_istifadəsi}} | {{hədəf}} | {{delta}} | {{qeydlər}} |
 
-### Denylist & Emergency Canon
+### İnkarçı və Təcili Canon
 
-| Metric | Count | DP Noise (ε) | Emergency Flags | TTL Compliance | Notes |
+| Metrik | Say | DP Səs-küy (ε) | Fövqəladə Bayraqlar | TTL Uyğunluğu | Qeydlər |
 |--------|-------|--------------|-----------------|----------------|-------|
-| Hash additions | {{additions}} | {{epsilon_counts}} | {{flags}} | {{ttl_status}} | {{notes}} |
-| Hash removals | {{removals}} | {{epsilon_counts}} | {{flags}} | {{ttl_status}} | {{notes}} |
-| Canon invocations | {{canon_invocations}} | n/a | {{flags}} | {{ttl_status}} | {{notes}} |
+| Hash əlavələri | {{əlavələr}} | {{epsilon_counts}} | {{bayraqlar}} | {{ttl_status}} | {{qeydlər}} |
+| Hash çıxarılması | {{çıxarılmalar}} | {{epsilon_counts}} | {{bayraqlar}} | {{ttl_status}} | {{qeydlər}} |
+| Canon çağırışları | {{canon_invocations}} | yox | {{bayraqlar}} | {{ttl_status}} | {{qeydlər}} |
 
-### Treasury Movements
+### Xəzinədarlıq Hərəkətləri
 
-| Flow | Amount (MINFO) | Source Reference | Notes |
-|------|----------------|------------------|-------|
-| Appeal deposits | {{amount}} | {{tx_ref}} | {{notes}} |
-| Panel rewards | {{amount}} | {{tx_ref}} | {{notes}} |
-| Operational spend | {{amount}} | {{tx_ref}} | {{notes}} |
+| Axın | Məbləğ (MINFO) | Mənbəyə istinad | Qeydlər |
+|------|----------------|-----------------|-------|
+| Əmanətlərə müraciət edin | {{miqdar}} | {{tx_ref}} | {{qeydlər}} |
+| Panel mükafatları | {{miqdar}} | {{tx_ref}} | {{qeydlər}} |
+| Əməliyyat xərcləri | {{miqdar}} | {{tx_ref}} | {{qeydlər}} |
 
-### Volunteer & Outreach Signals
+### Könüllülər və Yardım İşarələri
 
-| Metric | Value | Target | Notes |
+| Metrik | Dəyər | Hədəf | Qeydlər |
 |--------|-------|--------|-------|
-| Volunteer briefs published | {{value}} | {{target}} | {{notes}} |
-| Languages covered | {{value}} | {{target}} | {{notes}} |
-| Governance workshops hosted | {{value}} | {{target}} | {{notes}} |
+| Könüllülərin brifinqləri dərc olunub | {{dəyər}} | {{hədəf}} | {{qeydlər}} |
+| Əhatə olunan dillər | {{dəyər}} | {{hədəf}} | {{qeydlər}} |
+| İdarəetmə seminarları keçirilib | {{dəyər}} | {{hədəf}} | {{qeydlər}} |
 
-## Differential Privacy & Sanitization
+## Diferensial Məxfilik və Sanitizasiya
 
-Summarise the sanitizer run and include the RNG commitment.
+Dezinfeksiyaedicinin işini yekunlaşdırın və RNG öhdəliyini daxil edin.
 
-- Sanitizer job: `{{CI_JOB_URL}}`
-- DP parameters: ε = {{epsilon_total}}, δ = {{delta_total}}
-- RNG commitment: `{{blake3_seed_commitment}}`
-- Buckets suppressed: {{suppressed_buckets}}
-- QA reviewer: {{reviewer}}
+- Təmizləyici işi: `{{CI_JOB_URL}}`
+- DP parametrləri: ε={{epsilon_total}}, δ={{delta_total}}
+- RNG öhdəliyi: `{{blake3_seed_commitment}}`
+- Sızdırılan vedrələr: {{suppressed_buckets}}
+- QA rəyçisi: {{rəyçi}}
 
-Attach `artifacts/ministry/transparency/{{Quarter}}/dp_report.json` and note any manual interventions.
+`artifacts/ministry/transparency/{{Quarter}}/dp_report.json` əlavə edin və hər hansı əl müdaxilələrini qeyd edin.## Məlumat Qoşmaları
 
-## Data Attachments
-
-| Artefact | Path | SHA-256 | Uploaded to SoraFS? | Notes |
+| Artefakt | Yol | SHA-256 | SoraFS-ə yükləndiniz? | Qeydlər |
 |----------|------|---------|---------------------|-------|
-| Summary PDF | `artifacts/ministry/transparency/{{Quarter}}/summary.pdf` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Norito data appendix | `artifacts/ministry/transparency/{{Quarter}}/data/appendix.norito` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Metrics CSV bundle | `artifacts/ministry/transparency/{{Quarter}}/data/csv/` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Grafana export | `dashboards/grafana/ministry_transparency_overview.json` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Alert rules | `dashboards/alerts/ministry_transparency_rules.yml` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Provenance manifest | `artifacts/ministry/transparency/{{Quarter}}/manifest.json` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Manifest signature | `artifacts/ministry/transparency/{{Quarter}}/manifest.json.sig` | {{hash}} | {{Yes/No}} | {{notes}} |
+| Xülasə PDF | `artifacts/ministry/transparency/{{Quarter}}/summary.pdf` | {{hash}} | {{Bəli/Xeyr}} | {{qeydlər}} |
+| Norito məlumat əlavəsi | `artifacts/ministry/transparency/{{Quarter}}/data/appendix.norito` | {{hash}} | {{Bəli/Xeyr}} | {{qeydlər}} |
+| Metrik CSV paketi | `artifacts/ministry/transparency/{{Quarter}}/data/csv/` | {{hash}} | {{Bəli/Xeyr}} | {{qeydlər}} |
+| Grafana ixrac | `dashboards/grafana/ministry_transparency_overview.json` | {{hash}} | {{Bəli/Xeyr}} | {{qeydlər}} |
+| Xəbərdarlıq qaydaları | `dashboards/alerts/ministry_transparency_rules.yml` | {{hash}} | {{Bəli/Xeyr}} | {{qeydlər}} |
+| Mənşə manifest | `artifacts/ministry/transparency/{{Quarter}}/manifest.json` | {{hash}} | {{Bəli/Xeyr}} | {{qeydlər}} |
+| Manifest imzası | `artifacts/ministry/transparency/{{Quarter}}/manifest.json.sig` | {{hash}} | {{Bəli/Xeyr}} | {{qeydlər}} |
 
-## Publication Metadata
+## Nəşr metadatası
 
-| Field | Value |
+| Sahə | Dəyər |
 |-------|-------|
-| Release quarter | {{Quarter}} |
-| Release timestamp (UTC) | {{timestamp}} |
+| Buraxılış rübü | {{Rüb}} |
+| Buraxılış vaxt damğası (UTC) | {{zaman damgası}} |
 | SoraFS CID | `{{cid}}` |
-| Governance vote ID | {{vote_id}} |
-| Manifest digest (`blake2b`) | `{{manifest_digest}}` |
+| İdarəetmə səs nömrəsi | {{vote_id}} |
+| Manifest həzm (`blake2b`) | `{{manifest_digest}}` |
 | Git commit / tag | `{{git_rev}}` |
-| Release owner | {{owner}} |
+| Sahibini buraxın | {{sahibi}} |
 
-## Approvals
+## Təsdiqlər
 
-| Role | Name | Decision | Timestamp | Notes |
+| Rol | Adı | Qərar | Vaxt möhürü | Qeydlər |
 |------|------|----------|-----------|-------|
-| Ministry Observability TL | {{name}} | ✅/⚠️ | {{timestamp}} | {{notes}} |
-| Governance Council Liaison | {{name}} | ✅/⚠️ | {{timestamp}} | {{notes}} |
-| Docs/Comms Lead | {{name}} | ✅/⚠️ | {{timestamp}} | {{notes}} |
+| Nazirliyin Müşahidə Edilməsi TL | {{name}} | ✅/⚠️ | {{zaman damgası}} | {{qeydlər}} |
+| İdarəetmə Şurası ilə Əlaqə | {{name}} | ✅/⚠️ | {{zaman damgası}} | {{qeydlər}} |
+| Sənədlər/Comms Rəhbəri | {{name}} | ✅/⚠️ | {{zaman damgası}} | {{qeydlər}} |
 
-## Changelog & Follow-Ups
+## Dəyişikliklər və İzləmələr
 
 - {{CHANGELOG_ITEM_1}}
 - {{CHANGELOG_ITEM_2}}
 
-### Open Action Items
+### Fəaliyyət elementlərini açın
 
-| Item | Owner | Due | Status | Notes |
+| Maddə | Sahibi | Vaxtı | Status | Qeydlər |
 |------|-------|-----|--------|-------|
-| {{Action}} | {{Owner}} | {{Due}} | {{Status}} | {{Notes}} |
+| {{Fəaliyyət}} | {{Sahibi}} | {{Müddət}} | {{Status}} | {{Qeydlər}} |
 
-### Contact
+### Əlaqə
 
-- Primary contact: {{contact_name}} (`{{chat_handle}}`)
-- Escalation path: {{escalation_details}}
-- Distribution list: {{mailing_list}}
+- Əsas əlaqə: {{contact_name}} (`{{chat_handle}}`)
+- Eskalasiya yolu: {{escalation_details}}
+- Paylanma siyahısı: {{mailing_list}}
 
-_Template version: 2026-03-25. Update the revision date when making structural changes._
+_Şablon versiyası: 2026-03-25. Struktur dəyişiklikləri edərkən təftiş tarixini yeniləyin._

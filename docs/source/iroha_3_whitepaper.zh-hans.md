@@ -7,110 +7,107 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 07e149429887b0dfc38cf0619552cbefcbae4dd1ec9fe9e9d47a05371ed08f29
 source_last_modified: "2025-12-29T18:16:35.968351+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Iroha v3.0 (Nexus Preview)
+# Iroha v3.0（Nexus 预览版）
 
-This document captures the forward-looking Hyperledger Iroha v3 architecture, focusing on the multi-lane
-pipeline, Nexus data spaces, and the Asset Exchange Toolkit (AXT). It complements the Iroha v2 whitepaper by
-describing upcoming capabilities that are actively under development.
+本文档捕捉了前瞻性的 Hyperledger Iroha v3 架构，重点关注多通道
+管道、Nexus 数据空间和资产交换工具包 (AXT)。它补充了 Iroha v2 白皮书：
+描述正在积极开发的即将推出的功能。
 
 ---
 
-## 1. Overview
+## 1. 概述
 
-Iroha v3 extends the deterministic foundation of v2 with horizontal scalability and richer cross-domain
-workflows. The release, codenamed **Nexus**, introduces:
+Iroha v3 通过水平可扩展性和更丰富的跨域扩展了 v2 的确定性基础
+工作流程。该版本的代号为**Nexus**，介绍了：
 
-- A single, globally shared network called **SORA Nexus**. All Iroha v3 peers participate in this universal
-  ledger rather than operating isolated deployments. Organisations join by registering their own data spaces,
-  which remain isolated for policy and privacy while anchoring into the common ledger.
-- A shared codebase: the same repository builds both Iroha v2 (self-hosted networks) and Iroha v3 (SORA Nexus).
-  Configuration selects the target mode so operators can adopt Nexus features without switching software
-  stacks. The Iroha Virtual Machine (IVM) is identical across both releases, so Kotodama contracts and bytecode
-  artefacts run seamlessly on self-hosted networks and the global Nexus ledger.
-- Multi-lane block production to process independent workloads in parallel.
-- Data spaces (DS) that isolate execution environments while remaining composable through on-chain anchors.
-- The Asset Exchange Toolkit (AXT) for atomic, cross-space value transfers and contract-controlled swaps.
-- Enhanced reliability through Reliable Broadcast Commit (RBC) lanes, deterministic deadlines, and proof
-  sampling budgets.
+- 名为 **SORA Nexus** 的单一全球共享网络。所有 Iroha v3 对等体都参与此通用
+  分类账而不是操作孤立的部署。组织通过注册自己的数据空间加入，
+  它们在政策和隐私方面保持隔离，同时锚定到公共分类账中。
+- 共享代码库：同一存储库构建 Iroha v2（自托管网络）和 Iroha v3 (SORA Nexus)。
+  配置选择目标模式，以便运营商无需切换软件即可采用 Nexus 功能
+  堆栈。 Iroha 虚拟机 (IVM) 在两个版本中都是相同的，因此 Kotodama 合约和字节码
+  artefacts 在自托管网络和全球 Nexus 账本上无缝运行。
+- 多通道块生产可并行处理独立的工作负载。
+- 数据空间（DS），隔离执行环境，同时通过链上锚保持可组合性。
+- 用于原子、跨空间价值转移和合约控制交换的资产交换工具包（AXT）。
+- 通过可靠广播提交 (RBC) 通道、确定性截止日期和证明增强可靠性
+  抽样预算。
 
-These features remain under active development; APIs and layouts may evolve before the v3 general
-availability milestone. Refer to `nexus.md`, `nexus_transition_notes.md`, and `new_pipeline.md` for
-engineering-level detail.
+这些功能仍在积极开发中； API 和布局可能会在 v3 通用之前发展
+可用性里程碑。请参阅 `nexus.md`、`nexus_transition_notes.md` 和 `new_pipeline.md`
+工程级细节。
 
-## 2. Multi-lane architecture
+## 2. 多通道架构
 
-- **Scheduler:** The Nexus scheduler partitions work into lanes based on data space identifiers and
-  composability groups. Lanes execute in parallel while preserving deterministic ordering guarantees within
-  each lane.
-- **Lane groups:** Related data spaces share a `LaneGroupId`, enabling coordinated execution for workflows that
-  span multiple components (e.g., a CBDC DS and its payment dApp DS).
-- **Deadlines:** Each lane tracks deterministic deadlines (block, proof, data-availability) to guarantee
-  progress and bounded resource usage.
-- **Telemetry:** Lane-level metrics expose throughput, queue depth, deadline violations, and bandwidth usage.
-  CI scripts assert the presence of these counters to keep dashboards aligned with the scheduler.
+- **调度程序：** Nexus 调度程序根据数据空间标识符将工作划分为通道
+  可组合性组。通道并行执行，同时保留确定性的排序保证
+  每个车道。
+- **通道组：** 相关数据空间共享 `LaneGroupId`，从而能够协调执行以下工作流程
+  跨越多个组件（例如，CBDC DS 及其支付 dApp DS）。
+- **截止日期：** 每个通道都会跟踪确定的截止日期（区块、证明、数据可用性）以保证
+  进度和有限的资源使用。
+- **遥测：** 通道级指标显示吞吐量、队列深度、截止时间违规和带宽使用情况。
+  CI 脚本断言这些计数器的存在，以使仪表板与调度程序保持一致。
 
-## 3. Data spaces (Nexus)
+## 3. 数据空间 (Nexus)- **隔离：** 每个数据空间都维护自己的共识通道、世界状态段和 Kura 存储。这个
+  支持隐私域，同时通过锚点保持全局 SORA Nexus 账本的一致性。
+- **锚点：** 定期提交会生成总结 DS 状态的锚点工件（Merkle 根、证明、
+  承诺）并将其发布到全球通道以进行审计。
+- **通道组和可组合性：** 数据空间可以声明允许原子 AXT 的可组合性组
+  经批准的参与者之间的交易。治理控制成员变更和激活时期。
+- **纠删码存储：** Kura和WSV快照采用纠删码参数`(k, m)`来扩展数据
+  可用性而不牺牲确定性。恢复例程确定性地恢复丢失的片段。
 
-- **Isolation:** Each data space maintains its own consensus lane, world state segment, and Kura storage. This
-  supports privacy domains while keeping the global SORA Nexus ledger coherent through anchors.
-- **Anchors:** Regular commits produce anchor artifacts that summarise the DS state (Merkle roots, proofs,
-  commitments) and publish them to the global lane for auditability.
-- **Lane groups and composability:** Data spaces may declare composability groups that permit atomic AXT
-  transactions across approved participants. Governance controls membership changes and activation epochs.
-- **Erasure-coded storage:** Kura and WSV snapshots adopt erasure coding parameters `(k, m)` to scale data
-  availability without sacrificing determinism. Recovery routines restore missing fragments deterministically.
+## 4.资产交换工具包（AXT）
 
-## 4. Asset Exchange Toolkit (AXT)
+- **描述符和绑定：** 客户端构造确定性 AXT 描述符。 `axt_binding` 哈希锚点
+  描述符到各个信封，防止重播并确保共识参与者逐字节验证
+  字节 Norito 有效负载。
+- **系统调用：** IVM 公开 `AXT_BEGIN`、`AXT_TOUCH` 和 `AXT_COMMIT` 系统调用。合同声明其
+  每个数据空间的读/写集，允许主机跨通道强制执行原子性。
+- **句柄和纪元：** 钱包获取绑定到 `(dataspace_id, epoch_id, sub_nonce)` 的能力句柄。
+  并发确定性地使用冲突，当约束满足时返回规范的 `AxtTrap` 代码
+  违反了。
+- **策略执行：** 核心主机现在从 WSV 中的空间目录清单派生 AXT 策略快照，
+  强制执行清单根、目标通道、激活时代、子随机数和过期检查 (`current_slot >= expiry_slot`
+  中止），即使在最小的测试主机中也是如此。策略由数据空间 id 键入并根据通道目录构建，因此
+  句柄无法逃脱其发布通道或使用陈旧的清单。
+  - 拒绝原因是确定性的：未知的数据空间、明显的根不匹配、目标通道不匹配、
+    handle_era 低于清单激活，sub_nonce 低于策略底线，过期句柄，缺少触摸
+    句柄数据空间，或在需要时丢失证明。
+- **证明和截止日期：** 在活动窗口 Δ 期间，验证者收集证明、数据可用性样本、
+  并体现出来。如果未能按时完成，AXT 将会中止，并指导客户端重试。
+- **治理集成：** 策略模块定义哪些数据空间可以参与 AXT、速率限制
+  处理并发布审计员友好的清单，捕获承诺、无效因素和事件日志。
 
-- **Descriptor and binding:** Clients construct deterministic AXT descriptors. The `axt_binding` hash anchors
-  descriptors to individual envelopes, preventing replay and ensuring consensus participants validate byte-for-
-  byte Norito payloads.
-- **Syscalls:** The IVM exposes `AXT_BEGIN`, `AXT_TOUCH`, and `AXT_COMMIT` syscalls. Contracts declare their
-  read/write sets per data space, allowing the host to enforce atomicity across lanes.
-- **Handles and epochs:** Wallets obtain capability handles bound to `(dataspace_id, epoch_id, sub_nonce)`.
-  Concurrent uses conflict deterministically, returning canonical `AxtTrap` codes when constraints are
-  violated.
-- **Policy enforcement:** Core hosts now derive AXT policy snapshots from Space Directory manifests in WSV,
-  enforcing manifest root, target lane, activation-era, sub-nonce, and expiry checks (`current_slot >= expiry_slot`
-  aborts) even in minimal test hosts. Policies are keyed by dataspace id and built from the lane catalog so
-  handles cannot escape their issuing lane or use stale manifests.
-  - Rejection reasons are deterministic: unknown dataspace, manifest root mismatch, target lane mismatch,
-    handle_era below manifest activation, sub_nonce below the policy floor, expired handle, missing touch for
-    the handle dataspace, or missing proof when required.
-- **Proofs and deadlines:** During an active window Δ, validators collect proofs, data availability samples,
-  and manifests. Failure to meet deadlines aborts the AXT deterministically with guidance for client retries.
-- **Governance integration:** Policy modules define which data spaces can participate in AXT, rate-limit
-  handles, and publish auditor-friendly manifests capturing commitments, nullifiers, and event logs.
+## 5. 可靠广播提交 (RBC) 通道- **特定于通道的 DA：** RBC 通道镜像通道组，确保每个多通道管道都有专用数据
+  可用性保证。
+- **抽样预算：** 验证者遵循确定性抽样规则（`q_in_slot_per_ds`）来验证证明
+  并在没有中央协调的情况下见证材料。
+- **背压洞察：** Sumeragi 起搏器事件与 RBC 统计数据相关联，以诊断停滞通道
+  （参见 `scripts/sumeragi_backpressure_log_scraper.py`）。
 
-## 5. Reliable Broadcast Commit (RBC) lanes
+## 6. 操作和迁移
 
-- **Lane-specific DA:** RBC lanes mirror lane groups, ensuring each multi-lane pipeline has dedicated data
-  availability guarantees.
-- **Sampling budgets:** Validators follow deterministic sampling rules (`q_in_slot_per_ds`) to validate proofs
-  and witness material without central coordination.
-- **Backpressure insights:** Sumeragi pacemaker events correlate with RBC statistics to diagnose stalled lanes
-  (see `scripts/sumeragi_backpressure_log_scraper.py`).
+- **过渡计划：** `nexus_transition_notes.md` 概述了从单通道 (Iroha v2) 到
+  多通道 (Iroha v3)，包括遥测分段、配置门控和创世更新。
+- **通用网络：** SORA Nexus 对等点运行公共创世和治理堆栈。新运营商加入
+  创建数据空间 (DS) 并满足 Nexus 准入策略，而不是启动独立网络。
+- **配置：**新的配置旋钮涵盖通道预算、证明截止日期、AXT 配额和数据空间元数据。
+  默认值保持保守，直到操作员选择进入 Nexus 模式。
+- **测试：** 黄金测试捕获 AXT 描述符、通道清单和系统调用列表。集成测试
+  （`integration_tests/tests/repo.rs`、`crates/ivm/tests/axt_host_flow.rs`）练习端到端流程。
+- **工具：** `kagami` 获得 Nexus 感知创世生成，仪表板脚本验证通道吞吐量，
+  证明预算和红细胞健康状况。
 
-## 6. Operations and migration
+## 7. 路线图
 
-- **Transition plan:** `nexus_transition_notes.md` outlines phased migration from single-lane (Iroha v2) to
-  multi-lane (Iroha v3), including telemetry staging, config gating, and genesis updates.
-- **Universal network:** SORA Nexus peers run a common genesis and governance stack. New operators onboard by
-  creating a data space (DS) and satisfying Nexus admission policies instead of launching standalone networks.
-- **Configuration:** New config knobs cover lane budgets, proof deadlines, AXT quotas, and data-space metadata.
-  Defaults remain conservative until operators opt into Nexus mode.
-- **Testing:** Golden tests capture AXT descriptors, lane manifests, and syscall lists. Integration tests
-  (`integration_tests/tests/repo.rs`, `crates/ivm/tests/axt_host_flow.rs`) exercise end-to-end flows.
-- **Tooling:** `kagami` gains Nexus-aware genesis generation, and dashboard scripts validate lane throughput,
-  proof budgets, and RBC health.
+- **阶段 1：** 通过本地 AXT 支持和审核启用单域多通道执行。
+- **阶段 2：** 激活许可的跨域 AXT 的可组合性组并扩大遥测覆盖范围。
+- **第 3 阶段：** 推出完整的 Nexus 数据空间联合、纠删码存储和高级证明共享。
 
-## 7. Roadmap
-
-- **Phase 1:** Enable single-domain multi-lane execution with local AXT support and auditing.
-- **Phase 2:** Activate composability groups for permissioned cross-domain AXT and expand telemetry coverage.
-- **Phase 3:** Roll out full Nexus data-space federation, erasure-coded storage, and advanced proof sharing.
-
-Status updates live in `roadmap.md` and `status.md`. Contributions aligning with the Nexus design should follow
-the deterministic execution and governance policies established for v3.
+状态更新位于 `roadmap.md` 和 `status.md` 中。应遵循与 Nexus 设计一致的贡献
+为 v3 建立的确定性执行和治理策略。

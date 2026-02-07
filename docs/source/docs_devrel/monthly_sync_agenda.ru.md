@@ -6,103 +6,102 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: a2f89131efc0c79ddf63d71a25c04029014ba58393fb6336e676181322bc5066
 source_last_modified: "2026-01-03T18:08:00.500077+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Docs/DevRel Monthly Sync Agenda
+# План ежемесячной синхронизации документов/DevRel
 
-This agenda formalizes the monthly Docs/DevRel sync that is referenced across
-`roadmap.md` (see “Add localization staffing review to monthly Docs/DevRel
-sync”) and the Android AND5 i18n plan. Use it as the canonical checklist, and
-update it whenever roadmap deliverables add or retire agenda items.
+Эта программа формализует ежемесячную синхронизацию документов и DevRel, на которую ссылаются все
+`roadmap.md` (см. «Добавление проверки персонала по локализации в ежемесячные документы/DevRel»).
+sync») и план Android AND5 i18n. Используйте его в качестве канонического контрольного списка и
+обновляйте его всякий раз, когда в результатах дорожной карты добавляются или исключаются пункты повестки дня.
 
-## Cadence & Logistics
+## Каденция и логистика
 
-- **Frequency:** monthly (typically the second Thursday, 16:00 UTC)
-- **Duration:** 45 minutes + optional 15 minute hang-back for deep dives
-- **Location:** Zoom (`https://meet.sora.dev/docs-devrel-sync`) with shared
-  notes in HackMD or `docs/source/docs_devrel/minutes/<yyyy-mm>.md`
-- **Audience:** Docs/DevRel manager (chair), Docs engineers, localization
-  program manager, SDK DX TLs (Android, Swift, JS), Product Docs, Release
-  Engineering delegate, Support/QA observers
-- **Facilitator:** Docs/DevRel manager; appoint a rotating scribe who will
-  commit the minutes into the repo within 24 hours
+- **Периодичность:** ежемесячно (обычно второй четверг, 16:00 UTC).
+- **Продолжительность:** 45 минут + дополнительный 15-минутный отдых для глубоких погружений.
+- **Местоположение:** Zoom (`https://meet.sora.dev/docs-devrel-sync`) с общим
+  примечания в HackMD или `docs/source/docs_devrel/minutes/<yyyy-mm>.md`
+– **Аудитория:** Менеджер по документации/DevRel (председатель), инженеры по документации, локализация.
+  менеджер программы, SDK DX TL (Android, Swift, JS), документация по продукту, выпуск
+  Инженерный делегат, наблюдатели службы поддержки/QA
+- **Координатор:** Менеджер по документации/разработчикам; назначить сменного писца, который будет
+  зафиксируйте протоколы в репо в течение 24 часов
 
-## Pre-Work Checklist
+## Контрольный список перед работой
 
-| Owner | Task | Artefact |
+| Владелец | Задача | Артефакт |
 |-------|------|----------|
-| Scribe | Create the month’s notes file (`docs/source/docs_devrel/minutes/<yyyy-mm>.md`) using the template below. | Notes file |
-| Localization PM | Refresh `docs/source/sdk/android/i18n_plan.md#translation-status` and the staffing log; pre-fill proposed decisions. | i18n plan |
-| DX TLs | Run `ci/check_android_docs_i18n.sh` or `scripts/sync_docs_i18n.py --dry-run` and attach digests for discussion. | CI artefacts |
-| Docs tooling | Export `docs/i18n/manifest.json` digests + outstanding ticket list from `docs/source/sdk/android/i18n_requests/`. | Manifest & ticket summary |
-| Support/Release | Gather any escalations that require Docs/DevRel action (e.g., pending preview invites, blocking reviewer feedback). | Status.md or escalation doc |
+| Писец | Создайте файл заметок за месяц (`docs/source/docs_devrel/minutes/<yyyy-mm>.md`), используя шаблон ниже. | Файл заметок |
+| Локализация ПМ | Обновить `docs/source/sdk/android/i18n_plan.md#translation-status` и журнал штатного расписания; предварительно заполнить предлагаемые решения. | план i18n |
+| DX TL | Запустите `ci/check_android_docs_i18n.sh` или `scripts/sync_docs_i18n.py --dry-run` и прикрепите дайджесты для обсуждения. | Артефакты CI |
+| Инструменты Документы | Экспорт дайджеста `docs/i18n/manifest.json` + выдающийся список заявок от `docs/source/sdk/android/i18n_requests/`. | Сводка манифеста и билетов |
+| Поддержка/Выпуск | Соберите любые эскалации, требующие действий со стороны Документов и разработчиков (например, ожидающие приглашения на предварительный просмотр, блокирование отзывов рецензентов). | Status.md или документ для эскалации |
 
-## Agenda Blocks
-
-1. **Roll call & objectives (5 min)**
-   - Confirm quorum, scribe, and logistics.
-   - Highlight any urgent incidents (docs preview outage, localization block).
-2. **Localization staffing review (15 min)**
-   - Review the staffing decision log in
+## Блоки повестки дня1. **Перекличка и цели (5 минут)**
+   - Подтвердите кворум, писца и логистику.
+   - Выделяйте любые срочные инциденты (отключение предварительного просмотра документов, блокировка локализации).
+2. **Обзор штата локализатора (15 минут)**
+   - Просмотрите вход в систему кадрового решения.
      `docs/source/sdk/android/i18n_plan.md#staffing-decision-log`.
-   - Confirm status of open POs (`DOCS-L10N-*`) and interim coverage.
-   - Compare CI freshness output vs. the translation status table; call out any
-     doc whose locale SLA (>5 business days) will be breached before the next
-     sync.
-   - Decide whether escalation is required (Product Ops, Finance, contractor
-     management). Record the decision in both the staffing log and the monthly
-     minutes, including owner + due date.
-   - If staffing is healthy, document the confirmation so the roadmap action can
-     move back to 🈺/🈴 with evidence.
-3. **Docs/roadmap updates (10 min)**
-   - Status of DOCS-SORA portal work, Try-It proxy, and SoraFS publication
-     readiness.
-   - Highlight doc debt or reviewers needed for current release trains.
-4. **SDK highlights (10 min)**
-   - Android AND5/AND7 doc readiness, Swift IOS5 parity, JS GA progress.
-   - Capture shared fixtures or schema diffs that will affect docs.
-5. **Action review & parking lot (5 min)**
-   - Revisit open items from the previous sync; confirm closures.
-   - Record new actions in the notes file with explicit owners and deadlines.
+   - Подтвердите статус открытых заказов на покупку (`DOCS-L10N-*`) и временное покрытие.
+   - Сравните выходные данные актуальности CI с таблицей статуса перевода; вызвать любой
+     документ, соглашение об уровне обслуживания которого (>5 рабочих дней) будет нарушено до следующего
+     синхронизация.
+   - Решите, требуется ли эскалация (эксплуатация продукта, финансы, подрядчик
+     управление). Зафиксируйте решение как в штатном журнале, так и в ежемесячном отчете.
+     минут, включая владельца + срок выполнения.
+   - Если штат сотрудников в порядке, задокументируйте подтверждение, чтобы можно было выполнить план действий.
+     вернитесь к 🈺/🈴 с доказательствами.
+3. **Обновления документации/дорожной карты (10 минут)**
+   - Статус работы портала DOCS-SORA, прокси-сервера Try-It и публикации SoraFS.
+     готовность.
+   - Выделите задолженность по документации или рецензентов, необходимых для текущих выпусков.
+4. **Основные сведения о SDK (10 минут)**
+   - Готовность документации Android AND5/AND7, четность Swift IOS5, прогресс JS GA.
+   - Захват общих фикстур или различий в схеме, которые повлияют на документы.
+5. **Обзор действий и парковка (5 минут)**
+   - Вернуться к открытым элементам из предыдущей синхронизации; подтвердите закрытие.
+   - Записывайте новые действия в файл заметок с указанием конкретных владельцев и сроков.
 
-## Localization Staffing Review Template
+## Шаблон проверки кадрового обеспечения локализации
 
-Include the following table in each month’s minutes:
+В протокол каждого месяца включите следующую таблицу:
 
-| Locale | Capacity (FTE) | Commitments & POs | Risks / Escalations | Decision & Owner |
+| Язык | Мощность (FTE) | Обязательства и заказы | Риски / Эскалация | Решение и владелец |
 |--------|----------------|-------------------|---------------------|------------------|
-| JP | e.g., 0.5 contractor + 0.1 Docs backup | PO `DOCS-L10N-4901` (awaiting signature) | “Contract not signed by 2026-03-04” | “Escalate to Product Ops — @docs-devrel, due 2026-03-02” |
-| HE | e.g., 0.1 Docs engineer | Rotation enters PTO 2026-03-18 | “Need backup reviewer” | “@docs-lead to identify backup by 2026-03-05” |
+| Япония | например, 0,5 подрядчик + 0,1 резервная копия документов | PO `DOCS-L10N-4901` (ожидает подписи) | «Контракт не подписан до 04 марта 2026 г.» | «Передача в отдел эксплуатации продукта — @docs-devrel, срок выполнения — 2 марта 2026 г.» |
+| ОН | например, 0,1 инженер по документации | В ротацию входит ВОМ 18 марта 2026 г. | «Требуется резервный рецензент» | «@docs-lead определит резервную копию к 5 марта 2026 г.» |
 
-Also log a short narrative covering:
+Также запишите краткое повествование:
 
-- **SLA outlook:** Any doc expected to miss the five-business-day SLA and the
-  mitigation (swap priority, enlist backup vendor, etc.).
-- **Ticket & asset health:** Outstanding entries in
-  `docs/source/sdk/android/i18n_requests/` and whether screenshots/assets are
-  ready for translators.
+- **Перспективы SLA:** ожидается, что любой документ не будет соблюдать SLA в течение пяти рабочих дней и
+  смягчение последствий (замена приоритета, привлечение поставщика резервного копирования и т. д.).
+- **Состояние билетов и активов:** Выдающиеся записи в
+  `docs/source/sdk/android/i18n_requests/` и есть ли скриншоты/ресурсы
+  готов принять переводчиков.
 
-### Localization Staffing Review Logging
+### Журнал проверки кадрового обеспечения локализации
 
-- **Minutes:** Copy the staffing table + narrative into
-  `docs/source/docs_devrel/minutes/<yyyy-mm>.md` (all locales mirror the
-  English minutes via localized files under the same directory). Link the entry
-  back to the agenda (`docs/source/docs_devrel/monthly_sync_agenda.md`) so
-  governance can trace evidence.
-- **i18n plan:** Update the staffing decision log and translation status table
-  in `docs/source/sdk/android/i18n_plan.md` immediately after the meeting.
-- **Status:** When staffing decisions affect roadmap gates, add a short entry in
-  `status.md` (Docs/DevRel section) referencing the minute file and i18n plan
-  update.
+– **Минуты:** скопируйте штатное расписание и описательную часть в
+  `docs/source/docs_devrel/minutes/<yyyy-mm>.md` (все локали отражают
+  английские минуты в локализованных файлах в том же каталоге). Связать запись
+  вернемся к повестке дня (`docs/source/docs_devrel/monthly_sync_agenda.md`), так что
+  правительство может отслеживать доказательства.
+- **план i18n:** обновите журнал кадровых решений и таблицу статуса перевода.
+  в `docs/source/sdk/android/i18n_plan.md` сразу после встречи.
+- **Статус:** Если кадровые решения влияют на реализацию дорожной карты, добавьте короткую запись в
+  `status.md` (раздел Docs/DevRel) со ссылкой на файл минут и план i18n.
+  обновление.
 
-## Minutes Template
+## Шаблон протокола
 
-Copy this skeleton into `docs/source/docs_devrel/minutes/<yyyy-mm>.md`:
+Скопируйте этот скелет в `docs/source/docs_devrel/minutes/<yyyy-mm>.md`:
 
 ```markdown
 <!-- SPDX-License-Identifier: Apache-2.0 -->
@@ -125,22 +124,20 @@ Copy this skeleton into `docs/source/docs_devrel/minutes/<yyyy-mm>.md`:
 | Item | Owner | Due | Notes |
 |------|-------|-----|-------|
 | JP contractor PO follow-up | @docs-devrel-manager | 2026-03-02 | Example entry |
-```
+```Опубликуйте заметки через PR вскоре после встречи и дайте ссылку на них с `status.md`.
+при упоминании рисков или кадровых решениях.
 
-Publish the notes via PR soon after the meeting and link them from `status.md`
-when referencing risk or staffing decisions.
+## Последующие ожидания
 
-## Follow-Up Expectations
+1. **Количество минут:** в течение 24 часов (`docs/source/docs_devrel/minutes/`).
+2. **План i18n обновлен:** скорректируйте штатное расписание и таблицу переводов в соответствии с
+   отражают новые обязательства или эскалацию.
+3. **Запись на сайте Status.md:** суммируйте все решения, связанные с высоким риском, чтобы сохранить дорожную карту.
+   синхронно.
+4. **Эскалация отправлена:** если отзыв требует эскалации, создайте/обновите
+   соответствующий билет (например, эксплуатация продукта, утверждение финансов, подключение поставщика)
+   и укажите это как в протоколе, так и в плане i18n.
 
-1. **Minutes committed:** within 24 hours (`docs/source/docs_devrel/minutes/`).
-2. **i18n plan updated:** adjust the staffing log and translation table to
-   reflect new commitments or escalations.
-3. **Status.md entry:** summarize any high-risk decisions to keep the roadmap
-   in sync.
-4. **Escalations filed:** when the review calls for escalation, create/refresh
-   the relevant ticket (e.g., Product Ops, Finance approval, vendor onboarding)
-   and reference it in both the minutes and the i18n plan.
-
-By following this agenda, the roadmap requirement to include localization
-staffing reviews in the Docs/DevRel monthly sync stays auditable, and downstream
-teams always know where to find the evidence.
+Следуя этой программе, требование дорожной карты по включению локализации
+проверки персонала в ежемесячной синхронизации Docs/DevRel остаются проверяемыми и последующими
+команды всегда знают, где найти доказательства.

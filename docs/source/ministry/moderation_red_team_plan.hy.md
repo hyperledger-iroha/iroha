@@ -9,90 +9,85 @@ source_last_modified: "2025-12-29T18:16:35.978869+00:00"
 translation_last_reviewed: 2026-02-07
 title: Ministry Red-Team & Chaos Drill Plan
 summary: Execution plan for roadmap item MINFO-9 covering recurring adversarial campaigns, telemetry hooks, and reporting requirements.
+translator: machine-google-reviewed
 ---
 
 # Moderation Red-Team & Chaos Drills (MINFO-9)
 
-Roadmap reference: **MINFO-9 — Moderation red-team & chaos drills** (targets Q3 2026)
+Ճանապարհային քարտեզի հղում՝ **MINFO-9 — Կարմիր թիմի և քաոսի վարժանքներ** (թիրախներ Q32026)
 
-The Ministry of Information must run reproducible adversarial campaigns that stress AI moderation pipelines, bounty programs, gateways, and governance controls. This plan closes the “🈳 Not Started” gap noted in the roadmap by defining scope, cadence, drill templates, and evidence requirements that tie directly into the existing moderation dashboards (`dashboards/grafana/ministry_moderation_overview.json`) and emergency canon workflows.
+Տեղեկատվության նախարարությունը պետք է իրականացնի վերարտադրվող հակառակորդների արշավներ, որոնք շեշտում են AI-ի չափավորության խողովակաշարերը, պարգևավճարների ծրագրերը, դարպասները և կառավարման հսկողությունը: Այս պլանը փակում է «🈳 Չսկսված» բացը, որը նշված է ճանապարհային քարտեզում՝ սահմանելով շրջանակը, արագությունը, վարման ձևանմուշները և ապացույցների պահանջները, որոնք ուղղակիորեն կապված են գործող մոդերավորման վահանակների (`dashboards/grafana/ministry_moderation_overview.json`) և արտակարգ իրավիճակների կանոնների աշխատանքային հոսքերի հետ:
 
-## Goals & Deliverables
+## Նպատակներ և առաքում
 
-- Run quarterly red-team exercises that cover multi-part smuggling attempts, bribery/appeal tampering, and gateway side-channel probes before widening coverage to additional threat classes.
-- Capture deterministic artefacts (CLI logs, Norito manifests, Grafana exports, SoraFS CIDs) for every drill and file them via `docs/source/ministry/reports/<YYYY-MM>-mod-red-team-<scenario>.md`.
-- Feed drill output back into calibration manifests (`docs/examples/ai_moderation_calibration_*.json`) and the denylist policy so remediation tasks become traceable roadmap tickets.
-- Wire alert/runbook integration so failures surface alongside the MINFO-1 dashboards and Alertmanager packs (`dashboards/alerts/ministry_moderation_rules.yml`).
+- Կատարեք կարմիր թիմի եռամսյակային զորավարժություններ, որոնք ներառում են մաքսանենգության բազմաբնույթ փորձերը, կաշառակերության/բողոքարկման կեղծումը և դարպասի կողային ալիքի հետաքննությունը, նախքան ընդգրկումը լրացուցիչ սպառնալիքների դասերի ընդլայնումը:
+- Վերցրեք դետերմինիստական ​​արտեֆակտներ (CLI տեղեկամատյաններ, Norito մանիֆեստներ, Grafana արտահանումներ, SoraFS CID-ներ) յուրաքանչյուր հորատման համար և ներկայացրեք դրանք `docs/source/ministry/reports/<YYYY-MM>-mod-red-team-<scenario>.md`-ի միջոցով:
+- Սնուցող հորատման արդյունքները վերադարձվում են չափաբերման մանիֆեստներին (`docs/examples/ai_moderation_calibration_*.json`) և հերքման քաղաքականությանը, որպեսզի վերականգնման առաջադրանքները դառնան հետագծելի ճանապարհային քարտեզի տոմսեր:
+- Լարային ծանուցման/վազքագրքի ինտեգրում, որպեսզի խափանումները հայտնվեն MINFO-1 վահանակների և Alertmanager փաթեթների կողքին (`dashboards/alerts/ministry_moderation_rules.yml`):
 
-## Scope & Dependencies
+## Շրջանակ և կախվածություն
 
-- **Systems under test:** SoraFS ingest/orchestrator paths, AI moderation runner defined in `docs/source/sorafs_ai_moderation_plan.md`, denylist/Merkle enforcement, appeal treasury tooling, and gateway rate-limits.
-- **Prerequisites:** Emergency canon & TTL policy (`docs/source/ministry/emergency_canon_policy.md`), moderation calibration fixtures, and Torii mock harness parity so reproducible payloads can be replayed during chaos runs.
-- **Out-of-scope:** SoraDNS policies, Kaigi conferencing, or non-Ministry communications channels (tracked separately under SNNet and DOCS-SORA programs).
+- **Փորձարկման ենթակա համակարգեր.
+- **Նախադրյալներ.** Արտակարգ իրավիճակների կանոններ և TTL քաղաքականություն (`docs/source/ministry/emergency_canon_policy.md`), չափավոր չափաբերման հարմարանքներ և Torii կեղծ ամրագոտիների հավասարություն, որպեսզի վերարտադրվող բեռները կարողանան վերարտադրվել քաոսային վազքի ժամանակ:
+- **Շրջանակից դուրս.** SoraDNS քաղաքականություն, Kaigi կոնֆերանսներ կամ ոչ նախարարության հաղորդակցման ալիքներ (հետևվում են առանձին SNNet և DOCS-SORA ծրագրերում):
 
-## Roles & Responsibilities
+## Դերեր և պարտականություններ
 
-| Role | Responsibilities | Primary Owner | Backup |
-|------|------------------|---------------|--------|
-| Drill Director | Approves scenario list, assigns red-teamers, signs off on runbooks | Ministry Security Lead | Deputy Moderator |
-| Adversarial Cell | Crafts payloads, runs attacks, records evidence | Security Engineering guild | Volunteer operators |
-| Observability Lead | Monitors dashboards/alerts, captures Grafana exports, files incident timelines | SRE / Observability TL | On-call SRE |
-| Moderator on Duty | Drives escalation flow, validates override requests, updates emergency canon records | Incident commander | Reserve commander |
-| Reporting Scribe | Populates the template under `docs/source/ministry/reports/moderation_red_team_template.md`, links artefacts, opens follow-up issues | Docs/DevRel | Product liaison |
+| Դերը | Պարտականություններ | Հիմնական սեփականատեր | Կրկնօրինակում |
+|------|------------------|--------------|--------|
+| Հորատման տնօրեն | Հաստատում է սցենարների ցուցակը, նշանակում է կարմիր թիմեր, դուրս է գալիս վազքագրքերում | Նախարարության անվտանգության ղեկավար | Մոդերատորի տեղակալ |
+| Հակառակորդ Բջջ | Ստեղծում է օգտակար բեռներ, գործարկում հարձակումներ, գրանցում ապացույցներ | Անվտանգության ինժեներական գիլդիա | Կամավոր օպերատորներ |
+| Դիտորդունակության առաջատար | Վերահսկում է վահանակները/զգուշացումները, ֆիքսում Grafana արտահանումները, ֆայլեր միջադեպերի ժամանակացույցերը | SRE / Դիտորդական TL | Հերթապահ SRE |
+| Հերթապահ մոդերատոր | Առաջացնում է էսկալացիայի հոսքը, վավերացնում է անտեսման հարցումները, թարմացնում արտակարգ իրավիճակների կանոնների գրառումները | Միջադեպի հրամանատար | Պահեստազորի հրամանատար |
+| Հաշվետու գրագիր | Լրացնում է ձևանմուշը `docs/source/ministry/reports/moderation_red_team_template.md`-ի տակ, կապում է արտեֆակտները, բացում հետագա խնդիրներ | Փաստաթղթեր/DevRel | Ապրանքի կապ |
 
-## Cadence & Timeline
+## Cadence & Timeline| Փուլ | Թիրախային պատուհան | Հիմնական գործունեություն | Արտեֆակտներ |
+|-------|--------------|---------------|-----------|
+| **Պլան** | T−4 շաբաթ | Ընտրեք սցենարներ, թարմացրեք օգտակար բեռնվածքի հարմարանքները, փայտամած արտեֆակտները `scripts/ministry/scaffold_red_team_drill.py`-ի միջոցով և չոր գործարկեք հեռաչափության օգնականները (`scripts/telemetry/check_redaction_status.py`, `ci/run_android_telemetry_chaos_prep.sh`), որոնք փորված հայելին | Սցենարների համառոտագրեր, տոմսերի որոնիչ |
+| **Պատրաստ** | T−1 շաբաթ | Կողպեք մասնակիցներին, փուլ SoraFS/Torii ավազատուփեր, սառեցրեք վահանակներ/զգոն հեշեր | Պատրաստի ստուգաթերթ, վահանակի ամփոփումներ |
+| **Կատարել** | Հորատման օր (4ժ) | Գործարկել հակառակորդների հոսքերը, հավաքել Alertmanager-ի ծանուցումները, գրավել Torii/CLI հետքերը, կիրառել անտեսման հաստատումները | Ուղիղ մատյան, Grafana snapshots |
+| **Վերականգնել** | T+1 օր | Վերականգնել վերագրանցումները, մաքրել տվյալների հավաքածուները, արխիվային արտեֆակտները `artifacts/ministry/red-team/<YYYY-MM>/` և SoraFS | Ապացույցների փաթեթ, մանիֆեստ |
+| **Հաշվետվություն** | T+1 շաբաթ | Հրապարակեք Markdown հաշվետվությունը ձևանմուշից, գրանցամատյանների վերականգնման տոմսերը, թարմացրեք ճանապարհային քարտեզը/status.md | Հաշվետվության ֆայլ, Jira/GitHub հղումներ |
 
-| Phase | Target Window | Key Activities | Artefacts |
-|-------|---------------|----------------|-----------|
-| **Plan** | T−4 weeks | Select scenarios, refresh payload fixtures, scaffold artefacts via `scripts/ministry/scaffold_red_team_drill.py`, and dry-run the telemetry helpers (`scripts/telemetry/check_redaction_status.py`, `ci/run_android_telemetry_chaos_prep.sh`) that the drills mirror | Scenario briefs, ticket tracker |
-| **Ready** | T−1 week | Lock participants, stage SoraFS/Torii sandboxes, freeze dashboards/alert hashes | Ready checklist, dashboard digests |
-| **Execute** | Drill day (4 h) | Launch adversarial flows, collect Alertmanager notifications, capture Torii/CLI traces, enforce override approvals | Live logbook, Grafana snapshots |
-| **Recover** | T+1 day | Revert overrides, scrub datasets, archive artefacts to `artifacts/ministry/red-team/<YYYY-MM>/` and SoraFS | Evidence bundle, manifest |
-| **Report** | T+1 week | Publish Markdown report from template, log remediation tickets, update roadmap/status.md | Report file, Jira/GitHub links |
+Եռամսյակային զորավարժությունները (մար/հունիս/սեպտեմբեր/դեկտեմբեր) իրականացվում են նվազագույնը. բարձր ռիսկային բացահայտումները առաջացնում են ժամանակավոր գործարկումներ, որոնք հետևում են նույն ապացույցների աշխատանքի ընթացքին:
 
-Quarterly drills (Mar/Jun/Sep/Dec) run at minimum; high-risk findings trigger ad-hoc runs that follow the same evidence workflow.
+## Սցենարների գրադարան (Սկզբնական)
 
-## Scenario Library (Initial)
+| Սցենար | Նկարագրություն | Հաջողության ազդանշաններ | Ապացույցների մուտքագրում |
+|----------|------------|----------------|----------------|
+| Բազմամաս մաքսանենգություն | Կտորների շղթան տարածվում է SoraFS պրովայդերների վրա՝ պոլիմորֆ օգտակար բեռներով, որոնք ժամանակի ընթացքում փորձում են շրջանցել AI ֆիլտրերը: Իրականացնում է նվագախմբի տիրույթի բեռնում, չափավոր TTL-ներ և ժխտողական տարածում: | Մաքսանենգությունը հայտնաբերվել է մինչև օգտագործողի առաքումը. denylist delta արտանետվել; `ministry_moderation_overview`-ն ահազանգում է SLA-ի ներսում կրակի մասին: | CLI-ի վերարտադրման մատյաններ, կտորի մանիֆեստներ, հերքման ցուցակի տարբերություն, հետագծման ID-ներ `sorafs.fetch.*` վահանակներից: |
+| Կաշառք և բողոքարկում կեղծում | Զույգ չարամիտ մոդերատորներ փորձում են հաստատել կաշառքի պատճառով առաջացած խախտումները. փորձարկում է գանձապետական ​​հոսքերը, անտեսում է հաստատումները և աուդիտի գրանցումը: | Չեղարկել գրանցումը պարտադիր ապացույցներով, գանձապետական ​​փոխանցումները դրոշակված, կառավարման ձայների գրանցում: | Norito վերագրանցման գրառումները, `docs/source/ministry/volunteer_brief_template.md` թարմացումները, գանձապետարանի գրանցումները: |
+| Դարպասի կողային ալիքի զոնդավորում | Նմանակում է խարդախ հրատարակիչներին, որոնք չափում են քեշի ժամանակացույցը և TTL-ները՝ եզրակացնելու չափավոր բովանդակություն: Իրականացնում է CDN/gateway-ի կարծրացում SNNet-15-ից առաջ: | Սահմանափակման և անոմալիաների վահանակները ընդգծում են զոնդերը; admin CLI-ն ցույց է տալիս քաղաքականության կիրարկումը. բովանդակության արտահոսք չկա: | Դարպասների մուտքի տեղեկամատյաններ, `ministry_gateway_observability` վահանակների Grafana քերծվածք, փաթեթների հետքեր (pcap) գրավել անցանց վերանայման համար: |
 
-| Scenario | Description | Success Signals | Evidence Inputs |
-|----------|-------------|-----------------|-----------------|
-| Multi-part smuggling | Chain of chunks spread across SoraFS providers with polymorphic payloads that attempt to bypass AI filters over time. Exercises orchestrator range fetches, moderation TTLs, and denylist propagation. | Smuggling detected before user delivery; denylist delta emitted; `ministry_moderation_overview` alerts fire within SLA. | CLI replay logs, chunk manifests, denylist diff, Trace IDs from `sorafs.fetch.*` dashboards. |
-| Bribery & appeal tampering | Pairs of malicious moderators attempt to approve bribe-induced overrides; tests treasury flows, override approvals, and audit logging. | Override logged with mandatory evidence, treasury transfers flagged, governance vote recorded. | Norito override records, `docs/source/ministry/volunteer_brief_template.md` updates, treasury ledger entries. |
-| Gateway side-channel probing | Simulates rogue publishers measuring cache timing and TTLs to infer moderated content. Exercises CDN/gateway hardening before SNNet-15. | Rate-limit & anomaly dashboards highlight probes; admin CLI shows policy enforcement; no content leak. | Gateway access logs, Grafana scrape of `ministry_gateway_observability` panels, capture packet traces (pcap) for offline review. |
+Ապագա կրկնությունները կավելացնեն `honey-payload beacons`, `AI adversarial prompt floods` և `SoraFS metadata poisoning`, երբ նախնական երեք սցենարները ավարտեն ուսուցման արագությունը:
 
-Future iterations will add `honey-payload beacons`, `AI adversarial prompt floods`, and `SoraFS metadata poisoning` once the initial three scenarios graduate from the learning cadence.
+## Կատարման ստուգաթերթ1. **Նախապատրաստում**
+   - Հաստատեք, որ runbook + սցենարի փաստաթուղթը հրապարակված և հաստատված է:
+   - Snapshot-ի վահանակներ (`dashboards/grafana/ministry_moderation_overview.json`) և զգուշացման կանոններ `artifacts/ministry/red-team/<YYYY-MM>/dashboards/`-ի համար:
+   - Օգտագործեք `scripts/ministry/scaffold_red_team_drill.py` հաշվետվություն + արտեֆակտ գրացուցակներ ստեղծելու համար, այնուհետև գրանցեք SHA256 բովանդակությունը փորվածքի համար բեմադրված ցանկացած հարմարանքների փաթեթների համար:
+   - Հակառակորդ ծանրաբեռնվածություն ներարկելուց առաջ ստուգեք հերքող Merkle-ի արմատները և շտապ կանոնների նշումները:
+2. **Գործման ընթացքում**
+   - Մուտքագրեք յուրաքանչյուր գործողություն (ժամանականիշ, օպերատոր, հրաման) կենդանի գրանցամատյանում (համօգտագործվող փաստաթուղթ կամ `docs/source/ministry/reports/tmp/<timestamp>.md`):
+   - Ձեռք բերեք Torii պատասխանները և AI-ի չափավորության վճիռները, ներառյալ հարցումների ID-ները, մոդելների անունները և ռիսկի միավորները:
+   - Իրականացրեք էսկալացիայի աշխատանքային հոսքը (չեղարկելու հարցումը → հրամանատարի հաստատումը → `emergency_canon_policy` թարմացում):
+   - Գործարկեք ահազանգերի մաքրման առնվազն մեկ վարժություն և փաստաթղթերի արձագանքման ուշացում:
+3. **Հետավարժական**
+   - Մաքրել անտեսումները, վերադարձնել հերքման ցուցակի գրառումները դեպի արտադրական արժեքներ և ստուգել ծանուցումները՝ անխափան:
+   - Արտահանեք Grafana/Alertmanager պատմությունը, CLI տեղեկամատյանները, Norito մանիֆեստները և կցեք դրանք ապացույցների փաթեթին:
+   - Ֆայլերի վերականգնման խնդիրներ (բարձր/միջին/ցածր) սեփականատերերի և ժամկետների հետ; հղում վերջնական զեկույցին:
 
-## Execution Checklist
+## Հեռաչափություն, չափումներ և ապացույցներ
 
-1. **Pre-Drill**
-   - Confirm runbook + scenario doc is published and approved.
-   - Snapshot dashboards (`dashboards/grafana/ministry_moderation_overview.json`) and alert rules to `artifacts/ministry/red-team/<YYYY-MM>/dashboards/`.
-   - Use `scripts/ministry/scaffold_red_team_drill.py` to create the report + artefact directories, then record SHA256 digests for any fixture bundles staged for the drill.
-   - Verify denylist Merkle roots and emergency canon notes before injecting adversarial payloads.
-2. **During Drill**
-   - Log every action (timestamp, operator, command) into the live logbook (shared doc or `docs/source/ministry/reports/tmp/<timestamp>.md`).
-   - Capture Torii responses and AI moderation verdicts, including request IDs, model names, and risk scores.
-   - Exercise the escalation workflow (override request → commander approval → `emergency_canon_policy` update).
-   - Trigger at least one alert-clearing exercise and document response latency.
-3. **Post-Drill**
-   - Clear overrides, roll denylist entries back to production values, and verify alerts quiet.
-   - Export Grafana/Alertmanager history, CLI logs, Norito manifests, and attach them to the evidence bundle.
-   - File remediation issues (high/medium/low) with owners and due dates; link to the final report.
+- **Վահանակներ.** `dashboards/grafana/ministry_moderation_overview.json` + ապագա `ministry_red_team_heatmap.json` (տեղապահ) ֆիքսում են կենդանի ազդանշանները: Արտահանեք JSON-ի նկարները մեկ փորվածքով:
+- **Զգուշացում.** `dashboards/alerts/ministry_moderation_rules.yml` գումարած առաջիկա `ministry_red_team_rules.yml`-ը պետք է ներառի ծանոթագրություններ, որոնք հղում են կատարում վարման ID-ին և սցենարին՝ աուդիտը պարզեցնելու համար:
+- **Norito արտեֆակտներ.** կոդավորում են յուրաքանչյուր վարժանքը որպես `RedTeamDrillV1` իրադարձություն (սպեկտրը առաջիկայում), այնպես որ Torii/CLI արտահանումները որոշիչ են և կարող են համօգտագործվել կառավարման հետ:
+- **Հաշվետվության ձևանմուշ.** պատճենեք `docs/source/ministry/reports/moderation_red_team_template.md` և լրացրեք սցենարը, չափումները, ապացույցների ամփոփումները, վերականգնման կարգավիճակը և կառավարման ստորագրումը:
+- **Արխիվ.** Պահպանեք արտեֆակտները `artifacts/ministry/red-team/<YYYY-MM>/<scenario>/`-ում (տեղեկամատյաններ, CLI ելք, Norito փաթեթներ, վահանակի արտահանում) և հրապարակեք համապատասխան SoraFS CAR մանիֆեստը հանրային ստուգման համար, երբ կառավարությունը հաստատի:
 
-## Telemetry, Metrics & Evidence
+## Ավտոմատացում և հաջորդ քայլերը1. Կիրառեք օգնական սկրիպտներ `scripts/ministry/`-ի ներքո՝ սերմերի բեռնվածության հարմարանքները տեղադրելու համար, փոխարկեք հերքման ցանկի գրառումները և հավաքեք CLI/Grafana արտահանումները: (`scaffold_red_team_drill.py`, `moderation_payload_tool.py` և `check_red_team_reports.py` այժմ ծածկում են փայտամածները, օգտակար բեռների փաթեթավորումը, հերքվող ցուցակի կարկատումը և տեղապահի կիրառումը. մնա վճռական:)
+2. Ընդլայնեք CI-ն `ci/check_ministry_red_team.sh`-ով, որպեսզի ստուգեք ձևանմուշների ամբողջականությունը և ապացույցների ամփոփումը մինչև հաշվետվությունների միաձուլումը: ✅ (`scripts/ministry/check_red_team_reports.py`-ը պարտադրում է տեղաբաշխիչի հեռացումը բոլոր պարտավորված վարժանքների հաշվետվություններում:)
+3. Ավելացրեք `ministry_red_team_status` բաժինը `status.md`-ին՝ առաջիկա զորավարժություններին, բաց վերականգնման տարրերին և վերջին գործարկման չափորոշիչներին:
+4. Հորատման մետատվյալները ինտեգրել թափանցիկության խողովակաշարում, որպեսզի եռամսյակային հաշվետվությունները կարողանան հղում կատարել քաոսի ամենավերջին արդյունքներին:
+5. Feed drill-ը հաղորդում է անմիջապես `cargo xtask ministry-transparency ingest --red-team-report <path>...`-ում, որպեսզի ախտահանված եռամսյակային չափորոշիչները և կառավարման մանիֆեստները ունենան վարժման ID-ները, ապացույցների փաթեթները և վահանակի SHA-ները գոյություն ունեցող գրանցամատյանների/բողոքարկման/հերքման մատյանների հետ միասին:
 
-- **Dashboards:** `dashboards/grafana/ministry_moderation_overview.json` + future `ministry_red_team_heatmap.json` (placeholder) capture live signals. Export JSON snapshots per drill.
-- **Alerting:** `dashboards/alerts/ministry_moderation_rules.yml` plus upcoming `ministry_red_team_rules.yml` must include annotations referencing the drill ID and scenario to simplify audits.
-- **Norito artefacts:** encode every drill run as `RedTeamDrillV1` events (spec forthcoming) so Torii/CLI exports are deterministic and can be shared with governance.
-- **Report template:** copy `docs/source/ministry/reports/moderation_red_team_template.md` and fill in the scenario, metrics, evidence digests, remediation status, and governance sign-off.
-- **Archive:** Store artefacts in `artifacts/ministry/red-team/<YYYY-MM>/<scenario>/` (logs, CLI output, Norito bundles, dashboard exports) and publish a matching SoraFS CAR manifest for public review when governance approves.
-
-## Automation & Next Steps
-
-1. Implement helper scripts under `scripts/ministry/` to seed payload fixtures, toggle denylist entries, and collect CLI/Grafana exports. (`scaffold_red_team_drill.py`, `moderation_payload_tool.py`, and `check_red_team_reports.py` now cover scaffolding, payload bundling, denylist patching, and placeholder enforcement; `export_red_team_evidence.py` adds the missing dashboard/log export with Grafana API support so evidence manifests stay deterministic.)
-2. Extend CI with `ci/check_ministry_red_team.sh` to verify template completeness and evidence digests before merging reports. ✅ (`scripts/ministry/check_red_team_reports.py` enforces placeholder removal across all committed drill reports.)
-3. Add `ministry_red_team_status` section to `status.md` to surface upcoming drills, open remediation items, and last-run metrics.
-4. Integrate drill metadata into the transparency pipeline so quarterly reports can reference the most recent chaos results.
-5. Feed drill reports directly into `cargo xtask ministry-transparency ingest --red-team-report <path>...` so sanitized quarterly metrics and governance manifests carry the drill IDs, evidence bundles, and dashboard SHAs alongside the existing ledger/appeal/denylist feeds.
-
-Once these steps land, MINFO-9 transitions from 🈳 Not Started to 🈺 In Progress with traceable artefacts and measurable success criteria.
+Երբ այս քայլերը կատարվեն, MINFO-9-ը անցում է կատարում 🈳 Not Started-ից 🈺 Ընթացքի մեջ՝ հետագծելի արտեֆակտներով և չափելի հաջողության չափանիշներով:

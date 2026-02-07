@@ -6,48 +6,49 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: f2dd292b7d15b449f3cec1b79343387a8c23beef3a163367bd5fa8ced8593aae
 source_last_modified: "2026-01-03T18:08:00.656311+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# MOCHI Bundle Tooling
+# MOCHI バンドルツール
 
-MOCHI ships with a lightweight packaging workflow so developers can produce a
-portable desktop bundle without wiring bespoke CI scripts. The `xtask`
-subcommand handles compilation, layout, hashing, and (optionally) archive
-creation in one shot.
+MOCHI には軽量パッケージング ワークフローが付属しているため、開発者は
+カスタム CI スクリプトを配線する必要のないポータブル デスクトップ バンドル。 `xtask`
+サブコマンドは、コンパイル、レイアウト、ハッシュ、および (オプションで) アーカイブを処理します。
+一発で作成。
 
-## Generating a bundle
+## バンドルの生成
 
 ```bash
 cargo xtask mochi-bundle
 ```
 
-By default the command builds release binaries, assembles the bundle under
-`target/mochi-bundle/`, and emits a `mochi-<os>-<arch>-release.tar.gz` archive
-alongside a deterministic `manifest.json`. The manifest lists every file with
-its size and SHA-256 hash so CI pipelines can re-run verification or publish
-attestations. The helper ensures both the `mochi` desktop shell and the
-workspace `kagami` binary are present so genesis generation works out of the
-box.
+デフォルトでは、このコマンドはリリース バイナリをビルドし、以下にバンドルをアセンブルします。
+`target/mochi-bundle/`、`mochi-<os>-<arch>-release.tar.gz` アーカイブを発行します
+決定的な `manifest.json` と並んで。マニフェストには、すべてのファイルがリストされます。
+そのサイズと SHA-256 ハッシュにより、CI パイプラインが検証を再実行したり公開したりできるようになります
+証明書。ヘルパーは、`mochi` デスクトップ シェルと
+ワークスペース `kagami` バイナリが存在するため、genesis の生成は
+箱。
 
-### Flags
+### フラグ
 
-| Flag                | Description                                                                 |
-|---------------------|-----------------------------------------------------------------------------|
-| `--out <dir>`       | Override the output directory (defaults to `target/mochi-bundle`).         |
-| `--profile <name>`  | Build with a specific Cargo profile (e.g., `debug` for tests).              |
-| `--no-archive`      | Skip the `.tar.gz` archive, leaving only the prepared folder.               |
-| `--kagami <path>`   | Use an explicit `kagami` binary instead of building `iroha_kagami`.         |
-| `--matrix <path>`   | Append bundle metadata to a JSON matrix for CI provenance tracking.         |
-| `--smoke`           | Run `mochi --help` from the packaged bundle as a basic execution gate.      |
-| `--stage <dir>`     | Copy the finished bundle (and archive, when present) into a staging folder. |
+|旗 |説明 |
+|---------------------|----------------------------------------------------------------------------|
+| `--out <dir>` |出力ディレクトリをオーバーライドします (デフォルトは `target/mochi-bundle`)。         |
+| `--profile <name>` |特定の Cargo プロファイルを使用してビルドします (テスト用の `debug` など)。              |
+| `--no-archive` | `.tar.gz` アーカイブをスキップし、準備されたフォルダーのみを残します。               |
+| `--kagami <path>` | `iroha_kagami` をビルドする代わりに、明示的な `kagami` バイナリを使用します。         |
+| `--matrix <path>` | CI 来歴追跡のためにバンドル メタデータを JSON マトリックスに追加します。         |
+| `--smoke` |パッケージ化されたバンドルから基本的な実行ゲートとして `mochi --help` を実行します。      |
+| `--stage <dir>` |完成したバンドル (存在する場合はアーカイブ) をステージング フォルダーにコピーします。 |
 
-`--stage` is intended for CI pipelines where each build agent uploads its
-artefacts to a shared location. The helper recreates the bundle directory and
-copies the generated archive into the staging directory so publish jobs can
-collect platform-specific outputs without shell scripting.
+`--stage` は、各ビルド エージェントがビルド エージェントをアップロードする CI パイプラインを対象としています。
+アーティファクトを共有場所に移動します。ヘルパーはバンドル ディレクトリを再作成し、
+生成されたアーカイブをステージング ディレクトリにコピーして、ジョブを公開できるようにします。
+シェルスクリプトを使用せずにプラットフォーム固有の出力を収集します。
 
-The layout inside the bundle is intentionally simple:
+バンドル内のレイアウトは意図的にシンプルになっています。
 
 ```
 bin/mochi              # egui desktop executable
@@ -58,11 +59,11 @@ LICENSE                # repository licence
 manifest.json          # generated file manifest with SHA-256 digests
 ```
 
-### Runtime overrides
+### ランタイムオーバーライド
 
-The packaged `mochi` executable accepts command-line overrides for the most
-common supervisor settings. Use these flags instead of editing
-`config/local.toml` when experimenting:
+パッケージ化された `mochi` 実行可能ファイルは、ほとんどのコマンド ライン オーバーライドを受け入れます。
+共通のスーパーバイザ設定。編集する代わりにこれらのフラグを使用します
+実験時は `config/local.toml`:
 
 ```
 ./bin/mochi --data-root ./data --profile four-peer-bft \
@@ -70,16 +71,16 @@ common supervisor settings. Use these flags instead of editing
     --irohad /path/to/irohad --kagami /path/to/kagami
 ```
 
-Any CLI value takes precedence over `config/local.toml` entries and environment
-variables.
+CLI 値はすべて、`config/local.toml` エントリおよび環境よりも優先されます。
+変数。
 
-## Snapshot automation
+## スナップショットの自動化
 
-`manifest.json` records the generation timestamp, target triple, Cargo profile,
-and the complete file inventory. Pipelines can diff the manifest to detect when
-new artefacts appear, upload the JSON alongside release assets, or audit the
-hashes before promoting a bundle to operators.
+`manifest.json` は、生成タイムスタンプ、ターゲット トリプル、貨物プロファイル、
+そして完全なファイルインベントリ。パイプラインはマニフェストを比較して、いつであるかを検出できます。
+新しいアーティファクトが表示されたり、リリース アセットと一緒に JSON をアップロードしたり、
+バンドルをオペレーターにプロモートする前にハッシュを実行します。
 
-The helper is idempotent: re-running the command updates the manifest and
-overwrites the previous archive, keeping `target/mochi-bundle/` as the single
-source of truth for the latest bundle on the current machine.
+ヘルパーはべき等です。コマンドを再実行するとマニフェストが更新され、
+`target/mochi-bundle/` を単一として保持し、以前のアーカイブを上書きします。
+現在のマシン上の最新バンドルの信頼できる情報源。

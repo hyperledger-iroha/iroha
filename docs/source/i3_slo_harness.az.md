@@ -7,35 +7,36 @@ generator: scripts/sync_docs_i18n.py
 source_hash: df3e3ac15baf47a6c53001acabcac7987a2386c2b772b1d8625eb60598f95a60
 source_last_modified: "2025-12-29T18:16:35.966039+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% Iroha 3 SLO Harness
+% Iroha 3 SLO Qoşqu
 
-The Iroha 3 release line carries explicit SLOs for the critical Nexus paths:
+Iroha 3 buraxılış xətti kritik Nexus yolları üçün açıq SLOları daşıyır:
 
-- finality slot duration (NX‑18 cadence)
-- proof verification (commit certs, JDG attestations, bridge proofs)
-- proof endpoint handling (Axum path proxy via verification latency)
-- fee and staking paths (payer/sponsor and bond/slash flows)
+- final slotunun müddəti (NX‑18 kadans)
+- sübutun yoxlanılması (təhsil sertifikatları, JDG attestasiyaları, körpü sübutları)
+- sübut son nöqtə ilə işləmə (doğrulama gecikməsi ilə Axum yolu proksisi)
+- ödəniş və staking yolları (ödəyici/sponsor və istiqraz/slash axınları)
 
-## Budgets
+## Büdcələr
 
-Budgets live in `benchmarks/i3/slo_budgets.json` and map directly to the bench
-scenarios in the I3 suite. Objectives are per‑call p99 targets:
+Büdcələr `benchmarks/i3/slo_budgets.json`-də yaşayır və birbaşa dəzgahla xəritələnir
+I3 dəstindəki ssenarilər. Məqsədlər hər zəng üçün p99 hədəfləridir:
 
-- Fee/staking: 50 ms per call (`fee_payer`, `fee_sponsor`, `staking_bond`, `staking_slash`)
-- Commit cert / JDG / bridge verify: 80 ms (`commit_cert_verify`, `jdg_attestation_verify`,
+- Ödəniş/bağlama: hər zəng üçün 50 ms (`fee_payer`, `fee_sponsor`, `staking_bond`, `staking_slash`)
+- Təhlil sertifikatı / JDG / körpü yoxlayın: 80ms (`commit_cert_verify`, `jdg_attestation_verify`,
   `bridge_proof_verify`)
-- Commit cert assembly: 80 ms (`commit_cert_assembly`)
-- Access scheduler: 50 ms (`access_scheduler`)
-- Proof endpoint proxy: 120 ms (`torii_proof_endpoint`)
+- Sertifikat yığımını yerinə yetirin: 80ms (`commit_cert_assembly`)
+- Giriş planlayıcısı: 50ms (`access_scheduler`)
+- Provok son nöqtəsi: 120ms (`torii_proof_endpoint`)
 
-Burn-rate hints (`burn_rate_fast`/`burn_rate_slow`) encode the 14.4/6.0
-multi-window ratios for paging vs. ticket alerts.
+Yanma dərəcəsi göstərişləri (`burn_rate_fast`/`burn_rate_slow`) 14.4/6.0-ı kodlayır
+peyjinq və bilet xəbərdarlığı üçün çox pəncərə nisbətləri.
 
-## Harness
+## Qoşqu
 
-Run the harness via `cargo xtask i3-slo-harness`:
+Qoşqu `cargo xtask i3-slo-harness` vasitəsilə işə salın:
 
 ```bash
 cargo xtask i3-slo-harness \
@@ -44,30 +45,30 @@ cargo xtask i3-slo-harness \
   --out-dir artifacts/i3_slo/latest
 ```
 
-Outputs:
+Çıxışlar:
 
-- `bench_report.json|csv|md` — raw I3 bench suite results (git hash + scenarios)
-- `slo_report.json|md` — SLO evaluation with pass/fail/budget-ratio per target
+- `bench_report.json|csv|md` - xam I3 dəzgah dəstinin nəticələri (git hash + ssenarilər)
+- `slo_report.json|md` - hər hədəfə görə keçdi/uğursuz/büdcə nisbəti ilə SLO qiymətləndirməsi
 
-The harness consumes the budgets file and enforces `benchmarks/i3/slo_thresholds.json`
-during the bench run to fail fast when a target regresses.
+Qoşqu büdcə faylını istehlak edir və `benchmarks/i3/slo_thresholds.json`-i tətbiq edir
+skamyada qaçış zamanı hədəf geriyə doğru getdikdə sürətli uğursuzluq.
 
-## Telemetry and dashboards
+## Telemetriya və idarə panelləri
 
-- Finality: `histogram_quantile(0.99, rate(iroha_slot_duration_ms_bucket[5m]))`
-- Proof verification: `histogram_quantile(0.99, sum by (le) (rate(zk_verify_latency_ms_bucket{status="Verified"}[5m])))`
+- Sonluq: `histogram_quantile(0.99, rate(iroha_slot_duration_ms_bucket[5m]))`
+- Sübutun yoxlanılması: `histogram_quantile(0.99, sum by (le) (rate(zk_verify_latency_ms_bucket{status="Verified"}[5m])))`
 
-Grafana starter panels live in `dashboards/grafana/i3_slo.json`. Prometheus
-burn-rate alerts are provided in `dashboards/alerts/i3_slo_burn.yml` with the
-budgets above baked in (finality 2s, proof verify 80 ms, proof endpoint proxy
-120 ms).
+Grafana başlanğıc panelləri `dashboards/grafana/i3_slo.json`-də yaşayır. Prometheus
+Yanma dərəcəsi ilə bağlı xəbərdarlıqlar `dashboards/alerts/i3_slo_burn.yml`-də verilir
+yuxarıda göstərilən büdcələr (sonluq 2s, sübut doğrulama 80ms, sübut son nöqtə proxy
+120ms).
 
-## Operational notes
+## Əməliyyat qeydləri
 
-- Run the harness in nightlies; publish `artifacts/i3_slo/<stamp>/slo_report.md`
-  alongside the bench artefacts for governance evidence.
-- If a budget fails, use the bench markdown to identify the scenario, then drill
-  into the matching Grafana panel/alert to correlate with live metrics.
-- Proof endpoint SLOs use the verification latency as a proxy to avoid per-route
-  cardinality blowup; the benchmark target (120 ms) matches the retention/DoS
-  guardrails on the proof API.
+- Gecələr qoşqu işlətmək; nəşr `artifacts/i3_slo/<stamp>/slo_report.md`
+  idarəetmə sübutları üçün dəzgah artefaktları ilə yanaşı.
+- Büdcə uğursuz olarsa, ssenarini müəyyən etmək üçün skamyadan istifadə edin, sonra qazın
+  canlı ölçülərlə əlaqələndirmək üçün uyğun Grafana panelinə/xəbərdarlığına.
+- Proof son nöqtə SLO-ları hər marşrutdan qaçmaq üçün doğrulama gecikməsindən proxy kimi istifadə edir
+  kardinallıq zərbəsi; etalon hədəf (120ms) saxlama/DoS ilə uyğun gəlir
+  sübut API-də qoruyucu barmaqlıqlar.

@@ -9,70 +9,69 @@ source_last_modified: "2025-12-29T18:16:35.984008+00:00"
 translation_last_reviewed: 2026-02-07
 title: Volunteer Brief Template
 summary: Structured template for roadmap item MINFO-3a covering balanced briefs, fact tables, conflict disclosures, and moderation tags.
+translator: machine-google-reviewed
 ---
 
-# Volunteer Brief Template (MINFO-3a)
+# ཁས་བླངས་མདོར་བསྡུས་ (MINFO-3a)
 
-Roadmap reference: **MINFO-3a — Balanced brief templates & conflict disclosure.**
+ལམ་སྟོན་གཞི་བསྟུན་: **MINFO-3a — འདྲ་མཉམ་གྱི་ཊེམ་པེལེཊི་དང་ འཁྲུག་རྩོད་གསལ་བསྒྲགས།**
 
-Volunteer brief submissions summarise positions that citizen panels want governance to review when blacklist changes or other Ministry enforcement motions are proposed. MINFO-3a requires that every brief follows a deterministic structure so the transparency pipeline can (1) render comparable fact tables, (2) confirm that conflicts-of-interest are disclosed, and (3) drop or flag off-topic submissions automatically. This page defines the canonical fields, CSV-style fact table layout, and moderation tags expected by the tooling shipped in `cargo xtask ministry-transparency`.
+ཁས་བླངས་ཡིག་ཆ་ཐུང་ཀུ་ཚུ་གིས་ མི་སེར་ཚོགས་ཆུང་ཚུ་གིས་ ཐོ་ཡིག་ནགཔོ་བསྒྱུར་བཅོས་དང་ ཡང་ན་ གཞན་མི་བསྟར་སྤྱོད་ལྷན་ཁག་གི་ གྲོས་འཆར་ཚུ་ གྲོས་འཆར་བཀོད་པའི་སྐབས་ གཞུང་སྐྱོང་བསྐྱར་ཞིབ་འབད་དགོཔ་སྦེ་ བཅུད་བསྡུས་ཡོདཔ་ཨིན། MINFO-3a གིས་ དྭངས་གསལ་གྱི་ མདོང་ལམ་འདི་ ག་བསྡུར་རྐྱབ་ཚུགསཔ་སྦེ་ ཐུང་ཀུ་རེ་རེ་དགོཔ་ཨིན། (༡) བདེན་པ་གི་ཐིག་ཁྲམ་ཚུ་ ག་བསྡུར་རྐྱབ་ཚུགས། (༢) སྐྱེད་ཀྱི་འཁྲུག་རྩོད་ཚུ་ གསལ་བསྒྲགས་འབདཝ་ཨིནམ་དང་ (༣) རང་བཞིན་གྱིས་ བཀོད་མི་ཚུ་ རང་བཞིན་གྱིས་ གསལ་སྟོན་འབདཝ་ཨིན། ཤོག་ལེབ་འདི་གིས་ ཀེ་ནོ་ནིག་ས་སྒོ་དང་ སི་ཨེསི་ཝི་-བཟོ་རྣམ་གྱི་བདེན་པ་ཐིག་ཁྲམ་བཀོད་སྒྲིག་ དེ་ལས་ `cargo xtask ministry-transparency` ནང་ལུ་གཏང་ཡོད་པའི་ ལག་ཆས་ཀྱི་ ངོ་རྟགས་ཚུ་ ངེས་འཛིན་འབདཝ་ཨིན།
 
-> **Norito schema:** the `iroha_data_model::ministry::VolunteerBriefV1` struct (version `1`) is now the authoritative schema for all submissions. Tooling and portal validators call `VolunteerBriefV1::validate` before publishing a brief or referencing it in panel summaries.
+> **Norito ལས་འཆར་:** `iroha_data_model::ministry::VolunteerBriefV1` བཀོད་སྒྲིག་ (ཐོན་རིམ་ `1`) འདི་ ད་ལྟོ་ཕུལ་མི་ཆ་མཉམ་གྱི་དོན་ལུ་ དབང་ཚད་ཅན་གྱི་ལས་རིམ་ཨིན། ལག་ཆས་དང་ དྲྭ་ཚིགས་བདེན་དཔྱད་འབད་མི་ཚུ་གིས་ ཐུང་ཀུ་ཅིག་ དཔར་བསྐྲུན་མ་འབད་བའི་ཧེ་མ་ ཡང་ན་ པེ་ནཱལ་བཅུད་བསྡུས་ནང་ གཞི་བསྟུན་མ་འབད་བའི་ཧེ་མ་ `VolunteerBriefV1::validate` ཟེར་སླབ་ཨིན།
 
-## Submission payload structure
+##
 
-| Section | Fields | Requirements |
-|---------|--------|--------------|
-| **Envelope** | `version` (u16) | Must be `1`. The version guard allows the Ministry to evolve the schema without ambiguity. |
-| **Identity & stance** | `brief_id` (string, unique per calendar year), `proposal_id` (links to the blacklist or policy motion), `language` (BCP-47), `stance` (`support`/`oppose`/`context`), `submitted_at` (RFC 3339) | All fields required. `stance` feeds dashboards and must match the allowed vocabulary. |
-| **Author info** | `author.name`, `author.organization` (optional), `author.contact`, `author.no_conflicts_certified` (bool) | `author.contact` is redacted from public dashboards but stored in the raw artefact. Set `no_conflicts_certified: true` only if the author attests that no disclosures apply. |
-| **Summary** | `summary.title`, `summary.abstract`, `summary.requested_action` | Textual overview surfaced beside the fact table. Limit `summary.abstract` to ≤2 000 characters. |
-| **Fact table** | `fact_table` array (see next section) | Required even for short briefs. The CLI and transparency ingest job reject submissions without a fact table. |
-| **Disclosures** | `disclosures` array OR `author.no_conflicts_certified: true` | Each disclosure row must include `type` (`financial`, `employment`, `governance`, `family`, `other`), `entity`, `relationship`, and `details`. |
-| **Moderation metadata** | `moderation.off_topic` (bool), `moderation.tags` (array of enum strings), `moderation.notes` | Used by reviewers to suppress astroturfing or unrelated submissions. Off-topic entries do not contribute to dashboards. |
+| དོན་ཚན་ | ཕིལཌ་ | དགོས་མཁོ། |
+|----------------------------------------|
+| **བརྩམས་སྒྲུང་** | `version` (u16) | `1` དགོས། ཐོན་རིམ་སྲུང་སྐྱོབ་འདི་གིས་ ལྷན་ཁག་གིས་ གསལ་ཏོག་ཏོ་མེད་པའི་ ལས་རིམ་འདི་ གོང་འཕེལ་བཏང་བཅུགཔ་ཨིན། |
+| **ངོ་རྟགས་དང་ ལངས་པ།** | `brief_id` (ཡིག་རྒྱུན་ ཡིག་རྒྱུན་ མ་འདྲ་བ།) `proposal_id` (ཐོ་ཡིག་ནགཔོ་ཡང་ན་ སྲིད་བྱུས་གཡོ་འགུལ་གྱི་འབྲེལ་མཐུད་) `language` (BCP-47), `stance` (`support`/`oppose`/`context`), `submitted_at` (RFC3339) | ས་སྒོ་ཚུ་ཆ་མཉམ་ལུ་དགོཔ། `stance` གིས་ བརྡ་བཀོད་ཀྱི་ བརྡ་རྟགས་ཚུ་ འབདཝ་ལས་ གནང་བ་བྱིན་ཆོག་པའི་ མིང་ཚིག་ཚུ་དང་ མཐུན་སྒྲིག་འབད་དགོ། |
+| **རྩོམ་པ་པོའི་བརྡ་དོན་** | `author.name`, `author.organization` (གདམ་ཁ་ཅན་) `author.contact`, `author.no_conflicts_certified` (bool) | `author.contact` འདི་ མི་མང་གི་ བརྡ་དོན་བཀོད་སྒྲིག་ལས་ བཅོས་སྒྲིག་འབད་དེ་ཡོད་རུང་ ཅ་རྙིང་ཚུ་ གསོག་འཇོག་འབད་དེ་ཡོདཔ་ཨིན། རྩོམ་པ་པོ་གིས་ གསལ་བསྒྲགས་ག་ནི་ཡང་ འཇུག་སྤྱོད་འབད་ཡི་ཟེར་ བདེན་ཁུངས་བཀལཝ་ཨིན་པ་ཅིན་ `no_conflicts_certified: true` གཞི་སྒྲིག་འབད། |
+| **བཅུད་བསྡུས་** | `summary.title`, `summary.abstract`, `summary.requested_action` | བདེན་པ་ཐིག་ཁྲམ་གྱི་སྦོ་ལོགས་ཁར་ ཡིག་ཆའི་མཐོང་སྣང་འདི་ ཕྱིར་བཏོན་འབད་ཡོདཔ་ཨིན། `summary.abstract` ལས་ ≤2000 ཡིག་འབྲུ་ཚུ་ཚད་འཛིན་འབད། |
+| **བདེན་པ་གི་ཐིག་ཁྲམ་** | `fact_table` ཨེ་རེ་ (ཤུལ་མམ་གྱི་དབྱེ་ཚན་ནང་བལྟ།) | ཐུང་ཀུ་ཚུ་གི་དོན་ལུ་ཡང་དགོཔ་ཨིན། CLI དང་ དྭངས་གསལ་གྱིས་ ལཱ་གཡོག་གི་ ཞུ་ཡིག་ཚུ་ བདེན་པ་ཐིག་ཁྲམ་མེད་པར་ ངོས་ལེན་མི་འབད། |
+| **གསལ་སྟོན་** | `disclosures` ཨེ་རེ་ཡང་ན་ `author.no_conflicts_certified: true` | གསལ་བསྒྲགས་རེ་རེ་བཞིན་ `type` (`financial`, `employment`, `governance`, `VolunteerBriefV1::validate`, Norito ཚུ་ཚུདཔ་ཨིན། `relationship`, དང་ `details`. |
+| **བར་མཚམས་མེ་ཊ་ཌེ་ཊ་** | `moderation.off_topic` (bool), `moderation.tags` (ཨེ་ནམ་ཡིག་རྒྱུན་གྱི་ཨེ་རེ་), `moderation.notes` | བསྐྱར་ཞིབ་པ་ཚུ་གིས་ གནམ་གྲུ་འཕུར་འགྲུལ་དང་ ཡང་ན་ འབྲེལ་བ་མེད་པའི་ ཞུ་ཡིག་ཚུ་ མར་ཕབ་འབད་ནི་ལུ་ ལག་ལེན་འཐབ་ཨིན། བརྗོད་དོན་མེད་པའི་ཐོ་བཀོད་ཚུ་གིས་ ཌེཤ་བོརཌི་ཚུ་ལུ་ ཕན་ཐོགས་མི་འབད། |
 
-## Fact table specification
+## བདེན་དོན་ཐིག་ཁྲམ་གྱི་གསལ་བཤད།
 
-Each `fact_table` row captures a machine-readable claim. Store the rows as JSON objects with the following fields:
+`fact_table` གྲལ་ཐིག་རེ་རེ་གིས་ འཕྲུལ་ཆས་ལྷག་ཚུགས་པའི་ ཐོབ་བརྗོད་ཅིག་ བཟུང་ཡོདཔ་ཨིན། འོག་གི་ས་སྒོ་ཚུ་དང་གཅིག་ཁར་ JSON དངོས་པོ་ཚུ་བཟུམ་སྦེ་གྲལ་ཐིག་ཚུ་གསོག་འཇོག་འབད།| ཕིལཌ་ | འགྲེལ་བཤད་ |
+|----------------------------------------------------------------------------------------------
+| `claim_id` | གཏན་འཇགས་ངོས་འཛིན་འབད་མི་ (དཔེར་ན་ `VB-2026-04-F1`) |
+| `claim` | བདེན་པ་ཡང་ན་ ཕན་གནོད་ཀྱི་ ཚིག་གཅིག་རྐྱང་གི་ གསལ་བསྒྲགས། |
+| `status` | `corroborated`, `disputed`, `context-only`, |
+| Torii | `governance`, གཅིག་ཡང་ན་དེ་ལས་མང་བའི་ Array, `technical`, `compliance`, `community`, . |
+| `VolunteerBriefV1::validate` | ཡིག་རྒྱུན་གྱི་སྟོངམ་མེན་པའི་ཨེ་རེ་ཚུ། ཡུ་ཨར་ཨེལ་ཚུ་, Torii གནས་སྟངས་ཨའི་ཌི་ཚུ་ ཡང་ན་ སི་ཨའི་ཌི་གཞི་བསྟུན་ཚུ་ ངོས་ལེན་འབད་ཡོདཔ་ཨིན། |
+| `evidence_digest` | རྒྱབ་སྐྱོར་ཡིག་ཆ་ཚུ་གི་གདམ་ཁ་ཅན་གྱི་ BLAKE3 ཅེག་སམ། |
 
-| Field | Description |
-|-------|-------------|
-| `claim_id` | Stable identifier (e.g., `VB-2026-04-F1`). |
-| `claim` | Single-sentence statement of fact or impact. |
-| `status` | One of `corroborated`, `disputed`, `context-only`. |
-| `impact` | Array containing one or more of `governance`, `technical`, `compliance`, `community`. |
-| `citations` | Non-empty array of strings. URLs, Torii case IDs, or CID references are accepted. |
-| `evidence_digest` | Optional BLAKE3 checksum of supporting documents. |
+རང་བཞིན་དྲན་འཛིན་ཚུ།
+- བཙིར་མི་གིས་ དཔར་བསྐྲུན་གྱི་སྐུགས་བཀོད་ནིའི་དོན་ལུ་ `fact_rows` དང་ `fact_rows_with_citation` ཚུ་བཟོ་ནི། ལུང་འདྲེན་མེད་པའི་ གྱལ་རིམ་ཚུ་ ད་ལྟོ་ཡང་ མི་གི་ལྷག་ཚུགས་པའི་ ཐིག་ཁྲམ་ནང་ལུ་ཡོདཔ་ཨིན་རུང་ སྒྲུབ་བྱེད་མེད་མི་སྦེ་ བརྟག་ཞིབ་འབདཝ་ཨིན།
+- ཐོབ་བརྗོད་ཚུ་ བསྡུ་སྒྲིག་འབད་དེ་ གཞུང་སྐྱོང་གྲོས་འཆར་ནང་ ངོས་འཛིན་ཅོག་འཐདཔ་ཚུ་ གཞི་བསྟུན་འབད་དེ་ ཕར་ཚུར་འབྲེལ་མཐུད་འབད་ནི་འདི་ གཏན་འབེབས་ཅིག་ཨིན།
 
-Automation notes:
-- The ingest job counts `fact_rows` and `fact_rows_with_citation` to build publication scorecards. Rows without citations still appear in the human-readable table but are tracked as missing evidence.
-- Keep claims concise and reference the same identifiers used in governance proposals so cross-linking is deterministic.
+## རྩོད་རྙོགས་གསལ་སྟོན་དགོས་མཁོ།
 
-## Conflict disclosure requirements
+༡ དངུལ་འབྲེལ་དང་ལཱ་གཡོག་ གཞུང་སྐྱོང་ ཡང་ན་ བཟའ་ཚང་གི་འབྲེལ་བ་ཡོད་པའི་སྐབས་ ཉུང་ཤོས་རང་ གསལ་བསྒྲགས་འབད་དགོ།
+2. `author.no_conflicts_certified: true` འདི་ “ཤེས་རྟོགས་མེད་པའི་ འཁྲུག་རྩོད་” ཟེར་ བཀོད་དགོ། ཕུལ་མི་ནང་ གསལ་བསྒྲགས་འབད་ནི་དང་ ཡང་ན་ `true` ལག་ཁྱེར་ཚུ་ཚུདཔ་ཨིན། དེ་མེན་པ་ཅིན་ ཁོང་ཚུ་ བཟའ་སྤྱོད་འབད་བའི་སྐབས་ལུ་ དར་ཁྱབ་བཏང་ཡོདཔ་ཨིན།
+༣ མི་མང་ཡིག་ཆ་ཡོད་པའི་སྐབས་ `disclosures[i].evidence` ཚུད་དགོ། (དཔེར་ན་ ལས་འཛིན་ཡིག་ཆ་ ཡིག་ཆ་ ཌེ་ཨོ་ཚོགས་རྒྱན་) སྒྲུབ་བྱེད་འདི་ “མེད་” ལག་ཁྱེར་གྱི་དོན་ལུ་ གདམ་ཁ་ཅན་ཨིན་རུང་ ཤུགས་སྦེ་རང་ གྲོས་འཆར་བཀོདཔ་ཨིན།
 
-1. Provide at least one disclosure entry when a financial, employment, governance, or familial tie exists.
-2. Use `author.no_conflicts_certified: true` to assert “no known conflicts.” Submissions must include either a disclosure entry or a `true` certification; otherwise, they’re flagged during ingest.
-3. Include `disclosures[i].evidence` whenever public documentation exists (e.g., corporate filings, DAO votes). Evidence is optional for “none” certifications but strongly recommended.
+## བསྐུར་འཛིན་ངོ་རྟགས་དང་ བརྩམས་སྒྲུང་མེད་པའི་ ལེགས་སྐྱོང་།
 
-## Moderation tags & off-topic handling
+བར་མཚམས་བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ དྭངས་གསལ་གྱི་ མདོང་ལམ་ནང་ མ་འཛུལ་བའི་ཧེ་མ་ ཞུ་ཡིག་ཚུ་ ཁ་ཡིག་བཏགས་ཚུགས།
 
-Moderation reviewers can label submissions before they enter the transparency pipeline:
+- `moderation.off_topic: true` གིས་ `iroha_data_model::ministry::VolunteerBriefV1` གྱངས་ཁ་ཡར་སེང་འབད་བའི་སྐབས་ བསྡོམས་རྩིས་གྱངས་ཁ་ལས་ ཐོ་བཀོད་འདི་བཏོན་གཏང་དོ་ཡོདཔ་ཨིན། གྲལ་ཐིག་འདི་ ད་ལྟོ་ཡང་ རྩིས་ཞིབ་འབད་ནིའི་དོན་ལུ་ གཏན་མཛོད་ནང་ འཐོབ་ཚུགས།
+- `1`, `duplicate`, `needs-translation`, `1`, Norito, `astroturf`, `astroturf`, `astroturf`, Norito, Norito ངོ་རྟགས་ཚུ་གིས་ མར་འབབ་བསྐྱར་ཞིབ་འབད་མི་ཚུ་ལུ་ ཐུང་ཀུ་ཆ་ཚང་མ་ལྷག་པར་ ཚོད་བརྟག་འབད་ནི་ལུ་ གྲོགས་རམ་འབདཝ་ཨིན།
+- `moderation.notes` གིས་ བར་མཚམས་གྲོས་ཐག་གི་དོན་ལུ་ བདེན་བཤད་ཐུང་ཀུ་ཅིག་ གསོག་འཇོག་འབདཝ་ཨིན། (≤༥༡༢ ཡིག་འབྲུ་)
 
-- `moderation.off_topic: true` removes the entry from aggregate counts while incrementing an `off_topic_rejections` counter. The row is still available in raw archives for audit.
-- `moderation.tags` accepts enum values: `duplicate`, `needs-translation`, `needs-follow-up`, `spam`, `astroturf`, `policy-escalation`. Tags help downstream reviewers triage without re-reading the full brief.
-- `moderation.notes` stores a short justification for the moderation decision (≤512 characters).
+## དཔྱད་ཡིག་ཕུལ་བ།
 
-## Submission checklist
+༡ ཊེམ་པེལེཊི་འདི་ལག་ལེན་འཐབ་སྟེ་ ཇེ་ཨེསི་ཨོ་ཨེན་ པེ་ལོཌི་ ཡང་ན་ འོག་ལུ་འགྲེལ་བཤད་རྐྱབ་ཡོད་པའི་ གྲོགས་རམ་པ་སི་ཨེལ་ཨའི་ ལག་ལེན་འཐབ་སྟེ་ བཀང་དགོ།
+༢ ཉུང་མཐའ་ལུ་ བདེན་པ་ཐིག་ཁྲམ་གྲལ་ཐིག་གཅིག་ མི་རློབས་རྐྱབ། གྲལ་ཐིག་རེ་རེ་གི་དོན་ལུ་ ལུང་འདྲེན་ཚུ་ཚུདཔ་ཨིན།
+༣ གསལ་བསྒྲགས་ཚུ་བྱིན་ནི་ཡང་ན་ གསལ་ཏོག་ཏོ་སྦེ་ `author.no_conflicts_certified: true` གཞི་སྒྲིག་འབད་ནི།
+༤ བར་འཛུལ་གྱི་མེ་ཊ་ཌེ་ཊ་ (སྔོན་སྒྲིག་ `off_topic: false`) དེ་འབདཝ་ལས་ བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ མགྱོགས་དྲགས་སྦེ་ འགྲུལ་བསྐྱོད་འབད་ཚུགས།
+༥༽ སྐྱེལ་བཙུགས་མ་འབད་བའི་ཧེ་མ་ `cargo xtask ministry-transparency ingest --volunteer <file>` ཡང་ན་ Norito བདེན་དཔྱད་གང་རུང་ཅིག་དང་གཅིག་ཁར་ པེ་ལོཌ་འདི་ བདེན་དཔྱད་འབད།
 
-1. Fill out the JSON payload using this template or the helper CLI described below.
-2. Populate at least one fact table row; include citations for each row.
-3. Provide disclosures or explicitly set `author.no_conflicts_certified: true`.
-4. Attach moderation metadata (default `off_topic: false`) so reviewers can triage quickly.
-5. Validate the payload with `cargo xtask ministry-transparency ingest --volunteer <file>` or any Norito validator before uploading.
+## བདེན་དཔྱད་ CLI (MINFO-3)
 
-## Validation CLI (MINFO-3)
-
-The repository now ships a dedicated validator for volunteer briefs:
+མཛོད་ཁང་འདི་གིས་ ད་ལྟོ་ ཁས་བླངས་པ་ཚུ་གི་དོན་ལུ་ བརྩོན་ཤུགས་ཅན་གྱི་བདེན་དཔྱད་འབད་མི་ཅིག་ བཏངམ་ཨིན།
 
 ```bash
 cargo xtask ministry-transparency volunteer-validate \
@@ -80,32 +79,30 @@ cargo xtask ministry-transparency volunteer-validate \
   --json-output artifacts/ministry/volunteer_lint_report.json
 ```
 
-Key behaviour:
+Key ཡི་གུས།- JSON དངོས་པོ་རེ་རེ་བཞིན་དུ་ངོས་ལེན་འབདཝ་ཨིན་ *ཡང་ན་* གི་ཨེ་རེ་ ཐུང་ཀུ་ཚུ་གི་ཨེ་རེ་ཚུ། གཡོག་བཀོལ་གཅིག་ནང་ ཡིག་སྣོད་ལེ་ཤ་ཅིག་ ལྕེ་བཏང་ནིའི་དོན་ལུ་ `--input` ཚར་ལེ་ཤ་ཅིག་ བརྒྱུད་དེ་འགྱོཝ་ཨིན།
+- འཛོལ་བ་དང་ཉེན་བརྡ་གི་གྱངས་ཁ་སྟོན་མི་ བཅུད་བསྡུས་གཅིག་རེ་ བཏོནམ་ཨིན། ཉེན་བརྡ་ཚུ་གིས་ ཡིག་བརྗོད་ཐོ་ཡིག་ཚུ་ཡང་ན་ ཡུན་རིངམོ་སྦེ་དྲན་འཛིན་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིནམ་ད་ འཛོལ་བ་ཚུ་གིས་ དཔར་བསྐྲུན་འདི་བཀག་ཆ་འབདཝ་ཨིན།
+- དགོས་མཁོའི་ས་སྒོ་ཚུ་ (`brief_id`, `proposal_id`, `stance`, བདེན་པ་ཐིག་ཁྲམ་ནང་དོན་ གསལ་བསྒྲགས་ཚུ་ གསལ་བསྒྲགས། ཡང་ན་ `no_conflicts_certified`) ཡིག་ཐོག་ལུ་བཀོད་ཡོད་པའི་ཚིག་མཛོད་ནང་འཁོད་ལུ་ འཛུལ་སྤྱོད་གནས་གོང་འདི་ ཊེམ་པེལེཊི་འདི་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན།
+- `--json-output <path>` འདི་ བདེན་དཔྱད་འབད་མི་གིས་ གཞི་སྒྲིག་འབད་བའི་སྐབས་ འཕྲུལ་ཆས་ལྷག་བཏུབ་པའི་ གསལ་སྟོན་ཅིག་ ཐུང་ཀུ་རེ་རེ་ལུ་ བཅུད་བསྡུས་འབད་དེ་ བྲིས་ཡོདཔ་ཨིན། དྲྭ་ཚིགས་འདི་གི་ `npm run generate:volunteer-lint` བརྡ་བཀོད་འདི་གིས་ གྲོས་འཆར་ཤོག་ལེབ་རེ་རེ་གི་སྦོ་ལོགས་ཁར་ ལིནཊི་གནས་རིམ་བཀྲམ་སྟོན་འབད་ནི་ལུ་ གསལ་སྟོན་འདི་ བཀོལ་སྤྱོད་འབདཝ་ཨིན།
 
-- Accepts individual JSON objects *or* arrays of briefs; pass `--input` multiple times to lint several files in one run.
-- Emits a per-brief summary showing the number of errors and warnings; warnings highlight empty citation lists or overlong notes, while errors block publication.
-- Ensures required fields (`brief_id`, `proposal_id`, `stance`, fact table contents, disclosures or `no_conflicts_certified`) match this template and that enum values stay within the documented vocabularies.
-- When `--json-output <path>` is set the validator writes a machine-readable manifest summarising every brief (proposal id, stance, status, errors/warnings). The portal’s `npm run generate:volunteer-lint` command consumes this manifest to display lint status next to each proposal page.
+དྭངས་གསལ་གྱི་ལཱ་ནང་མ་ལྷོད་པའི་ཧེ་མ་ **MINFO-3** དང་འཁྲིལ་ཏེ་ ཁས་བླངས་པ་ཕུལ་མི་ཚུ་ མཐུན་སྒྲིག་འབད།
 
-Integrate the command into portal workflows or CI to keep volunteer submissions compliant with **MINFO-3** before they reach the transparency ingest job.
+## དཔེར་བརྗོད།
 
-## Example payload
+མི་རློབས་ཆ་ཚང་ཡོད་པའི་དཔེ་ཅིག་གི་དོན་ལུ་ `docs/examples/ministry/volunteer_brief_template.json` འདི་ བདེན་པ་ཐིག་ཁྲམ་གྲལ་ཐིག་དང་ གསལ་བསྒྲགས་ཚུ་ དེ་ལས་ བར་མཚམས་ངོ་རྟགས་ཚུ་རྩིས་ཏེ་ བལྟ། མར་སི་ཊིམ་ ཌེཤ་བོརཌི་ཚུ་གིས་ ཇེ་ཨེསི་ཨོ་ཨེན་ རུལ་པོ་འདི་ བཟའ་ཞིནམ་ལས་ རང་བཞིན་གྱིས་ རྩིས་སྟོནམ་ཨིན།
 
-See `docs/examples/ministry/volunteer_brief_template.json` for a fully populated example, including fact table rows, disclosures, and moderation tags. Downstream dashboards consume the raw JSON and automatically calculate:
-
-- `total_briefs` (off-topic submissions excluded)
-- `fact_rows` / `fact_rows_with_citation`
+- `total_briefs` (དོན་ཚན་མེད་པའི་ཡིག་ཆ་ཚུ་ཕྱིར་བཏོན་འབད་ཡོདཔ།)
+- `fact_rows` / `VolunteerBriefV1::validate`
 - `disclosures_missing`
 - `off_topic_rejections`
 
-If new fields are required, update this document and the ingest summariser (`xtask/src/ministry.rs`) in the same change so the governance evidence remains reproducible.
+གལ་སྲིད་ ས་སྒོ་གསརཔ་ཚུ་དགོ་པ་ཅིན་ ཡིག་ཆ་འདི་དང་ བཙུགས་མི་ བཅུད་བསྡུ་མི་ (`xtask/src/ministry.rs`) འདི་ བསྒྱུར་བཅོས་གཅིག་ནང་ དུས་མཐུན་བཟོ་ཡོདཔ་ལས་ གཞུང་སྐྱོང་སྒྲུབ་བྱེད་འདི་ ལོག་བཏོན་ཚུགསཔ་སྦེ་ ལུས་ཡོདཔ་ཨིན།
 
-## Publication SLA & portal surfacing (MINFO-3)
+## དཔར་བསྐྲུན་ཨེས་ཨེལ་ཨེ་དང་ དྲྭ་ཐོག་འོག་ཐིག་ (MINFO-3)
 
-To keep citizen submissions transparent, the portal now publishes briefs on a fixed cadence once they pass validation:
+མི་སེར་གྱི་ཞུ་ཡིག་ཚུ་ དྭངས་གསལ་སྦེ་བཞག་ནིའི་དོན་ལུ་ ད་ལྟོ་ དྲྭ་ཚིགས་འདི་གིས་ བདེན་དཔྱད་འབད་ཚར་བའི་ཤུལ་ལས་ གཏན་འཇགས་ཀྱི་ མཐོ་རིམ་གྱི་ བརྡ་དོན་ཚུ་ དཔར་བསྐྲུན་འབདཝ་ཨིན།
 
-1. **T+0–6 hours:** submissions land via the volunteer intake form or `cargo xtask ministry-transparency ingest`. Validators run `VolunteerBriefV1::validate`, reject malformed payloads, and emit lint reports (missing disclosures, duplicate fact IDs, etc.).
-2. **T+6–24 hours:** accepted briefs are queued for translation/triage. Moderation tags (`needs-translation`, `duplicate`, `policy-escalation`, …) are applied, and off-topic entries are archived but excluded from aggregate counts.
-3. **T+24–48 hours:** the portal publishes the brief alongside the corresponding proposal page. Each published proposal now links to “Volunteer Opinions” so reviewers can read support/oppose/context briefs without opening raw JSON.
+1. **T+0–6hours:** ཁས་བླངས་པ་ཚུ་བརྒྱུད་དེ་ ས་ཆ་ ཡང་ན་ `cargo xtask ministry-transparency ingest` བརྒྱུད་དེ་ ས་ཆག། བདེན་དཔྱད་འབད་མི་ཚུ་གིས་ `VolunteerBriefV1::validate` གཡོག་བཀོལ་ནི་དང་ སྐྱོན་ཅན་གྱི་གླ་ཆ་ཚུ་ ངོས་ལེན་མ་འབད་བར་ ལིནཊ་སྙན་ཞུ་ཚུ་ བཏོནམ་ཨིན།
+2. **T+6–24hours:** ངོས་ལེན་འབད་ཡོད་པའི་བདོག་གཏད་ཚུ་ སྐད་སྒྱུར་/ཚོད་བརྟག་གི་དོན་ལུ་ བང་རིམ་ཨིན། བར་མཚམས་ངོ་རྟགས་ (`needs-translation`, `duplicate`, `policy-escalation`, ...) ཚུ་འཇུག་སྤྱོད་འབད་ཡོདཔ་དང་ བརྗོད་གཞི་མེད་པའི་ཐོ་བཀོད་ཚུ་ གཏན་མཛོད་ནང་བཙུགས་ཡོདཔ་ཨིན་རུང་ བསྡོམས་རྩིས་ལས་ ཕྱིར་བཏོན་འབད་ཡོདཔ་ཨིན།
+3. **T+24–48hours:** དྲྭ་ཚིགས་འདི་གིས་ མཐུན་སྒྲིག་ཅན་གྱི་གྲོས་འཆར་ཤོག་ལེབ་ཀྱི་མཉམ་དུ་ བརྡ་དོན་ཐུང་ཀུ་འདི་ དཔར་བསྐྲུན་འབདཝ་ཨིན། ད་ལྟོ་དཔར་བསྐྲུན་འབད་ཡོད་པའི་གྲོས་འཆར་རེ་རེ་གིས་ “Volunteer Opinions” དང་འབྲེལ་བ་ཡོདཔ་ལས་ བསྐྱར་ཞིབ་པ་ཚུ་གིས་ རྒྱབ་སྐྱོར་/རྒྱབ་འགལ་/སྐབས་དོན་ནང་ བརྡ་དོན་ཚུ་ མ་ཕྱེ་བར་ལྷག་ཚུགས།
 
-If a submission is marked `policy-escalation` or `astroturf`, the SLA tightens to **12 hours** so governance can respond quickly. Operators can audit the SLA via the **Volunteer Briefs** page in the docs portal (`docs/portal/docs/ministry/volunteer-briefs.md`), which lists the latest publication windows, lint status, and links to Norito artefacts.
+གལ་སྲིད་ ཕུལ་མི་འདི་ `policy-escalation` ཡང་ན་ `astroturf` རྟགས་བཀོད་པ་ཅིན་ SLA གིས་ **12hours** ལུ་ བརྡ་རྟགས་བཏོནམ་ཨིན། བཀོལ་སྤྱོད་པ་ཚུ་གིས་ ཡིག་ཆ་གསརཔ་ (`docs/portal/docs/ministry/volunteer-briefs.md`) ནང་ལུ་ **Volunteer Brifs** ཤོག་ལེབ་བརྒྱུད་དེ་ SLA རྩིས་ཞིབ་འབད་ཚུགས།

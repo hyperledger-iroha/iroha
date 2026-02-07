@@ -7,169 +7,164 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 9201c0027f05b1ab2c83fa6b3e1a1e6dad3ff9660a8ed23bac7667408d421ada
 source_last_modified: "2026-01-22T14:35:37.551676+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Governance Playbook
+# Идара итеү пьесаһы
 
-This playbook captures the day-to-day rituals that keep the Sora Network
-governance council aligned. It aggregates the authoritative references from the
-repository so individual ceremonies can remain concise, while operators always
-have a single entry point for the broader process.
+Был плейбук көндәлек ритуалдарҙы тота, улар Сора селтәрен һаҡлай
+идара итеү советы тура килә. Ул абруйлы һылтанмаларҙы агрегациялай.
+һаҡлағыс шулай айырым тантаналар ҡыҫҡа булып ҡала ала, ә операторҙар һәр ваҡыт
+киңерәк процесс өсөн бер инеү нөктәһенә эйә.
 
-## Council Ceremonies
+## Совет тантаналары
 
-- **Fixture governance** – See [Sora Parliament Fixture Approval](sorafs/signing_ceremony.md)
-  for the on-chain approval flow that the Parliament’s Infrastructure Panel now
-  follows when reviewing SoraFS chunker updates.
-- **Vote tally publication** – Refer to
-  [Governance Vote Tally](governance_vote_tally.md) for the step-by-step CLI
-  workflow and reporting template.
+- **Теҙ идара итеү** – Ҡара: [Сора парламенты раҫлау раҫлау](sorafs/signing_ceremony.md)
+  өсөн сылбырҙа раҫлау ағымы, тип парламент’s инфраструктура панелдәре хәҙер
+  SoraFS chunker яңыртыуҙарын тикшергәндә эҙләп таба.
+- **Төньяҡ-хәтәр баҫмаһы** – Һылтанма.
+  [Идаралыҡ тауышы Талли] (governance_vote_tally.md) өсөн аҙым-аҙым CLI
+  эш ағымы һәм отчет шаблон.
 
-## Operational Runbooks
+##
 
-- **API integrations** – [Governance API reference](governance_api.md) lists the
-  REST/gRPC surfaces exposed by council services, including authentication
-  requirements and pagination rules.
-- **Telemetry dashboards** – The Grafana JSON definitions under
-  `docs/source/grafana_*` define the “Governance Constraints” and “Scheduler
-  TEU” boards. Export the JSON into Grafana after each release to stay aligned
-  with the canonical layout.
+- **API интеграциялары** – [Идаралыҡ API һылтанма](governance_api.md) исемлегенә
+  REST/gRPC өҫтө совет хеҙмәттәре тарафынан фашланған, шул иҫәптән аутентификация
+  талаптары һәм мәжүсилек ҡағиҙәләре.
+- **Телеметрия приборҙар таҡталары** – Grafana JSON аныҡлауҙары буйынса.
+  `docs/source/grafana_*` билдәләй “Идаралыҡ сикләүҙәре” һәм “График
+  ТЭУ» таҡталары.
+  канонлы планировка менән.
 
-## Data Availability Oversight
+## Мәғлүмәттәр булыуы күҙәтеү
 
-### Retention classes
+### Һаҡлау кластары
 
-Parliament panels approving DA manifests must reference the enforced retention
-policy before voting. The table below mirrors the defaults enforced via
-`torii.da_ingest.replication_policy` so reviewers can spot mismatches without
-hunting for the source TOML.【docs/source/da/replication_policy.md:1】
+Парламент панелдәре раҫлай DA манифесттары тейеш һылтанма мәжбүри һаҡлау
+тауыш биреү алдынан сәйәсәт. Түбәндәге таблицала ғәҙәттәгесә үтәлгән ғәҙәттән тыш хәлдәр .
+`torii.da_ingest.replication_policy` 2012 йылда рецензенттар тап килмәүҙәрҙе күрә ала.
+Һунар өсөн сығанаҡ ТОМЛ.
 
-| Governance tag | Blob class | Hot retention | Cold retention | Required replicas | Storage class |
-|----------------|------------|---------------|----------------|-------------------|---------------|
-| `da.taikai.live` | `taikai_segment` | 24 h | 14 d | 5 | `hot` |
-| `da.sidecar` | `nexus_lane_sidecar` | 6 h | 7 d | 4 | `warm` |
-| `da.governance` | `governance_artifact` | 12 h | 180 d | 3 | `cold` |
-| `da.default` | _all other classes_ | 6 h | 30 d | 3 | `warm` |
+| Идара итеү тегы | Блоб класы | Ҡайнар һаҡлау | Һалҡын һаҡлау | Кәрәкле репликалар | Һаҡлау класы |
+|--------------------------------------------------------------------------------- |-------------------------------- |
+| `da.taikai.live` | `taikai_segment` | 24h | 14d | 5 | `hot` |
+| `da.sidecar` | `nexus_lane_sidecar` | 6h | 7d | 4 | `warm` |
+| `da.governance` | `governance_artifact` | 12h | 180d | 3 | `cold` |
+| `da.default` | _башҡа кластар_ | 6h | 30d | 3 | `warm` |
 
-The Infrastructure Panel should attach the filled template from
-`docs/examples/da_manifest_review_template.md` to every ballot so the manifest
-digest, retention tag, and Norito artefacts remain linked in the governance
-record.
+Инфраструктура панелендә тултырылған ҡалыпты беркетергә кәрәк.
+`docs/examples/da_manifest_review_template.md` һәр бюллетень шулай манифест
+distest, һаҡлау тегы, һәм Norito артефакттары идара итеүҙә бәйле булып ҡала
+яҙымта.
 
-### Signed manifest audit trail
+### Ҡулланылған манифест аудит эҙҙәре
 
-Before a ballot reaches the agenda, council staff must prove that the manifest
-bytes under review match the Parliament envelope and the SoraFS artefact. Use
-the existing tooling to collect that evidence:
-
-1. Fetch the manifest bundle from Torii (`iroha app da get-blob --storage-ticket <hex>`
-   or the equivalent SDK helper) so everyone hashes the same bytes that reached
-   the gateways.
-2. Run the manifest stub verifier with the signed envelope:
+Бюллетень көн тәртибенә еткәнсе, совет хеҙмәткәрҙәре иҫбатларға тейеш, тип манифест .
+тикшерелгән байт парламент конвертына һәм SoraFS артефактына тап килә. Файҙаланыу
+был дәлилдәрҙе йыйыу өсөн булған инструменттар:1. Torii (`iroha app da get-blob --storage-ticket <hex>`
+   йәки эквивалентлы SDK ярҙамсыһы) шулай итеп, һәр кемгә еткән бер үк байттарҙы хеш
+   шлюздар.
+2. Ҡул ҡуйылған конверт менән манифест стаб тикшерергә:
    ```
    cargo run -p sorafs_car --bin sorafs-manifest-stub -- manifest.json \
      --manifest-signatures-in=fixtures/sorafs_chunker/manifest_signatures.json \
      --json-out=/tmp/manifest_report.json
    ```
-   This recomputes the BLAKE3 manifest digest, validates the
-   `chunk_digest_sha3_256`, and checks every Ed25519 signature embedded in
-   `manifest_signatures.json`. See `docs/source/sorafs/manifest_pipeline.md`
-   for additional CLI options.
-3. Copy the digest, `chunk_digest_sha3_256`, profile handle, and signer list into
-   the review template. NOTE: if the verifier reports “profile mismatch” or a
-   missing signature, halt the vote and request a corrected envelope.
-4. Store the verifier output (or CI artefact from
-   `ci/check_sorafs_fixtures.sh`) alongside the Norito `.to` payload so auditors
-   can replay the evidence without accessing internal gateways.
+   Был BLAKE3 асыҡ һеңдерелгән, раҫлай
+   `chunk_digest_sha3_256`, һәм 25519 25519 й.
+   `manifest_signatures.json`. Ҡара: `docs/source/sorafs/manifest_pipeline.md`
+   өҫтәмә CLI варианттары өсөн.
+3. Күсермә distest, `chunk_digest_sha3_256`, профиль тотҡаһы, һәм ҡул ҡуйыусылар исемлегенә
+   тикшерелгән ҡалып. ИҪКӘРМӘ: әгәр тикшерелгән хәбәр итә “профиль тап килмәү” йәки а
+   ҡултамға юҡ, тауыш биреүҙе туҡтата һәм төҙәтелгән конвертты һорай.
+4. Тикшерергә тикшерелгән сығыш (йәки CI артефакт 2019 йылдан
+   `ci/check_sorafs_fixtures.sh`) Norito менән бер рәттән `.to` файҙалы йөк шулай итеп, шулай итеп аудиторҙар
+   эске шлюздарға инмәйенсә дәлилдәрҙе ҡабатлай ала.
 
-The resulting audit pack should let Parliament recreate every hash and signature
-check even after the manifest is rotated out of hot storage.
+Һөҙөмтәлә аудит пакеты рөхсәт итергә тейеш Парламент һәр хеш һәм ҡултамғаһын яңынан тыуҙырырға
+тикшерергә хатта манифест әйләндереп, эҫе һаҡлау.
 
-### Review checklist
+### тикшерелгән исемлек
 
-1. Pull the Parliament-approved manifest envelope (see
-   `docs/source/sorafs/signing_ceremony.md`) and record the BLAKE3 digest.
-2. Verify the manifest’s `RetentionPolicy` block matches the tag in the table
-   above; Torii will reject mismatches, but the council must capture the
-   evidence for auditors.【docs/source/da/replication_policy.md:32】
-3. Confirm that the submitted Norito payload references the same retention tag
-   and blob class that appears in the intake ticket.
-4. Attach proof of the policy check (CLI output, `torii.da_ingest.replication_policy`
-   dump, or CI artefact) to the review packet so SRE can replay the decision.
-5. Record planned subsidy taps or rent adjustments when the proposal depends on
+1. Парламент тарафынан раҫланған манифест конвертын тартығыҙ (ҡара:
+   `docs/source/sorafs/signing_ceremony.md`) һәм BLAKE3 дигестын теркәй.
+2. Тикшерергә манифест’s `RetentionPolicy` блок тап килә тег таблицаһында .
+   өҫтә; Torii тап килмәүҙәрҙе кире ҡағасаҡ, әммә советты төшөрөргә тейеш.
+   аудиторҙар өсөн дәлил.【докттар/сығанаҡ/да/репликация_полиция.мд:32】
+3. Раҫлау, тип тапшырылған Norito файҙалы йөктәр тураһында һылтанмалар шул уҡ һаҡлау билдәһе .
+   һәм ҡабул итеү билетында күренгән блоб класы.
+4. Сәйәсәт тикшерергә дәлилдәре беркетергә (CLI сығыш, `torii.da_ingest.replication_policy`
+   свалка, йәки CI артефакт) тикшерелгән пакетҡа шулай SRE ҡарарҙы ҡабатлай ала.
+5. Яҙма планлаштырылған субсидия крандар йәки арендаға төҙәтмәләр ҡасан тәҡдимгә бәйле
    `docs/source/sorafs_reserve_rent_plan.md`.
 
-### Escalation matrix
+### Эскалация матрицаһы
 
-| Request type | Owning panel | Evidence to attach | Deadlines & telemetry | References |
-|--------------|--------------|--------------------|-----------------------|------------|
-| Subsidy / rent adjustment | Infrastructure + Treasury | Filled DA packet, rent delta from `reserve_rentd`, updated reserve projection CSV, council vote minutes | Note rent impact before submitting the Treasury update; include rolling 30 d buffer telemetry so Finance can reconcile within the next settlement window | `docs/source/sorafs_reserve_rent_plan.md`, `docs/examples/da_manifest_review_template.md` |
-| Moderation takedown / compliance action | Moderation + Compliance | Compliance ticket (`ComplianceUpdateV1`), proof tokens, signed manifest digest, appeal status | Follow the gateway compliance SLA (acknowledge within 24 h, full removal ≤72 h). Attach `TransparencyReportV1` excerpt showing the action. | `docs/source/sorafs_gateway_compliance_plan.md`, `docs/source/sorafs_moderation_panel_plan.md` |
-| Emergency freeze / rollback | Parliament moderation panel | Prior approval packet, new freeze order, rollback manifest digest, incident log | Publish freeze notice immediately and schedule the rollback referendum within the next governance slot; include buffer saturation + DA replication telemetry to justify the emergency. | `docs/source/sorafs/signing_ceremony.md`, `docs/source/sorafs_moderation_panel_plan.md` |
+| Тип запрос | Хужалыҡ панелендә | Беркетергә дәлилдәр | Сроктар & телеметрия | Һылтанмалар |
+|------------|-----------------------------------------------------|-----------------|
+| Субсидия / арендаға көйләү | Инфраструктура + ҡаҙна | DA пакет тултырылған, аренда дельта `reserve_rentd`, яңыртылған запас проекция CSV, совет тауыш минуты | Иҫкәрмә арендаға йоғонто тапшырыр алдынан ҡаҙна яңыртыу; 30d буфер телеметрияһын үҙ эсенә ала, шуға күрә Финанс киләһе ҡаласыҡ тәҙрәһе эсендә яраштырырға мөмкин | `docs/source/sorafs_reserve_rent_plan.md`, `docs/examples/da_manifest_review_template.md` |
+| Модерация тейкдаун / үтәү ғәмәлдәре | Модерация + үтәү | Ҡабул итеү билеты (`ComplianceUpdateV1`), иҫбатлау токендары, ҡул ҡуйылған асыҡ һеңдерелгән, апелляция статусы | Шлюз үтәү буйынса SLA (24h эсендә таныу, тулы сығарыу ≤72h). `TransparencyReportV1` беркетергә өҙөк күрһәтеү ғәмәл. | `docs/source/sorafs_gateway_compliance_plan.md`, `docs/source/sorafs_moderation_panel_plan.md` |
+| Ғәҙәттән тыш хәлдәрҙе туңдырыу / кире ҡайтарыу | Парламент модерация панелендә | Алдан раҫлау пакеты, яңы туңдырыу тәртибе, кире ҡағыу манифест distest, инциденттар журналы | Баҫтырыу өсөн туңдырыу тураһында иҫкәртмә шунда уҡ һәм график буйынса референдум график сиктәрендә киләһе идара итеү слот; үҙ эсенә буфер туйындырыу + DA репликацияһы телеметрияһы ғәҙәттән тыш хәлде аҡлау өсөн. | `docs/source/sorafs/signing_ceremony.md`, `docs/source/sorafs_moderation_panel_plan.md` X |Таблица ҡулланыу ҡасан триаинг ҡабул итеү билеттары, шулай итеп, һәр панель теүәл ала .
+уның мандатын башҡарыу өсөн кәрәкле артефакттар.
 
-Use the table when triaging intake tickets so every panel receives the exact
-artefacts required to execute its mandate.
+### Отчет тапшырыу өсөн
 
-### Reporting deliverables
+Һәр DA-10 ҡарары түбәндәге артефакттар менән ебәрергә тейеш (уларҙы беркетергә
+Идара итеү DAG яҙма һылтанма тауыш биреүҙең):
 
-Every DA-10 decision must ship with the following artefacts (attach them to the
-Governance DAG entry referenced in the vote):
+- тамамланған Markdown пакеты.
+  `docs/examples/da_manifest_review_template.md` (хәҙерге ҡултамға һәм
+  эскалация бүлектәре).
+- Ҡул ҡуйылған Norito манифест (`.to`) плюс `manifest_signatures.json` конверт
+  йәки CI тикшерелгән журналдар, улар иҫбатлай фетч distest.
+- Ғәмәлдән башланған теләһә ниндәй асыҡлыҡ яңыртыуҙары:
+  - `TransparencyReportV1` дельта өсөн takedown йәки үтәү-двигателдәр туңдырыу.
+  - Ҡуртымға/резерв леджер дельта йәки `ReserveSummaryV1` субсидиялар өсөн снимок.
+- тикшерелгән ваҡытта йыйылған телеметрия снимоктарына һылтанмалар (репликация тәрәнлеге,
+  буфер баш, сама менән артта ҡалған) шулай күҙәтеүселәр кросс-тикшерергә мөмкин шарттар
+  факттан һуң.
 
-- The completed Markdown packet from
-  `docs/examples/da_manifest_review_template.md` (now including signature and
-  escalation sections).
-- The signed Norito manifest (`.to`) plus the `manifest_signatures.json` envelope
-  or CI verifier logs that prove the fetch digest.
-- Any transparency updates triggered by the action:
-  - `TransparencyReportV1` delta for takedowns or compliance-driven freezes.
-  - Rent/reserve ledger delta or `ReserveSummaryV1` snapshot for subsidies.
-- Links to telemetry snapshots collected during the review (replication depth,
-  buffer headroom, moderation backlog) so observers can cross-check conditions
-  after the fact.
+## Модерация һәм эскалация
 
-## Moderation & Escalation
+Ҡапҡа takdowns, субсидия clowbacks, йәки DA туңдырыу үтәлешен үтәй
+торба һүрәте `docs/source/sorafs_gateway_compliance_plan.md` һәм был
+апелляция инструменттары `docs/source/sorafs_moderation_panel_plan.md`. Панель тейеш:
 
-Gateway takedowns, subsidy clawbacks, or DA freezes follow the compliance
-pipeline described in `docs/source/sorafs_gateway_compliance_plan.md` and the
-appeal tooling in `docs/source/sorafs_moderation_panel_plan.md`. Panels should:
+.
+   `ModerationAppealV1`) һәм беркетергә бәйле дәлил токендар.【доктар/сығанаҡ/сорафтар_ҡағай_план.мд:20】
+.
+   тауыш) йәки ашығыс ярҙам парламенты туңдырыу; ике ағым да асыҡлыҡты килтерергә тейеш
+   distest һәм һаҡлау тегы яңы ҡалыпта тотолған.【доктар/сығанаҡ/сорафтар_панел_панель.мд:1】
+3. Эскалация сроктарын иҫәпләү (апелляция коммит/асыу windows, ғәҙәттән тыш
+   туңдырыу оҙайлылығы) һәм ниндәй совет йәки панель эйәһе эҙләү.
+4. Телеметрия снимикаһын (буфер башы, сама менән артта ҡалған) ҡулланылығыҙ.
+   ғәмәлде аҡлау, шулай итеп, аҫҡы ағым аудиттары ҡарар ҡабул итеү тура килә ала тура килә
+   дәүләт.
 
-1. Log the originating compliance ticket (`ComplianceUpdateV1` or
-   `ModerationAppealV1`) and attach the associated proof tokens.【docs/source/sorafs_gateway_compliance_plan.md:20】
-2. Confirm whether the request invokes the moderation appeal path (citizen panel
-   vote) or an emergency Parliament freeze; both flows must cite the manifest
-   digest and retention tag captured in the new template.【docs/source/sorafs_moderation_panel_plan.md:1】
-3. Enumerate escalation deadlines (appeal commit/reveal windows, emergency
-   freeze duration) and state which council or panel owns the follow-up.
-4. Capture the telemetry snapshot (buffer headroom, moderation backlog) used to
-   justify the action so downstream audits can match the decision to the live
-   state.
+Ҡабул итеү һәм сама менән панелдәр синхронлаштырыу тейеш, уларҙы аҙналыҡ асыҡлыҡ отчеттары .
+ҡасаба маршрутизатор операторҙары менән шулай takdowns һәм субсидиялар шул уҡ йоғонто яһай
+манифестар йыйылмаһы.
 
-The compliance and moderation panels must sync their weekly transparency reports
-with the settlement router operators so takedowns and subsidies affect the same
-set of manifests.
+## Отчет ҡалыптары
 
-## Reporting Templates
+Бөтә DA-10 отзывтар хәҙер ҡул ҡуйылған Markdown пакет талап итә. Күсермәһе
+`docs/examples/da_manifest_review_template.md`, асыҡ метамағлүмәттәр менән тулыландырыла,
+һаҡлау тикшерелеүе таблицаһы, һәм панель тауыш резюме, һуңынан тамамланған плита
+документ (плюс һылтанма Norito/JSON артефакттары) идара итеү DAG инеү.
+Панель тейеш бәйләү өсөн пакет идара итеү минуттарында шулай киләсәктә takdowns йәки
+субсидия яңыртыуҙары цитаталай ала, тип, тәүге асыҡ һеңдерергә, ҡабаттан йүгермәйенсә,
+тотош тантана.
 
-All DA-10 reviews now require a signed Markdown packet. Copy
-`docs/examples/da_manifest_review_template.md`, populate the manifest metadata,
-retention verification table, and panel vote summary, then pin the completed
-document (plus referenced Norito/JSON artefacts) to the Governance DAG entry.
-Panels should link the packet in the governance minutes so future takedowns or
-subsidy renewals can cite the original manifest digest without re-running the
-entire ceremony.
+## Инцидент & Ҡабул итеү эш ағымы
 
-## Incident & Revocation Workflow
+Ғәҙәттән тыш хәлдәр ғәмәлдәре хәҙер сылбырҙа була. Ҡасан ҡоролма кәрәк булырға кәрәк
+кире ҡайтарып, идара итеү билетын тапшырып, Парламентҡа ҡайтыу тәҡдимен аса
+алдан раҫланған манифест һеңдереүенә күрһәтеп. Инфраструктура панелендә
+тауыш биреүҙе үҙләштерә, һәм бер тапҡыр Nexus йөрөү ваҡытын тамамлай, тип баҫтырып сығара кире ҡайтарыу
+ваҡиға, тип аҫҡы клиенттар ҡуллана. Урындағы JSON артефакттары кәрәкмәй.
 
-Emergency actions now happen on-chain. When a fixture release needs to be
-rolled back, file a governance ticket and open a Parliament revert proposal
-pointing at the previously approved manifest digest. The Infrastructure Panel
-handles the vote, and once finalized the Nexus runtime publishes the rollback
-event that downstream clients consume. No local JSON artefacts are required.
-
-## Keeping the Playbook Current
-
-- Update this file whenever a new governance-facing runbook lands in the
-  repository.
-- Cross-link new ceremonies here so the council index remains discoverable.
-- If a referenced document moves (for example, a new SDK path), update the link
-  as part of the same pull request to avoid stale pointers.
+## Плейбук ағымын һаҡлау- Был файлды яңыртығыҙ, ҡасан яңы идара итеү-ҡаршы runbook ерҙәре 2019 йылда.
+  һаҡлағыс.
+- Кросс-һылтанма яңы тантаналар бында шулай совет индексы асыҡ ҡала.
+- Әгәр һылтанма документ хәрәкәт итә (мәҫәлән, яңы SDK юл), һылтанманы яңыртыу
+  өлөшө булараҡ, шул уҡ тартыу запросы ҡотолоу өсөн иҫке күрһәткестәр.

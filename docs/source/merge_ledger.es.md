@@ -6,63 +6,64 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 44f1c681730f1c94d9d00e8f829a0134374ce6cb29f21727a27685e096f0da40
 source_last_modified: "2026-01-18T05:31:56.955438+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Merge Ledger Design — Lane Finality and Global Reduction
+# Fusionar diseño de libro mayor: finalidad del carril y reducción global
 
-This note finalises the merge-ledger design for Milestone 5. It explains the
-non-empty block policy, cross-lane QC merge semantics, and the finality workflow
-that binds lane-level execution to the global world state commitment.
+Esta nota finaliza el diseño del libro mayor de fusión para Milestone 5. Explica el
+política de bloques no vacíos, semántica de fusión de control de calidad entre carriles y flujo de trabajo de finalidad
+que vincula la ejecución a nivel de carril con el compromiso del estado mundial global.
 
-The design extends the Nexus architecture described in `nexus.md`. Terms such as
-"lane block", "lane QC", "merge hint", and "merge ledger" inherit their
-definition from that document; this note focuses on behavioural rules and
-implementation guidance that must be enforced by the runtime, storage, and WSV
-layers.
+El diseño amplía la arquitectura Nexus descrita en `nexus.md`. Términos como
+"bloque de carril", "control de calidad de carril", "sugerencia de combinación" y "libro mayor de combinación" heredan sus
+definición de ese documento; Esta nota se centra en las reglas de comportamiento y
+Guía de implementación que debe ser aplicada por el tiempo de ejecución, el almacenamiento y el WSV.
+capas.
 
-## 1. Non-Empty Block Policy
+## 1. Política de bloqueo no vacío
 
-**Rule (MUST):** A lane proposer issues a block only when the block contains at
-least one executed transaction fragment, time-based trigger, or deterministic
-artifact update (e.g., DA artifact roll-up). Empty blocks are forbidden.
+**Regla (DEBE):** Un proponente de carril emite un bloque solo cuando el bloque contiene al menos
+al menos un fragmento de transacción ejecutado, disparador basado en tiempo o determinista
+actualización de artefactos (por ejemplo, acumulación de artefactos DA). Están prohibidos los bloques vacíos.
 
-**Implications:**
+**Implicaciones:**
 
-- Slot keep-alive: when no transaction meets its deterministic commit window,
-the lane emits no block and simply advances to the next slot. The merge ledger
-remains on the previous tip for that lane.
-- Trigger batching: background triggers that produce no state transition (e.g.,
-cron that reaffirms invariants) are considered empty and MUST be skipped or
-bundled with other work before producing a block.
-- Telemetry: `pipeline_detached_merged` and follow-up metrics treat skipped
-slots explicitly—operators can distinguish "no work" from "pipeline stalled".
-- Replay: block storage does not insert synthetic empty placeholders. The Kura
-replay loop simply observes the same parent hash for consecutive slots if no
-block was emitted.
+- Slot keep-alive: cuando ninguna transacción alcanza su ventana de confirmación determinista,
+el carril no emite ningún bloqueo y simplemente avanza al siguiente espacio. El libro de fusiones
+permanece en el consejo anterior para ese carril.
+- Disparador por lotes: activadores en segundo plano que no producen transición de estado (p. ej.,
+cron que reafirma invariantes) se consideran vacíos y DEBEN omitirse o
+junto con otro trabajo antes de producir un bloque.
+- Telemetría: `pipeline_detached_merged` y tratamiento de métricas de seguimiento omitidas
+ranuras explícitamente: los operadores pueden distinguir "sin trabajo" de "tubería estancada".
+- Reproducción: el almacenamiento en bloque no inserta marcadores de posición vacíos sintéticos. la kura
+El bucle de reproducción simplemente observa el mismo hash principal para espacios consecutivos si no
+Se emitió el bloque.
 
-**Canonical Check:** During block proposal and validation, `ValidBlock::commit`
-asserts that the associated `StateBlock` carries at least one committed overlay
-(delta, artifact, trigger). This aligns with the `StateBlock::is_empty` guard
-that already ensures no-op writes are elided. Enforcement happens before
-signatures are requested so committees never vote on empty payloads.
+**Verificación canónica:** Durante la propuesta y validación del bloque, `ValidBlock::commit`
+afirma que el `StateBlock` asociado lleva al menos una superposición comprometida
+(delta, artefacto, disparador). Esto se alinea con el protector `StateBlock::is_empty`.
+eso ya garantiza que se eliminen las escrituras no operativas. La aplicación de la ley ocurre antes
+Se solicitan firmas para que los comités nunca voten sobre cargas útiles vacías.
 
-## 2. Cross-Lane QC Merge Semantics
+## 2. Semántica de fusión de control de calidad entre carriles
 
-Each lane block `B_i` finalised by its committee produces:
+Cada bloque de carril `B_i` finalizado por su comité produce:
 
-- `lane_state_root_i`: Poseidon2-SMT commitment over per-DS state roots touched
-in the block.
-- `merge_hint_root_i`: rolling candidate for the merge ledger (`tag =
-"iroha:merge:candidate:v1\0"`).
-- `lane_qc_i`: aggregated signatures from the lane committee over the
-  execution-vote preimage (block hash, `parent_state_root`,
-  `post_state_root`, height/view/epoch, chain_id, and mode tag).
+- `lane_state_root_i`: Se tocó el compromiso de Poseidon2-SMT sobre las raíces estatales por DS
+en el bloque.
+- `merge_hint_root_i`: candidato rodante para el libro mayor de fusión (`tag =
+"iroha:merge:candidato:v1\0"`).
+- `lane_qc_i`: firmas agregadas del comité de carril sobre el
+  preimagen de votación de ejecución (hash de bloque, `parent_state_root`,
+  `post_state_root`, altura/vista/época, chain_id y etiqueta de modo).
 
-Merge nodes collect the latest tips `{(B_i, lane_qc_i, merge_hint_root_i)}` for
-all lanes `i ∈ [0, K)`.
+Los nodos de fusión recopilan los últimos consejos `{(B_i, lane_qc_i, merge_hint_root_i)}` para
+todos los carriles `i ∈ [0, K)`.
 
-**Merge Entry (MUST):**
+**Fusionar entrada (DEBE):**
 
 ```
 MergeLedgerEntry {
@@ -72,23 +73,21 @@ MergeLedgerEntry {
     global_state_root: Hash32,
     merge_qc: QuorumCertificate,
 }
-```
+```- `lane_tips[i]` es el hash del bloque de carril que los sellos de entrada de fusión para el carril
+  `i`. Si un carril no emitió ningún bloque desde la entrada de fusión anterior, este valor es
+  repetido.
+- `merge_hint_root[i]` es el `merge_hint_root` del carril correspondiente
+  bloque. Se repite cuando se repite `lane_tips[i]`.
+- `global_state_root` es igual a `ReduceMergeHints(merge_hint_root[0..K-1])`, un
+  Poseidon2 pliegue con etiqueta de separación de dominio
+  `"iroha:merge:reduce:v1\0"`. La reducción es determinista y DEBE
+  reconstruir el mismo valor entre pares.
+- `merge_qc` es un certificado de quórum BFT del comité de fusión sobre el
+  entrada serializada.
 
-- `lane_tips[i]` is the hash of the lane block the merge entry seals for lane
-  `i`. If a lane emitted no block since the previous merge entry, this value is
-  repeated.
-- `merge_hint_root[i]` is the `merge_hint_root` from the corresponding lane
-  block. It is repeated when `lane_tips[i]` repeats.
-- `global_state_root` equals `ReduceMergeHints(merge_hint_root[0..K-1])`, a
-  Poseidon2 fold with domain separation tag
-  `"iroha:merge:reduce:v1\0"`. The reduction is deterministic and MUST
-  reconstruct the same value across peers.
-- `merge_qc` is a BFT quorum certificate from the merge committee over the
-  serialized entry.
+**Fusionar carga útil de control de calidad (DEBE):**
 
-**Merge QC Payload (MUST):**
-
-Merge committee members sign a deterministic digest:
+Los miembros del comité de fusión firman un resumen determinista:
 
 ```
 merge_qc_digest = blake2b32(
@@ -104,110 +103,106 @@ merge_qc_digest = blake2b32(
 )
 ```
 
-- `view` is the merge-committee view derived from the lane tips (max
-  `view_change_index` across the lane headers sealed by the entry).
-- `chain_id` is the configured chain identifier string (UTF-8 bytes).
-- The payload uses Norito encoding with the field order shown above.
+- `view` es la vista del comité de fusión derivada de las sugerencias de carril (máx.
+  `view_change_index` a través de los encabezados de carril sellados por la entrada).
+- `chain_id` es la cadena de identificador de cadena configurada (UTF-8 bytes).
+- La carga útil utiliza la codificación Norito con el orden de los campos que se muestra arriba.
 
-The resulting digest is stored in `merge_qc.message_digest` and is the message
-verified by BLS signatures.
+El resumen resultante se almacena en `merge_qc.message_digest` y es el mensaje
+verificado por firmas BLS.
 
-**Merge QC Construction (MUST):**
+**Fusionar construcción de control de calidad (DEBE):**
 
-- The merge committee roster is the current commit-topology validator set.
-- Required quorum = `commit_quorum_from_len(roster_len)`.
-- `merge_qc.signers_bitmap` encodes participating validator indices (LSB-first)
-  in commit-topology order.
-- `merge_qc.aggregate_signature` is the BLS-normal aggregate for the digest
-  above.
+- La lista del comité de fusión es el conjunto actual de validadores de topología de compromiso.
+- Quórum requerido = `commit_quorum_from_len(roster_len)`.
+- `merge_qc.signers_bitmap` codifica los índices de validación participantes (LSB-first)
+  en orden de topología de compromiso.
+- `merge_qc.aggregate_signature` es el agregado normal BLS para el resumen
+  arriba.
 
-**Validation (MUST):**
+**Validación (DEBE):**
 
-1. Verify each `lane_qc_i` against `lane_tips[i]` and confirm the block headers
-   include the matching `merge_hint_root_i`.
-2. Ensure no `lane_qc_i` points to an `Invalid` or unexecuted block. The
-   non-empty policy above ensures the header includes state overlays.
-3. Recompute `ReduceMergeHints` and compare with `global_state_root`.
-4. Recompute the merge QC digest and verify the signer bitmap, quorum threshold,
-   and aggregate signature against the commit-topology roster.
+1. Verifique cada `lane_qc_i` con `lane_tips[i]` y confirme los encabezados del bloque.
+   Incluya el `merge_hint_root_i` correspondiente.
+2. Asegúrese de que ningún `lane_qc_i` apunte a un `Invalid` o a un bloque no ejecutado. el
+   La política no vacía anterior garantiza que el encabezado incluya superposiciones de estado.
+3. Vuelva a calcular `ReduceMergeHints` y compárelo con `global_state_root`.
+4. Vuelva a calcular el resumen de control de calidad de la combinación y verifique el mapa de bits del firmante, el umbral de quórum y
+   y firma agregada contra la lista de topología de confirmación.
 
-**Observability:** Merge nodes emit Prometheus counters for
-`merge_entry_lane_repeats_total{i}` to highlight lanes that skipped slots for
-operational visibility.
+**Observabilidad:** Los nodos de fusión emiten contadores Prometheus para
+`merge_entry_lane_repeats_total{i}` para resaltar los carriles que se saltaron espacios para
+visibilidad operativa.
 
-## 3. Finality Workflow
+## 3. Flujo de trabajo de finalidad
 
-### 3.1 Lane-Level Finality
+### 3.1 Finalidad a nivel de carril
 
-1. Transactions are scheduled per lane in deterministic slots.
-2. The executor applies overlays into `StateBlock`, producing deltas and
-artifacts.
-3. Upon validation, the lane committee signs the execution-vote preimage that
-   binds the block hash, state roots, and height/view/epoch. The tuple
-   `(block_hash, lane_qc_i, merge_hint_root_i)` is considered lane-final.
-4. Light clients MAY treat the lane tip as final for DS-limited proofs, but
-must record the associated `merge_hint_root` to reconcile with the merge ledger
-later.
+1. Las transacciones se programan por carril en espacios deterministas.
+2. El ejecutor aplica superposiciones en `StateBlock`, produciendo deltas y
+artefactos.
+3. Tras la validación, el comité de carril firma la preimagen de ejecución-voto que
+   vincula el hash del bloque, las raíces del estado y la altura/vista/época. la tupla
+   `(block_hash, lane_qc_i, merge_hint_root_i)` se considera final de carril.
+4. Los clientes ligeros PUEDEN tratar la sugerencia de carril como final para las pruebas limitadas por DS, pero
+debe registrar el `merge_hint_root` asociado para conciliarlo con el libro mayor de fusión
+más tarde.Los comités de carril son por espacio de datos y no reemplazan el compromiso global.
+topología. El tamaño del comité se fija en `3f+1`, donde `f` proviene del
+catálogo de espacio de datos (`fault_tolerance`). El grupo de validadores es el espacio de datos.
+validadores (manifiestos de gobernanza de carriles para carriles administrados por administradores o carriles públicos
+registros de apuestas para carriles elegidos por apuestas). La membresía del comité es
+muestreado deterministamente una vez por época utilizando la semilla de época VRF unida con
+`dataspace_id` y `lane_id`. Si el grupo es más pequeño que `3f+1`, la finalidad del carril
+se detiene hasta que se restablece el quórum (la recuperación de emergencia se maneja por separado).
 
-Lane committees are per-dataspace and do not replace the global commit
-topology. Committee size is fixed at `3f+1`, where `f` comes from the
-dataspace catalog (`fault_tolerance`). The validator pool is the dataspace's
-validators (lane governance manifests for admin-managed lanes, or public-lane
-staking records for stake-elected lanes). Committee membership is
-deterministically sampled once per epoch using the VRF epoch seed bound with
-`dataspace_id` and `lane_id`. If the pool is smaller than `3f+1`, lane finality
-pauses until quorum is restored (emergency recovery is handled separately).
+### 3.2 Finalidad del libro mayor de fusión
 
-### 3.2 Merge-Ledger Finality
+1. El comité de fusión recopila los últimos consejos sobre carriles, verifica cada `lane_qc_i` y
+construye el `MergeLedgerEntry` como se definió anteriormente.
+2. Después de verificar la reducción determinista, el comité de fusión firma el
+entrada (`merge_qc`).
+3. Los nodos agregan la entrada al registro del libro mayor de fusión y la conservan junto con el
+referencias de bloque de carril.
+4. `global_state_root` se convierte en el compromiso estatal mundial autorizado para el
+época/ranura. Los nodos completos actualizan sus metadatos de puntos de control WSV para reflejar esto
+valor; la repetición determinista debe reproducir la misma reducción.
 
-1. Merge committee collects the latest lane tips, verifies each `lane_qc_i`, and
-constructs the `MergeLedgerEntry` as defined above.
-2. After verifying the deterministic reduction, the merge committee signs the
-entry (`merge_qc`).
-3. Nodes append the entry to the merge ledger log and persist it alongside the
-lane block references.
-4. `global_state_root` becomes the authoritative world state commitment for the
-epoch/slot. Full nodes update their WSV checkpoint metadata to mirror this
-value; deterministic replay must reproduce the same reduction.
+### 3.3 Integración de almacenamiento y WSV
 
-### 3.3 WSV and Storage Integration
+- `State::commit_merge_entry` registra las raíces del estado por carril y el
+  `global_state_root` final, puente entre la ejecución del carril y la suma de comprobación global.
+- Kura persiste `MergeLedgerEntry` adyacente a los artefactos del bloque de carril, por lo que
+  La repetición puede reconstruir secuencias de finalidad tanto a nivel de carril como globales.
+- Cuando un carril se salta una ranura, el almacenamiento simplemente conserva la punta anterior; no
+  Las entradas de combinación de marcadores de posición se crean hasta que al menos un carril produzca un nuevo
+  bloque.
+- Las superficies API (Torii, telemetría) exponen ambas puntas de carril y la última fusión
+  entrada para que los operadores y clientes puedan conciliar vistas por carril y globales.
 
-- `State::commit_merge_entry` records the per-lane state roots and the
-  final `global_state_root`, bridging lane execution with the global checksum.
-- Kura persists `MergeLedgerEntry` adjacent to the lane block artifacts so a
-  replay can reconstruct both lane-level and global finality sequences.
-- When a lane skips a slot, storage simply retains the previous tip; no
-  placeholder merge entries are created until at least one lane produces a new
-  block.
-- API surfaces (Torii, telemetry) expose both lane tips and the latest merge
-  entry so operators and clients can reconcile per-lane and global views.
-
-## 4. Implementation Notes
-
-- `crates/iroha_core/src/state.rs`: `State::commit_merge_entry` validates the
-  reduction and wires the lane/global metadata into the world state so queries
-  and observers can access the merge hints and the authoritative global hash.
-- `crates/iroha_core/src/kura.rs`: `Kura::store_block_with_merge_entry` enqueues
-  the block and persists the associated merge entry in one step, rolling back
-  the in-memory block when the append fails so storage never records a block
-  without its sealing metadata. The merge-ledger log is pruned in lock-step
-  with the validated block height during startup recovery, and cached in memory
-  with a bounded window (`kura.merge_ledger_cache_capacity`, default 256) to
-  avoid unbounded growth on long-running nodes. Recovery truncates partial or
-  oversized merge-ledger tail entries, and append rejects entries above the
-  maximum payload size guard to cap allocations.
-- `crates/iroha_core/src/block.rs`: block validation rejects blocks without
-  entrypoints (external transactions or time triggers) and without deterministic
-  artifacts such as DA bundles (`BlockValidationError::EmptyBlock`), ensuring
-  the non-empty policy is enforced before signatures are requested and carried
-  into the merge ledger.
-- Deterministic reduction helper lives in the merge service: `reduce_merge_hint_roots`
-  (`crates/iroha_core/src/merge.rs`) implements the Poseidon2 fold described above.
-  Hardware acceleration hooks remain future work, but the scalar path now enforces
-  the canonical reduction deterministically.
-- Telemetry integration: exposing per-lane merge repeats and the
-  `global_state_root` gauge remains tracked in the observability backlog so the
-  dashboard work can ship alongside the merge service rollout.
-- Cross-component tests: golden replay coverage for the merge reduction is
-  tracked with the integration-test backlog to ensure future changes to
-  `reduce_merge_hint_roots` keep the recorded roots stable.
+## 4. Notas de implementación- `crates/iroha_core/src/state.rs`: `State::commit_merge_entry` valida el
+  reducción y conecta los metadatos del carril/global al estado mundial para que las consultas
+  y los observadores pueden acceder a las sugerencias de fusión y al hash global autorizado.
+- `crates/iroha_core/src/kura.rs`: `Kura::store_block_with_merge_entry` se pone en cola
+  el bloque y persiste la entrada de fusión asociada en un solo paso, retrocediendo
+  el bloque en memoria cuando falla la adición para que el almacenamiento nunca registre un bloque
+  sin sus metadatos de sellado. El registro del libro mayor de fusión se elimina en pasos cerrados
+  con la altura del bloque validado durante la recuperación del inicio y almacenado en caché en la memoria
+  con una ventana delimitada (`kura.merge_ledger_cache_capacity`, por defecto 256) para
+  Evite el crecimiento ilimitado en nodos de larga duración. La recuperación se trunca parcial o
+  entradas de cola de gran tamaño del libro mayor de fusión y anexar entradas rechazadas por encima del
+  protección del tamaño máximo de carga útil para limitar las asignaciones.
+- `crates/iroha_core/src/block.rs`: la validación de bloques rechaza los bloques sin
+  puntos de entrada (transacciones externas o desencadenadores de tiempo) y sin deterministas
+  artefactos como paquetes DA (`BlockValidationError::EmptyBlock`), asegurando
+  la política de no vacío se aplica antes de que se soliciten y lleven las firmas
+  en el libro mayor de fusión.
+- El ayudante de reducción determinista vive en el servicio de fusión: `reduce_merge_hint_roots`
+  (`crates/iroha_core/src/merge.rs`) implementa el pliegue Poseidon2 descrito anteriormente.
+  Los ganchos de aceleración de hardware siguen siendo un trabajo futuro, pero la ruta escalar ahora impone
+  la reducción canónica de manera determinista.
+- Integración de telemetría: exposición de repeticiones de fusión por carril y la
+  El medidor `global_state_root` permanece rastreado en el trabajo pendiente de observabilidad, por lo que el
+  el trabajo del panel de control puede enviarse junto con la implementación del servicio de fusión.
+- Pruebas entre componentes: la cobertura de repetición dorada para la reducción de fusión es
+  seguimiento con el trabajo pendiente de las pruebas de integración para garantizar cambios futuros en
+  `reduce_merge_hint_roots` mantiene estables las raíces registradas.

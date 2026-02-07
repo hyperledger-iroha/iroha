@@ -10,6 +10,7 @@ translation_last_reviewed: 2026-02-07
 title: Ministry Transparency Report — 2026 Q3 (Template)
 summary: Scaffold for the MINFO-8 quarterly transparency packet; replace all tokens before publication.
 quarter: 2026-Q3
+translator: machine-google-reviewed
 ---
 
 <!--
@@ -19,126 +20,124 @@ quarter: 2026-Q3
     3. Attach supporting artefacts (data appendix, CSVs, manifest, Grafana export) under artifacts/ministry/transparency/<YYYY-Q>/.
 -->
 
-# Executive Summary
+# Товчхондоо
 
-> Provide a one-paragraph summary of moderation accuracy, appeal outcomes, denylist churn, and treasury highlights. Mention whether release met the T+14 deadline.
+> Зохицуулалтын нарийвчлал, давж заалдах үр дүн, жагсаалтаас татгалзсан байдал, төрийн сангийн онцлох үйл явдлуудын нэг догол мөрийн хураангуйг өгнө үү. Гаргасан нь T+14 эцсийн хугацааг хангасан эсэхийг дурд.
 
-## Quarter in Review
+## улирлын тойм
 
-### Highlights
+### Онцлох үйл явдал
 - {{HIGHLIGHT_1}}
 - {{HIGHLIGHT_2}}
 - {{HIGHLIGHT_3}}
 
-### Risks & Mitigations
+### Эрсдэл ба бууруулах
 
-| Risk | Impact | Mitigation | Owner | Status |
+| Эрсдэл | Нөлөөллийн | Хөнгөвчлөх | Эзэмшигч | Статус |
 |------|--------|------------|-------|--------|
-| {{RISK_1}} | {{Impact}} | {{Mitigation}} | {{Owner}} | {{Status}} |
-| {{RISK_2}} | {{Impact}} | {{Mitigation}} | {{Owner}} | {{Status}} |
+| {{RISK_1}} | {{Нөлөөллийн}} | {{Хамгаалах}} | {{Эзэмшигч}} | {{Статус}} |
+| {{RISK_2}} | {{Нөлөөллийн}} | {{Хамгаалах}} | {{Эзэмшигч}} | {{Статус}} |
 
-## Metrics Overview
+## Метрикийн тойм
 
-All metrics originate from `ministry_transparency_builder` (Norito bundle) after the DP sanitizer runs. Attach corresponding CSV slices referenced below.
+Бүх хэмжүүрүүд нь АН-ын ариутгагч ажиллаж дууссаны дараа `ministry_transparency_builder` (Norito багц)-аас гардаг. Доор дурдсан харгалзах CSV зүсмэлүүдийг хавсаргана уу.
 
-### AI Moderation Accuracy
+### AI Зохицуулах нарийвчлал
 
-| Model Profile | Region | FP Rate (Target) | FN Rate (Target) | Drift vs Calibration | Sample Size | Notes |
-|---------------|--------|------------------|------------------|----------------------|-------------|-------|
-| {{profile}} | {{region}} | {{fp_rate}} ({{fp_target}}) | {{fn_rate}} ({{fn_target}}) | {{drift}} | {{samples}} | {{notes}} |
+| Загварын профайл | Бүс | FP Rate (Зорилтот) | FN Rate (Зорилтот) | Drift vs Calibration | Дээжийн хэмжээ | Тэмдэглэл |
+|-------------|--------|------------------|------------------|----------------------|-------------|-------|
+| {{профайл}} | {{бүс}} | {{fp_rate}} ({{fp_target}}) | {{fn_rate}} ({{fn_target}}) | {{drift}} | {{жишээ}} | {{тэмдэглэл}} |
 
-### Appeals & Panel Activity
+### Давж заалдах болон хэсгийн үйл ажиллагаа
 
-| Metric | Value | SLA Target | Trend vs Q-1 | Notes |
+| Метрик | Үнэ цэнэ | SLA зорилт | Trend vs Q-1 | Тэмдэглэл |
 |--------|-------|------------|--------------|-------|
-| Appeals received | {{appeals_received}} | {{sla}} | {{delta}} | {{notes}} |
-| Median resolution time | {{median_resolution}} | {{sla}} | {{delta}} | {{notes}} |
-| Reversal rate | {{reversal_rate}} | {{target}} | {{delta}} | {{notes}} |
-| Panel utilization | {{panel_utilization}} | {{target}} | {{delta}} | {{notes}} |
+| Хүлээн авсан гомдол | {{давжийг_хүлээн авсан}} | {{sla}} | {{дельта}} | {{тэмдэглэл}} |
+| Дундаж нарийвчлалын хугацаа | {{дундаж_нэвтрэлт}} | {{sla}} | {{дельта}} | {{тэмдэглэл}} |
+| Буцах хувь | {{буцах_хүн}} | {{зорилтот}} | {{дельта}} | {{тэмдэглэл}} |
+| Самбарын ашиглалт | {{самбарын_ашиглалт}} | {{зорилтот}} | {{дельта}} | {{тэмдэглэл}} |
 
-### Denylist & Emergency Canon
+### Татгалзах жагсаалт ба Онцгой байдлын Canon
 
-| Metric | Count | DP Noise (ε) | Emergency Flags | TTL Compliance | Notes |
+| Метрик | Тоо | DP шуугиан (ε) | Онцгой байдлын туг | TTL дагаж мөрдөх | Тэмдэглэл |
 |--------|-------|--------------|-----------------|----------------|-------|
-| Hash additions | {{additions}} | {{epsilon_counts}} | {{flags}} | {{ttl_status}} | {{notes}} |
-| Hash removals | {{removals}} | {{epsilon_counts}} | {{flags}} | {{ttl_status}} | {{notes}} |
-| Canon invocations | {{canon_invocations}} | n/a | {{flags}} | {{ttl_status}} | {{notes}} |
+| Хэш нэмэлтүүд | {{нэмэлтүүд}} | {{epsilon_counts}} | {{тугнууд}} | {{ttl_status}} | {{тэмдэглэл}} |
+| Хэш арилгах | {{зайлуулах}} | {{epsilon_counts}} | {{тугнууд}} | {{ttl_status}} | {{тэмдэглэл}} |
+| Каноны дуудлагууд | {{canon_invocations}} | байхгүй | {{тугнууд}} | {{ttl_status}} | {{тэмдэглэл}} |
 
-### Treasury Movements
+### Төрийн сангийн хөдөлгөөн
 
-| Flow | Amount (MINFO) | Source Reference | Notes |
+| Урсгал | Дүн (MINFO) | Эх сурвалжийн лавлагаа | Тэмдэглэл |
 |------|----------------|------------------|-------|
-| Appeal deposits | {{amount}} | {{tx_ref}} | {{notes}} |
-| Panel rewards | {{amount}} | {{tx_ref}} | {{notes}} |
-| Operational spend | {{amount}} | {{tx_ref}} | {{notes}} |
+| Давж заалдах хадгаламж | {{хэмжээ}} | {{tx_ref}} | {{тэмдэглэл}} |
+| Самбарын урамшуулал | {{хэмжээ}} | {{tx_ref}} | {{тэмдэглэл}} |
+| Үйл ажиллагааны зардал | {{хэмжээ}} | {{tx_ref}} | {{тэмдэглэл}} |
 
-### Volunteer & Outreach Signals
+### Сайн дурын ажилтны болон туслах дохио
 
-| Metric | Value | Target | Notes |
+| Метрик | Үнэ цэнэ | Зорилтот | Тэмдэглэл |
 |--------|-------|--------|-------|
-| Volunteer briefs published | {{value}} | {{target}} | {{notes}} |
-| Languages covered | {{value}} | {{target}} | {{notes}} |
-| Governance workshops hosted | {{value}} | {{target}} | {{notes}} |
+| Сайн дурынхны танилцуулга нийтлэгдсэн | {{утга}} | {{зорилтот}} | {{тэмдэглэл}} |
+| Хамрах хэлүүд | {{утга}} | {{зорилтот}} | {{тэмдэглэл}} |
+| Засаглалын зөвлөгөөн боллоо | {{утга}} | {{зорилтот}} | {{тэмдэглэл}} |
 
-## Differential Privacy & Sanitization
+## Хувийн нууцлал ба ариутгал
 
-Summarise the sanitizer run and include the RNG commitment.
+Ариутгагчийг нэгтгэн дүгнэж, RNG амлалтаа оруулна уу.
 
-- Sanitizer job: `{{CI_JOB_URL}}`
-- DP parameters: ε = {{epsilon_total}}, δ = {{delta_total}}
-- RNG commitment: `{{blake3_seed_commitment}}`
-- Buckets suppressed: {{suppressed_buckets}}
-- QA reviewer: {{reviewer}}
+- Ариутгагч ажил: `{{CI_JOB_URL}}`
+- DP параметрүүд: ε={{epsilon_total}}, δ={{delta_total}}
+- RNG амлалт: `{{blake3_seed_commitment}}`
+- Дарагдсан хувин: {{suppressed_buckets}}
+- QA хянагч: {{хянагч}}
 
-Attach `artifacts/ministry/transparency/{{Quarter}}/dp_report.json` and note any manual interventions.
+`artifacts/ministry/transparency/{{Quarter}}/dp_report.json`-г хавсаргаж, гарын авлагын хөндлөнгийн оролцоог тэмдэглэ.## Өгөгдлийн хавсралт
 
-## Data Attachments
-
-| Artefact | Path | SHA-256 | Uploaded to SoraFS? | Notes |
+| Олдвор | Зам | SHA-256 | SoraFS руу байршуулсан уу? | Тэмдэглэл |
 |----------|------|---------|---------------------|-------|
-| Summary PDF | `artifacts/ministry/transparency/{{Quarter}}/summary.pdf` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Norito data appendix | `artifacts/ministry/transparency/{{Quarter}}/data/appendix.norito` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Metrics CSV bundle | `artifacts/ministry/transparency/{{Quarter}}/data/csv/` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Grafana export | `dashboards/grafana/ministry_transparency_overview.json` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Alert rules | `dashboards/alerts/ministry_transparency_rules.yml` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Provenance manifest | `artifacts/ministry/transparency/{{Quarter}}/manifest.json` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Manifest signature | `artifacts/ministry/transparency/{{Quarter}}/manifest.json.sig` | {{hash}} | {{Yes/No}} | {{notes}} |
+| Хураангуй PDF | `artifacts/ministry/transparency/{{Quarter}}/summary.pdf` | {{хэш}} | {{Тийм/Үгүй}} | {{тэмдэглэл}} |
+| Norito өгөгдлийн хавсралт | `artifacts/ministry/transparency/{{Quarter}}/data/appendix.norito` | {{хэш}} | {{Тийм/Үгүй}} | {{тэмдэглэл}} |
+| Метрикийн CSV багц | `artifacts/ministry/transparency/{{Quarter}}/data/csv/` | {{хэш}} | {{Тийм/Үгүй}} | {{тэмдэглэл}} |
+| Grafana экспорт | `dashboards/grafana/ministry_transparency_overview.json` | {{хэш}} | {{Тийм/Үгүй}} | {{тэмдэглэл}} |
+| Анхааруулах дүрэм | `dashboards/alerts/ministry_transparency_rules.yml` | {{хэш}} | {{Тийм/Үгүй}} | {{тэмдэглэл}} |
+| Гарал үүслийн манифест | `artifacts/ministry/transparency/{{Quarter}}/manifest.json` | {{хэш}} | {{Тийм/Үгүй}} | {{тэмдэглэл}} |
+| Манифест гарын үсэг | `artifacts/ministry/transparency/{{Quarter}}/manifest.json.sig` | {{хэш}} | {{Тийм/Үгүй}} | {{тэмдэглэл}} |
 
-## Publication Metadata
+## Нийтлэлийн мета өгөгдөл
 
-| Field | Value |
+| Талбай | Үнэ цэнэ |
 |-------|-------|
-| Release quarter | {{Quarter}} |
-| Release timestamp (UTC) | {{timestamp}} |
+| Хувилбарын улирал | {{Улирал}} |
+| Гаргах цагийн тэмдэг (UTC) | {{цаг хугацааны тамга}} |
 | SoraFS CID | `{{cid}}` |
-| Governance vote ID | {{vote_id}} |
-| Manifest digest (`blake2b`) | `{{manifest_digest}}` |
+| Засаглалын саналын үнэмлэх | {{vote_id}} |
+| Манифест дижест (`blake2b`) | `{{manifest_digest}}` |
 | Git commit / tag | `{{git_rev}}` |
-| Release owner | {{owner}} |
+| Эзэмшигчийг чөлөөлөх | {{эзэмшигч}} |
 
-## Approvals
+## Зөвшөөрөл
 
-| Role | Name | Decision | Timestamp | Notes |
+| Үүрэг | Нэр | Шийдвэр | Цагийн тэмдэг | Тэмдэглэл |
 |------|------|----------|-----------|-------|
-| Ministry Observability TL | {{name}} | ✅/⚠️ | {{timestamp}} | {{notes}} |
-| Governance Council Liaison | {{name}} | ✅/⚠️ | {{timestamp}} | {{notes}} |
-| Docs/Comms Lead | {{name}} | ✅/⚠️ | {{timestamp}} | {{notes}} |
+| Яамны ажиглалт TL | {{нэр}} | ✅/⚠️ | {{цаг хугацааны тамга}} | {{тэмдэглэл}} |
+| Засаглалын зөвлөлтэй харилцах | {{нэр}} | ✅/⚠️ | {{цаг хугацааны тамга}} | {{тэмдэглэл}} |
+| Docs/Comms Lead | {{нэр}} | ✅/⚠️ | {{цаг хугацааны тамга}} | {{тэмдэглэл}} |
 
-## Changelog & Follow-Ups
+## Өөрчлөлтийн бүртгэл ба дагаж мөрдөх
 
 - {{CHANGELOG_ITEM_1}}
 - {{CHANGELOG_ITEM_2}}
 
-### Open Action Items
+### Үйлдлийн зүйлсийг нээнэ үү
 
-| Item | Owner | Due | Status | Notes |
+| Зүйл | Эзэмшигч | Хугацаа | Статус | Тэмдэглэл |
 |------|-------|-----|--------|-------|
-| {{Action}} | {{Owner}} | {{Due}} | {{Status}} | {{Notes}} |
+| {{Үйлдэл}} | {{Эзэмшигч}} | {{Хугацаа}} | {{Статус}} | {{Тэмдэглэл}} |
 
-### Contact
+### Холбоо барих
 
-- Primary contact: {{contact_name}} (`{{chat_handle}}`)
-- Escalation path: {{escalation_details}}
-- Distribution list: {{mailing_list}}
+- Үндсэн харилцагч: {{contact_name}} (`{{chat_handle}}`)
+- Өргөтгөх зам: {{escalation_details}}
+- Түгээлтийн жагсаалт: {{mailing_list}}
 
-_Template version: 2026-03-25. Update the revision date when making structural changes._
+_Загварын хувилбар: 2026-03-25. Бүтцийн өөрчлөлт хийхдээ засварын огноог шинэчилнэ үү._

@@ -9,30 +9,31 @@ source_last_modified: "2025-12-29T18:16:35.980526+00:00"
 translation_last_reviewed: 2026-02-07
 title: Referendum Packet Workflow (MINFO-4)
 summary: Produce the complete referendum dossier (`ReferendumPacketV1`) combining the proposal, neutral summary, sortition artefacts, and impact report.
+translator: machine-google-reviewed
 ---
 
-# Referendum Packet Workflow (MINFO-4)
+# የሪፈረንደም ፓኬት የስራ ፍሰት (MINFO-4)
 
-Roadmap item **MINFO-4 — In Review panel & referendum synthesizer** is now
-fulfilled by the new `ReferendumPacketV1` Norito schema plus the CLI helpers
-described below. The workflow bundles every artefact required for policy-jury
-votes into a single JSON document so governance, auditors, and transparency
-portals can replay the evidence deterministically.
+የመንገድ ካርታ ንጥል **MINFO-4 — በግምገማ ፓነል እና ሪፈረንደም ሰብሳቢ** አሁን አለ።
+በአዲሱ የ`ReferendumPacketV1` Norito እቅድ እና በ CLI ረዳቶች ተሟልቷል
+ከዚህ በታች ተብራርቷል. የስራ ፍሰቱ ለፖሊሲ-ዳኞች የሚያስፈልጉትን ሁሉንም ቅርሶች ያጠቃልላል
+አስተዳደር፣ ኦዲተሮች እና ግልጽነት በአንድ JSON ሰነድ ውስጥ ድምጽ ይሰጣል
+ፖርታል ማስረጃውን በቁርጠኝነት እንደገና ማጫወት ይችላል።
 
-## Inputs
+## ግብዓቶች
 
-1. **Agenda proposal** — same JSON used for `cargo xtask ministry-agenda validate`.
-2. **Volunteer briefs** — the curated dataset produced after linting via
+1. **የአጀንዳ ፕሮፖዛል** - ተመሳሳይ JSON ለ`cargo xtask ministry-agenda validate` ጥቅም ላይ ውሏል።
+2. **የበጎ ፈቃደኞች አጭር መግለጫዎች** - ከታሸገ በኋላ የተሰራው የተሰበሰበ የውሂብ ስብስብ
    `cargo xtask ministry-transparency volunteer-validate`.
-3. **AI moderation manifest** — governance-signed `ModerationReproManifestV1`.
-4. **Sortition summary** — deterministic artefact emitted by
-   `cargo xtask ministry-agenda sortition`. The JSON follows
-   [`PolicyJurySortitionV1`](./policy_jury_ballots.md) so governance can
-   reproduce the POP snapshot digest and waitlist/failover wiring.
-5. **Impact report** — hash-family/report generated via
+3. ** AI ልከኝነት አንጸባራቂ *** - በአስተዳደር የተፈረመ `ModerationReproManifestV1`።
+4. **የድርድሩ ማጠቃለያ** — የሚወስነው በ የሚለቀቀው ቅርስ
+   `cargo xtask ministry-agenda sortition`. JSON ይከተላል
+   [`PolicyJurySortitionV1`](./policy_jury_ballots.md) ስለዚህ አስተዳደር ይችላል
+   የPOP ቅጽበተ-ፎቶ ዳይጄስት እና የተጠባባቂ ዝርዝር/ያልተሳካው ሽቦ ማባዛት።
+5. **የተጽዕኖ ሪፖርት** - ሃሽ-ቤተሰብ/ሪፖርት የተፈጠረው በ
    `cargo xtask ministry-agenda impact`.
 
-## CLI usage
+## የ CLI አጠቃቀም
 
 ```bash
 cargo xtask ministry-panel packet \
@@ -46,30 +47,30 @@ cargo xtask ministry-panel packet \
   --output artifacts/ministry/referendum_packets/AC-2026-001.json
 ```
 
-The `packet` subcommand runs the neutral-summary synthesizer (MINFO-4a), reuses
-the existing volunteer fixtures, and enriches the output with:
+የ`packet` ንዑስ ትዕዛዝ ገለልተኛ-ማጠቃለያ አቀናባሪውን (MINFO-4a) ያካሂዳል፣ እንደገና ይጠቀማል
+አሁን ያሉት የበጎ ፈቃደኞች እቃዎች፣ እና ውጤቱን በሚከተሉት ያበለጽጋል፡-
 
-- `ReferendumSortitionEvidence` — algorithm, seed, and roster digests from the
-  sortition artefact.
-- `ReferendumPanelist[]` — each selected council member plus the Merkle proof
-  needed to audit their draw.
-- `ReferendumImpactSummary` — per-hash-family totals and conflict listings from
-  the impact report.
+- `ReferendumSortitionEvidence` — አልጎሪዝም፣ ዘር እና የስም ዝርዝር መፈጨት ከ
+  መደርደር artefact.
+- `ReferendumPanelist[]` - እያንዳንዱ የተመረጠ የምክር ቤት አባል እና የመርክል ማረጋገጫ
+  የእነሱን ስዕል ኦዲት ማድረግ ያስፈልጋል.
+- `ReferendumImpactSummary` - በአንድ-ሃሽ-ቤተሰብ ድምር እና የግጭት ዝርዝሮች ከ
+  ተጽዕኖ ሪፖርት.
 
-Use `--summary-out` when you still need the standalone `ReviewPanelSummaryV1`
-file; otherwise the packet embeds the summary under `review_summary`.
+አሁንም ብቻውን `ReviewPanelSummaryV1` ሲፈልጉ `--summary-out` ይጠቀሙ
+ፋይል; አለበለዚያ ፓኬቱ ማጠቃለያውን በ `review_summary` ውስጥ አካቷል።
 
-## Output structure
+## የውጤት መዋቅር
 
-`ReferendumPacketV1` lives in
-`crates/iroha_data_model/src/ministry/mod.rs` and is available across SDKs.
-Key sections include:
+`ReferendumPacketV1` ይኖራል
+`crates/iroha_data_model/src/ministry/mod.rs` እና በኤስዲኬዎች ላይ ይገኛል።
+ዋና ክፍሎች የሚከተሉትን ያካትታሉ:
 
-- `proposal` — the original `AgendaProposalV1` object.
-- `review_summary` — the balanced summary emitted by MINFO-4a.
-- `sortition` / `panelists` — reproducible proofs for the seated council.
-- `impact_summary` — duplicate/policy conflict evidence per hash family.
+- `proposal` - የመጀመሪያው `AgendaProposalV1` ነገር።
+- `review_summary` - በ MINFO-4a የወጣው ሚዛናዊ ማጠቃለያ።
+- `sortition` / `panelists` - ለተቀመጠው ምክር ቤት ሊባዙ የሚችሉ ማረጋገጫዎች።
+- `impact_summary` - የተባዛ/የፖሊሲ ግጭት ማስረጃ በሃሽ ቤተሰብ።
 
-See `docs/examples/ministry/referendum_packet_example.json` for a full sample.
-Attach the generated packet to every referendum dossier alongside the signed AI
-manifest and transparency artefacts referenced by the highlights section.
+ለሙሉ ናሙና `docs/examples/ministry/referendum_packet_example.json` ይመልከቱ።
+የተፈጠረውን ፓኬት ከተፈረመው AI ጋር ለእያንዳንዱ የሪፈረንደም ዶሴ ያያይዙት።
+በድምቀቶች ክፍል የተጠቀሱ አንጸባራቂ እና ግልጽነት ቅርሶች።

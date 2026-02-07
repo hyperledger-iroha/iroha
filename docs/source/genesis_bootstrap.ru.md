@@ -6,32 +6,33 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 6feb2b03bd8f6a41de693a0c3f3c4ffc058072bc7942e2bc50b3fd9770aa56d4
 source_last_modified: "2026-01-03T18:08:01.368173+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Genesis Bootstrap from Trusted Peers
+# Genesis Bootstrap от Trusted Peers
 
-Iroha peers without a local `genesis.file` can fetch a signed genesis block from trusted peers
-using the Norito-encoded bootstrap protocol.
+Одноранговые узлы Iroha без локального `genesis.file` могут получать подписанный исходный блок от доверенных узлов.
+используя протокол начальной загрузки, закодированный Norito.
 
-- **Protocol:** peers exchange `GenesisRequest` (`Preflight` for metadata, `Fetch` for payload) and
-  `GenesisResponse` frames keyed by `request_id`. Responders include the chain id, signer pubkey,
-  hash, and an optional size hint; payloads are returned only on `Fetch`, and duplicate request ids
-  receive `DuplicateRequest`.
-- **Guards:** responders enforce an allowlist (`genesis.bootstrap_allowlist` or the trusted peers
-  set), chain-id/pubkey/hash matching, rate limits (`genesis.bootstrap_response_throttle`), and a
-  size cap (`genesis.bootstrap_max_bytes`). Requests outside the allowlist receive `NotAllowed`, and
-  payloads signed by the wrong key receive `MismatchedPubkey`.
-- **Requester flow:** when storage is empty and `genesis.file` is unset (and
-  `genesis.bootstrap_enabled=true`), the node preflights trusted peers with the optional
-  `genesis.expected_hash`, then fetches the payload, validates signatures via `validate_genesis_block`,
-  and persists `genesis.bootstrap.nrt` alongside Kura before applying the block. Bootstrap retries
-  honor `genesis.bootstrap_request_timeout`, `genesis.bootstrap_retry_interval`, and
+- **Протокол:** одноранговые узлы обмениваются `GenesisRequest` (`Preflight` для метаданных, `Fetch` для полезных данных) и
+  Кадры `GenesisResponse` с ключом `request_id`. Ответчики включают идентификатор цепочки, публичный ключ подписывающего лица,
+  хэш и необязательная подсказка о размере; полезные данные возвращаются только на `Fetch` и повторяются идентификаторы запросов.
+  получить `DuplicateRequest`.
+- **Guards:** ответчики применяют белый список (`genesis.bootstrap_allowlist` или доверенные узлы).
+  набор), сопоставление идентификатора цепочки/публичного ключа/хеша, ограничения скорости (`genesis.bootstrap_response_throttle`) и
+  крышка размера (`genesis.bootstrap_max_bytes`). Запросы за пределами белого списка получают `NotAllowed` и
+  полезные данные, подписанные неправильным ключом, получают `MismatchedPubkey`.
+- **Поток запроса:** когда хранилище пусто и `genesis.file` не установлен (и
+  `genesis.bootstrap_enabled=true`), узел предварительно проверяет доверенные узлы с помощью необязательного
+  `genesis.expected_hash`, затем извлекает полезную нагрузку, проверяет подписи через `validate_genesis_block`,
+  и сохраняет `genesis.bootstrap.nrt` рядом с Курой перед применением блока. Повторные попытки начальной загрузки
+  честь `genesis.bootstrap_request_timeout`, `genesis.bootstrap_retry_interval` и
   `genesis.bootstrap_max_attempts`.
-- **Failure modes:** requests are rejected for allowlist misses, chain/pubkey/hash mismatches, size
-  cap violations, rate limits, missing local genesis, or duplicate request ids. Conflicting hashes
-  across peers abort the fetch; no responders/timeouts fall back to local configuration.
-- **Operator steps:** ensure at least one trusted peer is reachable with a valid genesis, configure
-  `bootstrap_allowlist`/`bootstrap_max_bytes`/`bootstrap_response_throttle` and the retry knobs, and
-  optionally pin `expected_hash` to avoid accepting mismatched payloads. Persisted payloads can be
-  reused on subsequent boots by pointing `genesis.file` to `genesis.bootstrap.nrt`.
+- **Режимы сбоя:** запросы отклоняются из-за промахов в белом списке, несоответствия цепочки, открытого ключа или хэша, размера.
+  нарушения лимита, ограничения скорости, отсутствие локального происхождения или повторяющиеся идентификаторы запросов. Конфликтующие хеши
+  между узлами прерывают выборку; никакие ответчики/тайм-ауты не возвращаются к локальной конфигурации.
+- **Действия оператора:** убедитесь, что хотя бы один доверенный узел доступен с действительным происхождением, настройте
+  `bootstrap_allowlist`/`bootstrap_max_bytes`/`bootstrap_response_throttle` и ручки повтора, и
+  опционально вывод `expected_hash`, чтобы избежать приема несовпадающих полезных данных. Постоянные полезные нагрузки могут быть
+  повторно использовать при последующих загрузках, указывая с `genesis.file` на `genesis.bootstrap.nrt`.

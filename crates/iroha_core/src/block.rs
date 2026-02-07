@@ -8589,9 +8589,7 @@ pub(crate) mod valid {
             time::Duration,
         };
 
-        use iroha_crypto::{
-            Algorithm, Hash, HashOf, KeyPair, PrivateKey, PublicKey, Signature, SignatureOf,
-        };
+        use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PrivateKey, Signature, SignatureOf};
         use iroha_data_model::{
             Registrable,
             block::error::BlockRejectionReason as Reason,

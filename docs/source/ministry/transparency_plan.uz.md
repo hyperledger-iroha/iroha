@@ -9,119 +9,113 @@ source_last_modified: "2025-12-29T18:16:35.983537+00:00"
 translation_last_reviewed: 2026-02-07
 title: Ministry Transparency & Audit Plan
 summary: Implementation plan for roadmap item MINFO-8 covering quarterly transparency reports, privacy guardrails, dashboards, and automation.
+translator: machine-google-reviewed
 ---
 
-# Transparency & Audit Reports (MINFO-8)
+# Shaffoflik va audit hisobotlari (MINFO-8)
 
-Roadmap reference: **MINFO-8 — Transparency & audit reports** and **MINFO-8a — Privacy-preserving release process**
+“Yoʻl xaritasi” maʼlumotnomasi: **MINFO-8 — Shaffoflik va audit hisobotlari** va **MINFO-8a — Maxfiylikni saqlash jarayoni**
 
-The Ministry of Information must publish deterministic transparency artefacts so the community can audit moderation efficacy, appeal handling, and blacklist churn. This document defines the scope, artefacts, privacy controls, and operational workflow required to close MINFO-8 before the Q3 2026 target.
+Axborot vazirligi deterministik shaffoflik artefaktlarini nashr etishi kerak, shunda hamjamiyat moderatsiya samaradorligini, murojaatlarni ko'rib chiqishni va qora ro'yxatni buzishni tekshirishi mumkin. Ushbu hujjat MINFO-8-ni Q32026 maqsadidan oldin yopish uchun zarur bo'lgan qamrov, artefaktlar, maxfiylik nazorati va operatsion ish jarayonini belgilaydi.
 
-## Goals & Deliverables
+## Maqsadlar va bajariladigan narsalar
 
-- Produce quarterly transparency packets that summarise AI moderation accuracy, appeal outcomes, denylist churn, volunteer panel activity, and treasury movements tied to MINFO budgets.
-- Ship accompanying raw-data bundles (Norito JSON + CSV) plus dashboards so citizens can slice metrics without waiting for static PDFs.
-- Enforce privacy guarantees (differential privacy + minimum-count rules) and signed attestations before any dataset is published.
-- Record each publication in the governance DAG and SoraFS so historical artefacts remain immutable and independently verifiable.
+- Har chorakda AI moderatsiyasining aniqligi, apellyatsiya natijalari, rad etishlar ro'yxati, ko'ngillilar guruhi faoliyati va MINFO byudjetlari bilan bog'liq g'aznachilik harakati umumlashtiriladigan shaffoflik paketlarini ishlab chiqing.
+- Xom-ma'lumotlar to'plamlari (Norito JSON + CSV) va asboblar panelini yuboring, shunda fuqarolar statik PDF-fayllarni kutmasdan o'lchovlarni kesishlari mumkin.
+- Har qanday ma'lumotlar to'plami nashr etilishidan oldin maxfiylik kafolatlarini (differensial maxfiylik + minimal hisoblash qoidalari) va imzolangan sertifikatlarni amalga oshiring.
+- Har bir nashrni DAG va SoraFS boshqaruvida yozib oling, shunda tarixiy artefaktlar o'zgarmas va mustaqil ravishda tekshirilishi mumkin.
 
-### Artefact Matrix
+### Artefakt matritsasi
 
-| Artefact | Description | Format | Storage |
+| Artefakt | Tavsif | Format | Saqlash |
 |----------|-------------|--------|---------|
-| Transparency summary | Human-readable report with executive summary, highlights, risk items | Markdown → PDF | `docs/source/ministry/reports/<YYYY-Q>.md` → `artifacts/ministry/transparency/<YYYY-Q>/summary.pdf` |
-| Data appendix | Canonical Norito bundle with sanitized tables (`ModerationLedgerBlockV1`, appeals, blacklist deltas) | `.norito` + `.json` | `artifacts/ministry/transparency/<YYYY-Q>/data` (mirrored to SoraFS CID) |
-| Metrics CSVs | Convenience CSV exports for dashboards (AI FP/FN, appeal SLA, denylist churn) | `.csv` | Same directory, hashed & signed |
-| Dashboard snapshot | Grafana JSON export of `ministry_transparency_overview` panels + alert rules | `.json` | `dashboards/grafana/ministry_transparency_overview.json` / `dashboards/alerts/ministry_transparency_rules.yml` |
-| Provenance manifest | Norito manifest tying digests, SoraFS CID, signatures, release timestamp | `.json` + detached signature | `artifacts/ministry/transparency/<YYYY-Q>/manifest.json(.sig)` (also attached to governance vote) |
+| Shaffoflik haqida xulosa | Ijroiya xulosasi, diqqatga sazovor joylari, xavf-xatarli bandlari bilan inson o'qiy oladigan hisobot | Markdown → PDF | `docs/source/ministry/reports/<YYYY-Q>.md` → `artifacts/ministry/transparency/<YYYY-Q>/summary.pdf` |
+| Ma'lumotlar ilovasi | Kanonik Norito to'plami tozalangan jadvallar (`ModerationLedgerBlockV1`, murojaatlar, qora ro'yxat deltalari) | `.norito` + `.json` | `artifacts/ministry/transparency/<YYYY-Q>/data` (SoraFS CID ga aks ettirilgan) |
+| Ko'rsatkichlar CSV | Boshqaruv panellari uchun qulaylik CSV eksporti (AI FP/FN, murojaat SLA, rad etish roʻyxati) | `.csv` | Xuddi shu katalog, xeshlangan va imzolangan |
+| Boshqaruv panelining surati | `ministry_transparency_overview` panellarining Grafana JSON eksporti + ogohlantirish qoidalari | `.json` | `dashboards/grafana/ministry_transparency_overview.json` / `dashboards/alerts/ministry_transparency_rules.yml` |
+| Manifest kelib chiqishi | Norito manifest bog'lovchi dayjestlar, SoraFS CID, imzolar, chiqarish vaqt tamg'asi | `.json` + ajratilgan imzo | `artifacts/ministry/transparency/<YYYY-Q>/manifest.json(.sig)` (shuningdek, boshqaruv ovoziga biriktirilgan) |
 
-## Data Sources & Pipeline
+## Ma'lumot manbalari va quvur liniyasi
 
-| Source | Feed | Notes |
+| Manba | Tasma | Eslatmalar |
 |--------|------|-------|
-| Moderation ledger (`docs/source/sorafs_transparency_plan.md`) | Hourly `ModerationLedgerBlockV1` exports stored in CAR files | Already live for SFM-4c; reused for quarterly aggregation. |
-| AI calibration + false-positive rates | `docs/source/sorafs_ai_moderation_plan.md` fixtures + calibration manifests (`docs/examples/ai_moderation_calibration_*.json`) | Metrics aggregated per policy, region, and model profile. |
-| Appeal register | Norito `AppealCaseV1` events emitted by MINFO-7 treasury tooling | Contains stake transfers, panel roster, SLA timers. |
-| Denylist churn | `MinistryDenylistChangeV1` events from the Merkle registry (MINFO-6) | Includes hash families, TTL, emergency canon flags. |
-| Treasury flows | `MinistryTreasuryTransferV1` events (appeal deposits, panel rewards) | Balanced against `finance/mminfo_gl.csv`. |
+| Moderatsiya kitobi (`docs/source/sorafs_transparency_plan.md`) | CAR fayllarida saqlanadigan soatlik `ModerationLedgerBlockV1` eksportlari | SFM-4c uchun allaqachon jonli; choraklik yig'ish uchun qayta foydalaniladi. |
+| AI kalibrlash + noto'g'ri-musbat stavkalar | `docs/source/sorafs_ai_moderation_plan.md` armatura + kalibrlash manifestlari (`docs/examples/ai_moderation_calibration_*.json`) | Ko‘rsatkichlar siyosat, mintaqa va model profili bo‘yicha jamlangan. |
+| Apellyatsiya reestri | MINFO-7 xazina asboblari tomonidan chiqarilgan Norito `AppealCaseV1` hodisalari | Tarkibida ulush o‘tkazmalari, panel ro‘yxati, SLA taymerlari mavjud. |
+| Rad etish ro'yxati | Merkle registridagi `MinistryDenylistChangeV1` voqealari (MINFO-6) | Xesh oilalari, TTL, favqulodda vaziyat bayroqlarini o'z ichiga oladi. |
+| G'aznachilik oqimlari | `MinistryTreasuryTransferV1` voqealari (apellyatsiya depozitlari, panel mukofotlari) | `finance/mminfo_gl.csv` ga nisbatan muvozanatlangan. |Favqulodda kanon boshqaruvi, TTL cheklovlari va ko'rib chiqish talablari hozirda mavjud
+[`docs/source/ministry/emergency_canon_policy.md`](emergency_canon_policy.md), taʼminlash
+ajralish ko'rsatkichlari darajani (`standard`, `emergency`, `permanent`), kanon identifikatorini qamrab oladi.
+va Torii yuklash vaqtida amalga oshiradigan muddatlarni ko'rib chiqing.
 
-Emergency canon governance, TTL limits, and review requirements now live in
-[`docs/source/ministry/emergency_canon_policy.md`](emergency_canon_policy.md), ensuring
-that the churn metrics capture the tier (`standard`, `emergency`, `permanent`), canon id,
-and review deadlines that Torii enforces at load time.
+Qayta ishlash bosqichlari:
+1. **Ingest** xom hodisalarini `ministry_transparency_ingest` (shaffoflik daftarini qabul qiluvchini aks ettiruvchi Rust xizmati). Kechasi ishlaydi, idempotent.
+2. `ministry_transparency_builder` bilan har chorakda **Agregat**. Maxfiylik filtrlaridan oldin Norito maʼlumotlar ilovasini va har bir metrik jadvalni chiqaradi.
+3. `cargo xtask ministry-transparency sanitize` (yoki `scripts/ministry/dp_sanitizer.py`) orqali **Sanitizatsiya** koʻrsatkichlarini va metamaʼlumotlar bilan CSV/JSON boʻlaklarini chiqaring.
+4. **Paket** artefaktlari, ularni `ministry_release_signer` bilan imzolang va SoraFS + boshqaruv DAG ga yuklang.
 
-Processing stages:
-1. **Ingest** raw events into `ministry_transparency_ingest` (Rust service mirroring the transparency ledger ingestor). Runs nightly, idempotent.
-2. **Aggregate** per quarter with `ministry_transparency_builder`. Outputs the Norito data appendix plus per-metric tables before privacy filters.
-3. **Sanitize** metrics via `cargo xtask ministry-transparency sanitize` (or `scripts/ministry/dp_sanitizer.py`) and emit CSV/JSON slices with metadata.
-4. **Package** artefacts, sign them with `ministry_release_signer`, and upload to SoraFS + governance DAG.
+## 2026-3-chorak ma'lumotnoma nashri
 
-## 2026-Q3 Reference Release
+- Boshqaruvga asoslangan inauguratsion paket (2026-3-chorak) 2026-10-07 da `make check-ministry-transparency` orqali ishlab chiqarilgan. Artefaktlar `artifacts/ministry/transparency/2026-Q3/` da yashaydi, jumladan, `sanitized_metrics.json`, `dp_report.json`, `summary.md`, `checksums.sha256`, `transparency_manifest.json` va I101X va koʻzguda aks ettirilgan. SoraFS CID `7f4c2d81a6b13579ccddeeff00112233`.
+- Nashr ma'lumotlari, ko'rsatkichlar jadvallari va tasdiqlashlar `docs/source/ministry/reports/2026-Q3.md` da qayd etilgan bo'lib, u endi Q3 oynasini ko'rib chiqayotgan auditorlar uchun kanonik ma'lumotnoma bo'lib xizmat qiladi.
+- CI relizlar sahnalashtirishdan oldin, artefakt digestlari, Grafana/ogohlantirish xeshlari va manifest metamaʼlumotlarini tekshirishdan oldin `ci/check_ministry_transparency.sh` / `make check-ministry-transparency` ni qoʻllaydi, shuning uchun har chorakda bir xil dalillar izi kuzatiladi.
 
-- The inaugural governance-gated bundle (2026-Q3) was produced on 2026‑10‑07 via `make check-ministry-transparency`. Artefacts live in `artifacts/ministry/transparency/2026-Q3/`—including `sanitized_metrics.json`, `dp_report.json`, `summary.md`, `checksums.sha256`, `transparency_manifest.json`, and `transparency_release_action.json`—and were mirrored to SoraFS CID `7f4c2d81a6b13579ccddeeff00112233`.
-- Publication details, metrics tables, and approvals are captured in `docs/source/ministry/reports/2026-Q3.md`, which now serves as the canonical reference for auditors reviewing the Q3 window.
-- CI applies `ci/check_ministry_transparency.sh` / `make check-ministry-transparency` before releases leave staging, verifying the artefact digests, Grafana/alert hashes, and manifest metadata so every future quarter follows the same evidence trail.
+## Ko'rsatkichlar va asboblar paneli
 
-## Metrics & Dashboards
+Grafana asboblar paneli (`dashboards/grafana/ministry_transparency_overview.json`) quyidagi panellarni ko'rsatadi:
 
-The Grafana dashboard (`dashboards/grafana/ministry_transparency_overview.json`) exposes the following panels:
+- AI moderatsiyasining aniqligi: har bir modeldagi FP/FN tezligi, drift va kalibrlash maqsadi va `docs/source/sorafs/reports/ai_moderation_calibration_*.md` bilan bog'langan ogohlantirish chegaralari.
+- Apellyatsiya muddati: taqdim etishlar, SLA muvofiqligi, bekor qilishlar, obligatsiyalarni yoqib yuborish, har bir bosqichda kechikish.
+- Rad etish ro'yxati: har bir xesh oilasiga qo'shimchalar/o'chirishlar, TTL muddati tugashi, favqulodda kanon chaqiruvlari.
+- Ko'ngillilar brifinglari va panellarning xilma-xilligi: har bir til bo'yicha taqdimotlar, manfaatlar to'qnashuvini oshkor qilish, nashr etishda kechikish. Balanslangan qisqacha maydonlar `docs/source/ministry/volunteer_brief_template.md` da ko'rsatilgan, bu faktlar jadvallari va moderatsiya teglari mashinada o'qilishini ta'minlaydi.
+- G'aznachilik qoldiqlari: depozitlar, to'lovlar, to'lanmagan majburiyatlar (MINFO-7 ta'minoti).
 
-- AI moderation accuracy: per-model FP/FN rate, drift vs calibration target, and alert thresholds tied to `docs/source/sorafs/reports/ai_moderation_calibration_*.md`.
-- Appeal lifecycle: submissions, SLA compliance, reversals, bond burns, per-tier backlog.
-- Denylist churn: additions/removals per hash family, TTL expirations, emergency canon invocations.
-- Volunteer briefs & panel diversity: submissions per language, conflict-of-interest disclosures, publication lag. Balanced brief fields are specified in `docs/source/ministry/volunteer_brief_template.md`, ensuring fact tables and moderation tags are machine readable.
-- Treasury balances: deposits, payouts, outstanding liability (feeds MINFO-7).
+Ogohlantirish qoidalari (`dashboards/alerts/ministry_transparency_rules.yml` da kodlangan) quyidagilarni o'z ichiga oladi:
+- FP/FN og'ishi kalibrlashning asosiy chizig'iga nisbatan >25%.
+- Apellyatsiya SLA o'tkazib yuborish darajasi har chorakda >5%.
+- Favqulodda kanon TTLlari siyosatdan eski.
+- Chorak yopilganidan keyin nashrning kechikishi >14 kun.
 
-Alert rules (codified in `dashboards/alerts/ministry_transparency_rules.yml`) cover:
-- FP/FN deviation >25% versus calibration baseline.
-- Appeal SLA miss rate >5% per quarter.
-- Emergency canon TTLs older than policy.
-- Publication lag >14 days after quarter close.
+## Maxfiylik va ozodlik himoyasi (MINFO-8a)| Metrik sinf | Mexanizm | Parametrlar | Qo'shimcha soqchilar |
+|-------------|-----------|------------|-------------------|
+| Hisoblar (apellyatsiyalar, qora ro'yxatga o'zgartirishlar, ixtiyoriy brifinglar) | Laplas shovqini | har chorakda e=0,75, d=1e-6 | Shovqindan keyingi qiymati <5 bo'lgan chelaklarni bostirish; har chorakda aktyor uchun 1 ta klip hissasi. |
+| AI aniqligi | Numerator/maxrajdagi Gauss shovqini | e=0,5, d=1e-6 | Namuna soni ≥50 (`min_accuracy_samples` qavat) sanitarizatsiya qilinganidan keyin chiqaring va ishonch oralig'ini e'lon qiling. |
+| G'aznachilik oqimlari | Shovqin yo'q (allaqachon ommaviy tarmoqda) | — | G'aznachilik identifikatorlaridan tashqari niqob nomlari; Merkle dalillarini o'z ichiga oladi. |
 
-## Privacy & Release Guardrails (MINFO-8a)
+Chiqarish talablari:
+- Differentsial maxfiylik hisobotlari epsilon/delta kitobi va RNG urug'lik majburiyatini (`blake3(seed)`) o'z ichiga oladi.
+- Nozik misollar (dalil xeshlari), agar allaqachon ommaviy Merkle kvitansiyalari bo'lmasa, tahrirlangan.
+- Barcha olib tashlangan maydonlarni va asoslashni tavsiflovchi xulosaga ilova qilingan tahrirlash jurnali.
 
-| Metric class | Mechanism | Parameters | Additional guards |
-|--------------|-----------|------------|-------------------|
-| Counts (appeals, blacklist changes, volunteer briefs) | Laplace noise | ε = 0.75 per quarter, δ = 1e-6 | Suppress buckets with post-noise value <5; clip contributions to 1 per actor per quarter. |
-| AI accuracy | Gaussian noise on numerator/denominator | ε = 0.5, δ = 1e-6 | Release only when sanitized sample count ≥ 50 (the `min_accuracy_samples` floor) and publish the confidence interval. |
-| Treasury flows | No noise (already public on-chain) | — | Mask account names except treasury IDs; include Merkle proofs. |
+## Ish jarayoni va vaqt jadvalini nashr qilish
 
-Release requirements:
-- Differential privacy reports include the epsilon/delta ledger and RNG seed commitment (`blake3(seed)`).
-- Sensitive examples (evidence hashes) redacted unless already in public Merkle receipts.
-- Redaction log appended to the summary describing all removed fields and justification.
-
-## Publishing Workflow & Timeline
-
-| T‑Window | Task | Owner(s) | Evidence |
+| T-Oyna | Vazifa | Ega(lar)i | Dalil |
 |----------|------|----------|----------|
-| T + 3 d after quarter close | Freeze raw exports, trigger aggregation job | Ministry Observability TL | `ministry_transparency_ingest.log`, pipeline job ID |
-| T + 7 d | Review raw metrics, run DP sanitizer dry run | Data Trust team | Sanitizer report (`artifacts/.../dp_report.json`) |
-| T + 10 d | Draft summary + data appendix | Docs/DevRel + Policy analyst | `docs/source/ministry/reports/<YYYY-Q>.md` |
-| T + 12 d | Sign artefacts, produce manifest, upload to SoraFS | Ops / Governance Secretariat | `manifest.json(.sig)`, SoraFS CID |
-| T + 14 d | Publish dashboards + alerts, post governance announcement | Observability + Comms | Grafana export, alert rule hash, governance vote link |
+| Chorak yopilgandan keyin T+3d | Xom eksportni muzlatish, yig'ish ishini ishga tushirish | Vazirlikning kuzatuv qobiliyati TL | `ministry_transparency_ingest.log`, quvur liniyasi ish identifikatori |
+| T+7d | Xom o'lchovlarni ko'rib chiqing, DP sanitizer quruq ishini ishlating | Data Trust jamoasi | Sanitizer hisoboti (`artifacts/.../dp_report.json`) |
+| T+10d | Xulosa loyihasi + ma'lumotlar ilovasi | Docs/DevRel + Siyosat tahlilchisi | `docs/source/ministry/reports/<YYYY-Q>.md` |
+| T+12d | Artefaktlarni imzolang, manifest tayyorlang, SoraFS | ga yuklang Operatsiyalar / Boshqaruv kotibiyati | `manifest.json(.sig)`, SoraFS CID |
+| T+14d | Boshqaruv panellari + ogohlantirishlarni, boshqaruvdan keyingi e'lonlarni nashr qilish | Kuzatish qobiliyati + Comms | Grafana eksporti, ogohlantirish qoidasi xeshi, boshqaruv ovozi havolasi |
 
-Each release must be approved by:
-1. Ministry Observability TL (data integrity)
-2. Governance Council liaison (policy)
-3. Docs/Comms lead (public wording)
+Har bir nashr quyidagi tomonidan tasdiqlanishi kerak:
+1. Vazirlikning kuzatuv qobiliyati TL (maʼlumotlar yaxlitligi)
+2. Boshqaruv kengashi bilan aloqa (siyosat)
+3. Docs/Comms yetakchisi (ommaviy matn)
 
-## Automation & Evidence Storage
+## Avtomatlashtirish va dalillarni saqlash- `cargo xtask ministry-transparency ingest` dan choraklik suratni xom tasmalardan (buxgalteriya kitobi, murojaatlar, rad etish roʻyxati, xazina, koʻngilli) yaratish uchun foydalaning. Nashr qilishdan oldin JSON ko'rsatkichlarini va imzolangan manifestni chiqarish uchun `cargo xtask ministry-transparency build` bilan kuzatib boring.
+- Qizil jamoa aloqasi: bir yoki bir nechta `--red-team-report docs/source/ministry/reports/<YYYY-MM>-mod-red-team-<scenario>.md` fayllarini qabul qilish bosqichiga o'tkazing, shunda shaffoflik surati va tozalangan ko'rsatkichlar daftar/apellyatsiya/inkor ro'yxati ma'lumotlari bilan bir qatorda matkap identifikatorlari, stsenariy sinflari, dalillar to'plami yo'llari va asboblar panelidagi SHA-larni olib yuradi. Bu MINFO-9 matkap kadansini qo'lda tahrirlarsiz har bir shaffoflik paketida aks ettiradi.
+- Ko'ngillilar tomonidan taqdim etilgan arizalar `docs/source/ministry/volunteer_brief_template.md` ga muvofiq bo'lishi kerak (misol: `docs/examples/ministry/volunteer_brief_template.json`). Qabul qilish bosqichi ushbu ob'ektlarning JSON massivini kutadi, `moderation.off_topic` yozuvlarini avtomatik ravishda filtrlaydi, oshkor qilish sertifikatlarini qo'llaydi va asboblar paneli etishmayotgan iqtiboslarni ajratib ko'rsatishi uchun faktlar jadvalini qamrab oladi.
+- Qo'shimcha avtomatlashtirish `scripts/ministry/` ostida ishlaydi. `dp_sanitizer.py` `cargo xtask ministry-transparency sanitize` buyrug'ini o'rab oladi, `transparency_release.py` esa artefaktlarni paketlaydi, SoraFS CIDni Norito yoki tushuntirishdan oladi. `--sorafs-cid`) va `transparency_manifest.json` va `transparency_release_action.json` (manifest dayjest, SoraFS CID va SHA panellarini qamrab oluvchi `TransparencyReleaseV1` boshqaruv yuki) ham yozadi. `--governance-dir <path>` ni `transparency_release.py` ga o'tkazing (yoki `cargo xtask ministry-transparency anchor --action artifacts/.../transparency_release_action.json --governance-dir <path>` ni ishga tushiring) Norito foydali yukini kodlash va uni (plyus JSON xulosasini) nashr qilishdan oldin boshqaruv DAG katalogiga tashlang. Xuddi shu bayroq `MinistryTransparencyHeadUpdateV1` so'rovini `<governance-dir>/publisher/head_requests/ministry_transparency/` ostida ham chiqaradi, chorak, SoraFS CID, manifest yo'llari va IPNS kalit taxalluslari (`--ipns-key` orqali bekor qilinadi). `--auto-head-update` ni `publisher_head_updater.py` orqali darhol ko'rib chiqish uchun `--auto-head-update` ni taqdim eting, agar IPNS bir vaqtning o'zida chop etilishi kerak bo'lsa, `--head-update-ipns-template '/usr/local/bin/ipfs name publish --key {ipns_key} /ipfs/{cid}'` orqali o'ting. Aks holda, navbatni to'kib tashlash, `publisher/head_updates.log` qo'shish, `publisher/ipns_heads/<key>.json`ni yangilash va qayta ishlangan JSON faylini `head_requests/ministry_transparency/processed/` ostida arxivlash uchun `scripts/ministry/publisher_head_updater.py --governance-dir <path>` dasturini keyinroq ishga tushiring (agar kerak bo'lsa, xuddi shu andoza bilan).
+- Chiqarish kaliti bilan imzolangan `checksums.sha256` fayli bilan `artifacts/ministry/transparency/<YYYY-Q>/` ostida saqlangan artefaktlar. Daraxt hozirda `artifacts/ministry/transparency/2026-Q3/` (sanitizatsiya qilingan koʻrsatkichlar, DP hisoboti, xulosa, manifest, boshqaruv harakati) da mos yozuvlar toʻplamini olib yuradi, shuning uchun muhandislar asbobni oflayn rejimda sinab koʻrishlari mumkin va `scripts/ministry/check_transparency_release.py` dayjestlar/chorak metamaʼlumotlarini mahalliy ravishda tekshiradi, Grafana da bir xil dalillar mavjud. yuklangan. Tekshiruvchi endi hujjatlashtirilgan DP budjetlarini (hisoblash uchun e≤0,75, aniqlik uchun e≤0,5, d≤1e−6) amalga oshiradi va `min_accuracy_samples` yoki bostirish chegarasi drifti yoki chelak o‘sha qavatdan past bo‘lmagan qiymatlar bo‘lsa, qurishni muvaffaqiyatsiz tugatadi. Skriptni yo‘l xaritasi (MINFO‑8) va CI o‘rtasidagi shartnoma sifatida ko‘ring: agar maxfiylik parametrlari o‘zgarsa, yuqoridagi jadval va tekshirgichni birgalikda sozlang.- Boshqaruv langari: manifest dayjestiga, SoraFS CID va asboblar paneliga git SHA (`iroha_data_model::ministry::TransparencyReleaseV1` kanonik foydali yukni belgilaydi) havolasi bilan `TransparencyReleaseV1` harakatini yarating.
 
-- Use `cargo xtask ministry-transparency ingest` to build the quarterly snapshot from the raw feeds (ledger, appeals, denylist, treasury, volunteer). Follow up with `cargo xtask ministry-transparency build` to emit the dashboard metrics JSON plus the signed manifest before publishing.
-- Red-team linkage: pass one or more `--red-team-report docs/source/ministry/reports/<YYYY-MM>-mod-red-team-<scenario>.md` files to the ingest step so the transparency snapshot and sanitized metrics carry drill IDs, scenario classes, evidence bundle paths, and dashboard SHAs alongside the ledger/appeal/denylist data. This keeps MINFO-9 drill cadence reflected in every transparency packet without manual edits.
-- Volunteer submissions must follow `docs/source/ministry/volunteer_brief_template.md` (example: `docs/examples/ministry/volunteer_brief_template.json`). The ingest step expects a JSON array of those objects, automatically filters `moderation.off_topic` entries, enforces disclosure attestations, and records fact-table coverage so dashboards can highlight missing citations.
-- Additional automation lives under `scripts/ministry/`. `dp_sanitizer.py` wraps the `cargo xtask ministry-transparency sanitize` command, while `transparency_release.py` (added alongside the provenance tooling) now packages artefacts, derives the SoraFS CID from the `sorafs_cli car pack|proof verify` summary (or an explicit `--sorafs-cid`), and writes both `transparency_manifest.json` and `transparency_release_action.json` (a `TransparencyReleaseV1` governance payload capturing the manifest digest, SoraFS CID, and dashboards git SHA). Pass `--governance-dir <path>` to `transparency_release.py` (or run `cargo xtask ministry-transparency anchor --action artifacts/.../transparency_release_action.json --governance-dir <path>`) to encode the Norito payload and drop it (plus the JSON summary) into the governance DAG directory before publishing. The same flag also emits a `MinistryTransparencyHeadUpdateV1` request under `<governance-dir>/publisher/head_requests/ministry_transparency/`, referencing the quarter, SoraFS CID, manifest paths, and IPNS key alias (overridable via `--ipns-key`). Provide `--auto-head-update` to process that request immediately via `publisher_head_updater.py`, optionally passing `--head-update-ipns-template '/usr/local/bin/ipfs name publish --key {ipns_key} /ipfs/{cid}'` when IPNS needs to be published at the same time. Otherwise, run `scripts/ministry/publisher_head_updater.py --governance-dir <path>` later (with the same template if needed) to drain the queue, append `publisher/head_updates.log`, update `publisher/ipns_heads/<key>.json`, and archive the processed JSON under `head_requests/ministry_transparency/processed/`.
-- Artefacts stored under `artifacts/ministry/transparency/<YYYY-Q>/` with a `checksums.sha256` file signed by the release key. The tree now carries a reference bundle at `artifacts/ministry/transparency/2026-Q3/` (sanitized metrics, DP report, summary, manifest, governance action) so engineers can test the tooling offline, and `scripts/ministry/check_transparency_release.py` verifies the digests/quarter metadata locally while `ci/check_ministry_transparency.sh` runs the same validation in CI before evidence is uploaded. The checker now enforces the documented DP budgets (ε≤0.75 for counts, ε≤0.5 for accuracy, δ≤1e−6) and fails the build whenever `min_accuracy_samples` or the suppression threshold drift, or when a bucket leaks a value below those floors without being suppressed. Treat the script as the contract between the roadmap (MINFO‑8) and CI: adjust both the table above and the checker together if the privacy parameters ever change.
-- Governance anchor: create `TransparencyReleaseV1` action referencing the manifest digest, SoraFS CID, and dashboard git SHA (`iroha_data_model::ministry::TransparencyReleaseV1` defines the canonical payload).
+## Vazifalar va keyingi qadamlarni oching
 
-## Open Tasks & Next Steps
-
-| Task | Status | Notes |
+| Vazifa | Holati | Eslatmalar |
 |------|--------|-------|
-| Implement `ministry_transparency_ingest` + builder jobs | 🈺 In Progress | `cargo xtask ministry-transparency ingest|build` now stitches ledger/appeal/denylist/treasury feeds; remaining work wires the DP sanitizer + release script pipeline. |
-| Publish Grafana dashboard + alert pack | 🈴 Completed | Dashboard + alert files live under `dashboards/grafana/ministry_transparency_overview.json` and `dashboards/alerts/ministry_transparency_rules.yml`; wire them into PagerDuty `ministry-transparency` during rollout. |
-| Automate DP sanitizer + provenance manifest | 🈴 Completed | `cargo xtask ministry-transparency sanitize` (wrapper: `scripts/ministry/dp_sanitizer.py`) emits the sanitized metrics + DP report, and `scripts/ministry/transparency_release.py` now writes `checksums.sha256` plus `transparency_manifest.json` for provenance. |
-| Create quarterly report template (`reports/<YYYY-Q>.md`) | 🈴 Completed | Template added at `docs/source/ministry/reports/2026-Q3-template.md`; copy/rename per quarter and replace the `{{...}}` tokens before publishing. |
-| Wire governance DAG anchoring | 🈴 Completed | `TransparencyReleaseV1` lives in `iroha_data_model::ministry`, `scripts/ministry/transparency_release.py` emits the JSON payload, and `cargo xtask ministry-transparency anchor` encodes the `.to` artefact into the configured governance DAG directory so the publisher can ingest releases automatically. |
+| `ministry_transparency_ingest` + quruvchi ish o'rinlarini amalga oshirish | 🈺 Davom etmoqda | `cargo xtask ministry-transparency ingest|build` endi daftar/apellyatsiya/inkor ro'yxati/g'aznachilik manbalarini tikadi; qolgan ish simlari DP sanitizer + reliz skript quvur liniyasi. |
+| Grafana boshqaruv paneli + ogohlantirish paketini nashr qilish | 🈴 Tugallandi | Boshqaruv paneli + ogohlantirish fayllari `dashboards/grafana/ministry_transparency_overview.json` va `dashboards/alerts/ministry_transparency_rules.yml` ostida ishlaydi; ishga tushirish vaqtida ularni PagerDuty `ministry-transparency` ga ulang. |
+| DP sanitizer + kelib chiqish manifestini avtomatlashtirish | 🈴 Tugallandi | `cargo xtask ministry-transparency sanitize` (oʻram: `scripts/ministry/dp_sanitizer.py`) tozalangan koʻrsatkichlar + DP hisobotini chiqaradi va `scripts/ministry/transparency_release.py` endi kelib chiqishi uchun `checksums.sha256` va `transparency_manifest.json` yozadi. |
+| Har choraklik hisobot shablonini yaratish (`reports/<YYYY-Q>.md`) | 🈴 Tugallandi | `docs/source/ministry/reports/2026-Q3-template.md` da qo'shilgan shablon; har chorakda nusxa ko'chiring/nomini o'zgartiring va nashr qilishdan oldin `{{...}}` tokenlarini almashtiring. |
+| Simli boshqaruv DAG ankraj | 🈴 Tugallandi | `TransparencyReleaseV1` `iroha_data_model::ministry` da yashaydi, `scripts/ministry/transparency_release.py` JSON foydali yukini chiqaradi va `cargo xtask ministry-transparency anchor` `.to` artefaktini DAG nashri direktorini avtomatik ravishda chiqarish uchun tuzilgan konfiguratsiyaga kodlaydi. |
 
-Delivering the document, dashboard spec, and workflow moves MINFO-8 from 🈳 to 🈺. Remaining engineering tasks (jobs, scripts, alert wiring) are tracked in the table above and should close before the first Q3 2026 publication.
+Hujjatni, asboblar panelini va ish jarayonini yetkazib berish MINFO-8 ni 🈳 dan 🈺 ga o'tkazadi. Qolgan muhandislik vazifalari (ishlar, skriptlar, ogohlantirish kabellari) yuqoridagi jadvalda kuzatilgan va birinchi Q32026 nashridan oldin yopilishi kerak.

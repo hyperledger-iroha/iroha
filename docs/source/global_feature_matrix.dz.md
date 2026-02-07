@@ -7,111 +7,104 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 6a406b7656a87bb1469444db1cc2d2d5922f16660b53cc7eaef5b838199127e8
 source_last_modified: "2026-01-23T23:46:10.135119+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Global Feature Matrix
+# ཡོངས་ཁྱབ་ཁྱད་ཆོས་མེ་རིགས།
 
-Legend: `◉` fully implemented · `○` mostly implemented · `▲` partially implemented · `△` implementation just started · `✖︎` not started
+· `○` མང་ཆེ་བ་ · Izanami ཆ་ཤས་ཅིག་ · Izanami ལག་ལེན་འཐབ་འགོ་བཙུགས་ཡོདཔ་ཨིན། · `✖︎` འགོ་བཙུགས་མ་བཏུབ།
 
-## Consensus & Networking
+## མོས་མཐུན་དང་དྲ་རྒྱ།
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Multi-collector K/r support & first-commit-certificate-wins | ◉ | Deterministic collector selection, redundant fan-out, on-chain K/r parameters, and first-valid-commit-certificate acceptance shipped with tests. | status.md:255; status.md:314 |
-| Pacemaker backoff, RTT floor, deterministic jitter | ◉ | Configurable timers with jitter band wired through config, telemetry, and docs. | status.md:251 |
-| NEW_VIEW gating & highest QC tracking | ◉ | Control flow carries NEW_VIEW/Evidence, the highest QC adopts monotonically, handshake guards computed fingerprint. | status.md:210 |
-| availability evidence tracking (advisory) | ◉ | Availability evidence emitted and tracked; commit does not gate on availability in v1. | status.md:latest |
-| Reliable Broadcast (DA payload transport) | ◉ | RBC message flow (Init/Chunk/Ready/Deliver) is enabled when `da_enabled=true` as a transport/recovery path; availability evidence is tracked (advisory) while commit proceeds independently. | status.md:latest |
-| Commit QC state-root binding | ◉ | Commit QCs carry `parent_state_root`/`post_state_root`; there is no separate execution-QC gate. | status.md:latest |
-| Evidence propagation & audit endpoints | ◉ | ControlFlow::Evidence, Torii evidence endpoints, and negative tests landed. | status.md:176; status.md:760-761 |
-| RBC telemetry, readiness/delivered metrics | ◉ | `/v1/sumeragi/rbc*` endpoints and telemetry counters/histogram available for operators. | status.md:283-284; status.md:772 |
-| Consensus parameter advert & topology verification | ◉ | Nodes broadcast `(collectors_k, redundant_send_r)` and validate equality across peers. | status.md:255 |
-| Permissioned PRF-based rotation | ◉ | Permissioned leader/collector selection uses PRF seed + height/view over the canonical roster; prev-hash rotation remains a legacy helper. | status.md:latest |
+| ཁྱད་ཆོས། | གནས་ཚད་ | དྲན་ཐོ། | སྒྲུབ་བྱེད་ |
+|------------------------------ |------------------------------------------------- |
+| མལ་ཊི་-བསྡུ་སྒྲིག་ K/r རྒྱབ་སྐྱོར་དང་ དང་པོའི་ ལག་ཁྱེར་-ལག་ཁྱེར་-རྒྱལ་ཁ་ | ◉ | བརྟག་དཔྱད་དང་གཅིག་ཁར་ བཀོད་སྒྲིག་འབད་མི་ བསྡུ་སྒྲིག་འབད་མི་སེལ་འཐུ་དང་ དགོས་མཁོ་ཅན་གྱི་ ཕེན་ཨའུཊ་ རྒྱུན་རིམ་ཀེ་/ཨར་ ཚད་གཞི་ དེ་ལས་ བདེན་དཔྱད་དང་པ་ ཆོག་ཐམ་དང་པ་ ལག་ཁྱེར་ངོས་ལེན་འབད་ནི་ཚུ་ཨིན། | གནས་ཚད་.md:255; གནས་ཚད།md:314 |
+| Pacemaker backoff, RTT ཐིག, གཏན་འབེབས་ཀྱི་ཇི་ཊར། | ◉ | རིམ་སྒྲིག་འབད་བཏུབ་པའི་དུས་ཚོད་ཚུ་ ཇི་ཊར་བེནཌ་དང་གཅིག་ཁར་ རིམ་སྒྲིག་དང་ ཊེ་ལི་མི་ཊི་ དེ་ལས་ ཌོཀ་ཚུ་བརྒྱུད་དེ་ ཐགཔ་སྦེ་ཡོདཔ་ཨིན། | གནས་ཚད།md:251 |
+| NEW_VIEW gating & མཐོ་ཤོས་ QC རྗེས་འདེད་ | ◉ | ཚད་འཛིན་གྱི་ ཕོལོ་འདི་ NEW_VIEW/མངོན་གསལ་མཐོ་ཤོས་ QC འདི་ ལག་ཐོག་འཐག་མི་ ལགཔ་གི་རྫུབ་མོ་གི་ མཛུབ་མོ་གི་པར་བཏབ་སྟེ་ ཆ་གནས་འབདཝ་ཨིན། | གནས་ཚད།md:210 |
+| འཐོབ་ཚུགས་པའི་སྒྲུབ་བྱེད་བརྟག་དཔྱད་ (བསླབ་བྱ་) | ◉ | འཐོབ་ཚུགས་པའི་སྒྲུབ་བྱེད་དང་ འཚོལ་ཞིབ་འབདཝ་ཨིན། v1 ནང་ ཐོབ་ཚུགས་པའི་ཐོག་ལུ་ འབད་མི་བཏུབ། | གནས་ཚད།md: ལསཊ་ |
+| བློ་གཏད་ཅན་གྱི་རྒྱང་བསྒྲགས། (DA པེ་ལོཌ་སྐྱེལ་འདྲེན་) | ◉ | RBC འཕྲིན་དོན་རྒྱུན་འབབ་ ( Init/Chunk/Ready/Deliver) འདི་ `da_enabled=true` སྐྱེལ་འདྲེན་/སླར་གསོ་ལམ་ལུགས་སྦེ་ཡོད་པའི་སྐབས་ ལྕོགས་ཅན་བཟོ་ཡོདཔ་ཨིན། འཐོབ་ཚུགས་པའི་སྒྲུབ་བྱེད་འདི་ (བསླབ་བྱ་) འདི་ རང་དབང་ཅན་སྦེ་ འགྱོཝ་ཨིན། | གནས་ཚད།md: ལསཊ་ |
+| QC མངའ་སྡེ་-རྩ་བསྡམས་ | ◉ | ཁས་བླངས་ QCs གིས་ `parent_state_root`/`post_state_root` འདྲེན་བ། བཀོལ་སྤྱོད་-ཀིའུ་སི་ སྒོ་སོ་སོ་མེད། | གནས་ཚད།md: ལསཊ་ |
+| སྒྲུབ་བྱེད་ཁྱབ་སྤེལ་དང་རྩིས་ཞིབ་མཇུག་བསྡུ། | ◉ | ཚད་འཛིན་ཕོ་ལོ་::སྒྲུབ་བྱེད་ Torii སྒྲུབ་བྱེད་ཀྱི་མཇུག་བསྡུ། | གནས་རིམ་.md:176; གནས་ཚད།md:760-761 |
+| RBC ཊེ་ལི་མི་ཊི་ གྲ་སྒྲིག་/བཀྲམ་སྤེལ་འབད་ཡོད་པའི་མེ་ཊིག | ◉ | `/v1/sumeragi/rbc*` མཐའ་མཇུག་དང་ བརྒྱུད་འཕྲིན་ཨང་རྟགས་/ཧི་སི་ཊོ་གཱ་རམ་ཚུ་ བཀོལ་སྤྱོད་པ་ཚུ་གི་དོན་ལུ་ཐོབ་ཚུགས། | གནས་རིམ་.md:༢༨༣-༢༨༤; གནས་ཚད།md:772 |
+| མོས་མཐུན་ཚད་གཞི་བརྡ་ཁྱབ་དང་ ཊོ་པོ་ལོ་ཇི་བདེན་དཔྱད་ | ◉ | མཐུད་མཚམས་ཚུ་གིས་ `(collectors_k, redundant_send_r)` རྒྱང་བསྒྲགས་འབད་དེ་ མཉམ་རོགས་ཀྱིས་ འདྲ་མཉམ་བདེན་དཔྱད་འབད། | གནས་ཚད།md:255 |
+| ཆོག་མཆན་ PRF གཞི་བཞག་པའི་འཁོར་སྐྱོད་ | ◉ | གནང་བ་ཡོད་པའི་འགོ་ཁྲིད་/བསྡུ་སྒྲིག་གདམ་ཁ་གིས་ ཁྲིམས་ལུགས་ཀྱི་ཐོ་ཡིག་གུ་ PRF སོན་+མཐོ་ཚད་/མཐོང་སྣང་ལག་ལེན་འཐབ་ཨིན། prev-hash བསྒྱིར་ཚད་འདི་ ཤུལ་འཛིན་གྱི་གྲོགས་རམ་པ་ཅིག་སྦེ་ལུས་ཡོདཔ་ཨིན། | གནས་ཚད།md: ལསཊ་ |
 
-## Pipeline, Kura & State
+## པའིཔ་ལའིན་ ཀུ་ར་དང་མངའ་སྡེ་།| ཁྱད་ཆོས། | གནས་ཚད་ | དྲན་ཐོ། | སྒྲུབ་བྱེད་ |
+|------------------------------ |------------------------------------------------- |
+| ཟུར་བཞག་ལམ་ཁ་ དང་ ཊེ་ལི་མི་ཊི་རིཊ་ | ◉ | མཛུབ་མོ་ཚུ་ རིམ་སྒྲིག་འབད་དེ་ གཏན་འབེབས་བཟོ་མི་ རྒྱུན་འབབ་ཚུ་ འཛིན་སྐྱོང་དང་ ཊེ་ལི་མི་ཊི་ ཀའུན་ཊར་ཚུ་ ལག་ལེན་འཐབ་ཡོདཔ་ཨིན། | གནས་ཚད།md:263 |
+| Pipeline ལས་བྱེད་པའི་ཆུ་རྫིང་ knob | ◉ | `[pipeline].workers` env དབྱེ་དཔྱད་བརྟག་དཔྱད་ཚུ་དང་གཅིག་ཁར་ མངའ་སྡེ་ཨིན་ཊི་བརྒྱུད་དེ་ ཐིག་ཚད་བཟོ་ཡོདཔ་ཨིན། | གནས་ཚད།md:264 |
+| པར་ལེན་འདྲི་དཔྱད་ལམ་ (གསོག་འཇོག་འབད་ཡོདཔ་/བཤོལ་བའི་འོད་རྟགས་) | ◉ | Torii མཉམ་བསྡོམས་དང་བཀག་ཆ་འབད་མི་ལས་བྱེད་པའི་ཆུ་བོ་ཚུ་དང་གཅིག་ཁར་ གསོག་འཇོག་འབད་ཡོདཔ། | གནས་ཚད་.md:265; གནས་རིམ་.md:371; གནས་ཚད།md:501 |
+| Static DAG མཛུབ་མོའི་པར་རིས་སླར་གསོའི་ཟུར་ཁར། | ◉ | ཀུ་ར་ལུ་བསག་བཞག་མི་ སའི་ཌི་ཀར་ཚུ་ འགོ་བཙུགས་པའི་སྐབས་ བདེན་དཔྱད་འབད་དེ་ མ་མཐུན་པའི་ཉེན་བརྡ་ཚུ་ བཏོན་ཡོདཔ་ཨིན་པས། | གནས་རིམ་.md:106; གནས་ཚད།md:349 |
+| ཀུ་ར་བཀག་ཆ་ ཧེཤ་ ཌི་ཀོ་ཌིང་ཧརཌ་ནིང་ | ◉ | ཧཤ་གིས་ Norito-རང་དབང་ཅན་གྱི་ སྒོར་སྒོར་བརྟག་དཔྱད་ཚུ་དང་གཅིག་ཁར་ ༣༢ བཱའིཊི་འཛིན་སྐྱོང་ལུ་ སོར་བསྒྱུར་འབད་ཡོདཔ་ཨིན། | གནས་རིམ་.md:༦༠༨; གནས་ཚད།md:668 |
+| Norito མཐུན་སྒྲིག་བརྡ་འཕྲིན་ཨང་རྟགས་ཚུ་གི་དོན་ལུ་ | ◉ | AoS དང་ NCB སེལ་འཐུའི་མེ་ཊིགསི་ Norito ལུ་ཁ་སྐོང་འབད་ཡོདཔ་ཨིན། | གནས་ཚད།md:156 |
+| Torii བརྒྱུད་དེ་ WSV འདྲི་བ། | ◉ | Torii པར་ལེན་ཐིག་འདི་གིས་ བཀག་ཆ་འབད་མི་ལཱ་འབད་མི་ཆུ་རྫིང་དང་ གཏན་འབེབས་བརྡ་འཕྲིན་ཚུ་ལག་ལེན་འཐབ་ཨིན། | གནས་ཚད།md:501 |
+| Trigger by-call བཀོལ་སྤྱོད་རིམ་སྒྲིག་ | ◉ | གནད་སྡུད་འདི་གིས་ གཏན་འབེབས་རིམ་པ་དང་གཅིག་ཁར་ ཁ་པར་ཐོག་ལས་ ལག་ལེན་འཐབ་པའི་ཤུལ་ལས་ དེ་འཕྲོ་ལས་ རིམ་སྒྲིག་འབདཝ་ཨིན། | གནས་ཚད།md:668 |
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Quarantine lane caps & telemetry | ◉ | Config knobs, deterministic overflow handling, and telemetry counters implemented. | status.md:263 |
-| Pipeline worker pool knob | ◉ | `[pipeline].workers` threaded through state init with env parsing tests. | status.md:264 |
-| Snapshot query lane (stored/ephemeral cursors) | ◉ | Stored cursor mode with Torii integration and blocking worker pools. | status.md:265; status.md:371; status.md:501 |
-| Static DAG fingerprint recovery sidecars | ◉ | Sidecars stored in Kura, validated on startup, warnings emitted on mismatches. | status.md:106; status.md:349 |
-| Kura block store hash decoding hardening | ◉ | Hash reads switched to raw 32-byte handling with Norito-independent roundtrip tests. | status.md:608; status.md:668 |
-| Norito adaptive telemetry for codecs | ◉ | AoS vs NCB selection metrics added to Norito. | status.md:156 |
-| Snapshot WSV queries via Torii | ◉ | Torii snapshot query lane uses blocking worker pool, deterministic semantics. | status.md:501 |
-| Trigger by-call execution chaining | ◉ | Data triggers chain immediately after by-call execution with deterministic order. | status.md:668 |
+## Norito རིམ་སྒྲིག་དང་ལག་ཆས་བཟོ་ནི།
 
-## Norito Serialization & Tooling
+| ཁྱད་ཆོས། | གནས་ཚད་ | དྲན་ཐོ། | སྒྲུབ་བྱེད་ |
+|------------------------------ |------------------------------------------------- |
+| Norito JSON གནས་སྤོ་ (ལཱ་གི་ས་སྒོ་) | ◉ | བཟོ་བསྐྲུན་ལས་ཕྱིར་བཏོན་འབད་ཡོདཔ། intivitory + ཉེན་རྟོག་པ་ཚུ་གིས་ ལཱ་གི་ས་སྒོ་ Norito-རྐྱངམ་ཅིག་སྦེ་བཞགཔ་ཨིན། | གནས་རིམ་.md:112; གནས་ཚད།md:124 |
+| Serde-list & CI ཉེན་སྲུང། | ◉ | སྲུང་སྐྱོབ་ཀྱི་ལཱ་གི་རྒྱུན་རིམ་/ཡིག་གཟུགས་ཚུ་གིས་ ལཱ་གི་ས་སྒོ་ནང་ ཐད་ཀར་ སར་ཌི་ལག་ལེན་གསརཔ་ བཀག་ཐབས་འབདཝ་ཨིན། | གནས་ཚད།md:218 |
+| Norito ཀོ་ཌིག་གསེར་གྱི་རིགས་ & AoS/NCB བརྟག་དཔྱད། | ◉ | AoS/NCB གསེར་གྱི་རྟགས་དང་ བཏོག་པའི་བརྟག་དཔྱད་ དེ་ལས་ ཌོག་མཉམ་འབྱུང་ཚུ་ ཁ་སྐོང་བཀོད་ཡོདཔ་ཨིན། | གནས་རིམ་.md:༡༤༠-༡༤༧; གནས་རིམ་.md:༡༤༩-༡༥༠; གནས་རིམ་.md:332; གནས་ཚད།md:666 |
+| Norito ཁྱད་རྣམ་མེ་ཊིགསི་ལག་ཆས་བཟོ་ནི། | ◉ | `scripts/run_norito_feature_matrix.sh` གིས་ མར་གྱི་དུ་ཁ་བརྟག་དཔྱད་ལུ་རྒྱབ་སྐྱོར་འབདཝ་ཨིན། CI གིས་ ཐུམ་སྒྲིལ་ཅན་གྱི་-སེག་/སྒྲིག་གཞི་ ཀོམ་བོ་ཚུ་ ཁྱབ་ཚུགས། | གནས་རིམ་.md:146; གནས་ཚད།md:152 |
+| Norito སྐད་ཡིག་བཅིངས་ཏེ་ (Python/Java) | ◉ | མཉམ་འབྱུང་ཡིག་གཟུགས་ཚུ་དང་གཅིག་ཁར་ རྒྱུན་སྐྱོང་འཐབ་མི་ པའི་ཐོན་དང་ ཇ་བ་ Norito གསང་གྲངས་ཚུ། | གནས་རིམ་.md:74; གནས་ཚད།md:81 |
+| Norito རིམ་པ་-༡ སི་ཨེམ་ཌི་བཟོ་བཀོད་ཀྱི་དབྱེ་བ། | ◉ | NEON/AVX2 རིམ་པ་-༡ དབྱེ་ཁག་བཟོ་མི་ གསེར་གྱི་གསེར་དང་ གང་བྱུང་སྦེ་ ཀོར་པོ་ར་བརྟག་དཔྱད་ཚུ་ཨིན། | གནས་ཚད།md:241 |
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Norito JSON migration (workspace) | ◉ | Serde removed from production; inventory + guardrails keep the workspace Norito-only. | status.md:112; status.md:124 |
-| Serde deny-list & CI guardrails | ◉ | Guard workflows/scripts prevent new direct Serde usage across workspace. | status.md:218 |
-| Norito codec goldens & AoS/NCB tests | ◉ | AoS/NCB goldens, truncation tests, and doc sync added. | status.md:140-147; status.md:149-150; status.md:332; status.md:666 |
-| Norito feature matrix tooling | ◉ | `scripts/run_norito_feature_matrix.sh` supports downstream smoke tests; CI covers packed-seq/struct combos. | status.md:146; status.md:152 |
-| Norito language bindings (Python/Java) | ◉ | Python and Java Norito codecs maintained with sync scripts. | status.md:74; status.md:81 |
-| Norito Stage-1 SIMD structural classifiers | ◉ | NEON/AVX2 stage-1 classifiers with cross-arch goldens and randomized corpora tests. | status.md:241 |
+## གཞུང་སྐྱོང་དང་ གཡོག་བཀོལ།| ཁྱད་ཆོས། | གནས་ཚད་ | དྲན་ཐོ། | སྒྲུབ་བྱེད་ |
+|------------------------------ |------------------------------------------------- |
+| གཡོག་བཀོལ་དུས་ཚོད་ཡར་འཕར་འཛུལ་ཞུགས་ (ཨེ་བི་ཨའི་གཱེཊི) | ◉ | བཀོད་སྒྲིག་འབད་ཡོད་པའི་འཛོལ་བ་དང་བརྟག་དཔྱད་ཚུ་དང་གཅིག་ཁར་ འཛུལ་ཞུགས་འབད་བའི་སྐབས་ Active ABI གཞི་སྒྲིག་འབད་ཡོདཔ་ཨིན། | གནས་ཚད།md:196 |
+| བཀག་འཛིན་འབད་ཡོད་པའི་མིང་ས་སྟོང་བཀྲམ་སྤེལ་འབད་ནི་ སྒོ་སྒྲིག་ | ▲ | བཀྲམ་སྤེལ་འབད་མི་ མེ་ཊ་ཌེ་ཊ་ དགོས་མཁོ་དང་ གཱ་ཊིང་ གློག་ཐག་ཚུ། སྲིད་བྱུས་/UX ད་དུང་འཕེལ་རྒྱས་འགྲོ་བཞིན་ཡོད། | གནས་ཚད།md:171 |
+| Torii གཞུང་སྐྱོང་གིས་ མཐའ་མཇུག་ལྷག་ཡོདཔ། | ◉ | `/v1/gov/*` རའུ་ཊར་བརྟག་དཔྱད་དང་གཅིག་ཁར་ འགྲུལ་ལམ་ཨེ་པི་ཨའི་ཚུ་ལྷག་ཡོདཔ་ཨིན། | གནས་ཚད།md:212 |
+| བདེན་དཔྱད་ཀྱི་ཐོ་བཀོད་ཀྱི་མི་ཚེ་འཁོར་རིམ་དང་བྱུང་རིམ་ཚུ་ | ◉ | ཝི་ཀེ་ཐོ་བཀོད་/དུས་བདེན/སྔོན་བཤད་དང་ བྱུང་ལས་ སི་ཨེལ་ཨའི་ཚགས་མ་ཚུ་ དེ་ལས་ བཀག་བཞག་ཡིག་བརྡའི་རིག་པ་ཚུ་ ལག་ལེན་འཐབ་ཡོདཔ་ཨིན། | གནས་རིམ་.md:༢༣༦-༢༣༩; གནས་རིམ་.md:༥༩༥; གནས་ཚད།md:603 |
 
-## Governance & Runtime Upgrades
+## ཤེས་ཡོན་--ཤེས་ཡོན་གྱི་གཞི་རྟེན་ ཀླད་ཀོར།
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Runtime upgrade admission (ABI gating) | ◉ | Active ABI set enforced at admission with structured errors and tests. | status.md:196 |
-| Protected namespace deploy gating | ▲ | Deploy metadata requirements and gating wired; policy/UX still evolving. | status.md:171 |
-| Torii governance read endpoints | ◉ | `/v1/gov/*` read APIs routed with router tests. | status.md:212 |
-| Verifying-key registry lifecycle & events | ◉ | VK register/update/deprecate, events, CLI filters, and retention semantics implemented. | status.md:236-239; status.md:595; status.md:603 |
+| ཁྱད་ཆོས། | གནས་ཚད་ | དྲན་ཐོ། | སྒྲུབ་བྱེད་ |
+|------------------------------ |------------------------------------------------- |
+| མཉམ་སྦྲགས་གསོག་འཇོག་ཨེ་པི་ཨའི་ཚུ་ | ◉ | `POST/GET/LIST/DELETE` གཏན་འབེབས་ཨའི་ཌི་དང་བརྟག་དཔྱད་ཚུ་དང་གཅིག་ཁར་ མཐུད་འབྲེལ་མཐའ་མཚམས་ཚུ། | གནས་ཚད།md:231 |
+| རྒྱབ་ལྗོངས་དཔེ་རིས་ལས་བྱེད་པ་དང་ TTL | ▲ | ཁྱད་རྣམ་རྒྱལ་དར་གྱི་རྒྱབ་ཁར་ ལྕགས་ཐག་འདི་ བཤག་བཅོས་འབད། TTL GC དང་རིམ་སྒྲིག་མཛུབ་མོ་གིས་ གློག་ཐག་བཏང་ཡོདཔ། ཆ་ཚང་ཆ་ཚང་ པེན་ཌིང་། | གནས་རིམ་.md:212; གནས་ཚད།md:233 |
+| CoreHost ནང་ལུ་ ཡིག་ཤུབས་ཧེ་ཤི་བཱའིན་ཌིང་། | ◉ | CoreHost བརྒྱུད་དེ་ མཐུད་ཡོད་པའི་ ཡིག་ཆའི་ཧེ་ཤེ་ཚུ་ བདེན་དཔྱད་འབད་ཞིནམ་ལས་ རྩིས་ཞིབ་ཀྱི་ པཱལསི་ཚུ་བརྒྱུད་དེ་ གསལ་སྟོན་འབད་དགོ། | གནས་ཚད།md:250 |
+| རྩ་བའི་ལོ་རྒྱུས་སྒོ་སྒྲིག | ◉ | རྩ་བ་གི་པར་རིས་ཚུ་ མཐའ་མཚམས་ཅན་གྱི་ལོ་རྒྱུས་དང་ རྩ་བ་སྟོངམ་རིམ་སྒྲིག་འབད་དེ་ CoreHost ནང་ལུ་ ཐིག་རྐྱབ་ཡོདཔ་ཨིན། | གནས་ཚད།md:303 |
+| ZK ཚོགས་རྒྱན་བཀོལ་སྤྱོད་དང་ གཞུང་སྐྱོང་ལྡེ་མིག་ཚུ། | ◗ | ནུས་མེད་བཟོ་མི་ འབྱུང་ཁུངས་དང་ ལྡེ་མིག་དུས་མཐུན་བཟོ་ནི་ བདེན་དཔྱད་ཀྱི་ སོར་བསྒྱུར་ཚུ་ ལག་ལེན་འཐབ་ཡོདཔ་ཨིན། ཚེ་སྲོག་བདེན་དཔང་ཆ་ཚང་ད་དུང་ཡང་། | གནས་རིམ་.md:༡༢༦-༡༢༨; གནས་ཚད།md:༡༩༤-༡༩༥ |
+| བདེན་ཁུངས་མཉམ་སྦྲགས་ སྔོན་སྒྲིག་དང་ dedup | ◉ | རྒྱབ་ལོག་ངོ་རྟགས་ཀྱི་ བློ་རིག་དང་ བཏོན་གཏང་ནི་ དེ་ལས་ བདེན་ཁུངས་ཀྱི་དྲན་ཐོ་ཚུ་ ཧེ་མ་ལས་ ལག་ལེན་འཐབ་ནི་འདི་ རྟག་བུ་རང་ གནས་ཏེ་ཡོདཔ་ཨིན། | གནས་རིམ་.md:348; གནས་ཚད།md:602 |
+| ZK Torii ནུས་ཤུགས་ཅན་གྱི་ཕེཆ་མཐའ་མཚམས་ | ◉ | `/v1/zk/proof/{backend}/{hash}` གིས་ བདེན་ཁུངས་དྲན་ཐོ་ཚུ་ ཕྱིར་བཏོན་འབདཝ་ཨིན་ (གནས་ཚད་, མཐོ་ཚད་, vk_ref/commitment) | གནས་ཚད།md:94 |
 
-## Zero-Knowledge Infrastructure
+## IVM དང་ Kotodama མཉམ་བསྡོམས་| ཁྱད་ཆོས། | གནས་ཚད་ | དྲན་ཐོ། | སྒྲུབ་བྱེད་ |
+|------------------------------ |------------------------------------------------- |
+| CoreHost syscall→ISI ཟམ་ | ◗ | དཔག་བྱེད་ཊི་ཨེལ་ཝི་ ཌི་ཀོ་ཌིང་དང་ སི་ཀཱལ་གྱལ་རིམ་བཀོལ་སྤྱོད་འབད་ནི། ཁྱབ་ཚད་ཀྱི་བར་སྟོང་/འདྲ་མཉམ་བརྟག་དཔྱད་ཚུ་འཆར་གཞི་བརྩམ་ཡོདཔ། | state.md:༢༩༩-༣༠༧; གནས་ཚད།md:༤༧༧-༤༨༦ |
+| དཔག་བྱེད་བཟོ་སྐྲུན་པ་དང་མངའ་ཁོངས་བཟོད་པ། | ◉ | Kotodama བེ་ལུ་ཌིན་གྱིས་ IR/e2e བརྟག་དཔྱད་དང་ ཌོཀ་ཚུ་དང་གཅིག་ཁར་ Norito TLVs དང་ SCALLs ཡིག་དཔར་རྐྱབས། | གནས་ཚད།md:299-301 |
+| དཔག་བྱེད་-ABI དམ་དམ་བདེན་དཔང་དང་ doc མཉམ་འབྱུང་ | ◉ | TLV སྲིད་བྱུས་འདི་ host/I1NT00000029X ནང་ལུ་ གསེར་གྱི་བརྟག་དཔྱད་དང་ བཟོ་བཏོན་འབད་མི་ ཌོཀ་ཚུ་དང་གཅིག་ཁར་ ཤུགས་བཏོན་ཡོདཔ་ཨིན། | གནས་རིམ་.md:227; གནས་རིམ་.md:317; གནས་རིམ་.md:344; གནས་རིམ་.md:366; གནས་ཚད།md:527 |
+| ZK syscall འཛུལ་སྒོ་ CoreHost བརྒྱུད་དེ་ | ◉ | Per-op གྱལ་རིམ་ཚུ་ བདེན་དཔྱད་འབད་ཡོད་པའི་ ཡིག་ཤུབས་ཚུ་དང་ ISI ལག་ལེན་མ་འཐབ་པའི་ཧེ་མ་ ཧེཤ་མཐུན་སྒྲིག་འབད་ནི་འདི་ བསྟར་སྤྱོད་འབདཝ་ཨིན། | ཀྲེ་ཊིས་/ཨི་རོ་ཧ་_ཀོར་/ཨེསི་ཨར་སི/རིག་རྩལ་ཅན་གྱི་ཁ་འབག་/ངན་པ་/ཧོསཊི་.rs:213; ཀེརེ་ཊི/ཨི་རོ་ཧ་_ཀོར་/ཨེསི་ཨར་སི/རིག་རྩལ་ཅན་གྱི་ཁ་འབག་/ངན་པ་/ཧོསཊི་.rs:279 |
+| Kotodama དཔག་བྱེད་-ABI docs & ཡིག་གཟུགས་ | ◉ | ཡིག་གཟུགས་/ཡིག་ཆ་ཚུ་ ཐད་སྙོམས་བཟོ་བསྐྲུན་པ་དང་ SCALL སབ་ཁྲ་ཚུ་དང་གཅིག་ཁར་ མཉམ་མཐུད་འབད་ཡོདཔ་ཨིན། | གནས་ཚད།md:299-301 |
+| ISO 20022 འཆར་གཞིའི་འཕྲུལ་འཁོར་ & Torii ཟམ་པ། | ◉ | ཀེ་ནོ་ནིག་ཨའི་ཨེསི་ཨོ་ ༢༠༠༢༢ གི་ལས་རིམ་ཚུ་ བཙུགས་ཡོདཔ་ གཏན་འབེབས་ཨེགསི་ཨེམ་ཨེལ་དབྱེ་དཔྱད་ དེ་ལས་ `/v1/iso20022/status/{MsgId}` ཨེ་པི་ཨའི་ ཕྱིར་བཏོན་འབད་ཡོདཔ། | གནས་ཚད།md:65-70 |
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Attachment storage APIs | ◉ | `POST/GET/LIST/DELETE` attachment endpoints with deterministic ids and tests. | status.md:231 |
-| Background prover worker & report TTL | ▲ | Prover stub behind feature flag; TTL GC and config knobs wired; full pipeline pending. | status.md:212; status.md:233 |
-| Envelope hash binding in CoreHost | ◉ | Verify envelope hashes bound through CoreHost and exposed via audit pulses. | status.md:250 |
-| Shielded root history gating | ◉ | Root snapshots threaded into CoreHost with bounded history and empty-root config. | status.md:303 |
-| ZK ballot execution & governance locks | ○ | Nullifier derivation, lock updates, verification toggles implemented; full proof lifecycle still maturing. | status.md:126-128; status.md:194-195 |
-| Proof attachment pre-verify & dedup | ◉ | Backend-tag sanity, deduplication, and proof records persisted pre-execution. | status.md:348; status.md:602 |
-| ZK Torii proof fetch endpoint | ◉ | `/v1/zk/proof/{backend}/{hash}` exposes proof records (status, height, vk_ref/commitment). | status.md:94 |
+## མཐུན་རྐྱེན་མགྱོགས་ཐབས།
 
-## IVM & Kotodama Integration
+| ཁྱད་ཆོས། | གནས་ཚད་ | དྲན་ཐོ། | སྒྲུབ་བྱེད་ |
+|------------------------------ |------------------------------------------------- |
+| SIMD tail/Misalignment ཆ་སྙོམས་བརྟག་དཔྱད། | ◉ | རིམ་བྲལ་མེད་པའི་ཆ་སྙོམས་བརྟག་དཔྱད་འདི་གིས་ SIMD vector ops གིས་ ཁྲིམས་འགལ་གྱི་ཕྲང་སྒྲིག་འབད་ནི་གི་དོན་ལས་ scalar semantics མཐུན་སྒྲིག་འབདཝ་ཨིན། | གནས་ཚད།md:243 |
+| Metal/CUDA ཕོལ་བེག་ & རང་དོན་བརྟག་དཔྱད་ | ◉ | GPU རྒྱབ་ཐག་འདི་ གསེར་གྱི་རང་ཉིད་བརྟག་དཔྱད་ཚུ་འབད་དེ་ མ་མཐུན་པར་ scalar/SIMD ལུ་ལོག་འགྱོཝ་ཨིན། ཕ་ཊི་ཁང་མིག་ཚུ་གིས་ SHA-256/ཀེག་ཀ་/ཨེ་ཨི་ཨེསི་ཚུ་ ཁྱབ་ཚུགས། | གནས་ཚད།md:244-246 |
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| CoreHost syscall→ISI bridge | ○ | Pointer TLV decoding and syscall queueing operational; coverage gaps/parity tests planned. | status.md:299-307; status.md:477-486 |
-| Pointer constructors & domain builtins | ◉ | Kotodama builtins emit typed Norito TLVs and SCALLs, with IR/e2e tests and docs. | status.md:299-301 |
-| Pointer-ABI strict validation & doc sync | ◉ | TLV policy enforced across host/IVM with golden tests and generated docs. | status.md:227; status.md:317; status.md:344; status.md:366; status.md:527 |
-| ZK syscall gating via CoreHost | ◉ | Per-op queues gate verified envelopes and enforce hash matching before ISI execution. | crates/iroha_core/src/smartcontracts/ivm/host.rs:213; crates/iroha_core/src/smartcontracts/ivm/host.rs:279 |
-| Kotodama pointer-ABI docs & grammar | ◉ | Grammar/docs synced with live constructors and SCALL mappings. | status.md:299-301 |
-| ISO 20022 schema-driven engine & Torii bridge | ◉ | Canonical ISO 20022 schemas embedded, deterministic XML parsing, and `/v1/iso20022/status/{MsgId}` API exposed. | status.md:65-70 |
+## ཡོངས་འབྲེལ་དུས་ཚོད་དང་ མོས་མཐུན་ཐབས་ལམ་ཚུ།
 
-## Hardware Acceleration
+| ཁྱད་ཆོས། | གནས་ཚད་ | དྲན་ཐོ། | སྒྲུབ་བྱེད་ |
+|------------------------------ |------------------------------------------------- |
+| ཡོངས་འབྲེལ་དུས་ཚོད་ཞབས་ཏོག་ (NTS) | ✖︎ | བཟོ་བཀོད་འདི་ `new_pipeline.md` ནང་ལུ་ཡོདཔ་ཨིན། ལག་ལེན་འདི་ གནས་ཚད་དུས་མཐུན་བཟོ་ནི་ཚུ་ནང་ ད་ལྟོ་ཡང་ བརྟག་ཞིབ་མ་འབད་བས། | གསརཔ་_པིཔ་ལའིན་.ཨེམ་ཌི་ |
+| གདམ་ཁ་ཅན་གྱི་ PoS མོས་མཐུན་ཐབས་ལམ་ | ✖︎ | Nexus བཟོ་བཀོད་ཡིག་ཆ་ཁ་བསྡམས་དང་ NPoS ཐབས་ལམ་ཚུ། ཀོར་ལག་ལེན་འཐབ་ནིའི་དོན་ལུ་ཨིན། | new_pipeline.md; ནེགསི་.md |
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| SIMD tail/misalignment parity tests | ◉ | Randomized parity tests ensure SIMD vector ops match scalar semantics for arbitrary alignment. | status.md:243 |
-| Metal/CUDA fallback & self-tests | ◉ | GPU backends run golden self-tests and fall back to scalar/SIMD on mismatch; parity suites cover SHA-256/Keccak/AES. | status.md:244-246 |
+## Nexus ལེད་ཇར་ལམ་སྟོན།| ཁྱད་ཆོས། | གནས་ཚད་ | དྲན་ཐོ། | སྒྲུབ་བྱེད་ |
+|------------------------------ |------------------------------------------------- |
+| གནམ་སྟོང་སྣོད་ཐོ་གན་རྒྱ་ scaffold | ✖︎ | DS གི་དོན་ལུ་ འཛམ་གླིང་ཐོ་བཀོད་ཀྱི་གན་རྒྱ་འདི་ གསལ་སྟོན་/གཞུང་སྐྱོང་འདི་ ལག་ལེན་འཐབ་མ་ཚུགས། | ནེགསི་.md |
+| གནད་སྡུད་བར་སྟོང་གི་གསལ་སྟོན་རྩ་སྒྲིག་དང་ མི་ཚེ་འཁོར་རིམ། | ✖︎ | Norito ལས་འཆར་དང་ ཐོན་རིམ་བཟོ་ནི་ དེ་ལས་ གཞུང་སྐྱོང་རྒྱུན་འགྲུལ་ཚུ་ ལམ་སྟོན་ནང་ ལུས་ཡོདཔ་ཨིན། | ནེགསི་.md |
+| DS གཞུང་སྐྱོང་དང་ བདེན་དཔྱད་འཁོར་སྐྱོད་ | ✖︎ | DS འཐུས་མི་/བསྒྱིར་ཚད་ཀྱི་ རིམ་སྒྲིག་བྱ་རིམ་ཚུ་ ད་ལྟོ་ཡང་ བཟོ་བཀོད་ཀྱི་གོ་རིམ་ནང་ཨིན། | ནེགསི་.md |
+| ཀོརསི་ཌི་ཨེསི་ཨེན་ཀོ་རིང་དང་ Nexus བཀག་ཆ་རྩོམ་སྒྲིག་ | ✖︎ | བརྩམ་སྒྲིག་བང་རིམ་དང་ ཁས་བླངས་ཚུ་ བཀོད་ཡོད་རུང་ ལག་ལེན་མ་འཐབ་པར་ཡོདཔ་ཨིན། | ནེགསི་.md |
+| Kura/WSV བཏོན་གཏང་ནི་-གསང་ཡིག་ཡོད་པའི་གསོག་འཇོག་ | ✖︎ | མི་མང་/སྒེར་གྱི་ DS གི་དོན་ལུ་ རང་བཞིན་གསང་ཡིག་/པར་ཆས་བསག་བཞག་ གསོག་འཇོག་འབད་ནི། | ནེགསི་.md |
+| DS རེ་ལུ་ ZK/optistic བདེན་ཁུངས་ཀྱི་སྲིད་བྱུས། ✖︎ | གསང་ཡིག་ནང་ བརྟག་ཞིབ་ཀྱི་ དགོས་མཁོ་དང་ བསྟར་སྤྱོད་མ་འབད་བས། | ནེགསི་.md |
+| གནས་སྡུད་བར་སྟོང་རེ་ལུ་ འཐུས/ཚད་འཁོད་ཟུར་ཐོ། | ✖︎ | DS-specific quotas དང་ འཐུས་སྲིད་བྱུས་ཐབས་ལམ་ཚུ་ མ་འོངས་པའི་ལཱ་སྦེ་རང་ ལུས་ཡོདཔ་ཨིན། | ནེགསི་.md |
 
-## Network Time & Consensus Modes
+## ཟང་ཟིང་དང་ནོར་འཁྲུལ་བཙུགས་ནི།
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Network Time Service (NTS) | ✖︎ | Design exists in `new_pipeline.md`; implementation not yet tracked in status updates. | new_pipeline.md |
-| Nominated PoS consensus mode | ✖︎ | Nexus design documents closed-set and NPoS modes; core implementation pending. | new_pipeline.md; nexus.md |
-
-## Nexus Ledger Roadmap
-
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Space Directory contract scaffold | ✖︎ | Global registry contract for DS manifests/governance not implemented yet. | nexus.md |
-| Data Space manifest format & lifecycle | ✖︎ | Norito manifest schema, versioning, and governance flow remain on the roadmap. | nexus.md |
-| DS governance & validator rotation | ✖︎ | On-chain procedures for DS membership/rotation still in design phase. | nexus.md |
-| Cross-DS anchoring & Nexus block composition | ✖︎ | Composition layer and anchoring commitments outlined but unimplemented. | nexus.md |
-| Kura/WSV erasure-coded storage | ✖︎ | Erasure-coded blob/snapshot storage for public/private DS not yet built. | nexus.md |
-| ZK/optimistic proof policy per DS | ✖︎ | Per-DS proof requirements and enforcement not tracked in code. | nexus.md |
-| Fee/quota isolation per Data Space | ✖︎ | DS-specific quotas and fee policy mechanisms remain future work. | nexus.md |
-
-## Chaos & Fault Injection
-
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Izanami chaosnet orchestration | ○ | Izanami workload now drives asset-definition, metadata, NFT, and trigger-repetition recipes with unit coverage for the new paths. | crates/izanami/src/instructions.rs; crates/izanami/src/instructions.rs#tests |
+| ཁྱད་ཆོས། | གནས་ཚད་ | དྲན་ཐོ། | སྒྲུབ་བྱེད་ |
+|------------------------------ |------------------------------------------------- |
+| Izanami ཟིང་འཁྲུག ◗ | Izanami ལཱ་འབད་མི་འདི་གིས་ ད་ལྟོ་ འགྲུལ་ལམ་གསརཔ་ཚུ་གི་དོན་ལུ་ ཡུ་ནིཊི་ཁྱབ་ཚད་དང་གཅིག་ཁར་ རྒྱུ་དངོས་ངེས་ཚིག་དང་ མེ་ཊ་ཌེ་ཊ་ ཨེན་ཨེཕ་ཊི་ དེ་ལས་ ཊི་གར་-བསྐྱར་བཟོ་འབད་ཐངས་ཚུ་ འདྲེན་འབདཝ་ཨིན། | ཀེརེ་ཊི/ཨི་ཟ་ནམ་མི/སི་ཨར་སི་/ལམ་སྟོན་.rs; ཀེརེ་ཊི/ཨི་ཟ་ན་མི/སི་ཨར་སི་/ བརྡ་སྟོན།

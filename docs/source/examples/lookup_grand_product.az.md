@@ -7,28 +7,29 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 6f6421d420a704c5c4af335741e309adf641702ddb8c291dce94ea5581557a66
 source_last_modified: "2025-12-29T18:16:35.953884+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Lookup Grand-Product Example
+# Böyük Məhsul Nümunəsini axtarın
 
-This example expands the FASTPQ permission lookup argument mentioned in
-`fastpq_plan.md`.  In the Stage 2 pipeline the prover evaluates the selector
-(`s_perm`) and witness (`perm_hash`) columns on the low-degree extension (LDE)
-domain, updates a running grand product `Z_i`, and finally commits the entire
-sequence with Poseidon.  The hashed accumulator is appended to the transcript
-under the `fastpq:v1:lookup:product` domain, while the final `Z_i` still matches
-the committed permission table product `T`.
+Bu nümunədə qeyd olunan FASTPQ icazə axtarış arqumentini genişləndirir
+`fastpq_plan.md`.  Mərhələ 2 boru kəmərində prover seçicini qiymətləndirir
+(`s_perm`) və şahid (`perm_hash`) aşağı dərəcəli genişləndirmə (LDE) sütunları
+domen, işləyən böyük `Z_i` məhsulunu yeniləyir və nəhayət, bütün
+Poseidon ilə ardıcıllıq.  Hashed akkumulyator transkriptə əlavə olunur
+`fastpq:v1:lookup:product` domeni altında, son `Z_i` hələ də uyğun gəlir
+qəbul edilmiş icazə cədvəli məhsulu `T`.
 
-We consider a tiny batch with the following selector values:
+Aşağıdakı seçici dəyərləri olan kiçik bir partiyanı nəzərdən keçiririk:
 
-| row | `s_perm` | `perm_hash`                                   |
-| --- | -------- | ---------------------------------------------- |
-| 0   | 1        | `0x019a...` (grant role = auditor, perm = transfer_asset) |
-| 1   | 0        | `0xabcd...` (no permission change)                |
-| 2   | 1        | `0x42ff...` (revoke role = auditor, perm = burn_asset) |
+| sıra | `s_perm` | `perm_hash` |
+| --- | -------- | ------------------------------------------------------- |
+| 0 | 1 | `0x019a...` (qrant rolu = auditor, icazə = transfer_aktivi) |
+| 1 | 0 | `0xabcd...` (icazə dəyişikliyi yoxdur) |
+| 2 | 1 | `0x42ff...` (rolu ləğv et = auditor, icazə = yandırma_aktivi) |
 
-Let `gamma = 0xdead...` be the Fiat-Shamir lookup challenge derived from the
-transcript.  The prover initialises `Z_0 = 1` and folds each row:
+Qoy `gamma = 0xdead...` Fiat-Shamir axtarış problemi olsun.
+transkript.  Prover `Z_0 = 1`-i işə salır və hər cərgəni qatlayır:
 
 ```
 Z_0 = 1
@@ -37,27 +38,27 @@ Z_2 = Z_1 * (perm_hash_1 + gamma)^(s_perm_1) = Z_1 (selector is zero)
 Z_3 = Z_2 * (perm_hash_2 + gamma)^(s_perm_2)
 ```
 
-Rows where `s_perm = 0` do not alter the accumulator.  After processing the
-trace, the prover Poseidon-hashes the sequence `[Z_1, Z_2, ...]` for the transcript
-yet also publishes `Z_final = Z_3` (the final running product) to match the table
-boundary condition.
+`s_perm = 0`-in akkumulyatoru dəyişdirmədiyi sətirlər.  emal etdikdən sonra
+iz, prover Poseidon transkript üçün `[Z_1, Z_2, ...]` ardıcıllığını heş edir.
+hələ də cədvələ uyğun olaraq `Z_final = Z_3` (son işləyən məhsul) dərc edir
+sərhəd vəziyyəti.
 
-On the table side, the committed permission Merkle tree encodes the deterministic
-set of active permissions for the slot.  The verifier (or the prover during
-witness generation) computes
+Cədvəl tərəfində, verilmiş icazə Merkle ağacı deterministi kodlayır
+slot üçün aktiv icazələr dəsti.  Doğrulayıcı (və ya sübut edən
+şahid nəsli) hesablayır
 
 ```
 T = product over entries: (entry.hash + gamma)
 ```
 
-The protocol enforces the boundary constraint `Z_final / T = 1`.  If the trace
-introduced a permission that is not present in the table (or omitted one that
-is), the grand product ratio diverges from 1 and the verifier rejects.  Because
-both sides multiply by `(value + gamma)` inside the Goldilocks field, the ratio
-remains stable across CPU/GPU backends.
+Protokol `Z_final / T = 1` sərhəd məhdudiyyətini tətbiq edir.  Əgər iz
+Cədvəldə olmayan icazəni təqdim etdi (və ya onu buraxdı
+is), böyük məhsul nisbəti 1-dən ayrılır və yoxlayıcı rədd edir.  Çünki
+Goldilocks sahəsinin daxilində hər iki tərəf `(value + gamma)` ilə çoxalır, nisbət
+CPU/GPU arxa uçlarında sabit qalır.
 
-To serialise the example as Norito JSON for fixtures, record the tuple of
-`perm_hash`, selector, and accumulator after each row, for example:
+Nümunəni armaturlar üçün Norito JSON kimi seriallaşdırmaq üçün dəstini qeyd edin
+`perm_hash`, seçici və hər cərgədən sonra akkumulyator, məsələn:
 
 ```json
 {
@@ -71,7 +72,7 @@ To serialise the example as Norito JSON for fixtures, record the tuple of
 }
 ```
 
-The hexadecimal placeholders (`0x...`) can be replaced with concrete Goldilocks
-field elements when generating automated tests.  Stage 2 fixtures additionally
-record the Poseidon hash of the running accumulator but keep the same JSON shape,
-so the example can double as a template for future test vectors.
+Hexadecimal yer tutucular (`0x...`) beton qızıl kilidlərlə əvəz edilə bilər
+avtomatlaşdırılmış testlər yaradan zaman sahə elementləri.  Əlavə olaraq 2-ci mərhələ armaturları
+işləyən akkumulyatorun Poseidon hashını qeyd edin, lakin eyni JSON formasını saxlayın,
+beləliklə, nümunə gələcək test vektorları üçün şablon kimi ikiqat ola bilər.

@@ -10,6 +10,7 @@ translation_last_reviewed: 2026-02-07
 title: Ministry Transparency Report — 2026 Q3 (Template)
 summary: Scaffold for the MINFO-8 quarterly transparency packet; replace all tokens before publication.
 quarter: 2026-Q3
+translator: machine-google-reviewed
 ---
 
 <!--
@@ -19,126 +20,124 @@ quarter: 2026-Q3
     3. Attach supporting artefacts (data appendix, CSVs, manifest, Grafana export) under artifacts/ministry/transparency/<YYYY-Q>/.
 -->
 
-# Executive Summary
+# བཀོལ་སྤྱོད་བཅུད་བསྡུས།
 
-> Provide a one-paragraph summary of moderation accuracy, appeal outcomes, denylist churn, and treasury highlights. Mention whether release met the T+14 deadline.
+> བརྡ་བཀོད་ཀྱི་ གཏན་གཏན་དང་ མཐོ་གཏུགས་ཀྱི་གྲུབ་འབྲས་ དེ་ལས་ ཐོ་ཡིག་མེད་པའི་ ཆ་ཤས་ཚུ་ དེ་ལས་ དངུལ་འཛིན་གྱི་ གཙོ་བོ་ཚུ་ བཅུད་བསྡུས་ཅིག་ བྱིན་དགོ། གློད་གྲོལ་ཐོབ་ཡོད་མེད་ བཤད་པ་ T+14 གི་དུས་ཚོད་ཚང་ཡོད།
 
-## Quarter in Review
+## བསྐྱར་ཞིབ་ཀྱི་ཟླ་གམ།
 
-### Highlights
-- {{HIGHLIGHT_1}}
-- {{HIGHLIGHT_2}}
-- {{HIGHLIGHT_3}}
+### གཙོ་བསྟེན།
+- {HIGHLIGHT_1}}
+- {HIGHLIGHT_2}}
+- {HIGHLIGHT_3}}
 
-### Risks & Mitigations
+### ཉེན་ཁ།
 
-| Risk | Impact | Mitigation | Owner | Status |
+| ཉེན་ཁ། ཕན་གནོད་ | མར་ཕབ་ | ཇོ་བདག་ | གནས་ཚད་ |
 |------|--------|------------|-------|--------|
-| {{RISK_1}} | {{Impact}} | {{Mitigation}} | {{Owner}} | {{Status}} |
-| {{RISK_2}} | {{Impact}} | {{Mitigation}} | {{Owner}} | {{Status}} |
+| {{RISK_1}} | {{Impact}} | {{ཕག}} | {{ཁྱིམ་བདག་}} | {{གནས་}} |
+| {{RISK_2}} | {{Impact}} | {{ཕག}} | {{ཁྱིམ་བདག་}} | {{གནས་}} |
 
-## Metrics Overview
+## མེ་ཊིགསི་སྤྱིར་བཏང་བལྟ་བ།
 
-All metrics originate from `ministry_transparency_builder` (Norito bundle) after the DP sanitizer runs. Attach corresponding CSV slices referenced below.
+ཌི་པི་ གཙང་སྦྲ་འཕྲོད་བསྟེན་གྱི་ གཡོག་བཀོལ་བའི་ཤུལ་ལས་ `ministry_transparency_builder` (Norito bundle) ལས་ འཐོན་འོང་། འོག་གི་གཞི་བསྟུན་འབད་ཡོད་པའི་ མཐུན་སྒྲིག་ཅན་གྱི་ CSV བཤུད་ཚུ་ མཉམ་སྦྲགས་འབད།
 
-### AI Moderation Accuracy
+### ཨེ་ཨའི་ བཤེར་འཇོག་གི་དཔྱད་གཞི།
 
-| Model Profile | Region | FP Rate (Target) | FN Rate (Target) | Drift vs Calibration | Sample Size | Notes |
+| དཔེ་སྟོན་གསལ་སྡུད་ | ས་ཁུངས། | FP ཚད་ (དམིགས་ཚད།) | FN གོང་ཚད་ (དམིགས་ཚད།) | Drift vs ཚད་འཇལ་ | དཔེ་ཚད་ཀྱི་ཚད་གཞི་ | དྲན་ཐོ། |
 |---------------|--------|------------------|------------------|----------------------|-------------|-------|
-| {{profile}} | {{region}} | {{fp_rate}} ({{fp_target}}) | {{fn_rate}} ({{fn_target}}) | {{drift}} | {{samples}} | {{notes}} |
+| ༥ {{གསལ་བསྒྲིགས་}} | {{ལུང་ཕྱོགས་}} | {{fp_rate}} ({{fp_target}}) | {{fn_rate}} ({{fn_target}}) | {{drift}} | {{དཔེ་ཚད་}} | {{notes}} |
 
-### Appeals & Panel Activity
+### མཐོ་གཏུགས་དང་ ཚོགས་ཆུང་གི་ལས་རིམ།
 
-| Metric | Value | SLA Target | Trend vs Q-1 | Notes |
-|--------|-------|------------|--------------|-------|
-| Appeals received | {{appeals_received}} | {{sla}} | {{delta}} | {{notes}} |
-| Median resolution time | {{median_resolution}} | {{sla}} | {{delta}} | {{notes}} |
-| Reversal rate | {{reversal_rate}} | {{target}} | {{delta}} | {{notes}} |
-| Panel utilization | {{panel_utilization}} | {{target}} | {{delta}} | {{notes}} |
+| མེ་ཊིག་ | གནས་གོང་ | SLA དམིགས་གཏད་ | ཊེནཌ་ vs Q-1 | དྲན་ཐོ། |
+|------------------------------------------------------------------------------------------------------------------------
+| མཐོ་གཏུགས་ཐོབ་ཡོད། | {{euppeals_འཐོབ་ཡོདཔ་}} | {{སླ་}} | {{དལ་ཏ}} | {{notes}} |
+| བར་ཐག་ཐག་གཅོད་དུས་ཚོད། | {{བར་མའི་_གྲོས་ཆོད་} | {{སླ་}} | {{དལ་ཏ}} | {{notes}} |
+| ཕྱི་འགྱུར་གྱི་ཚད་གཞི། | {{བལྡད་ཚད་}} | {{དམིགས་ཚད་}} | {{དལ་ཏ}} | {{notes}} |
+| པེ་ནཱལ་ལག་ལེན་འཐབ་ནི། | {{པེ་ནཱལ་_ཨུ་ཊི་ལི་ཟེ་ }} | {{དམིགས་ཚད་}} | {{དལ་ཏ}} | {{notes}} |
 
-### Denylist & Emergency Canon
+### བཤེར་ཡིག་དང་ཛ་དྲག་གནག་ནོན།
 
-| Metric | Count | DP Noise (ε) | Emergency Flags | TTL Compliance | Notes |
-|--------|-------|--------------|-----------------|----------------|-------|
-| Hash additions | {{additions}} | {{epsilon_counts}} | {{flags}} | {{ttl_status}} | {{notes}} |
-| Hash removals | {{removals}} | {{epsilon_counts}} | {{flags}} | {{ttl_status}} | {{notes}} |
-| Canon invocations | {{canon_invocations}} | n/a | {{flags}} | {{ttl_status}} | {{notes}} |
+| མེ་ཊིག་ | གྱངས་ཁ་ | DP Noise (ε) | ཛ་དྲག་གི་དར་ཆ། | TTL མཐུན་སྒྲིག་ | དྲན་ཐོ། |
+|-|-|-|-|-|-|-|--|--------------------------------------------------------------------------------------------------------- |
+| ཧ་ཤི་ཁ་སྐོང་ | {{ཁ་སྐོང་}} | {{epsilon_counts}} | {{ཕད་པ་}} | {{ttl_status}} | {{notes}} |
+| ཧ་ཤི་བཏོན་གཏང་ནི། | {{བཅར་བསྐྲུན།}} | {{epsilon_counts}} | {{ཕད་པ་}} | {{ttl_status}} | {{notes}} |
+| ཀེན་ནོན་ འབོད་བརྡ་ཚུ་ | {{canon_འབོ་ནི་ཚུ་}} | ན/ཨ | {{ཕད་པ་}} | {{ttl_status}} | {{notes}} |
 
-### Treasury Movements
+### དངུལ་ཁང་གི་ལས་འགུལ།
 
-| Flow | Amount (MINFO) | Source Reference | Notes |
+| ཕོལོ་ | དངུལ་འབོར་ (MINFO) | འབྱུང་ཁུངས་གཞི་བསྟུན་ | དྲན་ཐོ། |
 |------|----------------|------------------|-------|
-| Appeal deposits | {{amount}} | {{tx_ref}} | {{notes}} |
-| Panel rewards | {{amount}} | {{tx_ref}} | {{notes}} |
-| Operational spend | {{amount}} | {{tx_ref}} | {{notes}} |
+| མཐོ་གཏུགས་དངུལ་བཙུགས་ | {{ཁམ }} | {{tx_ref}} | {{notes}} |
+| པེ་ནཱལ་གྱི་གསོལ་རས་ | {{ཁམ }} | {{tx_ref}} | {{notes}} |
+| བཀོལ་སྤྱོད་ཀྱི་ཟད་འགྲོ་ | {{ཁམ }} | {{tx_ref}} | {{notes}} |
 
-### Volunteer & Outreach Signals
+### དྭང་བླངས་དང་ཕྱིར་འགྲོ་རྟགས་མ།
 
-| Metric | Value | Target | Notes |
-|--------|-------|--------|-------|
-| Volunteer briefs published | {{value}} | {{target}} | {{notes}} |
-| Languages covered | {{value}} | {{target}} | {{notes}} |
-| Governance workshops hosted | {{value}} | {{target}} | {{notes}} |
+| མེ་ཊིག་ | གནས་གོང་ | དམིགས་ཚད་ | དྲན་ཐོ། |
+|-------------------------------------------- |
+| ཁས་བླངས་ཡིག་ཆ་ཚུ་དཔར་བསྐྲུན་འབད་ཡོདཔ། | {{གནས་གོང་}} | {{དམིགས་ཚད་}} | {{notes}} |
+| སྐད་ཡིག་ཚུ་གིས་ཁྱབ་སྟེ་ཡོད། | {{གནས་གོང་}} | {{དམིགས་ཚད་}} | {{notes}} |
+| གཞུང་སྐྱོང་ལས་རིམ་ཚུ་གིས་ འགོ་འདྲེན་འཐབ་ཡོདཔ། | {{གནས་གོང་}} | {{དམིགས་ཚད་}} | {{notes}} |
 
-## Differential Privacy & Sanitization
+## ཁྱད་པར་སྒེར་དང་གཙང་སྦྲ།
 
-Summarise the sanitizer run and include the RNG commitment.
+གཙང་སྦྲ་འཕྲོད་བསྟེན་གྱི་ རྒྱུག་འགྲན་འདི་ བཅུད་བསྡུ་སྟེ་ RNG ཁས་བླངས་འདི་ ཚུདཔ་ཨིན།
 
-- Sanitizer job: `{{CI_JOB_URL}}`
-- DP parameters: ε = {{epsilon_total}}, δ = {{delta_total}}
-- RNG commitment: `{{blake3_seed_commitment}}`
-- Buckets suppressed: {{suppressed_buckets}}
-- QA reviewer: {{reviewer}}
+- གཙང་སྦྲ་འཕྲོད་བསྟེན་གྱི་ལཱ་: `{{CI_JOB_URL}}`
+- ཌི་པི་ཚད་བཟུང་ཚུ་: ε={{epsilon_total}}, δ={ཌེལ་ཊ་_བསྡོམས་}}, ཨིན།
+- RNG ཁས་བླངས་: `{{blake3_seed_commitment}}`
+- བཱ་ཀེཊི་ཚུ་ བཀག་འཛིན་འབད་ཡོདཔ་: {suppressed_buckets}}
+- QA བསྐྱར་ཞིབ་པ་: {{བསྐྱར་ཞིབ་}}
 
-Attach `artifacts/ministry/transparency/{{Quarter}}/dp_report.json` and note any manual interventions.
+`artifacts/ministry/transparency/{{Quarter}}/dp_report.json` མཉམ་སྦྲགས་འབད་དེ་ ལག་ཐོག་ལས་ བར་འཛུལ་ག་ཅི་རང་འབད་རུང་ དྲན་འཛིན་འབད།## གནད་སྡུད་མཚན་རྟགས་ཚུ།
 
-## Data Attachments
+| ཅ་ཆས། | ལམ། SHA-256 | SoraFS ལུ་སྐྱེལ་བཙུགས་འབད་ཡོདཔ་ཨིན་ན? | དྲན་ཐོ། |
+|-------------------------------------------------------------------- |
+| བཅུད་བསྡུས་ PDF | `artifacts/ministry/transparency/{{Quarter}}/summary.pdf` | བ{ཧ་ཤ}} | {{ཡེས/ནོ་}} | {{notes}} |
+| Norito ཟུར་ཐོ་ | `artifacts/ministry/transparency/{{Quarter}}/data/appendix.norito` | བ{ཧ་ཤ}} | {{ཡེས/ནོ་}} | {{notes}} |
+| མེ་ཊིག་སི་ཨེསི་ཝི་ བུནཌལ་ | `artifacts/ministry/transparency/{{Quarter}}/data/csv/` | བ{ཧ་ཤ}} | {{ཡེས/ནོ་}} | {{notes}} |
+| Grafana ཕྱིར་འདྲེན་ | `dashboards/grafana/ministry_transparency_overview.json` | བ{ཧ་ཤ}} | {{ཡེས/ནོ་}} | {{notes}} |
+| དྲན་སྐུལ་ལམ་ལུགས་ | `dashboards/alerts/ministry_transparency_rules.yml` | བ{ཧ་ཤ}} | {{ཡེས/ནོ་}} | {{notes}} |
+| Provenance གསལ་སྟོན་ | `artifacts/ministry/transparency/{{Quarter}}/manifest.json` | བ{ཧ་ཤ}} | {{ཡེས/ནོ་}} | {{notes}} |
+| མཚན་རྟགས་ མཚན་རྟགས་ | `artifacts/ministry/transparency/{{Quarter}}/manifest.json.sig` | བ{ཧ་ཤ}} | {{ཡེས/ནོ་}} | {{notes}} |
 
-| Artefact | Path | SHA-256 | Uploaded to SoraFS? | Notes |
-|----------|------|---------|---------------------|-------|
-| Summary PDF | `artifacts/ministry/transparency/{{Quarter}}/summary.pdf` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Norito data appendix | `artifacts/ministry/transparency/{{Quarter}}/data/appendix.norito` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Metrics CSV bundle | `artifacts/ministry/transparency/{{Quarter}}/data/csv/` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Grafana export | `dashboards/grafana/ministry_transparency_overview.json` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Alert rules | `dashboards/alerts/ministry_transparency_rules.yml` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Provenance manifest | `artifacts/ministry/transparency/{{Quarter}}/manifest.json` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Manifest signature | `artifacts/ministry/transparency/{{Quarter}}/manifest.json.sig` | {{hash}} | {{Yes/No}} | {{notes}} |
+## པར་སྐྲུན་མེ་ཊ་ཌེ་ཊ་
 
-## Publication Metadata
+| ཕིལཌ་ | གནས་གོང་ |
+|-------|--|-------------------------------------------------------------------------
+| བཏོན་གཏང་ནི་ བཞི་ཆ་ | {{Quarter}} |
+| དུས་ཚོད་མཚོན་རྟགས་ (UTC) བཏོན་གཏང་། | {{དུས་ཚོད་རྟགས་}} |
+| SoraFS སི་ཨའི་ཌི་ | `{{cid}}` |
+| གཞུང་སྐྱོང་ཚོགས་རྒྱན་ ID | {{བགྲོད་པ་_ིད་}} |
+| མཚོན་ཆའི་ བཞུ་བཅོས་ (`blake2b`) | `{{manifest_digest}}` |
+| Git ཁས་བླངས་ / ངོ་རྟགས་ | `{{git_rev}}` |
+| ཇོ་བདག་ | {{ཁྱིམ་}} |
 
-| Field | Value |
-|-------|-------|
-| Release quarter | {{Quarter}} |
-| Release timestamp (UTC) | {{timestamp}} |
-| SoraFS CID | `{{cid}}` |
-| Governance vote ID | {{vote_id}} |
-| Manifest digest (`blake2b`) | `{{manifest_digest}}` |
-| Git commit / tag | `{{git_rev}}` |
-| Release owner | {{owner}} |
+## ཆ་འཇོག་ཚུ།
 
-## Approvals
+| འགན་ཁུར་ | མིང | གྲོས་ཐག་ | དུས་ཚོད་མཚོན་རྟགས་ | དྲན་ཐོ། |
+|------------------------------------------------------ ----------------------------
+| ལྷན་ཁག་བལྟ་བརྟོག་ TL | {{མིང་}} | ✅/⚠️ | {{དུས་ཚོད་རྟགས་}} | {{notes}} |
+| གཞུང་སྐྱོང་ཚོགས་སྡེའི་འབྲེལ་འཐུད་ | {{མིང་}} | ✅/⚠️ | {{དུས་ཚོད་རྟགས་}} | {{notes}} |
+| Docs/Comms ལིཌ་ | {{མིང་}} | ✅/⚠️ | {{དུས་ཚོད་རྟགས་}} | {{notes}} |
 
-| Role | Name | Decision | Timestamp | Notes |
-|------|------|----------|-----------|-------|
-| Ministry Observability TL | {{name}} | ✅/⚠️ | {{timestamp}} | {{notes}} |
-| Governance Council Liaison | {{name}} | ✅/⚠️ | {{timestamp}} | {{notes}} |
-| Docs/Comms Lead | {{name}} | ✅/⚠️ | {{timestamp}} | {{notes}} |
+## བསྒྱུར་བཅོས་དང་ རྗེས་འཇུག་-Ups
 
-## Changelog & Follow-Ups
+- {CHANGELOG_ITEM_1}}
+- {CHANGELOG_ITEM_2}}
 
-- {{CHANGELOG_ITEM_1}}
-- {{CHANGELOG_ITEM_2}}
+### ཁ་ཕྱེ་བྱ་བ་རྣམ་གྲངས།
 
-### Open Action Items
+| རྣམ་གྲངས་ | ཇོ་བདག་ | འདི་ | གནས་ཚད་ | དྲན་ཐོ། |
+|---|--|---------------------------------------------- |
+| {{བྱ་བ་}} | {{ཁྱིམ་བདག་}} | {{Due}} | {{གནས་}} | {{དྲན་ཐོ་}} |
 
-| Item | Owner | Due | Status | Notes |
-|------|-------|-----|--------|-------|
-| {{Action}} | {{Owner}} | {{Due}} | {{Status}} | {{Notes}} |
+### འབྲེལ༌བ༌འཐབ༌ནི
 
-### Contact
+- གཞི་རིམ་འབྲེལ་བ་: {{འབྲེལ་བའི་_མིང་}} (`{{chat_handle}}`)
+- ཡར་འཕར་འགྱོ་བའི་ལམ་: {{ཡར་འཕར་_ཁ་གསལ་}}
+- བགོ་འགྲེམས་ཐོ་ཡིག་: {{mailing_list}}.
 
-- Primary contact: {{contact_name}} (`{{chat_handle}}`)
-- Escalation path: {{escalation_details}}
-- Distribution list: {{mailing_list}}
-
-_Template version: 2026-03-25. Update the revision date when making structural changes._
+_ཊེམ་པེལེཊི་ཐོན་རིམ་: ༢༠༢༦-༠༣-༢༥. བཟོ་བཀོད་བསྒྱུར་བཅོས་འབད་བའི་སྐབས་ བསྐྱར་ཞིབ་ཚེས་གྲངས་འདི་དུས་མཐུན་བཟོ།

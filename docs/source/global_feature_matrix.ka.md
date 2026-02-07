@@ -7,111 +7,104 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 6a406b7656a87bb1469444db1cc2d2d5922f16660b53cc7eaef5b838199127e8
 source_last_modified: "2026-01-23T23:46:10.135119+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Global Feature Matrix
+# გლობალური მახასიათებლების მატრიცა
 
-Legend: `◉` fully implemented · `○` mostly implemented · `▲` partially implemented · `△` implementation just started · `✖︎` not started
+ლეგენდა: `◉` სრულად დანერგილია · `○` ძირითადად დანერგილია · `▲` ნაწილობრივ განხორციელებულია · `△` განხორციელება ახლახან დაიწყო · `✖︎` არ დაწყებულა
 
-## Consensus & Networking
+## კონსენსუსი და ქსელი
 
-| Feature | Status | Notes | Evidence |
+| თვისება | სტატუსი | შენიშვნები | მტკიცებულება |
 |---------|--------|-------|----------|
-| Multi-collector K/r support & first-commit-certificate-wins | ◉ | Deterministic collector selection, redundant fan-out, on-chain K/r parameters, and first-valid-commit-certificate acceptance shipped with tests. | status.md:255; status.md:314 |
-| Pacemaker backoff, RTT floor, deterministic jitter | ◉ | Configurable timers with jitter band wired through config, telemetry, and docs. | status.md:251 |
-| NEW_VIEW gating & highest QC tracking | ◉ | Control flow carries NEW_VIEW/Evidence, the highest QC adopts monotonically, handshake guards computed fingerprint. | status.md:210 |
-| availability evidence tracking (advisory) | ◉ | Availability evidence emitted and tracked; commit does not gate on availability in v1. | status.md:latest |
-| Reliable Broadcast (DA payload transport) | ◉ | RBC message flow (Init/Chunk/Ready/Deliver) is enabled when `da_enabled=true` as a transport/recovery path; availability evidence is tracked (advisory) while commit proceeds independently. | status.md:latest |
-| Commit QC state-root binding | ◉ | Commit QCs carry `parent_state_root`/`post_state_root`; there is no separate execution-QC gate. | status.md:latest |
-| Evidence propagation & audit endpoints | ◉ | ControlFlow::Evidence, Torii evidence endpoints, and negative tests landed. | status.md:176; status.md:760-761 |
-| RBC telemetry, readiness/delivered metrics | ◉ | `/v1/sumeragi/rbc*` endpoints and telemetry counters/histogram available for operators. | status.md:283-284; status.md:772 |
-| Consensus parameter advert & topology verification | ◉ | Nodes broadcast `(collectors_k, redundant_send_r)` and validate equality across peers. | status.md:255 |
-| Permissioned PRF-based rotation | ◉ | Permissioned leader/collector selection uses PRF seed + height/view over the canonical roster; prev-hash rotation remains a legacy helper. | status.md:latest |
+| Multi-Collector K/r მხარდაჭერა & first-commit-sertificate-wins | ◉ | კოლექციონერის განმსაზღვრელი შერჩევა, ზედმეტი გულშემატკივართა ამოღება, ჯაჭვზე K/r პარამეტრები და პირველი მოქმედი სერთიფიკატის მიღება, რომელიც გაიგზავნება ტესტებთან ერთად. | სტატუსი.მდ:255; სტატუსი.md:314 |
+| კარდიოსტიმულატორის უკან დახევა, RTT სართული, დეტერმინისტული ჯიტერი | ◉ | კონფიგურირებადი ტაიმერები ჟიტერის ზოლით, რომელიც დაკავშირებულია კონფიგურაციის, ტელემეტრიისა და დოკუმენტების მეშვეობით. | სტატუსი.md:251 |
+| NEW_VIEW კარიბჭე და უმაღლესი QC თვალთვალი | ◉ | კონტროლის ნაკადი ახორციელებს NEW_VIEW/Evidence-ს, უმაღლესი QC იღებს მონოტონურად, ხელის ჩამორთმევით იცავს გამოთვლილ თითის ანაბეჭდს. | სტატუსი.md:210 |
+| ხელმისაწვდომობის მტკიცებულების თვალყურის დევნება (საკონსულტაციო) | ◉ | ხელმისაწვდომობის მტკიცებულება გამოშვებული და თვალყურის დევნება; commit არ ზღუდავს ხელმისაწვდომობას v1-ში. | status.md:უახლესი |
+| საიმედო მაუწყებლობა (DA payload transport) | ◉ | RBC შეტყობინების ნაკადი (Init/Chunk/Ready/Deliver) ჩართულია `da_enabled=true`, როგორც ტრანსპორტის/აღდგენის გზა; ხელმისაწვდომობის მტკიცებულებები თვალყურს ადევნებენ (საკონსულტაციო), ხოლო ჩადენა დამოუკიდებლად მიმდინარეობს. | status.md:უახლესი |
+| ჩადენა QC state-root binding | ◉ | ჩააბარეთ QC-ები `parent_state_root`/`post_state_root`; არ არსებობს ცალკე აღსრულების-QC კარიბჭე. | status.md:უახლესი |
+| მტკიცებულებების გავრცელება და აუდიტის საბოლოო წერტილები | ◉ | ControlFlow::მტკიცებულება, Torii მტკიცებულება საბოლოო წერტილები და უარყოფითი ტესტები დაეშვა. | სტატუსი.მდ:176; სტატუსი.მდ:760-761 |
+| RBC ტელემეტრია, მზადყოფნის/მიწოდების მეტრიკა | ◉ | `/v1/sumeragi/rbc*` ბოლო წერტილები და ტელემეტრიის მრიცხველები/ჰისტოგრაფია ხელმისაწვდომია ოპერატორებისთვის. | სტატუსი.მდ:283-284; სტატუსი.md:772 |
+| კონსენსუსის პარამეტრის რეკლამა და ტოპოლოგიის შემოწმება | ◉ | კვანძები ავრცელებენ `(collectors_k, redundant_send_r)` და ამოწმებენ თანასწორობას თანატოლებს შორის. | სტატუსი.md:255 |
+| ნებადართული PRF-ზე დაფუძნებული როტაცია | ◉ | ნებადართული ლიდერის/კოლექტორის შერჩევა იყენებს PRF თესლს + სიმაღლეს/ხედს კანონიკურ სიაში; prev-hash როტაცია რჩება მემკვიდრეობით დამხმარედ. | status.md:უახლესი |
 
-## Pipeline, Kura & State
-
-| Feature | Status | Notes | Evidence |
+## მილსადენი, კურა და სახელმწიფო| თვისება | სტატუსი | შენიშვნები | მტკიცებულება |
 |---------|--------|-------|----------|
-| Quarantine lane caps & telemetry | ◉ | Config knobs, deterministic overflow handling, and telemetry counters implemented. | status.md:263 |
-| Pipeline worker pool knob | ◉ | `[pipeline].workers` threaded through state init with env parsing tests. | status.md:264 |
-| Snapshot query lane (stored/ephemeral cursors) | ◉ | Stored cursor mode with Torii integration and blocking worker pools. | status.md:265; status.md:371; status.md:501 |
-| Static DAG fingerprint recovery sidecars | ◉ | Sidecars stored in Kura, validated on startup, warnings emitted on mismatches. | status.md:106; status.md:349 |
-| Kura block store hash decoding hardening | ◉ | Hash reads switched to raw 32-byte handling with Norito-independent roundtrip tests. | status.md:608; status.md:668 |
-| Norito adaptive telemetry for codecs | ◉ | AoS vs NCB selection metrics added to Norito. | status.md:156 |
-| Snapshot WSV queries via Torii | ◉ | Torii snapshot query lane uses blocking worker pool, deterministic semantics. | status.md:501 |
-| Trigger by-call execution chaining | ◉ | Data triggers chain immediately after by-call execution with deterministic order. | status.md:668 |
+| საკარანტინო ზოლის ქუდები და ტელემეტრია | ◉ | კონფიგურაციის სახელურები, განმსაზღვრელი გადინების მართვა და ტელემეტრიის მრიცხველები დანერგილია. | სტატუსი.md:263 |
+| მილსადენის მუშა აუზის სახელური | ◉ | `[pipeline].workers` ხრახნიანი მდგომარეობიდან init-ში env ანალიზის ტესტებით. | სტატუსი.md:264 |
+| Snapshot-ის შეკითხვის ხაზი (შენახული/ეფემერული კურსორები) | ◉ | შენახული კურსორის რეჟიმი Torii ინტეგრაციით და მუშათა აუზების დაბლოკვით. | სტატუსი.მდ:265; სტატუსი.მდ:371; სტატუსი.md:501 |
+| სტატიკური DAG თითის ანაბეჭდის აღდგენის გვერდითი კარები | ◉ | კურაში შენახული გვერდითი მანქანები, დამოწმებული გაშვებისას, გაფრთხილებები გამოშვებული შეუსაბამობის შესახებ. | სტატუსი.მდ:106; სტატუსი.md:349 |
+| Kura block store hash decoding hardening | ◉ | ჰეშის წაკითხვები გადართულია დაუმუშავებელ 32 ბაიტიან დამუშავებაზე Norito დამოუკიდებელი ორმხრივი ტესტებით. | სტატუსი.მდ:608; სტატუსი.md:668 |
+| Norito ადაპტური ტელემეტრია კოდეკებისთვის | ◉ | AoS vs NCB შერჩევის მეტრიკა დაემატა Norito-ს. | სტატუსი.md:156 |
+| Snapshot WSV მოთხოვნები Torii | ◉ | Torii სნეპშოტის შეკითხვის ზოლი იყენებს მუშათა ფონდის ბლოკირებას, დეტერმინისტულ სემანტიკას. | სტატუსი.md:501 |
+| გამოძახებით შესრულების ჯაჭვის გააქტიურება | ◉ | მონაცემები ააქტიურებს ჯაჭვს ზარის განხორციელებისთანავე დეტერმინისტული თანმიმდევრობით. | სტატუსი.md:668 |
 
-## Norito Serialization & Tooling
+## Norito სერიალიზაცია და ხელსაწყოები
 
-| Feature | Status | Notes | Evidence |
+| თვისება | სტატუსი | შენიშვნები | მტკიცებულება |
 |---------|--------|-------|----------|
-| Norito JSON migration (workspace) | ◉ | Serde removed from production; inventory + guardrails keep the workspace Norito-only. | status.md:112; status.md:124 |
-| Serde deny-list & CI guardrails | ◉ | Guard workflows/scripts prevent new direct Serde usage across workspace. | status.md:218 |
-| Norito codec goldens & AoS/NCB tests | ◉ | AoS/NCB goldens, truncation tests, and doc sync added. | status.md:140-147; status.md:149-150; status.md:332; status.md:666 |
-| Norito feature matrix tooling | ◉ | `scripts/run_norito_feature_matrix.sh` supports downstream smoke tests; CI covers packed-seq/struct combos. | status.md:146; status.md:152 |
-| Norito language bindings (Python/Java) | ◉ | Python and Java Norito codecs maintained with sync scripts. | status.md:74; status.md:81 |
-| Norito Stage-1 SIMD structural classifiers | ◉ | NEON/AVX2 stage-1 classifiers with cross-arch goldens and randomized corpora tests. | status.md:241 |
+| Norito JSON მიგრაცია (სამუშაო სივრცე) | ◉ | სერდე ამოღებულია წარმოებიდან; ინვენტარი + დამცავი მოაჯირები ინარჩუნებს სამუშაო ადგილს მხოლოდ Norito. | სტატუსი.მდ:112; სტატუსი.md:124 |
+| Serde deny-list & CI guardrails | ◉ | დაცვის სამუშაო ნაკადები/სკრიპტები ხელს უშლის Serde-ის ახალ პირდაპირ გამოყენებას სამუშაო სივრცეში. | სტატუსი.md:218 |
+| Norito კოდეკი ოქროსფერი & AoS/NCB ტესტები | ◉ | დამატებულია AoS/NCB ოქროსფერი, შეკვეცის ტესტები და დოკუმენტების სინქრონიზაცია. | სტატუსი.მდ:140-147; სტატუსი.მდ:149-150; სტატუსი.მდ:332; სტატუსი.md:666 |
+| Norito მატრიცის ფუნქციის დამუშავება | ◉ | `scripts/run_norito_feature_matrix.sh` მხარს უჭერს ქვედა დინების კვამლის ტესტებს; CI მოიცავს შეფუთულ-seq/struct კომბინაციებს. | სტატუსი.მდ:146; სტატუსი.md:152 |
+| Norito ენის შეკვრა (Python/Java) | ◉ | Python და Java Norito კოდეკები შენარჩუნებულია სინქრონიზაციის სკრიპტებით. | სტატუსი.მდ:74; სტატუსი.md:81 |
+| Norito Stage-1 SIMD სტრუქტურული კლასიფიკატორები | ◉ | NEON/AVX2 ეტაპი-1 კლასიფიკატორები ჯვარედინი თაღოვანი ოქროს და რანდომიზებული კორპუსის ტესტებით. | სტატუსი.md:241 |
 
-## Governance & Runtime Upgrades
-
-| Feature | Status | Notes | Evidence |
+## მმართველობა და გაშვების განახლებები| თვისება | სტატუსი | შენიშვნები | მტკიცებულება |
 |---------|--------|-------|----------|
-| Runtime upgrade admission (ABI gating) | ◉ | Active ABI set enforced at admission with structured errors and tests. | status.md:196 |
-| Protected namespace deploy gating | ▲ | Deploy metadata requirements and gating wired; policy/UX still evolving. | status.md:171 |
-| Torii governance read endpoints | ◉ | `/v1/gov/*` read APIs routed with router tests. | status.md:212 |
-| Verifying-key registry lifecycle & events | ◉ | VK register/update/deprecate, events, CLI filters, and retention semantics implemented. | status.md:236-239; status.md:595; status.md:603 |
+| Runtime განახლება დაშვება (ABI gating) | ◉ | აქტიური ABI ნაკრები ამოქმედდა მიღებისას სტრუქტურირებული შეცდომებით და ტესტებით. | სტატუსი.md:196 |
+| დაცული სახელთა სივრცის განლაგების კარიბჭე | ▲ | განათავსეთ მეტამონაცემების მოთხოვნები და კარიბჭე სადენიანი; პოლიტიკა/UX ჯერ კიდევ ვითარდება. | სტატუსი.md:171 |
+| Torii მმართველობა წაკითხვის საბოლოო წერტილები | ◉ | `/v1/gov/*` წაიკითხავს API-ებს, რომლებიც მარშრუტებულია როუტერის ტესტებით. | სტატუსი.md:212 |
+| გასაღების რეესტრის სასიცოცხლო ციკლი და მოვლენები | ◉ | VK რეგისტრაცია/განახლება/უარყოფა, ღონისძიებები, CLI ფილტრები და შენარჩუნების სემანტიკა დანერგილია. | სტატუსი.მდ:236-239; სტატუსი.მდ:595; სტატუსი.md:603 |
 
-## Zero-Knowledge Infrastructure
+## ნულოვანი ცოდნის ინფრასტრუქტურა
 
-| Feature | Status | Notes | Evidence |
+| თვისება | სტატუსი | შენიშვნები | მტკიცებულება |
 |---------|--------|-------|----------|
-| Attachment storage APIs | ◉ | `POST/GET/LIST/DELETE` attachment endpoints with deterministic ids and tests. | status.md:231 |
-| Background prover worker & report TTL | ▲ | Prover stub behind feature flag; TTL GC and config knobs wired; full pipeline pending. | status.md:212; status.md:233 |
-| Envelope hash binding in CoreHost | ◉ | Verify envelope hashes bound through CoreHost and exposed via audit pulses. | status.md:250 |
-| Shielded root history gating | ◉ | Root snapshots threaded into CoreHost with bounded history and empty-root config. | status.md:303 |
-| ZK ballot execution & governance locks | ○ | Nullifier derivation, lock updates, verification toggles implemented; full proof lifecycle still maturing. | status.md:126-128; status.md:194-195 |
-| Proof attachment pre-verify & dedup | ◉ | Backend-tag sanity, deduplication, and proof records persisted pre-execution. | status.md:348; status.md:602 |
-| ZK Torii proof fetch endpoint | ◉ | `/v1/zk/proof/{backend}/{hash}` exposes proof records (status, height, vk_ref/commitment). | status.md:94 |
+| დანართის შენახვის API | ◉ | `POST/GET/LIST/DELETE` დანართის ბოლო წერტილები განმსაზღვრელი იდენტიფიკატორებითა და ტესტებით. | სტატუსი.md:231 |
+| ფონური პროვერის თანამშრომელი და ანგარიში TTL | ▲ | Prover stub უკან ფუნქცია flag; TTL GC და კონფიგურაციის სახელურები სადენიანი; სრული მილსადენი მოლოდინშია. | სტატუსი.მდ:212; სტატუსი.md:233 |
+| კონვერტის ჰეშის სავალდებულოა CoreHost | ◉ | გადაამოწმეთ კონვერტის ჰეშები, რომლებიც შეკრულია CoreHost-ით და გამოვლენილია აუდიტის იმპულსების მეშვეობით. | სტატუსი.md:250 |
+| დაცული ფესვის ისტორიის კარიბჭე | ◉ | ძირეული სნეპშოტები ჩასმულია CoreHost-ში შეზღუდული ისტორიით და ცარიელი ფესვის კონფიგურაციით. | სტატუსი.md:303 |
+| ZK ბიულეტენების აღსრულება და მმართველობის ჩაკეტვა | ○ | განხორციელებული გაუქმების წარმოშობა, დაბლოკვის განახლებები, დადასტურების გადართვები; სრული მტკიცებულების სასიცოცხლო ციკლი ჯერ კიდევ მწიფდება. | სტატუსი.მდ:126-128; სტატუსი.მდ:194-195 |
+| დამადასტურებელი დანართის წინასწარი შემოწმება და ამოღება | ◉ | Backend-tag საღი აზრი, deduplication, და მტკიცებულება ჩანაწერები გაგრძელდა წინასწარი შესრულება. | სტატუსი.მდ:348; სტატუსი.md:602 |
+| ZK Torii proof fetch endpoint | ◉ | `/v1/zk/proof/{backend}/{hash}` ასახავს მტკიცებულების ჩანაწერებს (სტატუსს, სიმაღლეს, vk_ref/ვალდებულებას). | სტატუსი.md:94 |
 
-## IVM & Kotodama Integration
-
-| Feature | Status | Notes | Evidence |
+## IVM & Kotodama ინტეგრაცია| თვისება | სტატუსი | შენიშვნები | მტკიცებულება |
 |---------|--------|-------|----------|
-| CoreHost syscall→ISI bridge | ○ | Pointer TLV decoding and syscall queueing operational; coverage gaps/parity tests planned. | status.md:299-307; status.md:477-486 |
-| Pointer constructors & domain builtins | ◉ | Kotodama builtins emit typed Norito TLVs and SCALLs, with IR/e2e tests and docs. | status.md:299-301 |
-| Pointer-ABI strict validation & doc sync | ◉ | TLV policy enforced across host/IVM with golden tests and generated docs. | status.md:227; status.md:317; status.md:344; status.md:366; status.md:527 |
-| ZK syscall gating via CoreHost | ◉ | Per-op queues gate verified envelopes and enforce hash matching before ISI execution. | crates/iroha_core/src/smartcontracts/ivm/host.rs:213; crates/iroha_core/src/smartcontracts/ivm/host.rs:279 |
-| Kotodama pointer-ABI docs & grammar | ◉ | Grammar/docs synced with live constructors and SCALL mappings. | status.md:299-301 |
-| ISO 20022 schema-driven engine & Torii bridge | ◉ | Canonical ISO 20022 schemas embedded, deterministic XML parsing, and `/v1/iso20022/status/{MsgId}` API exposed. | status.md:65-70 |
+| CoreHost syscall→ISI bridge | ○ | Pointer TLV დეკოდირება და syscall queuing ფუნქციონირებს; დაგეგმილია დაფარვის ხარვეზები/პარიტეტული ტესტები. | სტატუსი.მდ:299-307; სტატუსი.მდ:477-486 |
+| მაჩვენებლის კონსტრუქტორები და დომენის ჩაშენებული ინსტრუმენტები | ◉ | Kotodama ჩაშენებულები ასხივებენ აკრეფილ Norito TLV-ებს და SCALL-ებს, IR/e2e ტესტებითა და დოკუმენტებით. | სტატუსი.მდ:299-301 |
+| Pointer-ABI მკაცრი ვალიდაცია და დოკუმენტების სინქრონიზაცია | ◉ | TLV პოლიტიკა ამოქმედდა ჰოსტში/IVM ოქროს ტესტებითა და გენერირებული დოკუმენტებით. | სტატუსი.მდ:227; სტატუსი.მდ:317; სტატუსი.მდ:344; სტატუსი.მდ:366; სტატუსი.md:527 |
+| ZK syscall gating CoreHost | ◉ | Per-op რიგები აწარმოებს შემოწმებულ კონვერტებს და აიძულებს ჰეშის შესაბამისობას ISI შესრულებამდე. | crates/iroha_core/src/smartcontracts/ivm/host.rs:213; crates/iroha_core/src/smartcontracts/ivm/host.rs:279 |
+| Kotodama მაჩვენებელი-ABI დოკუმენტები და გრამატიკა | ◉ | გრამატიკა/დოკუმენტები სინქრონიზებულია ცოცხალ კონსტრუქტორებთან და SCALL რუკებთან. | სტატუსი.მდ:299-301 |
+| ISO 20022 სქემაზე ორიენტირებული ძრავა & Torii ხიდი | ◉ | ჩაშენებულია კანონიკური ISO 20022 სქემები, განმსაზღვრელი XML ანალიზი და `/v1/iso20022/status/{MsgId}` API. | სტატუსი.მდ:65-70 |
 
-## Hardware Acceleration
+## აპარატურის აჩქარება
 
-| Feature | Status | Notes | Evidence |
+| თვისება | სტატუსი | შენიშვნები | მტკიცებულება |
 |---------|--------|-------|----------|
-| SIMD tail/misalignment parity tests | ◉ | Randomized parity tests ensure SIMD vector ops match scalar semantics for arbitrary alignment. | status.md:243 |
-| Metal/CUDA fallback & self-tests | ◉ | GPU backends run golden self-tests and fall back to scalar/SIMD on mismatch; parity suites cover SHA-256/Keccak/AES. | status.md:244-246 |
+| SIMD კუდის/არასწორად განლაგების პარიტეტის ტესტები | ◉ | რანდომიზებული პარიტეტის ტესტები უზრუნველყოფს SIMD ვექტორული ოპერაციების შესაბამისობას სკალარული სემანტიკისთვის თვითნებური გასწორებისთვის. | სტატუსი.md:243 |
+| Metal/CUDA სარეზერვო და თვითტესტები | ◉ | GPU backends აწარმოებს ოქროს თვითტესტს და უბრუნდება სკალარს/SIMD-ს შეუსაბამობის შემთხვევაში; პარიტეტული ლუქსი მოიცავს SHA-256/Keccak/AES. | სტატუსი.მდ:244-246 |
 
-## Network Time & Consensus Modes
+## ქსელის დრო და კონსენსუსის რეჟიმები
 
-| Feature | Status | Notes | Evidence |
+| თვისება | სტატუსი | შენიშვნები | მტკიცებულება |
 |---------|--------|-------|----------|
-| Network Time Service (NTS) | ✖︎ | Design exists in `new_pipeline.md`; implementation not yet tracked in status updates. | new_pipeline.md |
-| Nominated PoS consensus mode | ✖︎ | Nexus design documents closed-set and NPoS modes; core implementation pending. | new_pipeline.md; nexus.md |
+| ქსელის დროის სერვისი (NTS) | ✖︎ | დიზაინი არსებობს `new_pipeline.md`-ში; იმპლემენტაცია ჯერ არ არის თვალყური ადევნეთ სტატუსის განახლებებს. | new_pipeline.md |
+| ნომინირებული PoS კონსენსუსის რეჟიმი | ✖︎ | Nexus დიზაინის დოკუმენტების დახურული ნაკრები და NPoS რეჟიმები; ძირითადი განხორციელება მოლოდინშია. | new_pipeline.md; nexus.md |
 
-## Nexus Ledger Roadmap
-
-| Feature | Status | Notes | Evidence |
+## Nexus ლეჯერის საგზაო რუკა| თვისება | სტატუსი | შენიშვნები | მტკიცებულება |
 |---------|--------|-------|----------|
-| Space Directory contract scaffold | ✖︎ | Global registry contract for DS manifests/governance not implemented yet. | nexus.md |
-| Data Space manifest format & lifecycle | ✖︎ | Norito manifest schema, versioning, and governance flow remain on the roadmap. | nexus.md |
-| DS governance & validator rotation | ✖︎ | On-chain procedures for DS membership/rotation still in design phase. | nexus.md |
-| Cross-DS anchoring & Nexus block composition | ✖︎ | Composition layer and anchoring commitments outlined but unimplemented. | nexus.md |
-| Kura/WSV erasure-coded storage | ✖︎ | Erasure-coded blob/snapshot storage for public/private DS not yet built. | nexus.md |
-| ZK/optimistic proof policy per DS | ✖︎ | Per-DS proof requirements and enforcement not tracked in code. | nexus.md |
-| Fee/quota isolation per Data Space | ✖︎ | DS-specific quotas and fee policy mechanisms remain future work. | nexus.md |
+| Space Directory contract scaffold | ✖︎ | გლობალური რეესტრის კონტრაქტი DS მანიფესტებისთვის/მმართველობისთვის ჯერ არ განხორციელებულა. | nexus.md |
+| მონაცემთა სივრცის მანიფესტის ფორმატი და სასიცოცხლო ციკლი | ✖︎ | Norito მანიფესტის სქემა, ვერსიები და მართვის ნაკადი რჩება საგზაო რუკაზე. | nexus.md |
+| DS მართვა და ვალიდატორის როტაცია | ✖︎ | ჯაჭვური პროცედურები DS წევრობის/როტაციისთვის ჯერ კიდევ დიზაინის ფაზაშია. | nexus.md |
+| Cross-DS დამაგრება & Nexus ბლოკის შემადგენლობა | ✖︎ | შემადგენლობის ფენა და დამაგრების ვალდებულებები ასახული, მაგრამ განუხორციელებელი. | nexus.md |
+| Kura/WSV წაშლის კოდირებული საცავი | ✖︎ | წაშლის კოდირებული blob/snapshot შენახვის საჯარო/კერძო DS-ისთვის ჯერ არ არის აშენებული. | nexus.md |
+| ZK/ოპტიმისტური მტკიცებულების პოლიტიკა DS | ✖︎ | Per-DS-ის მტკიცებულების მოთხოვნები და აღსრულება კოდში არ არის თვალყური. | nexus.md |
+| საკომისიო/კვოტის იზოლაცია მონაცემთა სივრცეზე | ✖︎ | DS-ს სპეციფიკური კვოტები და საფასურის პოლიტიკის მექანიზმები სამომავლოდ რჩება. | nexus.md |
 
-## Chaos & Fault Injection
+## ქაოსი და შეცდომის ინექცია
 
-| Feature | Status | Notes | Evidence |
+| თვისება | სტატუსი | შენიშვნები | მტკიცებულება |
 |---------|--------|-------|----------|
-| Izanami chaosnet orchestration | ○ | Izanami workload now drives asset-definition, metadata, NFT, and trigger-repetition recipes with unit coverage for the new paths. | crates/izanami/src/instructions.rs; crates/izanami/src/instructions.rs#tests |
+| Izanami chaosnet ორკესტრირება | ○ | Izanami დატვირთვა ახლა ამოძრავებს აქტივების განმარტებას, მეტამონაცემებს, NFT-ს და ტრიგერის გამეორების რეცეპტებს ახალი გზების ერთეულის დაფარვით. | crates/izanami/src/instructions.rs; crates/izanami/src/instructions.rs#tests |

@@ -7,138 +7,136 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5a2e92d81f17dbd015894a9b61f6acc40d4116a06aefe476a9f8d0ba4d6d3955
 source_last_modified: "2026-01-30T18:06:03.184151+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# IVM Gas Model
+# Modelo de gás IVM
 
-This document defines the canonical gas schedule for the Iroha Virtual Machine
-(IVM) and explains how the schedule is hashed and applied. The source of truth
-for costs is `crates/ivm/src/gas.rs`; the schedule table below is a rendered
-view of that canonical mapping.
+Este documento define o cronograma de gás canônico para a máquina virtual Iroha
+(IVM) e explica como o agendamento é criptografado e aplicado. A fonte da verdade
+para custos é `crates/ivm/src/gas.rs`; a tabela de cronograma abaixo é uma renderização
+visão desse mapeamento canônico.
 
-## Scope
+## Escopo
 
-- Applies to IVM bytecode execution (Executable::Ivm).
-- Native ISI gas metering is defined separately in `crates/iroha_core/src/gas.rs`.
-- ISO 20022 opcodes are reserved in ABI v1 and do not carry gas entries yet.
+- Aplica-se à execução de bytecode IVM (Executable::Ivm).
+- A medição de gás ISI nativa é definida separadamente em `crates/iroha_core/src/gas.rs`.
+- Os opcodes ISO 20022 são reservados na ABI v1 e ainda não carregam entradas de gás.
 
-## Determinism and schedule hash
+## Determinismo e hash de cronograma
 
-The gas schedule is deterministic and derived from opcode → cost pairs. The
-canonical digest is computed over the ordered opcode list with each entry
-serialized as:
+A programação do gás é determinística e derivada de pares opcode → custo. O
+o resumo canônico é calculado na lista ordenada de opcode com cada entrada
+serializado como:
 
-- opcode byte (u8)
-- cost (u64, little-endian)
+- byte de código de operação (u8)
+- custo (u64, little endian)
 
-The hash is exposed by:
+O hash é exposto por:
 
-- `ivm::gas::schedule_hash()` (canonical schedule hash)
-- `ivm::limits::schedule_hash()` (host-facing alias)
+- `ivm::gas::schedule_hash()` (hash de programação canônica)
+- `ivm::limits::schedule_hash()` (alias voltado para host)
 
-Use this digest to verify that all peers share the same schedule when wiring
-config or telemetry checks.
+Use este resumo para verificar se todos os peers compartilham a mesma programação durante a conexão
+verificações de configuração ou telemetria.
 
-## Vector scaling and HTM retries
+## Dimensionamento vetorial e novas tentativas HTM
 
-- Vector ops (`VADD*`, `VAND`, `VXOR`, `VOR`, `VROT32`) scale with the logical
-  vector length set by `SETVL`. The base costs in the table are scaled by
-  `min(vector_len, VECTOR_BASE_LANES) / VECTOR_BASE_LANES` (baseline = 2 lanes).
-- HTM retries multiply the cost by `(retries + 1)`; most consensus paths do not
-  incur retries.
+- Escala de operações vetoriais (`VADD*`, `VAND`, `VXOR`, `VOR`, `VROT32`) com a lógica
+  comprimento do vetor definido por `SETVL`. Os custos básicos na tabela são escalonados por
+  `min(vector_len, VECTOR_BASE_LANES) / VECTOR_BASE_LANES` (linha de base = 2 pistas).
+- Novas tentativas HTM multiplicam o custo por `(retries + 1)`; a maioria dos caminhos de consenso não
+  incorrer em novas tentativas.
 
-## Canonical opcode gas table
+## Tabela de gás de código de operação canônico
 
-The table below lists the base costs used by `ivm::gas::cost_of`. Vector scaling
-and HTM retries are applied on top of these base values as noted above.
-
-| Category | Opcode | Mnemonic | Base gas |
+A tabela abaixo lista os custos básicos usados pelo `ivm::gas::cost_of`. Escala vetorial
+e as novas tentativas HTM são aplicadas sobre esses valores base, conforme observado acima.| Categoria | Código de operação | Mnemônico | Gás de base |
 |---|---:|---|---:|
-| arithmetic | 0x01 | `ADD` | 1 |
-| arithmetic | 0x02 | `SUB` | 1 |
-| arithmetic | 0x03 | `AND` | 1 |
-| arithmetic | 0x04 | `OR` | 1 |
-| arithmetic | 0x05 | `XOR` | 1 |
-| arithmetic | 0x06 | `SLL` | 1 |
-| arithmetic | 0x07 | `SRL` | 1 |
-| arithmetic | 0x08 | `SRA` | 1 |
-| arithmetic | 0x0D | `NEG` | 1 |
-| arithmetic | 0x0C | `NOT` | 1 |
-| arithmetic | 0x20 | `ADDI` | 1 |
-| arithmetic | 0x21 | `ANDI` | 1 |
-| arithmetic | 0x22 | `ORI` | 1 |
-| arithmetic | 0x23 | `XORI` | 1 |
-| arithmetic | 0x10 | `MUL` | 3 |
-| arithmetic | 0x11 | `MULH` | 3 |
-| arithmetic | 0x12 | `MULHU` | 3 |
-| arithmetic | 0x13 | `MULHSU` | 3 |
-| arithmetic | 0x14 | `DIV` | 10 |
-| arithmetic | 0x15 | `DIVU` | 10 |
-| arithmetic | 0x16 | `REM` | 10 |
-| arithmetic | 0x17 | `REMU` | 10 |
-| arithmetic | 0x18 | `ROTL` | 2 |
-| arithmetic | 0x19 | `ROTR` | 2 |
-| arithmetic | 0x25 | `ROTL_IMM` | 2 |
-| arithmetic | 0x26 | `ROTR_IMM` | 2 |
-| arithmetic | 0x1A | `POPCNT` | 6 |
-| arithmetic | 0x1B | `CLZ` | 6 |
-| arithmetic | 0x1C | `CTZ` | 6 |
-| arithmetic | 0x1D | `ISQRT` | 6 |
-| arithmetic | 0x1E | `MIN` | 1 |
-| arithmetic | 0x1F | `MAX` | 1 |
-| arithmetic | 0x27 | `ABS` | 1 |
-| arithmetic | 0x28 | `DIV_CEIL` | 12 |
-| arithmetic | 0x29 | `GCD` | 12 |
-| arithmetic | 0x2A | `MEAN` | 2 |
-| arithmetic | 0x09 | `SLT` | 2 |
-| arithmetic | 0x0A | `SLTU` | 2 |
-| arithmetic | 0x0E | `SEQ` | 2 |
-| arithmetic | 0x0F | `SNE` | 2 |
-| arithmetic | 0x0B | `CMOV` | 3 |
-| arithmetic | 0x24 | `CMOVI` | 3 |
-| memory | 0x30 | `LOAD64` | 3 |
-| memory | 0x31 | `STORE64` | 3 |
-| memory | 0x32 | `LOAD128` | 5 |
-| memory | 0x33 | `STORE128` | 5 |
-| control | 0x40 | `BEQ` | 1 |
-| control | 0x41 | `BNE` | 1 |
-| control | 0x42 | `BLT` | 1 |
-| control | 0x43 | `BGE` | 1 |
-| control | 0x44 | `BLTU` | 1 |
-| control | 0x45 | `BGEU` | 1 |
-| control | 0x46 | `JAL` | 2 |
-| control | 0x48 | `JALR` | 2 |
-| control | 0x47 | `JR` | 2 |
-| control | 0x4A | `JMP` | 2 |
-| control | 0x4B | `JALS` | 2 |
-| control | 0x49 | `HALT` | 0 |
-| system | 0x60 | `SCALL` | 5 |
-| system | 0x61 | `GETGAS` | 0 |
-| crypto | 0x70 | `VADD32` | 2 |
-| crypto | 0x71 | `VADD64` | 2 |
-| crypto | 0x72 | `VAND` | 1 |
-| crypto | 0x73 | `VXOR` | 1 |
-| crypto | 0x74 | `VOR` | 1 |
-| crypto | 0x75 | `VROT32` | 1 |
-| crypto | 0x76 | `SETVL` | 1 |
-| crypto | 0x77 | `PARBEGIN` | 0 |
-| crypto | 0x78 | `PAREND` | 0 |
-| crypto | 0x80 | `SHA256BLOCK` | 50 |
-| crypto | 0x81 | `SHA3BLOCK` | 50 |
-| crypto | 0x82 | `POSEIDON2` | 10 |
-| crypto | 0x83 | `POSEIDON6` | 10 |
-| crypto | 0x84 | `PUBKGEN` | 50 |
-| crypto | 0x85 | `VALCOM` | 50 |
-| crypto | 0x86 | `ECADD` | 20 |
-| crypto | 0x87 | `ECMUL_VAR` | 100 |
-| crypto | 0x8E | `PAIRING` | 500 |
-| crypto | 0x88 | `AESENC` | 30 |
-| crypto | 0x89 | `AESDEC` | 30 |
-| crypto | 0x8A | `BLAKE2S` | 40 |
-| crypto | 0x8B | `ED25519VERIFY` | 1000 |
-| crypto | 0x8F | `ED25519BATCHVERIFY` | 500 |
-| crypto | 0x8C | `ECDSAVERIFY` | 1500 |
-| crypto | 0x8D | `DILITHIUMVERIFY` | 5000 |
+| aritmética | 0x01 | `ADD` | 1 |
+| aritmética | 0x02 | `SUB` | 1 |
+| aritmética | 0x03 | `AND` | 1 |
+| aritmética | 0x04 | `OR` | 1 |
+| aritmética | 0x05 | `XOR` | 1 |
+| aritmética | 0x06 | `SLL` | 1 |
+| aritmética | 0x07 | `SRL` | 1 |
+| aritmética | 0x08 | `SRA` | 1 |
+| aritmética | 0x0D | `NEG` | 1 |
+| aritmética | 0x0C | `NOT` | 1 |
+| aritmética | 0x20 | `ADDI` | 1 |
+| aritmética | 0x21 | `ANDI` | 1 |
+| aritmética | 0x22 | `ORI` | 1 |
+| aritmética | 0x23 | `XORI` | 1 |
+| aritmética | 0x10 | `MUL` | 3 |
+| aritmética | 0x11 | `MULH` | 3 |
+| aritmética | 0x12 | `MULHU` | 3 |
+| aritmética | 0x13 | `MULHSU` | 3 |
+| aritmética | 0x14 | `DIV` | 10 |
+| aritmética | 0x15 | `DIVU` | 10 |
+| aritmética | 0x16 | `REM` | 10 |
+| aritmética | 0x17 | `REMU` | 10 |
+| aritmética | 0x18 | `ROTL` | 2 |
+| aritmética | 0x19 | `ROTR` | 2 |
+| aritmética | 0x25 | `ROTL_IMM` | 2 |
+| aritmética | 0x26 | `ROTR_IMM` | 2 |
+| aritmética | 0x1A | `POPCNT` | 6 |
+| aritmética | 0x1B | `CLZ` | 6 |
+| aritmética | 0x1C | `CTZ` | 6 |
+| aritmética | 0x1D | `ISQRT` | 6 |
+| aritmética | 0x1E | `MIN` | 1 |
+| aritmética | 0x1F | `MAX` | 1 |
+| aritmética | 0x27 | `ABS` | 1 |
+| aritmética | 0x28 | `DIV_CEIL` | 12 |
+| aritmética | 0x29 | `GCD` | 12 |
+| aritmética | 0x2A | `MEAN` | 2 |
+| aritmética | 0x09 | `SLT` | 2 |
+| aritmética | 0x0A | `SLTU` | 2 |
+| aritmética | 0x0E | `SEQ` | 2 |
+| aritmética | 0x0F | `SNE` | 2 |
+| aritmética | 0x0B | `CMOV` | 3 |
+| aritmética | 0x24 | `CMOVI` | 3 |
+| memória | 0x30 | `LOAD64` | 3 |
+| memória | 0x31 | `STORE64` | 3 |
+| memória | 0x32 | `LOAD128` | 5 |
+| memória | 0x33 | `STORE128` | 5 |
+| controle | 0x40 | `BEQ` | 1 |
+| controle | 0x41 | `BNE` | 1 |
+| controle | 0x42 | `BLT` | 1 |
+| controle | 0x43 | `BGE` | 1 |
+| controle | 0x44 | `BLTU` | 1 |
+| controle | 0x45 | `BGEU` | 1 |
+| controle | 0x46 | `JAL` | 2 |
+| controle | 0x48 | `JALR` | 2 |
+| controle | 0x47 | `JR` | 2 |
+| controle | 0x4A | `JMP` | 2 |
+| controle | 0x4B | `JALS` | 2 |
+| controle | 0x49 | `HALT` | 0 |
+| sistema | 0x60 | `SCALL` | 5 |
+| sistema | 0x61 | `GETGAS` | 0 |
+| criptografia | 0x70 | `VADD32` | 2 |
+| criptografia | 0x71 | `VADD64` | 2 |
+| criptografia | 0x72 | `VAND` | 1 |
+| criptografia | 0x73 | `VXOR` | 1 |
+| criptografia | 0x74 | `VOR` | 1 |
+| criptografia | 0x75 | `VROT32` | 1 |
+| criptografia | 0x76 | `SETVL` | 1 |
+| criptografia | 0x77 | `PARBEGIN` | 0 |
+| criptografia | 0x78 | `PAREND` | 0 |
+| criptografia | 0x80 | `SHA256BLOCK` | 50 || criptografia | 0x81 | `SHA3BLOCK` | 50 |
+| criptografia | 0x82 | `POSEIDON2` | 10 |
+| criptografia | 0x83 | `POSEIDON6` | 10 |
+| criptografia | 0x84 | `PUBKGEN` | 50 |
+| criptografia | 0x85 | `VALCOM` | 50 |
+| criptografia | 0x86 | `ECADD` | 20 |
+| criptografia | 0x87 | `ECMUL_VAR` | 100 |
+| criptografia | 0x8E | `PAIRING` | 500 |
+| criptografia | 0x88 | `AESENC` | 30 |
+| criptografia | 0x89 | `AESDEC` | 30 |
+| criptografia | 0x8A | `BLAKE2S` | 40 |
+| criptografia | 0x8B | `ED25519VERIFY` | 1000 |
+| criptografia | 0x8F | `ED25519BATCHVERIFY` | 500 |
+| criptografia | 0x8C | `ECDSAVERIFY` | 1500 |
+| criptografia | 0x8D | `DILITHIUMVERIFY` | 5000 |
 | zk | 0xA0 | `ASSERT` | 1 |
 | zk | 0xA1 | `ASSERT_EQ` | 1 |
 | zk | 0xA2 | `FADD` | 1 |
@@ -146,4 +144,3 @@ and HTM retries are applied on top of these base values as noted above.
 | zk | 0xA4 | `FMUL` | 3 |
 | zk | 0xA5 | `FINV` | 5 |
 | zk | 0xA6 | `ASSERT_RANGE` | 1 |
-

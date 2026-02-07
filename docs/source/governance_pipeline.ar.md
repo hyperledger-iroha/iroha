@@ -6,21 +6,22 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: f9f765fbe3170f654a9c44c3cd1afc5d82a72ff49137f32b98cf9d310faf114e
 source_last_modified: "2026-01-03T18:08:00.913452+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% Governance Pipeline (Iroha 2 and SORA Parliament)
+% خط أنابيب الحوكمة (Iroha 2 وSORA البرلمان)
 
-# Current state (v1)
-- Governance proposals run as: proposer → referendum → tally → enactment. Referendum windows and turnout/approval thresholds are enforced as described in `gov.md`; locks are extend-only and unlock on expiry.
-- Parliament selection uses VRF-based draws with deterministic ordering and term bounds; when no persisted roster exists, Torii derives a fallback using `gov.parliament_*` config. Council gating and quorum checks are exercised in `gov_parliament_bodies` / `gov_pipeline_sla` tests.
-- Voting modes: ZK (default, requires `Active` VK with inline bytes) and Plain (quadratic weight). Mode mismatches are rejected; lock creation/extension is monotonic in both modes with regression tests for ZK and plain re-votes.
-- Validator misconduct is acted on via the evidence pipeline (`/v1/sumeragi/evidence*`, CLI helpers) with joint-consensus hand-offs enforced by `NextMode` + `ModeActivationHeight`.
-- Protected namespaces, runtime-upgrade hooks, and governance manifest admission are documented in `governance_api.md` and covered by telemetry (`governance_manifest_*`, `governance_protected_namespace_total`).
+# الحالة الحالية (الإصدار 1)
+- مقترحات الحوكمة تسير على النحو التالي: المقترح ← الاستفتاء ← الفرز ← التشريع. يتم فرض نوافذ الاستفتاء وحدود نسبة المشاركة/الموافقة كما هو موضح في `gov.md`؛ الأقفال قابلة للتمديد فقط ويتم فتحها عند انتهاء الصلاحية.
+- يستخدم اختيار البرلمان عمليات السحب المستندة إلى VRF مع الترتيب الحتمي وحدود المدة؛ في حالة عدم وجود قائمة مستمرة، يقوم Torii باشتقاق بديل باستخدام تكوين `gov.parliament_*`. يتم إجراء فحوصات المجلس والنصاب القانوني في اختبارات `gov_parliament_bodies` / `gov_pipeline_sla`.
+- أوضاع التصويت: ZK (افتراضي، يتطلب `Active` VK مع البايتات المضمنة) وعادي (الوزن التربيعي). يتم رفض حالات عدم تطابق الوضع؛ يعد إنشاء/تمديد القفل أمرًا رتيبًا في كلا الوضعين مع اختبارات الانحدار لـ ZK وإعادة التصويت العادي.
+- يتم التعامل مع سوء سلوك جهة التحقق من خلال سلسلة الأدلة (`/v1/sumeragi/evidence*`، مساعدي CLI) مع عمليات التسليم بالإجماع المشترك التي يتم تنفيذها بواسطة `NextMode` + `ModeActivationHeight`.
+- تم توثيق مساحات الأسماء المحمية وخطافات ترقية وقت التشغيل وقبول بيان الإدارة في `governance_api.md` وتغطيتها القياس عن بعد (`governance_manifest_*`، `governance_protected_namespace_total`).
 
-# In-flight / backlog
-- Publish VRF draw artifacts (seed, proof, ordered roster, alternates) and codify replacement rules for no-shows; add golden fixtures for the draw and replacements.
-- Stage-SLA enforcement for the Parliament bodies (rules → agenda → study → review → jury → enact) needs explicit timers, escalation paths, and telemetry counters.
-- Policy-jury secret/commit–reveal voting and associated bribery-resistance audits are still to be implemented.
-- Role-bond multipliers, misconduct slashing for high-risk bodies, and cooldowns between service slots require configuration plumbing plus tests.
-- Governance lane sealing and referenda window/turnout gates are tracked in `gov.md`/`status.md`; keep the roadmap entries updated as the remaining acceptance tests land.
+# على متن الطائرة / المتراكمة
+- نشر عناصر رسم VRF (الأصل، والإثبات، والقائمة المطلوبة، والبدائل) وتدوين قواعد الاستبدال لعدم الحضور؛ إضافة تركيبات ذهبية للقرعة والبدلاء.
+- تطبيق مرحلة SLA لهيئات البرلمان (القواعد ← جدول الأعمال ← الدراسة ← المراجعة ← هيئة المحلفين ← التشريع) يحتاج إلى مؤقتات واضحة، ومسارات تصعيد، وعدادات قياس عن بعد.
+- سياسة - سر / التزام - كشف التصويت وما يرتبط به من عمليات تدقيق مقاومة الرشوة لا تزال بحاجة إلى التنفيذ.
+- تتطلب مضاعفات ترابط الأدوار، وتقليل سوء السلوك للهيئات عالية المخاطر، وفترات التهدئة بين فتحات الخدمة، إجراء أعمال السباكة للتكوين بالإضافة إلى الاختبارات.
+- يتم تتبع إغلاق حارات الحوكمة ونوافذ الاستفتاءات/بوابات الإقبال في `gov.md`/`status.md`؛ حافظ على تحديث إدخالات خريطة الطريق مع وصول اختبارات القبول المتبقية.

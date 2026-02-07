@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: cba8780bcec4ebf562dc9c5725f328b0ea2d9009517efa5b5a504e2fb6be81fe
 source_last_modified: "2026-01-11T04:52:11.136647+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Error Mapping Guide
+# የስህተት የካርታ መመሪያ
 
-Last updated: 2025-08-21
+ለመጨረሻ ጊዜ የዘመነው፡ 2025-08-21
 
-This guide maps common failure modes in Iroha to stable error categories surfaced by the data model. Use it to design tests and to make client error handling predictable.
+ይህ መመሪያ በ Iroha ውስጥ በመረጃ ሞዴሉ ብቅ ያሉ የተረጋጉ የስህተት ምድቦችን የጋራ ውድቀት ሁነታዎችን ያዘጋጃል። ፈተናዎችን ለመንደፍ እና የደንበኛ ስህተት አያያዝ ሊተነበይ የሚችል ለማድረግ ይጠቀሙበት።
 
-Principles
-- Instruction and query paths emit structured enums. Avoid panics; report a specific category wherever possible.
-- Categories are stable, messages may evolve. Clients should match on categories, not on free‑form strings.
+መርሆዎች
+- የመመሪያ እና የመጠይቅ መንገዶች የተዋቀሩ ቁጥሮችን ያስወጣሉ። ድንጋጤን ያስወግዱ; በተቻለ መጠን አንድ የተወሰነ ምድብ ሪፖርት ያድርጉ።
+- ምድቦች የተረጋጉ ናቸው, መልዕክቶች ሊሻሻሉ ይችላሉ. ደንበኞች በነጻ ቅፅ ሕብረቁምፊዎች ላይ ሳይሆን በምድብ ላይ መመሳሰል አለባቸው።
 
-Categories
-- InstructionExecutionError::Find: Entity missing (asset, account, domain, NFT, role, trigger, permission, public key, block, transaction). Example: removing a non‑existent metadata key yields Find(MetadataKey).
-- InstructionExecutionError::Repetition: Duplicate registration or conflicting ID. Contains the instruction type and the repeated IdBox.
-- InstructionExecutionError::Mintability: Mintability invariant violated (`Once` exhausted twice, `Limited(n)` overdrawn, or attempts to disable `Infinitely`). Examples: minting an asset defined as `Once` twice yields `Mintability(MintUnmintable)`; configuring `Limited(0)` yields `Mintability(InvalidMintabilityTokens)`.
-- InstructionExecutionError::Math: Numeric domain errors (overflow, divide‑by‑zero, negative value, not enough quantity). Example: burning more than available amount yields Math(NotEnoughQuantity).
-- InstructionExecutionError::InvalidParameter: Invalid instruction parameter or configuration (e.g., time trigger in the past). Use for malformed contract payloads.
-- InstructionExecutionError::Evaluate: DSL/spec mismatch for instruction shape or types. Example: wrong numeric spec for an asset value yields Evaluate(Type(AssetNumericSpec(..))).
-- InstructionExecutionError::InvariantViolation: Violation of a system invariant that cannot be expressed in other categories. Example: attempting to remove the last signatory.
-- InstructionExecutionError::Query: Wrapping of QueryExecutionFail when a query fails during instruction execution.
+ምድቦች
+- InstructionExecutionError :: አግኝ: የጠፋ አካል (ንብረት, መለያ, ጎራ, NFT, ሚና, ቀስቅሴ, ፈቃድ, የህዝብ ቁልፍ, እገዳ, ግብይት). ምሳሌ፡- የሌለ የሜታዳታ ቁልፍን በማስወገድ አግኝ (ሜታዳታ ቁልፍ)።
+- InstructionExecutionError:: መደጋገም: የተባዛ ምዝገባ ወይም የሚጋጭ መታወቂያ። የመመሪያውን አይነት እና ተደጋጋሚውን IdBox ይዟል።
+- InstructionExecutionError:: Mintability: Mintability invariant ተጥሷል (`Once` ሁለት ጊዜ ተዳክሟል፣ `Limited(n)` ከልክ በላይ ተሳጥቷል፣ ወይም `Infinitely`ን ለማሰናከል ሙከራዎች)። ምሳሌዎች፡- እንደ `Once` ሁለት ጊዜ የተገለጸውን ንብረት መፍጠር `Mintability(MintUnmintable)`; `Limited(0)` ማዋቀር `Mintability(InvalidMintabilityTokens)` ያስገኛል.
+- InstructionExecutionError::ሒሳብ: የቁጥር ጎራ ስህተቶች (ትርፍ፣ በዜሮ መከፋፈል፣ አሉታዊ እሴት፣ በቂ ያልሆነ መጠን)። ምሳሌ፡ ካለው መጠን በላይ ማቃጠል ሒሳብ (NotEnoughQuantity) ያስገኛል።
+- InstructionExecutionError:: ልክ ያልሆነ ፓራሜትር፡ ልክ ያልሆነ የትምህርት መለኪያ ወይም ውቅር (ለምሳሌ፡ ያለፈው ጊዜ ቀስቅሴ)። ለተበላሸ የኮንትራት ጭነት ተጠቀም።
+- InstructionExecutionError:: ይገምግሙ: DSL/የመመሪያ ቅርጽ ወይም ዓይነቶች ጋር አለመዛመድ. ምሳሌ፡ የተሳሳተ የቁጥር ዝርዝር ለንብረት እሴት ያስገኛል ይገምግሙ(አይነት(AssetNumericSpec(..))))።
+- InstructionExecutionError::ኢንቫሪንት ጥሰት: በሌሎች ምድቦች ውስጥ ሊገለጽ የማይችል የሥርዓት የማይለዋወጥ ጥሰት. ምሳሌ፡ የመጨረሻውን ፈራሚ ለማስወገድ መሞከር።
+- InstructionExecutionError::ጥያቄ፡- በመመሪያ አፈጻጸም ወቅት መጠይቁ ሳይሳካ ሲቀር የQueryExecutionFail መጠቅለል።
 
 QueryExecutionFail
-- Find: Missing entity in query context.
-- Conversion: Wrong type expected by a query.
-- NotFound: Missing live query cursor.
-- CursorMismatch / CursorDone: Cursor protocol errors.
-- FetchSizeTooBig: Server‑enforced limit exceeded.
-- GasBudgetExceeded: Query execution exceeded the gas/materialization budget.
-- InvalidSingularParameters: Unsupported parameters for singular queries.
-- CapacityLimit: Live query store capacity reached.
+- አግኝ፡ በመጠይቅ አውድ ውስጥ የጎደለ አካል።
+ልወጣ፡- በጥያቄ የሚጠበቀው የተሳሳተ ዓይነት።
+- አልተገኘም፡ የቀጥታ መጠይቅ ጠቋሚ ጠፍቷል።
+- CursorMismatch / CursorDone: የጠቋሚ ፕሮቶኮል ስህተቶች።
+- FetchSizeTooBig፡ በአገልጋይ የተገደበ ገደብ ታልፏል።
+- GasBudget ታልፏል፡ የጥያቄ አፈጻጸም ከጋዝ/ቁሳቁስ በጀት አልፏል።
+- ልክ ያልሆኑ ነጠላ መለኪያዎች፡ ለነጠላ መጠይቆች የማይደገፉ መለኪያዎች።
+- የአቅም ገደብ፡ የቀጥታ መጠይቅ ማከማቻ አቅም ላይ ደርሷል።
 
-Testing Tips
-- Prefer unit tests close to the origin of an error. For example, asset numeric spec mismatch can be generated in data‑model tests.
-- Integration tests should cover end‑to‑end mapping for representative cases (e.g., duplicate register, missing key on remove, transfer without ownership).
-- Keep assertions resilient by matching enum variants instead of message substrings.
+የሙከራ ምክሮች
+- ለስህተት መነሻ ቅርብ የሆኑ የክፍል ሙከራዎችን ይምረጡ። ለምሳሌ፣ የንብረት ቁጥራዊ ዝርዝር አለመመጣጠን በውሂብ-ሞዴል ሙከራዎች ውስጥ ሊፈጠር ይችላል።
+- የውህደት ሙከራዎች ለወኪል ጉዳዮች ከመጨረሻ እስከ መጨረሻ ካርታ ስራን መሸፈን አለባቸው (ለምሳሌ፡ የተባዛ መዝገብ፣ የማስወገድ ቁልፍ ጠፍቷል፣ ያለ ባለቤትነት ማስተላለፍ)።
+- ከመልእክት ንዑስ ሕብረቁምፊዎች ይልቅ የኢነም ተለዋጮችን በማዛመድ ፅንሰ-ሀሳቦችን ጠንካራ ይሁኑ።
