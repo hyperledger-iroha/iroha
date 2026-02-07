@@ -2625,8 +2625,13 @@ fn parse_permission_name(s: &str) -> Result<PermissionToken, VMError> {
 
 /// Parse a JSON payload and return either the raw string value or selected field contents.
 fn parse_json_string_any(bytes: &[u8], keys: &[&str]) -> Result<String, VMError> {
-    let json: Json = decode_from_bytes(bytes).map_err(|_| VMError::DecodeError)?;
-    let value: njson::Value = njson::from_str(json.get()).map_err(|_| VMError::NoritoInvalid)?;
+    let value: njson::Value = match decode_from_bytes::<Json>(bytes) {
+        Ok(json) => njson::from_str(json.get()).map_err(|_| VMError::NoritoInvalid)?,
+        Err(_) => {
+            let raw = core::str::from_utf8(bytes).map_err(|_| VMError::NoritoInvalid)?;
+            njson::from_str(raw).map_err(|_| VMError::NoritoInvalid)?
+        }
+    };
     if let Some(s) = value.as_str() {
         return Ok(s.to_string());
     }
@@ -2640,8 +2645,13 @@ fn parse_json_string_any(bytes: &[u8], keys: &[&str]) -> Result<String, VMError>
 
 /// Parse a JSON payload and extract a string array from the top-level value or one of the provided keys.
 fn parse_json_string_array_any(bytes: &[u8], keys: &[&str]) -> Result<Vec<String>, VMError> {
-    let json: Json = decode_from_bytes(bytes).map_err(|_| VMError::DecodeError)?;
-    let value: njson::Value = njson::from_str(json.get()).map_err(|_| VMError::NoritoInvalid)?;
+    let value: njson::Value = match decode_from_bytes::<Json>(bytes) {
+        Ok(json) => njson::from_str(json.get()).map_err(|_| VMError::NoritoInvalid)?,
+        Err(_) => {
+            let raw = core::str::from_utf8(bytes).map_err(|_| VMError::NoritoInvalid)?;
+            njson::from_str(raw).map_err(|_| VMError::NoritoInvalid)?
+        }
+    };
 
     let array = if let Some(arr) = value.as_array() {
         arr
@@ -2669,72 +2679,82 @@ fn parse_peer_any(bytes: &[u8]) -> Result<Peer, VMError> {
     Peer::from_str(&peer).map_err(|_| VMError::NoritoInvalid)
 }
 
-// Parse permission JSON into a PermissionToken using typed Norito conversions.
+// Parse permission JSON into a PermissionToken.
+//
+// DevEx: accept the string forms used by `iroha_cli` and unit tests, rather
+// than requiring a full typed Norito JSON representation for IDs.
 fn parse_permission_json(s: &str) -> Result<PermissionToken, VMError> {
-    use norito::json::{self, JsonDeserializeOwned, Value};
-
-    fn parse_field<T: JsonDeserializeOwned>(map: &json::Map, key: &str) -> Result<T, VMError> {
-        let value = map.get(key).ok_or(VMError::NoritoInvalid)?;
-        json::from_value(value.clone()).map_err(|_| VMError::NoritoInvalid)
+    fn require_str<'a>(map: &'a njson::Map, key: &str) -> Result<&'a str, VMError> {
+        map.get(key)
+            .and_then(njson::Value::as_str)
+            .ok_or(VMError::NoritoInvalid)
     }
 
-    let value: Value = json::from_slice(s.as_bytes()).map_err(|_| VMError::NoritoInvalid)?;
+    let value: njson::Value = njson::from_slice(s.as_bytes()).map_err(|_| VMError::NoritoInvalid)?;
     if let Some(name) = value.as_str() {
         return parse_permission_name(name);
     }
 
     let map = value.as_object().ok_or(VMError::NoritoInvalid)?;
-    let kind = map
-        .get("type")
-        .and_then(Value::as_str)
-        .ok_or(VMError::NoritoInvalid)?;
+    let kind = require_str(map, "type")?;
 
     match kind {
         "register_domain" => Ok(PermissionToken::RegisterDomain),
         "register_account" => Ok(PermissionToken::RegisterAccount),
         "register_asset_definition" => Ok(PermissionToken::RegisterAssetDefinition),
         "register_zk_asset" => {
-            let id: AssetDefinitionId = parse_field(map, "target")?;
+            let id: AssetDefinitionId =
+                require_str(map, "target")?.parse().map_err(|_| VMError::NoritoInvalid)?;
             Ok(PermissionToken::RegisterZkAsset(id))
         }
         "read_assets" => {
-            let account: AccountId = parse_field(map, "target")?;
+            let account: AccountId =
+                require_str(map, "target")?.parse().map_err(|_| VMError::NoritoInvalid)?;
             Ok(PermissionToken::ReadAccountAssets(account))
         }
         "add_signatory" => {
-            let account: AccountId = parse_field(map, "target")?;
+            let account: AccountId =
+                require_str(map, "target")?.parse().map_err(|_| VMError::NoritoInvalid)?;
             Ok(PermissionToken::AddSignatory(account))
         }
         "remove_signatory" => {
-            let account: AccountId = parse_field(map, "target")?;
+            let account: AccountId =
+                require_str(map, "target")?.parse().map_err(|_| VMError::NoritoInvalid)?;
             Ok(PermissionToken::RemoveSignatory(account))
         }
         "set_account_quorum" => {
-            let account: AccountId = parse_field(map, "target")?;
+            let account: AccountId =
+                require_str(map, "target")?.parse().map_err(|_| VMError::NoritoInvalid)?;
             Ok(PermissionToken::SetAccountQuorum(account))
         }
         "set_account_detail" => {
-            let account: AccountId = parse_field(map, "target")?;
+            let account: AccountId =
+                require_str(map, "target")?.parse().map_err(|_| VMError::NoritoInvalid)?;
             Ok(PermissionToken::SetAccountDetail(account))
         }
         "shield" => {
-            let id: AssetDefinitionId = parse_field(map, "target")?;
+            let id: AssetDefinitionId =
+                require_str(map, "target")?.parse().map_err(|_| VMError::NoritoInvalid)?;
             Ok(PermissionToken::Shield(id))
         }
         "unshield" => {
-            let id: AssetDefinitionId = parse_field(map, "target")?;
+            let id: AssetDefinitionId =
+                require_str(map, "target")?.parse().map_err(|_| VMError::NoritoInvalid)?;
             Ok(PermissionToken::Unshield(id))
         }
         "mint_asset" => {
-            let id: AssetDefinitionId = parse_field(map, "target")?;
+            let id: AssetDefinitionId =
+                require_str(map, "target")?.parse().map_err(|_| VMError::NoritoInvalid)?;
             Ok(PermissionToken::MintAsset(id))
         }
         "burn_asset" => {
-            let id: AssetDefinitionId = parse_field(map, "target")?;
+            let id: AssetDefinitionId =
+                require_str(map, "target")?.parse().map_err(|_| VMError::NoritoInvalid)?;
             Ok(PermissionToken::BurnAsset(id))
         }
         "transfer_asset" => {
-            let id: AssetDefinitionId = parse_field(map, "target")?;
+            let id: AssetDefinitionId =
+                require_str(map, "target")?.parse().map_err(|_| VMError::NoritoInvalid)?;
             Ok(PermissionToken::TransferAsset(id))
         }
         _ => Err(VMError::NoritoInvalid),
@@ -5994,7 +6014,7 @@ mod tests_null_decode {
     }
 
     #[test]
-    fn name_decode_rejects_reserved_chars() {
+    fn name_decode_rejects_non_norito_payload() {
         let caller: AccountId =
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
                 .parse()
@@ -6016,11 +6036,11 @@ mod tests_null_decode {
 
         let err = call_syscall(&mut vm, syscalls::SYSCALL_NAME_DECODE)
             .expect_err("expected reserved chars to be rejected");
-        assert!(matches!(err, VMError::NoritoInvalid));
+        assert!(matches!(err, VMError::DecodeError));
     }
 
     #[test]
-    fn json_decode_rejects_blob() {
+    fn json_decode_accepts_blob() {
         let caller: AccountId =
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
                 .parse()
@@ -6039,9 +6059,11 @@ mod tests_null_decode {
             .alloc_input_tlv(&make_tlv(PointerType::Blob, json))
             .expect("alloc tlv");
         vm.set_register(10, ptr);
-        let err = call_syscall(&mut vm, syscalls::SYSCALL_JSON_DECODE)
-            .expect_err("blob should be rejected");
-        assert!(matches!(err, VMError::NoritoInvalid));
+        call_syscall(&mut vm, syscalls::SYSCALL_JSON_DECODE).expect("blob should be accepted");
+        let out_ptr = vm.register(10);
+        assert_ne!(out_ptr, 0);
+        let out = vm.memory.validate_tlv(out_ptr).expect("validate tlv");
+        assert_eq!(out.type_id, PointerType::Json);
     }
 
     #[test]
