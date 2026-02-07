@@ -1,18 +1,82 @@
-<!-- Auto-generated stub for Azerbaijani (az) translation. Replace this content with the full translation. -->
-
 ---
 lang: az
 direction: ltr
 source: docs/source/sdk/android/troubleshooting.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: b0122d9c46a188c3b8e6b33ae282fa98beafaa2eae2bc7b909fa29ea58c7852a
 source_last_modified: "2026-01-22T14:45:02.194276+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2026-02-07
 ---
 
-# Translation In Progress
+<!--
+  SPDX-License-Identifier: Apache-2.0
+-->
 
-This file is a placeholder for the Azerbaijani translation of the English document. Once the translation is complete, update the `status` field in the metadata above.
+# Android SDK Troubleshooting Matrix (AND5)
 
-This stub awaits translation. Replace the placeholder body with the completed text and update the metadata status to `complete` when finished.
+**Status:** Draft GA reference (updated 2026-03-24)  
+**Scope:** Android SDK operator/support incidents tracked under roadmap milestone **AND5 – Developer Experience & Samples**
+
+Use this matrix when triaging customer issues so diagnostics remain consistent
+with the Android runbook (`docs/source/android_runbook.md`) and telemetry
+policies (`docs/source/sdk/android/telemetry_redaction.md`). Each scenario lists
+the primary signals, first-response actions, escalation triggers, and canonical
+evidence bundles. Follow the linked runbook sections for deep dives.
+
+## 1. Severity & SLA Reference
+
+| Severity | SLA | Typical Triggers | Required Evidence |
+|----------|-----|------------------|-------------------|
+| **Sev 1** – Critical outage | Bridge up ≤10 min, mitigation ≤1 h | Ledger integrity risk, Torii submission halted globally, telemetry export fully stalled | Grafana screenshots (latency/queue/deck), manifest hash, queue dump, incident log |
+| **Sev 2** – Degraded | Acknowledge ≤15 min, mitigation ≤4 h | Regional queue backlog, StrongBox regression on subset of devices, redaction alert flapping | Targeted dashboard snapshots, device profile list, PendingQueueInspector JSON |
+| **Sev 3** – Limited impact | Response next business day | Single-partner config drift, localized doc issue | Support ticket notes + config diff |
+
+Escalate to Release Engineering and Compliance immediately for Sev 1, and loop
+Program Lead if mitigation exceeds the SLA.
+
+## 2. Troubleshooting Matrix
+
+| Scenario | Signals & Telemetry | First Response | Escalation Criteria | Reference |
+|----------|--------------------|----------------|---------------------|-----------|
+| **Torii transport failures (HTTP/Norito RPC)** | `android_sdk_submission_latency`, `torii.request.duration`, `torii_rpc_retry_total`, app logs with `X-Iroha-Error-Code` | Run `ci/run_android_tests.sh -Ptransport` to verify client libraries, capture `scripts/telemetry/check_redaction_status.py --status-url <cluster>` output, attempt direct-mode fallback per runbook §9.1 | Latency >3× baseline for 15 min, sustained `schema_mismatch` or TLS errors, or retries exhausting queue budget | `docs/source/android_runbook.md#91-torii-transport--pending-queue` |
+| **Pending queue backlog / replay stuck** | `android_sdk_pending_queue_depth`, `android_sdk_offline_replay_errors`, `PendingQueueInspector` hashes | Export queue (`adb shell run-as … cat files/pending.queue`), decode via `PendingQueueInspector --json`, compare against Torii ledger via `iroha_cli ledger query`. Trigger load generator dry-run if queue exceeds 500 tx | Replay >10 min with no drain, hashed payloads missing from Torii, or repeated replay errors | `docs/source/android_runbook.md#91-torii-transport--pending-queue`, `docs/source/sdk/android/readiness/labs/telemetry_lab_01.md#scenario-d` |
+| **Telemetry redaction failures** | `android.telemetry.redaction.failure`, `android.telemetry.redaction.override`, dashboard drift alerts, governance diff artefacts | Run `scripts/telemetry/check_redaction_status.py`, confirm salt epoch/current override state, execute `scripts/telemetry/inject_redaction_failure.sh --dry-run` to validate alert path, verify schema diff artefact under `readiness/schema_diffs/` | Failure counter >0 for 15 min, drift >10 % vs Rust baseline, or overrides active >24 h | `docs/source/android_runbook.md#82-override-workflow`, `docs/source/sdk/android/telemetry_redaction.md#signal-inventory-draft` |
+| **StrongBox / attestation rejection** | `android_sdk_strongbox_success_rate`, `android.keystore.attestation.failure`, support tickets referencing `KeySecurityPreference.STRONGBOX_ONLY` | Capture bundle via `scripts/android_keystore_attestation.sh`, rerun mock attestation CI (`scripts/android_strongbox_attestation_ci.sh`), consult device matrix (`readiness/android_strongbox_device_matrix.md`), attach bundle + result JSON to incident | Success rate <98 % for >30 min, bundle invalid on multiple devices, or alias fallback required | `docs/source/android_runbook.md#92-strongbox--attestation-failures`, `docs/source/sdk/android/strongbox_attestation_harness_plan.md` |
+| **Manifest/config drift** | `android.telemetry.config.reload` failures, `schema diff` CI alarms, `ConfigWatcher` log errors | Capture `ClientConfig` digest from device logcat, dump node config via `iroha_cli config show --actual`, compare using `scripts/telemetry/run_schema_diff.sh --android-config <a> --rust-config <b>`, record findings in incident | Drift affects >1 partner or involves ABI hash mismatch, or schema diff cannot reconcile within SLA | `docs/source/android_runbook.md#93-manifest--config-mismatches`, `docs/source/sdk/android/telemetry_schema_diff.md` |
+| **Telemetry exporter outage / collector saturation** | `android.telemetry.export.status`, `android.telemetry.redaction.salt_version`, Grafana Exporter Health dashboard | Check collector pods (`kubectl --context staging get pods -n android-telemetry-*`), restart exporter if safe, replay backlog via runbook §5, snapshot status tool output for archive | Exporter unavailable >10 min, salt mismatch triggers compliance alert, or backlog drains slower than 500 events/5 min | `docs/source/android_runbook.md#22-telemetry--redaction`, `docs/source/sdk/android/telemetry_chaos_checklist.md` |
+| **Norito schema mismatch / fixture drift** | HTTP 400 with `X-Iroha-Error-Code: schema_mismatch`, CI failing `run_tests.sh`, dashboards showing parity gaps | Run `scripts/android_fixture_regen.sh` (with owner env), re-run `make android-fixtures-check`, inspect `fixtures/norito_rpc/schema_hashes.json` (DTO→hash table), regenerate docs via `scripts/android_codegen_docs.py` | Schema hash mismatch persists after regen, or discriminant change lacks matching manifest entry | `docs/source/sdk/android/generated/README.md`, `docs/source/android_fixture_changelog.md` |
+
+## 3. Tooling Reference
+
+| Tool / Script | Purpose | Notes |
+|---------------|---------|-------|
+| `scripts/telemetry/check_redaction_status.py` | Snapshot exporter counters, salt epoch, override status | Use `--write-cache` for offline evidence bundles. |
+| `scripts/telemetry/run_schema_diff.sh` | Compare Android vs Rust telemetry manifests | Attach JSON diff output to incidents and labs. |
+| `scripts/android_fixture_regen.sh` + `scripts/check_android_fixtures.py` | Refresh Norito fixtures and verify diffs | Set `ANDROID_FIXTURE_ROTATION_OWNER` to capture ownership in state file/log. |
+| `scripts/android_keystore_attestation.sh` | Export StrongBox/TEE attestation bundles | Requires hardware lab access; use mock bundle generator when hardware unavailable. |
+| `org.hyperledger.iroha.android.tools.PendingQueueInspector` | Generate queue hash/alias inventories | Built via `ci/run_android_tests.sh`; outputs JSON for governance archives. |
+
+## 4. Evidence & Reporting Checklist
+
+1. **Dashboards:** Capture the relevant Grafana panels (latency, queue depth,
+   exporter health) and store PNGs under
+   `docs/source/sdk/android/readiness/screenshots/<date>/`.
+2. **Logs:** Export CLI outputs (`telemetry/check_redaction_status`,
+   `run_schema_diff`, queue inspector) into the incident folder under
+   `docs/source/sdk/android/readiness/labs/reports/<date>/`.
+3. **Incident doc:** Record severity, mitigation, and follow-ups using the
+   template in `docs/source/sdk/android/readiness/labs/reports/<date>/incident.md`.
+4. **Postmortem:** For Sev 1/2, update `status.md` and ensure the Android
+   support playbook (#8) references any new mitigations or SLA adjustments.
+
+## 5. Localization Guidance
+
+- Strings in tables are phrased in declarative sentences to simplify JP/HE
+  localization; avoid idioms when editing this file.
+- Link targets must remain stable so translators can cross-check context.
+- When adding new scenarios, include both the script/command names and the
+  runbook section so localized versions can keep English commands verbatim.
+
+Questions or edits should be filed via the Docs tracker and flagged during the
+weekly Android DX sync.

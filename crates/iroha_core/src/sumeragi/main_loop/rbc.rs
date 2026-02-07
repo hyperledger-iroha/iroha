@@ -340,6 +340,13 @@ pub(super) fn apply_hydrated_payload(
     chunk_max_bytes: usize,
 ) -> HydrationOutcome {
     let mut outcome = HydrationOutcome::default();
+    if payload_bytes.is_empty() {
+        session.invalid = true;
+        outcome.updated = true;
+        outcome.layout_mismatch = true;
+        outcome.observed_chunks = Some(0);
+        return outcome;
+    }
     let chunk_bytes = chunk_payload_bytes(payload_bytes, chunk_max_bytes);
 
     let chunk_count = if let Ok(count) = u32::try_from(chunk_bytes.len()) {
