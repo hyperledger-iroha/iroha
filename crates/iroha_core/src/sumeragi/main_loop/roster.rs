@@ -30,7 +30,6 @@ pub(super) fn canonicalize_roster_for_mode(
     roster: Vec<PeerId>,
     _consensus_mode: ConsensusMode,
 ) -> Vec<PeerId> {
-    // Canonicalize for all modes to keep roster hashes stable across peers.
     canonicalize_roster(roster)
 }
 
@@ -313,9 +312,10 @@ fn roster_member_has_live_consensus_key(
     })
 }
 
-fn filter_roster_with_live_consensus_keys(
+pub(super) fn filter_roster_with_live_consensus_keys_at_height(
     view: &StateView<'_>,
     roster: Vec<PeerId>,
+    height: u64,
 ) -> Vec<PeerId> {
     let world = view.world();
     if world.consensus_keys().is_empty() {
@@ -325,9 +325,6 @@ fn filter_roster_with_live_consensus_keys(
     let sumeragi = params.sumeragi();
     let overlap_grace_blocks = sumeragi.key_overlap_grace_blocks;
     let expiry_grace_blocks = sumeragi.key_expiry_grace_blocks;
-    let height = u64::try_from(view.height())
-        .unwrap_or(u64::MAX)
-        .saturating_add(1);
     roster
         .into_iter()
         .filter(|peer| {
@@ -340,6 +337,16 @@ fn filter_roster_with_live_consensus_keys(
             )
         })
         .collect()
+}
+
+fn filter_roster_with_live_consensus_keys(
+    view: &StateView<'_>,
+    roster: Vec<PeerId>,
+) -> Vec<PeerId> {
+    let next_height = u64::try_from(view.height())
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
+    filter_roster_with_live_consensus_keys_at_height(view, roster, next_height)
 }
 
 #[allow(clippy::if_not_else)]

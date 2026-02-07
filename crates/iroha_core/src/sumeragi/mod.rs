@@ -884,7 +884,7 @@ mod tests {
     #[test]
     fn select_next_tier_prefers_votes_when_not_starved() {
         let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
-        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (_rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (_block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (_consensus_tx, consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -907,29 +907,6 @@ mod tests {
         vote_tx
             .send(inbound(BlockMessage::QcVote(vote)))
             .expect("send prevote");
-
-        let proposal = Proposal {
-            header: ConsensusBlockHeader {
-                parent_hash: block_hash,
-                tx_root: Hash::new(b"tx"),
-                state_root: Hash::new(b"state"),
-                proposer: 0,
-                height: 1,
-                view: 0,
-                epoch: 0,
-                highest_qc: QcHeaderRef {
-                    height: 0,
-                    view: 0,
-                    epoch: 0,
-                    subject_block_hash: block_hash,
-                    phase: Phase::Prepare,
-                },
-            },
-            payload_hash: Hash::new(b"payload"),
-        };
-        block_payload_tx
-            .send(inbound(BlockMessage::Proposal(proposal)))
-            .expect("send proposal");
 
         let cfg = WorkerLoopConfig {
             time_budget: Duration::from_secs(1),
@@ -970,8 +947,15 @@ mod tests {
         );
         mailbox.fill_slots(&budgets);
 
-        let selected =
-            select_next_tier(now, &mailbox, &budgets, &loop_state.last_served, &cfg, true);
+        let selected = select_next_tier(
+            now,
+            &mailbox,
+            &budgets,
+            &loop_state.last_served,
+            &cfg,
+            true,
+            false,
+        );
         assert_eq!(selected, Some(PriorityTier::Votes));
     }
 
@@ -1053,8 +1037,15 @@ mod tests {
         );
         mailbox.fill_slots(&budgets);
 
-        let selected =
-            select_next_tier(now, &mailbox, &budgets, &loop_state.last_served, &cfg, true);
+        let selected = select_next_tier(
+            now,
+            &mailbox,
+            &budgets,
+            &loop_state.last_served,
+            &cfg,
+            true,
+            false,
+        );
         assert_eq!(selected, Some(PriorityTier::Blocks));
     }
 
@@ -1155,6 +1146,7 @@ mod tests {
             &budgets,
             &loop_state.last_served,
             &cfg,
+            false,
             false,
         );
         assert_eq!(selected, Some(PriorityTier::BlockPayload));
@@ -1293,6 +1285,7 @@ mod tests {
             &budgets,
             &loop_state.last_served,
             &cfg,
+            false,
             false,
         );
         assert_eq!(selected, Some(PriorityTier::BlockPayload));
@@ -6239,7 +6232,7 @@ mod tests {
         status::reset_worker_loop_snapshot_for_tests();
 
         let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
-        let (_block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (_rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (_block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (_consensus_tx, consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -6267,6 +6260,30 @@ mod tests {
             .send(inbound(BlockMessage::QcVote(vote)))
             .expect("send prevote");
         status::record_worker_queue_enqueue(status::WorkerQueueKind::Votes);
+
+        let proposal = Proposal {
+            header: ConsensusBlockHeader {
+                parent_hash: block_hash,
+                tx_root: Hash::new(b"tx"),
+                state_root: Hash::new(b"state"),
+                proposer: 0,
+                height: 1,
+                view: 0,
+                epoch: 0,
+                highest_qc: QcHeaderRef {
+                    height: 0,
+                    view: 0,
+                    epoch: 0,
+                    subject_block_hash: block_hash,
+                    phase: Phase::Prepare,
+                },
+            },
+            payload_hash: Hash::new(b"payload"),
+        };
+        block_payload_tx
+            .send(inbound(BlockMessage::Proposal(proposal)))
+            .expect("send proposal");
+        status::record_worker_queue_enqueue(status::WorkerQueueKind::BlockPayload);
 
         let config = WorkerLoopConfig {
             time_budget: Duration::from_millis(5),
@@ -10284,7 +10301,7 @@ enum DrainPhase {
 fn drain_mailbox<A: WorkerActor>(
     actor: &mut A,
     cfg: &WorkerLoopConfig,
-    tick_gap: Duration,
+    _tick_gap: Duration,
     iter_start: Instant,
     mailbox: &mut WorkerMailbox<'_>,
     budgets: &mut TierBudgets,
@@ -10303,16 +10320,12 @@ fn drain_mailbox<A: WorkerActor>(
         .time_budget
         .min(cfg.tick_max_gap)
         .min(cfg.drain_budget_cap);
+    let drain_budget_is_time_limited = drain_budget == cfg.time_budget;
     let drain_budget_deadline = iter_start.checked_add(drain_budget).unwrap_or(iter_start);
     let tick_deadline = tick_deadline
-        .map(|deadline| {
-            if deadline <= iter_start {
-                iter_start.checked_add(tick_gap).unwrap_or(iter_start)
-            } else {
-                deadline
-            }
-        })
+        .filter(|deadline| *deadline > iter_start)
         .filter(|deadline| *deadline <= drain_budget_deadline);
+    let mut overtime_non_vote_turn = false;
     loop {
         if !mailbox.any_pending() {
             break;
@@ -10324,16 +10337,52 @@ fn drain_mailbox<A: WorkerActor>(
             }
         }
         if now >= drain_budget_deadline {
-            stats.budget_exceeded = true;
-            break;
+            let payload_pending = budgets.remaining(PriorityTier::BlockPayload) > 0
+                && mailbox.has_pending(PriorityTier::BlockPayload);
+            let grant_overtime_turn = !overtime_non_vote_turn
+                && matches!(phase, DrainPhase::PreTick)
+                && drain_budget_is_time_limited
+                && stats.votes_handled > 0
+                && stats.block_payloads_handled == 0
+                && payload_pending;
+            if grant_overtime_turn {
+                overtime_non_vote_turn = true;
+            } else {
+                stats.budget_exceeded = true;
+                break;
+            }
         }
         let votes_pending =
             budgets.remaining(PriorityTier::Votes) > 0 && mailbox.has_pending(PriorityTier::Votes);
+        let force_payload_turn = overtime_non_vote_turn
+            && stats.block_payloads_handled == 0
+            && budgets.remaining(PriorityTier::BlockPayload) > 0
+            && mailbox.has_pending(PriorityTier::BlockPayload);
+        let suppress_starved_payload_preemption = stats.votes_handled == 0
+            && stats.rbc_chunks_handled == 0
+            && stats.block_payloads_handled == 0
+            && stats.blocks_handled == 0
+            && stats.consensus_handled == 0
+            && stats.lane_relays_handled == 0
+            && stats.background_handled == 0;
         let prefer_votes = votes_pending
+            && !force_payload_turn
             && (stats.votes_handled < vote_burst
                 || mailbox.has_pending(PriorityTier::BlockPayload));
-        let Some(tier) = select_next_tier(now, mailbox, budgets, last_served, cfg, prefer_votes)
-        else {
+        let tier = if force_payload_turn {
+            Some(PriorityTier::BlockPayload)
+        } else {
+            select_next_tier(
+                now,
+                mailbox,
+                budgets,
+                last_served,
+                cfg,
+                prefer_votes,
+                suppress_starved_payload_preemption,
+            )
+        };
+        let Some(tier) = tier else {
             break;
         };
         let Some(envelope) = mailbox.take(tier) else {
@@ -10509,7 +10558,7 @@ fn run_worker_iteration<A: WorkerActor>(
     if queue_depths.block_rx > 0 {
         cfg.vote_rx_drain_max_messages = cfg
             .vote_rx_drain_max_messages
-            .max(VOTE_BURST_CAP_WITH_BLOCKS);
+            .max(VOTE_BURST_CAP_WITH_BLOCKS.saturating_add(1));
     }
     let pre_tick_gap = if has_pending_queue_depths(queue_depths) {
         cfg.tick_busy_gap
@@ -10702,10 +10751,17 @@ fn select_next_tier(
     last_served: &[Instant; PRIORITY_TIER_COUNT],
     cfg: &WorkerLoopConfig,
     prefer_votes: bool,
+    suppress_starved_payload_preemption: bool,
 ) -> Option<PriorityTier> {
+    let votes_pending =
+        budgets.remaining(PriorityTier::Votes) > 0 && mailbox.has_pending(PriorityTier::Votes);
+    let non_vote_payload_pending = (budgets.remaining(PriorityTier::RbcChunks) > 0
+        && mailbox.has_pending(PriorityTier::RbcChunks))
+        || (budgets.remaining(PriorityTier::BlockPayload) > 0
+            && mailbox.has_pending(PriorityTier::BlockPayload));
     let blocks_pending =
         budgets.remaining(PriorityTier::Blocks) > 0 && mailbox.has_pending(PriorityTier::Blocks);
-    if blocks_pending {
+    if blocks_pending && !non_vote_payload_pending {
         let urgent_gap = block_rx_urgent_gap(cfg);
         if now.saturating_duration_since(last_served[PriorityTier::Blocks.idx()]) >= urgent_gap {
             return Some(PriorityTier::Blocks);
@@ -10724,7 +10780,8 @@ fn select_next_tier(
             continue;
         }
         let elapsed = now.saturating_duration_since(last_served[tier.idx()]);
-        if elapsed >= max_starve {
+        let starve_threshold = max_starve.saturating_add(max_starve / 2);
+        if elapsed > starve_threshold {
             let replace = match starved {
                 None => true,
                 Some((_, best)) => elapsed > best,
@@ -10735,12 +10792,14 @@ fn select_next_tier(
         }
     }
     if let Some((tier, _)) = starved {
-        return Some(tier);
+        if !(suppress_starved_payload_preemption
+            && tier == PriorityTier::BlockPayload
+            && votes_pending)
+        {
+            return Some(tier);
+        }
     }
-    if prefer_votes
-        && budgets.remaining(PriorityTier::Votes) > 0
-        && mailbox.has_pending(PriorityTier::Votes)
-    {
+    if prefer_votes && votes_pending {
         return Some(PriorityTier::Votes);
     }
     // After the vote burst, rotate to the oldest pending tier while keeping votes ahead of

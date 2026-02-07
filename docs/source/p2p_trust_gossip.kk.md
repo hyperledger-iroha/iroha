@@ -1,0 +1,18 @@
+<!-- Auto-generated stub for Kazakh (kk) translation. Replace this content with the full translation. -->
+
+---
+lang: kk
+direction: ltr
+source: docs/source/p2p_trust_gossip.md
+status: needs-translation
+generator: scripts/sync_docs_i18n.py
+source_hash: 19912eba5930ce21483d018a6dd846fb38a4f2060013e5cdcf8dd1173a0a9aa7
+source_last_modified: "2025-12-29T18:16:36.006735+00:00"
+translation_last_reviewed: null
+---
+
+# Translation In Progress
+
+This file is a placeholder for the Kazakh translation of the English document. Once the translation is complete, update the `status` field in the metadata above.
+
+This stub awaits translation. Replace the placeholder body with the completed text and update the metadata status to `complete` when finished.

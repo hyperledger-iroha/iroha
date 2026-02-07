@@ -1,0 +1,18 @@
+<!-- Auto-generated stub for Chinese (Traditional) (zh-hant) translation. Replace this content with the full translation. -->
+
+---
+lang: zh-hant
+direction: ltr
+source: docs/source/sorafs/developer/orchestrator_tuning.md
+status: needs-translation
+generator: scripts/sync_docs_i18n.py
+source_hash: e220b21c725b607416869d20b3f39c58bba011a701eefbeb376c6cca7f09029d
+source_last_modified: "2026-01-22T14:45:02.131411+00:00"
+translation_last_reviewed: null
+---
+
+# Translation In Progress
+
+This file is a placeholder for the Chinese (Traditional) translation of the English document. Once the translation is complete, update the `status` field in the metadata above.
+
+This stub awaits translation. Replace the placeholder body with the completed text and update the metadata status to `complete` when finished.

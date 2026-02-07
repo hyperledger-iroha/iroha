@@ -1,0 +1,18 @@
+<!-- Auto-generated stub for Amharic (Ethiopian) (am) translation. Replace this content with the full translation. -->
+
+---
+lang: am
+direction: ltr
+source: docs/portal/docs/sorafs/taikai-monitoring-dashboards.md
+status: needs-translation
+generator: scripts/sync_docs_i18n.py
+source_hash: f5f8db3cc2a4255f29c4a196c14f7c14dcdf9019a0dc6e6a55ba4a9037815e58
+source_last_modified: "2025-12-29T18:16:35.205443+00:00"
+translation_last_reviewed: null
+---
+
+# Translation In Progress
+
+This file is a placeholder for the Amharic (Ethiopian) translation of the English document. Once the translation is complete, update the `status` field in the metadata above.
+
+This stub awaits translation. Replace the placeholder body with the completed text and update the metadata status to `complete` when finished.

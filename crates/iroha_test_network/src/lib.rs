@@ -3152,6 +3152,13 @@ fn resolve_actual_config(
     for layer in config_layers {
         merge_tables(&mut merged, layer);
     }
+    parse_actual_config_for_genesis(merged, config_layers)
+}
+
+fn parse_actual_config_for_genesis(
+    merged: Table,
+    config_layers: &[Table],
+) -> Option<iroha_config::parameters::actual::Root> {
     let user = match ConfigReader::new()
         .with_env(MockEnv::default())
         .with_toml_source(TomlSource::inline(merged))
@@ -3164,7 +3171,13 @@ fn resolve_actual_config(
         }
     };
     match user.parse() {
-        Ok(config) => Some(config),
+        Ok(mut config) => {
+            if config_requires_sora_profile(config_layers) {
+                config.apply_sora_profile();
+            }
+            config.apply_storage_budget();
+            Some(config)
+        }
         Err(err) => {
             warn!(?err, "failed to parse merged config for genesis config");
             None
@@ -3860,7 +3873,12 @@ impl NetworkBuilder {
         sumeragi_parameters.retain(|param| !matches!(param, SumeragiParameter::DaEnabled(_)));
         sumeragi_parameters.push(SumeragiParameter::DaEnabled(da_enabled));
 
-        let consensus_mode = resolve_consensus_mode_from_config(&merged_sumeragi);
+        let use_sora_profile = config_requires_sora_profile(&config_layers);
+        let mut consensus_mode = resolve_consensus_mode_from_config(&merged_sumeragi);
+        if use_sora_profile && !matches!(consensus_mode, ConsensusMode::Npos) {
+            warn!("Sora profile detection forces NPoS consensus mode in test-network genesis");
+            consensus_mode = ConsensusMode::Npos;
+        }
 
         let peers: Vec<_> = (0..n_peers)
             .map(|i| {
@@ -8347,6 +8365,39 @@ exit 0
         assert_eq!(
             genesis.0.header().da_proof_policies_hash(),
             Some(HashOf::new(&policies))
+        );
+    }
+
+    #[test]
+    fn resolve_actual_config_applies_sora_profile_when_required() {
+        let config_layers = vec![Table::new().write(["sorafs", "storage", "enabled"], true)];
+
+        assert!(
+            config_requires_sora_profile(&config_layers),
+            "SoraFS-enabled configs should trigger --sora profile detection"
+        );
+
+        let mut merged = sora_profile_detection_defaults();
+        for layer in &config_layers {
+            merge_tables(&mut merged, layer);
+        }
+        apply_streaming_identity_defaults_for_detection(&mut merged);
+        ensure_sora_profile_trusted_peer_pop(&mut merged);
+
+        let actual = parse_actual_config_for_genesis(merged, &config_layers)
+            .expect("should resolve runtime-equivalent config");
+        assert_eq!(
+            actual.sumeragi.consensus_mode,
+            ConsensusMode::Npos,
+            "Sora profile should force NPoS consensus mode"
+        );
+        assert!(
+            actual.nexus.enabled,
+            "Sora profile should enable nexus in resolved config"
+        );
+        assert!(
+            actual.nexus.lane_config.entries().len() > 1,
+            "Sora profile should expand lane catalog beyond single-lane defaults"
         );
     }
 

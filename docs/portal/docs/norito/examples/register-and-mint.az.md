@@ -1,0 +1,18 @@
+<!-- Auto-generated stub for Azerbaijani (az) translation. Replace this content with the full translation. -->
+
+---
+lang: az
+direction: ltr
+source: docs/portal/docs/norito/examples/register-and-mint.md
+status: needs-translation
+generator: scripts/sync_docs_i18n.py
+source_hash: 19babc3c24608a2eaaff8d205392c10a46f044feb91dd22c3cff4d7a0d12d542
+source_last_modified: "2026-01-22T16:26:46.501854+00:00"
+translation_last_reviewed: null
+---
+
+# Translation In Progress
+
+This file is a placeholder for the Azerbaijani translation of the English document. Once the translation is complete, update the `status` field in the metadata above.
+
+This stub awaits translation. Replace the placeholder body with the completed text and update the metadata status to `complete` when finished.
