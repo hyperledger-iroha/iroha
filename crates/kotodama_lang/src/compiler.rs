@@ -5025,13 +5025,18 @@ impl Compiler {
                                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
                             );
                             code.extend_from_slice(&pub_word.to_le_bytes());
+                            // Both args must be in INPUT for pointer-ABI validation.
+                            push_word(&mut code, encode_addi(scratch2, 10, 0)?);
                             if let Some(s) = string_map.get(&(func_idx, *key)) {
                                 let kb = DataKey(DataKind::Name, s.clone());
-                                emit_literal_stub(&mut code, &mut fixups, 11, kb);
+                                emit_literal_stub(&mut code, &mut fixups, 10, kb);
                             } else {
                                 let r = src_reg(key, scratch1, &mut code)?;
-                                push_word(&mut code, encode_addi(11, r, 0)?);
+                                push_word(&mut code, encode_addi(10, r, 0)?);
                             }
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(11, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, scratch2, 0)?);
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_JSON_GET_I64 as u8,
@@ -5063,13 +5068,18 @@ impl Compiler {
                                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
                             );
                             code.extend_from_slice(&pub_word.to_le_bytes());
+                            // Both args must be in INPUT for pointer-ABI validation.
+                            push_word(&mut code, encode_addi(scratch2, 10, 0)?);
                             if let Some(s) = string_map.get(&(func_idx, *key)) {
                                 let kb = DataKey(DataKind::Name, s.clone());
-                                emit_literal_stub(&mut code, &mut fixups, 11, kb);
+                                emit_literal_stub(&mut code, &mut fixups, 10, kb);
                             } else {
                                 let r = src_reg(key, scratch1, &mut code)?;
-                                push_word(&mut code, encode_addi(11, r, 0)?);
+                                push_word(&mut code, encode_addi(10, r, 0)?);
                             }
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(11, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, scratch2, 0)?);
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_JSON_GET_JSON as u8,
@@ -5101,13 +5111,18 @@ impl Compiler {
                                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
                             );
                             code.extend_from_slice(&pub_word.to_le_bytes());
+                            // Both args must be in INPUT for pointer-ABI validation.
+                            push_word(&mut code, encode_addi(scratch2, 10, 0)?);
                             if let Some(s) = string_map.get(&(func_idx, *key)) {
                                 let kb = DataKey(DataKind::Name, s.clone());
-                                emit_literal_stub(&mut code, &mut fixups, 11, kb);
+                                emit_literal_stub(&mut code, &mut fixups, 10, kb);
                             } else {
                                 let r = src_reg(key, scratch1, &mut code)?;
-                                push_word(&mut code, encode_addi(11, r, 0)?);
+                                push_word(&mut code, encode_addi(10, r, 0)?);
                             }
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(11, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, scratch2, 0)?);
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_JSON_GET_NAME as u8,
@@ -5139,13 +5154,18 @@ impl Compiler {
                                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
                             );
                             code.extend_from_slice(&pub_word.to_le_bytes());
+                            // Both args must be in INPUT for pointer-ABI validation.
+                            push_word(&mut code, encode_addi(scratch2, 10, 0)?);
                             if let Some(s) = string_map.get(&(func_idx, *key)) {
                                 let kb = DataKey(DataKind::Name, s.clone());
-                                emit_literal_stub(&mut code, &mut fixups, 11, kb);
+                                emit_literal_stub(&mut code, &mut fixups, 10, kb);
                             } else {
                                 let r = src_reg(key, scratch1, &mut code)?;
-                                push_word(&mut code, encode_addi(11, r, 0)?);
+                                push_word(&mut code, encode_addi(10, r, 0)?);
                             }
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(11, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, scratch2, 0)?);
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_JSON_GET_ACCOUNT_ID as u8,
@@ -5177,13 +5197,18 @@ impl Compiler {
                                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
                             );
                             code.extend_from_slice(&pub_word.to_le_bytes());
+                            // Both args must be in INPUT for pointer-ABI validation.
+                            push_word(&mut code, encode_addi(scratch2, 10, 0)?);
                             if let Some(s) = string_map.get(&(func_idx, *key)) {
                                 let kb = DataKey(DataKind::Name, s.clone());
-                                emit_literal_stub(&mut code, &mut fixups, 11, kb);
+                                emit_literal_stub(&mut code, &mut fixups, 10, kb);
                             } else {
                                 let r = src_reg(key, scratch1, &mut code)?;
-                                push_word(&mut code, encode_addi(11, r, 0)?);
+                                push_word(&mut code, encode_addi(10, r, 0)?);
                             }
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(11, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, scratch2, 0)?);
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_JSON_GET_NFT_ID as u8,
@@ -5215,13 +5240,18 @@ impl Compiler {
                                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
                             );
                             code.extend_from_slice(&pub_word.to_le_bytes());
+                            // Both args must be in INPUT for pointer-ABI validation.
+                            push_word(&mut code, encode_addi(scratch2, 10, 0)?);
                             if let Some(s) = string_map.get(&(func_idx, *key)) {
                                 let kb = DataKey(DataKind::Name, s.clone());
-                                emit_literal_stub(&mut code, &mut fixups, 11, kb);
+                                emit_literal_stub(&mut code, &mut fixups, 10, kb);
                             } else {
                                 let r = src_reg(key, scratch1, &mut code)?;
-                                push_word(&mut code, encode_addi(11, r, 0)?);
+                                push_word(&mut code, encode_addi(10, r, 0)?);
                             }
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(11, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, scratch2, 0)?);
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_JSON_GET_BLOB_HEX as u8,
