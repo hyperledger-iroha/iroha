@@ -6,40 +6,41 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: c5fe52a907606a67a09e0ff229adb94f91dda73d809d8a8344166862dc62def9
 source_last_modified: "2026-01-03T18:07:57.090255+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Template for recording SM rollout decisions during Crypto WG syncs.
+//! قالب لتسجيل قرارات طرح SM أثناء مزامنة Crypto WG.
 
-# SM Rollout – WG Sync Notes (Template)
+# SM Rollout - ملاحظات مزامنة WG (قالب)
 
-- **Date:** 2025-__-__
-- **Participants:** Crypto WG core, Release Eng, Security Review, SDK leads
-- **Facilitator:** ___________________
+- **التاريخ:** 2025-__-__
+- **المشاركين:** Crypto WG core، ومهندس الإصدار، ومراجعة الأمان، وقيادات SDK
+- **الميسر:** ___________________
 
-## Agenda
-1. Lock refresh approval (`sm_lock_refresh_plan.md`)
-2. Deterministic policy & config knobs (SM-1/SM-3 tasks)
-3. Compliance brief status (SM-6a complete) & operator checklist updates (SM-6b)
-4. Dependency audit reviewers for `sm2`, `sm3`, `sm4`, `rfc6979`
+## جدول الأعمال
+1. الموافقة على تحديث القفل (`sm_lock_refresh_plan.md`)
+2. السياسة الحتمية ومقابض التكوين (مهام SM-1/SM-3)
+3. حالة موجز الامتثال (اكتمل SM-6a) وتحديثات قائمة مراجعة المشغل (SM-6b)
+4. مراجعو تدقيق التبعيات لـ `sm2`، `sm3`، `sm4`، `rfc6979`
 
-## Decisions
-- [ ] Lock refresh approved? Details:
-- [ ] Deterministic policy affirmed? Notes:
-- [ ] Compliance brief owner + due date:
-- [ ] Audit reviewers assigned:
+## القرارات
+- [ ] تمت الموافقة على تحديث القفل؟ التفاصيل:
+- [ ] تأكيد السياسة الحتمية؟ ملاحظات:
+- [ ] ملخص الامتثال + تاريخ الاستحقاق:
+- [ ] تم تعيين مراجعي التدقيق:
 
-## Action Items
-| Item | Owner | Due | Status |
+## عناصر العمل
+| العنصر | المالك | مستحق | الحالة |
 |------|-------|-----|--------|
-| Prepare Cargo.lock PR after approval | Release Eng | ████ | ☐ |
-| Verify Annex D OpenSSL checks | Crypto WG | ████ | ☐ |
-| Track compliance brief revisions & operator checklist addenda | Docs/Legal | ████ | ☐ |
+| قم بإعداد Cargo.lock PR بعد الموافقة | الافراج عن المهندس | ████ | ☐ |
+| تحقق من عمليات التحقق من الملحق D OpenSSL | مجموعة عمل التشفير | ████ | ☐ |
+| تتبع المراجعات الموجزة للامتثال وإضافات قائمة مراجعة المشغل | مستندات/قانونية | ████ | ☐ |
 
-## Notes / Risks
+## ملاحظات / المخاطر
 - _______________________________
 - _______________________________
 
-## Follow-up
-- Next review date:
-- Reporting back channel:
+##متابعة
+- موعد المراجعة القادم:
+- الإبلاغ عن القناة الخلفية:

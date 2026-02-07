@@ -6,28 +6,29 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 1f133d9489c4bcfae2212e6c5dc098f39c3dea3e5cd42855ba76e8c9b73b4d03
 source_last_modified: "2026-01-03T18:07:57.103009+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Notes for the RustCrypto SM integration spike.
+//! روسٹ کریپٹو ایس ایم انضمام اسپائک کے لئے نوٹس۔
 
-# RustCrypto SM Spike Notes
+# Rustcrypto SM سپائیک نوٹس
 
-## Objective
-Validate that introducing RustCrypto’s `sm2`, `sm3`, and `sm4` crates (plus `rfc6979`, `ccm`, `gcm`) as optional dependencies compiles cleanly in the `iroha_crypto` crate and yields acceptable build times before wiring the feature flag into the wider workspace.
+## مقصد
+اس بات کی توثیق کریں کہ Rustcrypto کے `sm2` ، `sm3` ، اور `sm4` کریٹس (پلس `rfc6979` ، `ccm` ، `ccm`) کو `gcm`) کے طور پر `gcm`) کے طور پر اختیاری انحصار کو واضح طور پر تیار کیا گیا ہے۔ وسیع تر ورک اسپیس میں فیچر پرچم۔
 
-## Proposed Dependency Map
+## مجوزہ انحصار کا نقشہ
 
-| Crate | Suggested Version | Features | Notes |
-|-------|-------------------|----------|-------|
-| `sm2` | `0.13` (RustCrypto/signatures) | `std` | Depends on `elliptic-curve`; verify MSRV matches workspace. |
-| `sm3` | `0.5.0-rc.1` (RustCrypto/hashes) | default | API parallels `sha2`, integrates with existing `digest` traits. |
-| `sm4` | `0.5.1` (RustCrypto/block-ciphers) | default | Works with cipher traits; AEAD wrappers deferred to later spike. |
-| `rfc6979` | `0.4` | default | Reuse for deterministic nonce derivation. |
+| کریٹ | تجویز کردہ ورژن | خصوصیات | نوٹ |
+| ------- | ------------------- | ------------ | ------- |
+| `sm2` | `0.13` (rustcrypto/دستخط) | `std` | `elliptic-curve` پر منحصر ہے ؛ ایم ایس آر وی کے میچ اسپیس سے میچز کی تصدیق کریں۔ |
+| `sm3` | `0.5.0-rc.1` (rustcrypto/hases) | ڈیفالٹ | API متوازی `sha2` ، موجودہ `digest` خصلتوں کے ساتھ مربوط ہے۔ |
+| `sm4` | `0.5.1` (rustcrypto/block-ciphers) | ڈیفالٹ | سائفر کی خصوصیات کے ساتھ کام کرتا ہے۔ AEAD ریپرز نے بعد میں سپائیک کو موخر کردیا۔ |
+| `rfc6979` | `0.4` | ڈیفالٹ | تعصب پسند نونس سے ماخوذ کے لئے دوبارہ استعمال کریں۔ |
 
-*Versions reflect current releases as of 2024-12; confirm with `cargo search` before landing.*
+*ورژن 2024-12 تک موجودہ ریلیز کی عکاسی کرتے ہیں۔ لینڈنگ سے پہلے `cargo search` کے ساتھ تصدیق کریں۔*
 
-## Manifest Changes (draft)
+## ظاہر تبدیلیاں (مسودہ)
 
 ```toml
 [features]
@@ -40,34 +41,32 @@ sm4 = { version = "0.5.1", optional = true }
 rfc6979 = { version = "0.4", optional = true, default-features = false }
 ```
 
-Follow-up: pin `elliptic-curve` to match versions already in `iroha_crypto` (currently `0.13.8`).
+فالو اپ: `iroha_crypto` (فی الحال `0.13.8`) میں ورژن سے ملنے کے لئے `elliptic-curve`۔
 
-## Spike Checklist
-- [x] Add optional dependencies and feature to `crates/iroha_crypto/Cargo.toml`.
-- [x] Create `signature::sm` module behind `cfg(feature = "sm")` with placeholder structs to confirm wiring.
-- [x] Run `cargo check -p iroha_crypto --features sm` to confirm compile; record build time and new dependency count (`cargo tree --features sm`).
-- [x] Confirm the std-only posture with `cargo check -p iroha_crypto --features sm --locked`; `no_std` builds are no longer supported.
-- [x] File results (timings, dependency tree delta) in `docs/source/crypto/sm_program.md`.
+## اسپائک چیک لسٹ
+- [x] `crates/iroha_crypto/Cargo.toml` میں اختیاری انحصار اور خصوصیت شامل کریں۔
+- [x] وائرنگ کی تصدیق کے ل place پلیس ہولڈر ڈھانچے کے ساتھ `cfg(feature = "sm")` کے پیچھے `signature::sm` ماڈیول بنائیں۔
+- [x] مرتب کی تصدیق کے لئے `cargo check -p iroha_crypto --features sm` چلائیں ؛ ریکارڈ بنانے کا وقت اور نئی انحصار کی گنتی (`cargo tree --features sm`)۔
+- [x] `cargo check -p iroha_crypto --features sm --locked` کے ساتھ صرف STD-صرف کرنسی کی تصدیق کریں۔ `no_std` بلڈز کی حمایت نہیں کی جاتی ہے۔
+- [x] `docs/source/crypto/sm_program.md` میں فائل کے نتائج (اوقات ، انحصار درخت ڈیلٹا)۔
 
-## Observations To Capture
-- Additional compile time vs. baseline.
-- Binary size impact (if measurable) with `cargo builtinsize`.
-- Any MSRV or feature conflicts (e.g., with `elliptic-curve` minor versions).
-- Warnings emitted (unsafe code, const-fn gating) that may require upstream patches.
+## قبضہ کرنے کے مشاہدات
+- اضافی مرتب کا وقت بمقابلہ بیس لائن۔
+- `cargo builtinsize` کے ساتھ بائنری سائز کا اثر (اگر پیمائش قابل)۔
+- کوئی بھی MSRV یا خصوصیت کے تنازعات (جیسے `elliptic-curve` معمولی ورژن کے ساتھ)۔
+- انتباہات خارج (غیر محفوظ کوڈ ، کونسٹ-ایف این گیٹنگ) جس میں اپ اسٹریم پیچ کی ضرورت پڑسکتی ہے۔
 
-## Pending Items
-- Await Crypto WG approval before inflating workspace dependency graph.
-- Confirm whether to vendor crates for review or rely on crates.io (mirrors may be required).
-- Coordinate `Cargo.lock` refresh per `sm_lock_refresh_plan.md` before marking checklist complete.
-- Use `scripts/sm_lock_refresh.sh` once approval is granted to regenerate the lockfile and dependency tree.
+## زیر التواء آئٹمز
+- ورک اسپیس انحصار گراف کو بڑھانے سے پہلے کریپٹو ڈبلیو جی کی منظوری کا انتظار کریں۔
+- اس بات کی تصدیق کریں کہ آیا جائزہ لینے کے لئے وینڈر کریٹ ہیں یا کریٹ.یو پر انحصار کریں (آئینے کی ضرورت ہوسکتی ہے)۔
+- چیک لسٹ کو مکمل نشان لگانے سے پہلے `Cargo.lock` ریفریش فی `sm_lock_refresh_plan.md` کو مربوط کریں۔
+- لاک فائل اور انحصار کے درخت کو دوبارہ تخلیق کرنے کے لئے منظوری دی جانے کے بعد `scripts/sm_lock_refresh.sh` استعمال کریں۔
 
-## 2025-01-19 Spike Log
-- Added optional dependencies (`sm2 0.13`, `sm3 0.5.0-rc.1`, `sm4 0.5.1`, `rfc6979 0.4`) and `sm` feature flag in `iroha_crypto`.
-- Stubbed `signature::sm` module to exercise hashing/block cipher APIs during compilation.
-- `cargo check -p iroha_crypto --features sm --locked` now resolves dependency graph but aborts with `Cargo.lock` update requirement; repository policy forbids lockfile edits, so the compile run remains pending until we coordinate an allowed lock refresh.
-
-## 2026-02-12 Spike Log
-- Resolved the previous lockfile blocker—the dependencies are already captured—so `cargo check -p iroha_crypto --features sm --locked` succeeds (cold build 7.9 s on dev Mac; incremental re-run 0.23 s).
-- `cargo check -p iroha_crypto --no-default-features --features "std sm" --locked` passes in 1.0 s, confirming the optional feature compiles in `std`-only configurations (no `no_std` path remains).
-- Dependency delta with the `sm` feature enabled introduces 11 crates: `base64ct`, `ghash`, `opaque-debug`, `pem-rfc7468`, `pkcs8`, `polyval`, `primeorder`, `sm2`, `sm3`, `sm4`, and `sm4-gcm`. (`rfc6979` was already part of the baseline graph.)
-- Build warnings persist for unused NEON policy helpers; leave as-is until the metering smoothing runtime re-enables those code paths.
+## 2025-01-19 اسپائک لاگ
+- شامل اختیاری انحصار (`sm2 0.13` ، `sm3 0.5.0-rc.1` ، `sm4 0.5.1` ، `rfc6979 0.4`) اور `sm` `iroha_crypto` میں فیچر پرچم۔
+- تالیف کے دوران ہیشنگ/بلاک سائفر APIs کے لئے ورزش کرنے کے لئے `signature::sm` ماڈیول کو ضائع کردیا۔
+- `cargo check -p iroha_crypto --features sm --locked` اب انحصار گراف کو حل کرتا ہے لیکن `Cargo.lock` اپ ڈیٹ کی ضرورت کے ساتھ اسقاط حمل کرتا ہے۔ ریپوزٹری پالیسی لاک فائل میں ترمیم سے منع کرتی ہے ، لہذا مرتب رن اس وقت تک زیر التواء رہتا ہے جب تک کہ ہم کسی لاک ریفریش کو مربوط نہ کریں۔## 2026-02-12 اسپائک لاگ
+- سابقہ ​​لاکفائل بلاکر کو حل کیا گیا ہے- انحصار پہلے ہی پکڑا گیا ہے- لہذا `cargo check -p iroha_crypto --features sm --locked` کامیاب ہوتا ہے (دیو میک پر کولڈ بلڈ 7.9s ؛ بڑھتی ہوئی دوبارہ رن 0.23s)۔
+- `cargo check -p iroha_crypto --no-default-features --features "std sm" --locked` 1.0s میں گزرتا ہے ، جس کی تصدیق `std` صرف کنفیگریشن میں ہوتی ہے (کوئی `no_std` راستہ باقی نہیں رہتا ہے)۔
+- `sm` کے ساتھ انحصار ڈیلٹا 11 کریٹس کو متعارف کراتا ہے: `base64ct` ، `ghash` ، `opaque-debug` ، `pem-rfc7468` ، `pkcs8` ، I18000055X ، `polyval` `sm2` ، `sm3` ، `sm4` ، اور `sm4-gcm`۔ (`rfc6979` پہلے ہی بیس لائن گراف کا حصہ تھا۔)
+- غیر استعمال شدہ نیین پالیسی مددگاروں کے لئے انتباہات برقرار رکھیں۔ اس وقت تک چھوڑ دیں جب تک کہ پیمائش کرنے والی ہموار رن ٹائم ان کوڈ کے راستوں کو دوبارہ قابل بنائے۔

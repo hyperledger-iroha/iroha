@@ -6,59 +6,60 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 70163ed6740c80c48c78ae918c37d34e0022ab97ffabce6d451bbf85060e24b4
 source_last_modified: "2026-01-22T15:38:30.661849+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Data Availability Replication Policy (DA-4)
+# Política de replicação de disponibilidade de dados (DA-4)
 
-_Status: In Progress — Owners: Core Protocol WG / Storage Team / SRE_
+_Status: Em andamento — Proprietários: Core Protocol WG / Storage Team / SRE_
 
-The DA ingestion pipeline now enforces deterministic retention targets for
-every blob class described in `roadmap.md` (workstream DA-4). Torii refuses to
-persist caller-provided retention envelopes that do not match the configured
-policy, guaranteeing that every validator/storage node retains the required
-number of epochs and replicas without relying on submitter intent.
+O pipeline de ingestão de DA agora impõe metas de retenção determinísticas para
+cada classe de blob descrita em `roadmap.md` (fluxo de trabalho DA-4). Torii se recusa a
+persistir envelopes de retenção fornecidos pelo chamador que não correspondem ao configurado
+política, garantindo que cada nó validador/armazenamento retenha o necessário
+número de épocas e réplicas sem depender da intenção do remetente.
 
-## Default policy
+## Política padrão
 
-| Blob class | Hot retention | Cold retention | Required replicas | Storage class | Governance tag |
+| Classe de blob | Retenção quente | Retenção de frio | Réplicas necessárias | Classe de armazenamento | Etiqueta de governança |
 |------------|---------------|----------------|-------------------|----------------|----------------|
-| `taikai_segment` | 24 hours | 14 days | 5 | `hot` | `da.taikai.live` |
-| `nexus_lane_sidecar` | 6 hours | 7 days | 4 | `warm` | `da.sidecar` |
-| `governance_artifact` | 12 hours | 180 days | 3 | `cold` | `da.governance` |
-| _Default (all other classes)_ | 6 hours | 30 days | 3 | `warm` | `da.default` |
+| `taikai_segment` | 24 horas | 14 dias | 5 | `hot` | `da.taikai.live` |
+| `nexus_lane_sidecar` | 6 horas | 7 dias | 4 | `warm` | `da.sidecar` |
+| `governance_artifact` | 12 horas | 180 dias | 3 | `cold` | `da.governance` |
+| _Padrão (todas as outras classes)_ | 6 horas | 30 dias | 3 | `warm` | `da.default` |
 
-These values are embedded in `torii.da_ingest.replication_policy` and applied to
-all `/v1/da/ingest` submissions. Torii rewrites manifests with the enforced
-retention profile and emits a warning when callers provide mismatched values so
-operators can detect stale SDKs.
+Esses valores estão incorporados em `torii.da_ingest.replication_policy` e aplicados a
+todos os envios `/v1/da/ingest`. Torii reescreve manifestos com o imposto
+perfil de retenção e emite um aviso quando os chamadores fornecem valores incompatíveis para
+os operadores podem detectar SDKs obsoletos.
 
-### Taikai availability classes
+### Aulas de disponibilidade de Taikai
 
-Taikai routing manifests (`taikai.trm` metadata) now include an
-`availability_class` hint (`Hot`, `Warm`, or `Cold`). When present, Torii
-selects the matching retention profile from `torii.da_ingest.replication_policy`
-before chunking the payload, allowing event operators to downgrade inactive
-renditions without editing the global policy table. The defaults are:
+Os manifestos de roteamento Taikai (metadados `taikai.trm`) agora incluem um
+Dica `availability_class` (`Hot`, `Warm` ou `Cold`). Quando presente, Torii
+seleciona o perfil de retenção correspondente de `torii.da_ingest.replication_policy`
+antes de dividir a carga útil, permitindo que os operadores de eventos façam downgrade
+representações sem editar a tabela de política global. Os padrões são:
 
-| Availability class | Hot retention | Cold retention | Required replicas | Storage class | Governance tag |
+| Classe de disponibilidade | Retenção quente | Retenção de frio | Réplicas necessárias | Classe de armazenamento | Etiqueta de governança |
 |--------------------|---------------|----------------|-------------------|----------------|----------------|
-| `hot` | 24 hours | 14 days | 5 | `hot` | `da.taikai.live` |
-| `warm` | 6 hours | 30 days | 4 | `warm` | `da.taikai.warm` |
-| `cold` | 1 hour | 180 days | 3 | `cold` | `da.taikai.archive` |
+| `hot` | 24 horas | 14 dias | 5 | `hot` | `da.taikai.live` |
+| `warm` | 6 horas | 30 dias | 4 | `warm` | `da.taikai.warm` |
+| `cold` | 1 hora | 180 dias | 3 | `cold` | `da.taikai.archive` |
 
-If the manifest omits `availability_class`, the ingest path falls back to the
-`hot` profile so live streams keep their full replica set. Operators can
-override these values by editing the new
-`torii.da_ingest.replication_policy.taikai_availability` block in configuration.
+Se o manifesto omitir `availability_class`, o caminho de ingestão retornará ao
+Perfil `hot` para que as transmissões ao vivo mantenham seu conjunto completo de réplicas. Os operadores podem
+substitua esses valores editando o novo
+Bloco `torii.da_ingest.replication_policy.taikai_availability` na configuração.
 
-## Configuration
+## Configuração
 
-The policy lives under `torii.da_ingest.replication_policy` and exposes a
-*default* template plus an array of per-class overrides. Class identifiers are
-case-insensitive and accept `taikai_segment`, `nexus_lane_sidecar`,
-`governance_artifact`, or `custom:<u16>` for governance-approved extensions.
-Storage classes accept `hot`, `warm`, or `cold`.
+A política está sob `torii.da_ingest.replication_policy` e expõe um
+Modelo *padrão* mais uma série de substituições por classe. Os identificadores de classe são
+não diferencia maiúsculas de minúsculas e aceita `taikai_segment`, `nexus_lane_sidecar`,
+`governance_artifact` ou `custom:<u16>` para extensões aprovadas pela governança.
+As classes de armazenamento aceitam `hot`, `warm` ou `cold`.
 
 ```toml
 [torii.da_ingest.replication_policy.default_retention]
@@ -78,11 +79,9 @@ storage_class = "hot"
 governance_tag = "da.taikai.live"
 ```
 
-Leave the block untouched to run with the defaults listed above. To tighten a
-class, update the matching override; to change the baseline for new classes,
-edit `default_retention`.
-
-To adjust specific Taikai availability classes, add entries under
+Deixe o bloco intacto para executar com os padrões listados acima. Para apertar um
+class, atualize a substituição correspondente; para alterar a linha de base para novas classes,
+edite `default_retention`.Para ajustar classes específicas de disponibilidade do Taikai, adicione entradas em
 `torii.da_ingest.replication_policy.taikai_availability`:
 
 ```toml
@@ -96,30 +95,30 @@ storage_class = "warm"
 governance_tag = "da.taikai.warm"
 ```
 
-## Enforcement semantics
+## Semântica de aplicação
 
-- Torii replaces the user-supplied `RetentionPolicy` with the enforced profile
-  before chunking or manifest emission.
-- Pre-built manifests that declare a mismatched retention profile are rejected
-  with `400 schema mismatch` so stale clients cannot weaken the contract.
-- Every override event is logged (`blob_class`, submitted vs expected policy)
-  to surface non-compliant callers during rollout.
+- Torii substitui o `RetentionPolicy` fornecido pelo usuário pelo perfil imposto
+  antes da fragmentação ou emissão de manifesto.
+- Manifestos pré-criados que declaram um perfil de retenção incompatível são rejeitados
+  com `400 schema mismatch` para que clientes obsoletos não possam enfraquecer o contrato.
+- Cada evento de substituição é registrado (`blob_class`, política enviada versus política esperada)
+  para revelar chamadores não conformes durante a implementação.
 
-See `docs/source/da/ingest_plan.md` (Validation checklist) for the updated gate
-covering retention enforcement.
+Consulte `docs/source/da/ingest_plan.md` (lista de verificação de validação) para obter o portão atualizado
+abrangendo a aplicação da retenção.
 
-## Re-replication workflow (DA-4 follow-up)
+## Fluxo de trabalho de nova replicação (acompanhamento DA-4)
 
-Retention enforcement is only the first step. Operators must also prove that
-live manifests and replication orders stay aligned with the configured policy so
-that SoraFS can automatically re-replicate out-of-compliance blobs.
+A aplicação da retenção é apenas o primeiro passo. Os operadores também devem provar que
+manifestos ao vivo e pedidos de replicação permanecem alinhados com a política configurada para que
+que SoraFS pode replicar automaticamente blobs fora de conformidade.
 
-1. **Watch for drift.** Torii emits
-   `overriding DA retention policy to match configured network baseline` whenever
-   a caller submits stale retention values. Pair that log with
-   `torii_sorafs_replication_*` telemetry to spot replica shortfalls or delayed
-   redeployments.
-2. **Diff intent vs live replicas.** Use the new audit helper:
+1. **Observe o desvio.** Torii emite
+   `overriding DA retention policy to match configured network baseline` sempre que
+   um chamador envia valores de retenção obsoletos. Emparelhe esse registro com
+   Telemetria `torii_sorafs_replication_*` para detectar deficiências ou atrasos na réplica
+   reafectações.
+2. **Intenção diferente versus réplicas ativas.** Use o novo auxiliar de auditoria:
 
    ```bash
    cargo xtask da-replication-audit \
@@ -129,57 +128,55 @@ that SoraFS can automatically re-replicate out-of-compliance blobs.
      --json-out artifacts/da/replication_audit.json
    ```
 
-   The command loads `torii.da_ingest.replication_policy` from the provided
-   config, decodes each manifest (JSON or Norito), and optionally matches any
-   `ReplicationOrderV1` payloads by manifest digest. The summary flags two
-   conditions:
+   O comando carrega `torii.da_ingest.replication_policy` do fornecido
+   config, decodifica cada manifesto (JSON ou Norito) e, opcionalmente, corresponde a qualquer
+   Cargas úteis `ReplicationOrderV1` por resumo do manifesto. O resumo sinaliza dois
+   condições:
 
-   - `policy_mismatch` – the manifest retention profile diverges from the enforced
-     policy (this should never happen unless Torii is misconfigured).
-   - `replica_shortfall` – the live replication order requests fewer replicas than
-     `RetentionPolicy.required_replicas` or provides fewer assignments than its
-     target.
+   - `policy_mismatch` – o perfil de retenção do manifesto diverge do imposto
+     política (isso nunca deve acontecer, a menos que Torii esteja configurado incorretamente).
+   - `replica_shortfall` – o pedido de replicação em tempo real solicita menos réplicas do que
+     `RetentionPolicy.required_replicas` ou fornece menos atribuições do que seu
+     alvo.
 
-   A non-zero exit status indicates an active shortfall so CI/on-call automation
-   can page immediately. Attach the JSON report to the
-   `docs/examples/da_manifest_review_template.md` packet for Parliament votes.
-3. **Trigger re-replication.** When the audit reports a shortfall, issue a fresh
-   `ReplicationOrderV1` via the governance tooling described in
-   `docs/source/sorafs/storage_capacity_marketplace.md` and re-run the audit
-   until the replica set converges. For emergency overrides, pair the CLI output
-   with `iroha app da prove-availability` so that SREs can reference the same digest
-   and PDP evidence.
+   Um status de saída diferente de zero indica um déficit ativo, portanto a automação de CI/de plantão
+   pode paginar imediatamente. Anexe o relatório JSON ao
+   Pacote `docs/examples/da_manifest_review_template.md` para votações no Parlamento.
+3. **Acione a nova replicação.** Quando a auditoria relatar uma deficiência, emita uma nova
+   `ReplicationOrderV1` por meio das ferramentas de governança descritas em
+   `docs/source/sorafs/storage_capacity_marketplace.md` e execute novamente a auditoria
+   até que o conjunto de réplicas convirja. Para substituições de emergência, emparelhe a saída CLI
+   com `iroha app da prove-availability` para que os SREs possam referenciar o mesmo resumo
+   e evidências de PDP.
 
-Regression coverage lives in `integration_tests/tests/da/replication_policy.rs`;
-the suite submits a mismatched retention policy to `/v1/da/ingest` and verifies
-that the fetched manifest exposes the enforced profile instead of the caller
-intent.
+A cobertura de regressão reside em `integration_tests/tests/da/replication_policy.rs`;
+o pacote envia uma política de retenção incompatível para `/v1/da/ingest` e verifica
+que o manifesto obtido expõe o perfil imposto em vez do chamador
+intenção.
 
-## Proof-health telemetry & dashboards (DA-5 bridge)
+## Telemetria e painéis de prova de integridade (ponte DA-5)
 
-Roadmap item **DA-5** requires PDP/PoTR enforcement outcomes to be auditable in
-real time. `SorafsProofHealthAlert` events now drive a dedicated set of
-Prometheus metrics:
+O item do roteiro **DA-5** exige que os resultados da aplicação do PDP/PoTR sejam auditáveis em
+tempo real. Os eventos `SorafsProofHealthAlert` agora acionam um conjunto dedicado de
+Métricas Prometheus:
 
-- `torii_sorafs_proof_health_alerts_total{provider_id,trigger,penalty}`
-- `torii_sorafs_proof_health_pdp_failures{provider_id}`
-- `torii_sorafs_proof_health_potr_breaches{provider_id}`
-- `torii_sorafs_proof_health_penalty_nano{provider_id}`
-- `torii_sorafs_proof_health_cooldown{provider_id}`
-- `torii_sorafs_proof_health_window_end_epoch{provider_id}`
+-`torii_sorafs_proof_health_alerts_total{provider_id,trigger,penalty}`
+-`torii_sorafs_proof_health_pdp_failures{provider_id}`
+-`torii_sorafs_proof_health_potr_breaches{provider_id}`
+-`torii_sorafs_proof_health_penalty_nano{provider_id}`
+-`torii_sorafs_proof_health_cooldown{provider_id}`
+-`torii_sorafs_proof_health_window_end_epoch{provider_id}`
 
-The **SoraFS PDP & PoTR Health** Grafana board
-(`dashboards/grafana/sorafs_pdp_potr_health.json`) now exposes those signals:
+A placa **SoraFS PDP e PoTR Health** Grafana
+(`dashboards/grafana/sorafs_pdp_potr_health.json`) agora expõe esses sinais:- *Prova de alertas de saúde por gatilho* gráficos de taxas de alerta por gatilho/sinalizador de penalidade, então
+  Os operadores de Taikai/CDN podem provar se os ataques somente PDP, somente PoTR ou duplos são
+  disparando.
+- *Provedores em Tempo de Recarga* informa a soma ao vivo dos provedores atualmente sob um
+  Tempo de espera do SorafsProofHealthAlert.
+- *Instantâneo da janela de prova de integridade* mescla os contadores PDP/PoTR, valor da penalidade,
+  sinalizador de resfriamento e época final da janela de ataque por provedor para que os revisores de governança
+  pode anexar a tabela aos pacotes de incidentes.
 
-- *Proof Health Alerts by Trigger* charts alert rates by trigger/penalty flag so
-  Taikai/CDN operators can prove whether PDP-only, PoTR-only, or dual strikes are
-  firing.
-- *Providers in Cooldown* reports the live sum of providers currently under a
-  SorafsProofHealthAlert cooldown.
-- *Proof Health Window Snapshot* merges the PDP/PoTR counters, penalty amount,
-  cooldown flag, and strike window end epoch per provider so governance reviewers
-  can attach the table to incident packets.
-
-Runbooks should link these panels when presenting DA enforcement evidence; they
-tie the CLI proof-stream failures directly to on-chain penalty metadata and
-provide the observability hook called out in the roadmap.
+Os runbooks devem vincular esses painéis ao apresentar evidências de aplicação da DA; eles
+vincular as falhas do fluxo de prova da CLI diretamente aos metadados de penalidade na cadeia e
+forneça o gancho de observabilidade indicado no roteiro.

@@ -7,229 +7,217 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 55ac770cf80229c23d6067ef1ab312422c76fb928a08e8cad8c040bdab396016
 source_last_modified: "2026-01-28T18:22:38.873410+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Iroha v2 Data Model and ISI — Implementation‑Derived Spec
+# Iroha v2 Տվյալների մոդել և ISI — Իրականացումից ստացված սպեկտր
 
-This specification is reverse‑engineered from the current implementation across `iroha_data_model` and `iroha_core` to aid design review. Paths in backticks point to the authoritative code.
+Այս հատկանիշը հակադարձ նախագծված է `iroha_data_model` և `iroha_core`-ի ընթացիկ ներդրումից՝ դիզայնի վերանայմանը նպաստելու համար: Հետադարձ կապի ուղիները մատնանշում են հեղինակավոր կոդը:
 
-## Scope
-- Defines canonical entities (domains, accounts, assets, NFTs, roles, permissions, peers, triggers) and their identifiers.
-- Describes state‑changing instructions (ISI): types, parameters, preconditions, state transitions, emitted events, and error conditions.
-- Summarizes parameter management, transactions, and instruction serialization.
+## Շրջանակ
+- Սահմանում է կանոնական սուբյեկտները (տիրույթներ, հաշիվներ, ակտիվներ, NFT-ներ, դերեր, թույլտվություններ, գործընկերներ, գործարկիչներ) և դրանց նույնացուցիչները:
+- Նկարագրում է վիճակի փոփոխման հրահանգները (ISI)՝ տեսակները, պարամետրերը, նախապայմանները, վիճակների անցումները, արտանետվող իրադարձությունները և սխալի պայմանները:
+- Ամփոփում է պարամետրերի կառավարումը, գործարքները և հրահանգների սերիականացումը:
 
-Determinism: All instruction semantics are pure state transitions without hardware‑dependent behavior. Serialization uses Norito; VM bytecode uses the IVM and is validated host‑side before on‑chain execution.
-
----
-
-## Entities and Identifiers
-IDs have stable string forms with `Display`/`FromStr` round‑trip. Name rules forbid whitespace and the reserved `@ # $` characters.
-
-- `Name` — validated textual identifier. Rules: `crates/iroha_data_model/src/name.rs`.
-- `DomainId` — `name`. Domain: `{ id, logo, metadata, owned_by }`. Builders: `NewDomain`. Code: `crates/iroha_data_model/src/domain.rs`.
-- `AccountId` — canonical addresses are produced via `AccountAddress` (IH58 / `sora…` compressed / hex) and Torii normalises inputs through `AccountAddress::parse_any`. IH58 is the preferred account format; the `sora…` form is second-best for Sora-only UX. The familiar `alias@domain` string is retained as a routing alias only. Account: `{ id, metadata }`. Code: `crates/iroha_data_model/src/account.rs`.
-- Account admission policy — domains control implicit account creation by storing a Norito-JSON `AccountAdmissionPolicy` under metadata key `iroha:account_admission_policy`. When the key is absent, the chain-level custom parameter `iroha:default_account_admission_policy` provides the default; when that is also absent, the hard default is `ImplicitReceive` (first release). The policy tags `mode` (`ExplicitOnly` or `ImplicitReceive`) plus optional per-transaction (default `16`) and per-block creation caps, an optional `implicit_creation_fee` (burn or sink account), `min_initial_amounts` per asset definition, and an optional `default_role_on_create` (granted after `AccountCreated`, rejects with `DefaultRoleError` if missing). Genesis cannot opt in; disabled/invalid policies reject receipt-style instructions for unknown accounts with `InstructionExecutionError::AccountAdmission`. Implicit accounts stamp metadata `iroha:created_via="implicit"` before `AccountCreated`; default roles emit a follow-up `AccountRoleGranted`, and executor owner-baseline rules let the new account spend its own assets/NFTs without extra roles. Code: `crates/iroha_data_model/src/account/admission.rs`, `crates/iroha_core/src/smartcontracts/isi/account_admission.rs`.
-- `AssetDefinitionId` — `asset#domain`. Definition: `{ id, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`. Code: `crates/iroha_data_model/src/asset/definition.rs`.
-- `AssetId` — `asset#domain#account` or `asset##account` if domains match, where `account` is the canonical `AccountId` string (IH58 preferred). Asset: `{ id, value: Numeric }`. Code: `crates/iroha_data_model/src/asset/{id.rs,value.rs}`.
-- `NftId` — `nft$domain`. NFT: `{ id, content: Metadata, owned_by }`. Code: `crates/iroha_data_model/src/nft.rs`.
-- `RoleId` — `name`. Role: `{ id, permissions: BTreeSet<Permission> }` with builder `NewRole { inner: Role, grant_to }`. Code: `crates/iroha_data_model/src/role.rs`.
-- `Permission` — `{ name: Ident, payload: Json }`. Code: `crates/iroha_data_model/src/permission.rs`.
-- `PeerId`/`Peer` — peer identity (public key) and address. Code: `crates/iroha_data_model/src/peer.rs`.
-- `TriggerId` — `name`. Trigger: `{ id, action }`. Action: `{ executable, repeats, authority, filter, metadata }`. Code: `crates/iroha_data_model/src/trigger/`.
-- `Metadata` — `BTreeMap<Name, Json>` with checked insert/remove. Code: `crates/iroha_data_model/src/metadata.rs`.
-- Subscription pattern (application layer): plans are `AssetDefinition` entries with `subscription_plan` metadata; subscriptions are `Nft` records with `subscription` metadata; billing is executed by time triggers referencing subscription NFTs. See `docs/source/subscriptions_api.md` and `crates/iroha_data_model/src/subscription.rs`.
-- **Cryptographic primitives** (feature `sm`):
-  - `Sm2PublicKey` / `Sm2Signature` mirror the canonical SEC1 point + fixed-width `r∥s` encoding for SM2. Constructors enforce curve membership and distinguishing ID semantics (`DEFAULT_DISTID`), while verification rejects malformed or high-range scalars. Code: `crates/iroha_crypto/src/sm.rs` and `crates/iroha_data_model/src/crypto/mod.rs`.
-  - `Sm3Hash` exposes the GM/T 0004 digest as a Norito-serialisable `[u8; 32]` newtype used wherever hashes appear in manifests or telemetry. Code: `crates/iroha_data_model/src/crypto/hash.rs`.
-  - `Sm4Key` represents 128-bit SM4 keys and is shared between host syscalls and data-model fixtures. Code: `crates/iroha_data_model/src/crypto/symmetric.rs`.
-  These types sit alongside the existing Ed25519/BLS/ML-DSA primitives and are available to data-model consumers (Torii, SDKs, genesis tooling) once the `sm` feature is enabled.
-
-Important traits: `Identifiable`, `Registered`/`Registrable` (builder pattern), `HasMetadata`, `IntoKeyValue`. Code: `crates/iroha_data_model/src/lib.rs`.
-
-Events: Every entity has events emitted on mutations (create/delete/owner changed/metadata changed, etc.). Code: `crates/iroha_data_model/src/events/`.
+Դետերմինիզմ. Բոլոր հրահանգների իմաստաբանությունը մաքուր վիճակի անցումներ են՝ առանց սարքաշարից կախված վարքագծի: Սերիալիզացիան օգտագործում է Norito; VM բայթկոդը օգտագործում է IVM-ը և վավերացված է հյուրընկալողի կողմից նախքան շղթայական գործարկումը:
 
 ---
 
-## Parameters (Chain Configuration)
-- Families: `SumeragiParameters { block_time_ms, commit_time_ms, min_finality_ms, pacing_factor_bps, max_clock_drift_ms, collectors_k, collectors_redundant_send_r }`, `BlockParameters { max_transactions }`, `TransactionParameters { max_signatures, max_instructions, ivm_bytecode_size, max_tx_bytes, max_decompressed_bytes }`, `SmartContractParameters { fuel, memory, execution_depth }`, plus `custom: BTreeMap`.
-- Single enums for diffs: `SumeragiParameter`, `BlockParameter`, `TransactionParameter`, `SmartContractParameter`. Aggregator: `Parameters`. Code: `crates/iroha_data_model/src/parameter/system.rs`.
+## Սուբյեկտներ և նույնացուցիչներ
+ID-ները ունեն կայուն լարային ձևեր `Display`/`FromStr` հետադարձ ճանապարհով: Անվան կանոնները արգելում են բացատները և վերապահված `@ # $` նիշերը:- `Name` — վավերացված տեքստային նույնացուցիչ: Կանոններ՝ `crates/iroha_data_model/src/name.rs`:
+- `DomainId` — `name`. Դոմեն՝ `{ id, logo, metadata, owned_by }`: Շինարարներ՝ `NewDomain`: Կոդ՝ `crates/iroha_data_model/src/domain.rs`։
+- `AccountId` — կանոնական հասցեները արտադրվում են `AccountAddress`-ի միջոցով (IH58 / `sora…` սեղմված / hex) և Torii-ը նորմալացնում է մուտքերը Torii-ի միջոցով: IH58-ը հաշվի նախընտրելի ձևաչափն է. `sora…` ձևը երկրորդ լավագույնն է միայն Sora-ի UX-ի համար: Ծանոթ `alias@domain` տողը պահպանվում է միայն որպես երթուղային այլանուն: Հաշիվ՝ `{ id, metadata }`: Կոդ՝ `crates/iroha_data_model/src/account.rs`։
+- Հաշվի ընդունման քաղաքականություն. տիրույթները վերահսկում են անուղղակի հաշվի ստեղծումը` պահելով Norito-JSON `AccountAdmissionPolicy` `AccountAdmissionPolicy` մետատվյալների բանալու տակ: Երբ բանալին բացակայում է, շղթայի մակարդակի մաքսային պարամետրը `iroha:default_account_admission_policy` ապահովում է լռելյայն; երբ դա նույնպես բացակայում է, կոշտ կանխադրվածը `ImplicitReceive` է (առաջին թողարկում): Քաղաքականության պիտակները `mode` (`ExplicitOnly` կամ `ImplicitReceive`) գումարած կամընտիր մեկ գործարքի համար (կանխադրված `16`) և յուրաքանչյուր բլոկի ստեղծման գլխարկներ, կամընտիր `implicit_creation_fee` հաշիվ: `min_initial_amounts` յուրաքանչյուր ակտիվի սահմանման համար և կամընտիր `default_role_on_create` (տրամադրվում է `AccountCreated`-ից հետո, մերժվում է `DefaultRoleError`-ով, եթե բացակայում է): Genesis-ը չի կարող մասնակցել. անջատված/անվավեր քաղաքականությունները մերժում են `InstructionExecutionError::AccountAdmission`-ով անհայտ հաշիվների անդորրագրի ոճի հրահանգները: Անուղղակի հաշիվների կնիքի մետատվյալները `iroha:created_via="implicit"` մինչև `AccountCreated`; լռելյայն դերերը թողարկում են հաջորդող `AccountRoleGranted`, և կատարողի սեփականատեր-բազային կանոնները թույլ են տալիս, որ նոր հաշիվը ծախսի իր սեփական ակտիվները/NFT-ները՝ առանց լրացուցիչ դերերի: Կոդ՝ `crates/iroha_data_model/src/account/admission.rs`, `crates/iroha_core/src/smartcontracts/isi/account_admission.rs`։
+- `AssetDefinitionId` — `asset#domain`. Սահմանում. `{ id, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`: Կոդ՝ `crates/iroha_data_model/src/asset/definition.rs`։
+- `AssetId` — `asset#domain#account` կամ `asset##account`, եթե տիրույթները համընկնում են, որտեղ `account`-ը `AccountId` կանոնական տող է (նախընտրելի է IH58): Ակտիվ՝ `{ id, value: Numeric }`: Կոդ՝ `crates/iroha_data_model/src/asset/{id.rs,value.rs}`։
+- `NftId` — `nft$domain`. NFT՝ `{ id, content: Metadata, owned_by }`: Կոդ՝ `crates/iroha_data_model/src/nft.rs`։
+- `RoleId` — `name`. Դերը՝ `{ id, permissions: BTreeSet<Permission> }` `NewRole { inner: Role, grant_to }` շինարարի հետ: Կոդ՝ `crates/iroha_data_model/src/role.rs`։
+- `Permission` — `{ name: Ident, payload: Json }`. Կոդ՝ `crates/iroha_data_model/src/permission.rs`։
+- `PeerId`/`Peer` — հասակակիցների ինքնությունը (հանրային բանալի) և հասցե: Կոդ՝ `crates/iroha_data_model/src/peer.rs`։
+- `TriggerId` — `name`. Գործարկիչ՝ `{ id, action }`: Գործողություն՝ `{ executable, repeats, authority, filter, metadata }`: Կոդ՝ `crates/iroha_data_model/src/trigger/`։
+- `Metadata` — `BTreeMap<Name, Json>` նշված ներդիրով/հեռացնել: Կոդ՝ `crates/iroha_data_model/src/metadata.rs`։
+- Բաժանորդագրության օրինակ (կիրառման շերտ). պլանները `AssetDefinition` գրառումներ են՝ `subscription_plan` մետատվյալներով; բաժանորդագրությունները `Nft` գրառումներն են՝ `subscription` մետատվյալներով; բիլինգը կատարվում է ժամանակային գործարկիչներով, որոնք հղում են կատարում բաժանորդագրության NFT-ներին: Տես `docs/source/subscriptions_api.md` և `crates/iroha_data_model/src/subscription.rs`:
+- **Գաղտնագրման պրիմիտիվներ** (հատկանիշ `sm`):- `Sm2PublicKey` / `Sm2Signature` արտացոլում է SEC1 կանոնական կետը + ֆիքսված լայնությամբ `r∥s` կոդավորումը SM2-ի համար: Կառուցիչները պարտադրում են կորի անդամակցությունը և տարբերակիչ ID-ի իմաստաբանությունը (`DEFAULT_DISTID`), մինչդեռ ստուգումը մերժում է սխալ ձևավորված կամ բարձր տիրույթի սկալերը: Կոդ՝ `crates/iroha_crypto/src/sm.rs` և `crates/iroha_data_model/src/crypto/mod.rs`։
+  - `Sm3Hash`-ը ցուցադրում է GM/T 0004 ամփոփումը որպես Norito-սերիալիզացվող `[u8; 32]` նոր տիպ, որն օգտագործվում է ամենուր, որտեղ հեշեր են հայտնվում մանիֆեստներում կամ հեռաչափության մեջ: Կոդ՝ `crates/iroha_data_model/src/crypto/hash.rs`։
+  - `Sm4Key`-ը ներկայացնում է 128-բիթանոց SM4 ստեղներ և համօգտագործվում է հյուրընկալող համակարգերի և տվյալների մոդելի հարմարանքների միջև: Կոդ՝ `crates/iroha_data_model/src/crypto/symmetric.rs`։
+  Այս տեսակները տեղավորվում են գոյություն ունեցող Ed25519/BLS/ML-DSA պրիմիտիվների կողքին և հասանելի են տվյալների մոդելի սպառողների համար (Torii, SDKs, genesis tooling) `sm` ֆունկցիան միացնելուց հետո:
 
-Setting parameters (ISI): `SetParameter(Parameter)` updates the corresponding field and emits `ConfigurationEvent::Changed`. Code: `crates/iroha_data_model/src/isi/transparent.rs`, executor in `crates/iroha_core/src/smartcontracts/isi/world.rs`.
+Կարևոր հատկանիշներ՝ `Identifiable`, `Registered`/`Registrable` (շինարարի օրինակ), `HasMetadata`, `IntoKeyValue`: Կոդ՝ `crates/iroha_data_model/src/lib.rs`։
 
----
-
-## Instruction Serialization and Registry
-- Core trait: `Instruction: Send + Sync + 'static` with `dyn_encode()`, `as_any()`, stable `id()` (defaults to concrete type name).
-- `InstructionBox`: `Box<dyn Instruction>` wrapper. Clone/Eq/Ord operate on `(type_id, encoded_bytes)` so equality is by value.
-- Norito serde for `InstructionBox` serializes as `(String wire_id, Vec<u8> payload)` (falls back to `type_name` if no wire ID). Deserialization uses a global `InstructionRegistry` mapping identifiers to constructors. Default registry includes all built‑in ISI. Code: `crates/iroha_data_model/src/isi/{mod.rs,registry.rs}`.
-
----
-
-## ISI: Types, Semantics, Errors
-Execution is implemented via `Execute for <Instruction>` in `iroha_core::smartcontracts::isi`. Below lists the public effects, preconditions, emitted events, and errors.
-
-### Register / Unregister
-Types: `Register<T: Registered>` and `Unregister<T: Identifiable>`, with sum types `RegisterBox`/`UnregisterBox` covering concrete targets.
-
-- Register Peer: inserts into world peers set.
-  - Preconditions: must not already exist.
-  - Events: `PeerEvent::Added`.
-  - Errors: `Repetition(Register, PeerId)` if duplicate; `FindError` on lookups. Code: `core/.../isi/world.rs`.
-
-- Register Domain: builds from `NewDomain` with `owned_by = authority`. Disallowed: `genesis` domain.
-  - Preconditions: domain non‑existence; not `genesis`.
-  - Events: `DomainEvent::Created`.
-  - Errors: `Repetition(Register, DomainId)`, `InvariantViolation("Not allowed to register genesis domain")`. Code: `core/.../isi/world.rs`.
-
-- Register Account: builds from `NewAccount`, disallowed in `genesis` domain; `genesis` account cannot be registered.
-  - Preconditions: domain must exist; account non‑existence; not in genesis domain.
-  - Events: `DomainEvent::Account(AccountEvent::Created)`.
-  - Errors: `Repetition(Register, AccountId)`, `InvariantViolation("Not allowed to register account in genesis domain")`. Code: `core/.../isi/domain.rs`.
-
-- Register AssetDefinition: builds from builder; sets `owned_by = authority`.
-  - Preconditions: definition non‑existence; domain exists.
-  - Events: `DomainEvent::AssetDefinition(AssetDefinitionEvent::Created)`.
-  - Errors: `Repetition(Register, AssetDefinitionId)`. Code: `core/.../isi/domain.rs`.
-
-- Register NFT: builds from builder; sets `owned_by = authority`.
-  - Preconditions: NFT non‑existence; domain exists.
-  - Events: `DomainEvent::Nft(NftEvent::Created)`.
-  - Errors: `Repetition(Register, NftId)`. Code: `core/.../isi/nft.rs`.
-
-- Register Role: builds from `NewRole { inner, grant_to }` (first owner recorded via account‑role mapping), stores `inner: Role`.
-  - Preconditions: role non‑existence.
-  - Events: `RoleEvent::Created`.
-  - Errors: `Repetition(Register, RoleId)`. Code: `core/.../isi/world.rs`.
-
-- Register Trigger: stores the trigger in the appropriate trigger set by filter kind.
-  - Preconditions: If filter is not mintable, `action.repeats` must be `Exactly(1)` (otherwise `MathError::Overflow`). Duplicate IDs prohibited.
-  - Events: `TriggerEvent::Created(TriggerId)`.
-  - Errors: `Repetition(Register, TriggerId)`, `InvalidParameterError::SmartContract(..)` on conversion/validation failures. Code: `core/.../isi/triggers/mod.rs`.
-
-- Unregister Peer/Domain/Account/AssetDefinition/NFT/Role/Trigger: removes the target; emits deletion events. Additional cascading removals:
-  - Unregister Domain: removes all accounts in domain, their roles, permissions, tx-sequence counters, account labels, and UAID bindings; deletes their assets (and per-asset metadata); removes all asset definitions in the domain; deletes NFTs in the domain and any NFTs owned by the removed accounts; removes triggers whose authority domain matches. Events: `DomainEvent::Deleted`, plus per-item deletion events. Errors: `FindError::Domain` if missing. Code: `core/.../isi/world.rs`.
-  - Unregister Account: removes account’s permissions, roles, tx-sequence counter, account label mapping, and UAID bindings; deletes assets owned by the account (and per-asset metadata); deletes NFTs owned by the account; removes triggers whose authority is that account. Events: `AccountEvent::Deleted`, plus `NftEvent::Deleted` per removed NFT. Errors: `FindError::Account` if missing. Code: `core/.../isi/domain.rs`.
-  - Unregister AssetDefinition: deletes all assets of that definition and their per-asset metadata. Events: `AssetDefinitionEvent::Deleted` and `AssetEvent::Deleted` per asset. Errors: `FindError::AssetDefinition`. Code: `core/.../isi/domain.rs`.
-  - Unregister NFT: removes NFT. Events: `NftEvent::Deleted`. Errors: `FindError::Nft`. Code: `core/.../isi/nft.rs`.
-  - Unregister Role: revokes the role from all accounts first; then removes the role. Events: `RoleEvent::Deleted`. Errors: `FindError::Role`. Code: `core/.../isi/world.rs`.
-  - Unregister Trigger: removes trigger if present; duplicate unregister yields `Repetition(Unregister, TriggerId)`. Events: `TriggerEvent::Deleted`. Code: `core/.../isi/triggers/mod.rs`.
-
-### Mint / Burn
-Types: `Mint<O, D: Identifiable>` and `Burn<O, D: Identifiable>`, boxed as `MintBox`/`BurnBox`.
-
-- Asset (Numeric) mint/burn: adjusts balances and definition’s `total_quantity`.
-  - Preconditions: `Numeric` value must satisfy `AssetDefinition.spec()`; mint allowed by `mintable`:
-    - `Infinitely`: always allowed.
-    - `Once`: allowed exactly once; the first mint flips `mintable` to `Not` and emits `AssetDefinitionEvent::MintabilityChanged`, plus a detailed `AssetDefinitionEvent::MintabilityChangedDetailed { asset_definition, minted_amount, authority }` for auditability.
-    - `Limited(n)`: allows `n` additional mint operations. Each successful mint decrements the counter; when it reaches zero the definition flips to `Not` and emits the same `MintabilityChanged` events as above.
-    - `Not`: error `MintabilityError::MintUnmintable`.
-  - State changes: creates asset if missing on mint; removes asset entry if balance becomes zero on burn.
-  - Events: `AssetEvent::Added`/`AssetEvent::Removed`, `AssetDefinitionEvent::MintabilityChanged` (when `Once` or `Limited(n)` exhausts its allowance).
-  - Errors: `TypeError::AssetNumericSpec(Mismatch)`, `MathError::Overflow`/`NotEnoughQuantity`. Code: `core/.../isi/asset.rs`.
-
-- Trigger repetitions mint/burn: changes `action.repeats` count for a trigger.
-  - Preconditions: on mint, filter must be mintable; arithmetic must not overflow/underflow.
-  - Events: `TriggerEvent::Extended`/`TriggerEvent::Shortened`.
-  - Errors: `MathError::Overflow` on invalid mint; `FindError::Trigger` if missing. Code: `core/.../isi/triggers/mod.rs`.
-
-### Transfer
-Types: `Transfer<S: Identifiable, O, D: Identifiable>`, boxed as `TransferBox`.
-
-- Asset (Numeric): subtract from source `AssetId`, add to destination `AssetId` (same definition, different account). Delete zeroed source asset.
-  - Preconditions: source asset exists; value satisfies `spec`.
-  - Events: `AssetEvent::Removed` (source), `AssetEvent::Added` (destination).
-  - Errors: `FindError::Asset`, `TypeError::AssetNumericSpec`, `MathError::NotEnoughQuantity/Overflow`. Code: `core/.../isi/asset.rs`.
-
-- Domain ownership: changes `Domain.owned_by` to destination account.
-  - Preconditions: both accounts exist; domain exists.
-  - Events: `DomainEvent::OwnerChanged`.
-  - Errors: `FindError::Account/Domain`. Code: `core/.../isi/domain.rs`.
-
-- AssetDefinition ownership: changes `AssetDefinition.owned_by` to destination account.
-  - Preconditions: both accounts exist; definition exists; source must currently own it.
-  - Events: `AssetDefinitionEvent::OwnerChanged`.
-  - Errors: `FindError::Account/AssetDefinition`. Code: `core/.../isi/account.rs`.
-
-- NFT ownership: changes `Nft.owned_by` to destination account.
-  - Preconditions: both accounts exist; NFT exists; source must currently own it.
-  - Events: `NftEvent::OwnerChanged`.
-  - Errors: `FindError::Account/Nft`, `InvariantViolation` if source doesn’t own the NFT. Code: `core/.../isi/nft.rs`.
-
-### Metadata: Set/Remove Key‑Value
-Types: `SetKeyValue<T>` and `RemoveKeyValue<T>` with `T ∈ { Domain, Account, AssetDefinition, Nft, Trigger }`. Boxed enums provided.
-
-- Set: inserts or replaces `Metadata[key] = Json(value)`.
-- Remove: removes the key; error if missing.
-- Events: `<Target>Event::MetadataInserted` / `MetadataRemoved` with the old/new values.
-- Errors: `FindError::<Target>` if the target doesn’t exist; `FindError::MetadataKey` on missing key for removal. Code: `crates/iroha_data_model/src/isi/transparent.rs` and executor impls per target.
-
-### Permissions and Roles: Grant / Revoke
-Types: `Grant<O, D>` and `Revoke<O, D>`, with boxed enums for `Permission`/`Role` to/from `Account`, and `Permission` to/from `Role`.
-
-- Grant Permission to Account: adds `Permission` unless already inherent. Events: `AccountEvent::PermissionAdded`. Errors: `Repetition(Grant, Permission)` if duplicate. Code: `core/.../isi/account.rs`.
-- Revoke Permission from Account: removes if present. Events: `AccountEvent::PermissionRemoved`. Errors: `FindError::Permission` if absent. Code: `core/.../isi/account.rs`.
-- Grant Role to Account: inserts `(account, role)` mapping if absent. Events: `AccountEvent::RoleGranted`. Errors: `Repetition(Grant, RoleId)`. Code: `core/.../isi/account.rs`.
-- Revoke Role from Account: removes mapping if present. Events: `AccountEvent::RoleRevoked`. Errors: `FindError::Role` if absent. Code: `core/.../isi/account.rs`.
-- Grant Permission to Role: rebuilds role with permission added. Events: `RoleEvent::PermissionAdded`. Errors: `Repetition(Grant, Permission)`. Code: `core/.../isi/world.rs`.
-- Revoke Permission from Role: rebuilds role without that permission. Events: `RoleEvent::PermissionRemoved`. Errors: `FindError::Permission` if absent. Code: `core/.../isi/world.rs`.
-
-### Triggers: Execute
-Type: `ExecuteTrigger { trigger: TriggerId, args: Json }`.
-- Behavior: enqueues an `ExecuteTriggerEvent { trigger_id, authority, args }` for the trigger subsystem. Manual execution is allowed only for by-call triggers (`ExecuteTrigger` filter); the filter must match and the caller must be the trigger action authority or hold `CanExecuteTrigger` for that authority. When a user-provided executor is active, trigger execution is validated by the runtime executor and consumes the transaction’s executor fuel budget (base `executor.fuel` plus optional metadata `additional_fuel`).
-- Errors: `FindError::Trigger` if not registered; `InvariantViolation` if called by non‑authority. Code: `core/.../isi/triggers/mod.rs` (and tests in `core/.../smartcontracts/isi/mod.rs`).
-
-### Upgrade and Log
-- `Upgrade { executor }`: migrates the executor using provided `Executor` bytecode, updates executor and its data model, emits `ExecutorEvent::Upgraded`. Errors: wrapped as `InvalidParameterError::SmartContract` on migration failure. Code: `core/.../isi/world.rs`.
-- `Log { level, msg }`: emits a node log with the given level; no state changes. Code: `core/.../isi/world.rs`.
-
-### Error Model
-Common envelope: `InstructionExecutionError` with variants for evaluation errors, query failures, conversions, entity not found, repetition, mintability, math, invalid parameter, and invariant violation. Enumerations and helpers are in `crates/iroha_data_model/src/isi/mod.rs` under `pub mod error`.
+Իրադարձություններ. Յուրաքանչյուր կազմակերպություն ունի մուտացիաների պատճառով թողարկված իրադարձություններ (ստեղծել/ջնջել/սեփականատերը փոխվել է/մետատվյալները փոխվել են և այլն): Կոդ՝ `crates/iroha_data_model/src/events/`։
 
 ---
 
-## Transactions and Executables
-- `Executable`: either `Instructions(ConstVec<InstructionBox>)` or `Ivm(IvmBytecode)`; bytecode serializes as base64. Code: `crates/iroha_data_model/src/transaction/executable.rs`.
-- `TransactionBuilder`/`SignedTransaction`: constructs, signs, and packages an executable with metadata, `chain_id`, `authority`, `creation_time_ms`, optional `ttl_ms`, and `nonce`. Code: `crates/iroha_data_model/src/transaction/`.
-- At runtime, `iroha_core` executes `InstructionBox` batches via `Execute for InstructionBox`, downcasting to the appropriate `*Box` or concrete instruction. Code: `crates/iroha_core/src/smartcontracts/isi/mod.rs`.
-- Runtime executor validation budget (user-provided executor): base `executor.fuel` from parameters plus optional transaction metadata `additional_fuel` (`u64`), shared across instruction/trigger validations within the transaction.
+## Պարամետրեր (շղթայի կազմաձևում)
+- Ընտանիքներ՝ `SumeragiParameters { block_time_ms, commit_time_ms, min_finality_ms, pacing_factor_bps, max_clock_drift_ms, collectors_k, collectors_redundant_send_r }`, `BlockParameters { max_transactions }`, `TransactionParameters { max_signatures, max_instructions, ivm_bytecode_size, max_tx_bytes, max_decompressed_bytes }`, `SmartContractParameters { fuel, memory, execution_depth }`, գումարած `custom: BTreeMap`:
+- Տարբերությունների համար առանձին թվեր՝ `SumeragiParameter`, `BlockParameter`, `TransactionParameter`, `SmartContractParameter`: Ագրեգատոր՝ `Parameters`: Կոդ՝ `crates/iroha_data_model/src/parameter/system.rs`։
+
+Պարամետրերի կարգավորում (ISI). `SetParameter(Parameter)`-ը թարմացնում է համապատասխան դաշտը և թողարկում `ConfigurationEvent::Changed`: Կոդ՝ `crates/iroha_data_model/src/isi/transparent.rs`, կատարող՝ `crates/iroha_core/src/smartcontracts/isi/world.rs`-ում։
 
 ---
 
-## Invariants and Notes (from tests and guards)
-- Genesis protections: cannot register the `genesis` domain or accounts in `genesis` domain; `genesis` account cannot be registered. Code/tests: `core/.../isi/world.rs`, `core/.../smartcontracts/isi/mod.rs`.
-- Numeric assets must satisfy their `NumericSpec` on mint/transfer/burn; spec mismatch yields `TypeError::AssetNumericSpec`.
-- Mintability: `Once` allows a single mint and then flips to `Not`; `Limited(n)` allows exactly `n` mints before flipping to `Not`. Attempts to forbid minting on `Infinitely` cause `MintabilityError::ForbidMintOnMintable`, and configuring `Limited(0)` yields `MintabilityError::InvalidMintabilityTokens`.
-- Metadata operations are key‑exact; removing a non‑existent key is an error.
-- Trigger filters can be non‑mintable; then `Register<Trigger>` only permits `Exactly(1)` repeats.
-- Trigger metadata key `__enabled` (bool) gates execution; missing defaults to enabled, and disabled triggers are skipped across data/time/by-call paths.
-- Determinism: all arithmetic uses checked operations; under/overflow returns typed math errors; zero balances drop asset entries (no hidden state).
+## Հրահանգների սերիականացում և գրանցում
+- Հիմնական հատկանիշ՝ `Instruction: Send + Sync + 'static` `dyn_encode()`, `as_any()`, կայուն `id()` (կանխադրված է կոնկրետ տեսակի անվանման համար):
+- `InstructionBox`: `Box<dyn Instruction>` փաթաթան: Clone/Eq/Ord-ը գործում է `(type_id, encoded_bytes)`-ի վրա, ուստի հավասարությունն ըստ արժեքի է:
+- Norito սերդը `InstructionBox`-ի համար սերիականացվում է որպես `(String wire_id, Vec<u8> payload)` (իջնում ​​է մինչև `type_name`, եթե չկա մետաղալար ID): Ապասերիալիզացիան օգտագործում է գլոբալ `InstructionRegistry` քարտեզագրման նույնացուցիչներ կոնստրուկտորների համար: Կանխադրված ռեեստրը ներառում է բոլոր ներկառուցված ISI-ները: Կոդ՝ `crates/iroha_data_model/src/isi/{mod.rs,registry.rs}`։
 
 ---
 
-## Practical Examples
-- Minting and transfer:
-  - `Mint::asset_numeric(10, asset_id)` → adds 10 if allowed by spec/mintability; events: `AssetEvent::Added`.
-  - `Transfer::asset_numeric(asset_id, 5, to_account)` → moves 5; events for removal/addition.
-- Metadata updates:
-  - `SetKeyValue::account(account_id, "avatar".parse()?, json)` → upsert; removal via `RemoveKeyValue::account(...)`.
-- Role/permission management:
-  - `Grant::account_role(role_id, account)`, `Grant::role_permission(perm, role)`, and their `Revoke` counterparts.
-- Trigger lifecycle:
-  - `Register::trigger(Trigger::new(id, Action::new(exec, repeats, authority, filter)))` with mintability check implied by filter; `ExecuteTrigger::new(id).with_args(&args)` must match configured authority.
-  - Triggers can be disabled by setting metadata key `__enabled` to `false` (missing defaults to enabled); toggle via `SetKeyValue::trigger` or the IVM `set_trigger_enabled` syscall.
-  - Trigger storage is repaired on load: duplicate ids, mismatched ids, and triggers referencing missing bytecode are dropped; bytecode reference counts are recomputed.
-  - If a trigger's IVM bytecode is missing at execution time, the trigger is removed and the execution is treated as a no-op with a failure outcome.
-  - Depleted triggers are removed immediately; if a depleted entry is encountered during execution it is pruned and treated as missing.
-- Parameter update:
-  - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` updates and emits `ConfigurationEvent::Changed`.
+## ISI՝ տեսակներ, իմաստաբանություն, սխալներ
+Կատարումն իրականացվում է `Execute for <Instruction>`-ի միջոցով `iroha_core::smartcontracts::isi`-ում: Ստորև թվարկված են հանրային ազդեցությունները, նախապայմանները, արտանետվող իրադարձությունները և սխալները:
+
+### Գրանցվել / Չգրանցվել
+Տեսակները՝ `Register<T: Registered>` և `Unregister<T: Identifiable>`, գումարային տեսակներով `RegisterBox`/`UnregisterBox` ծածկող կոնկրետ թիրախներ:
+
+- Գրանցվել Peer. ներդիրներ համաշխարհային հասակակիցների հավաքածուի մեջ:
+  - Նախադրյալներ. չպետք է արդեն գոյություն ունենան:
+  - Իրադարձություններ՝ `PeerEvent::Added`:
+  - Սխալներ. `Repetition(Register, PeerId)`, եթե կրկնօրինակ է; `FindError` որոնումների վրա: Կոդ՝ `core/.../isi/world.rs`։
+
+- Գրանցեք տիրույթ. կառուցվում է `NewDomain`-ից `owned_by = authority`-ով: Արգելված է՝ `genesis` տիրույթ:
+  - Նախադրյալներ. տիրույթի բացակայություն; ոչ `genesis`.
+  - Իրադարձություններ՝ `DomainEvent::Created`:
+  - Սխալներ՝ `Repetition(Register, DomainId)`, `InvariantViolation("Not allowed to register genesis domain")`: Կոդ՝ `core/.../isi/world.rs`։- Գրանցեք հաշիվ. կառուցված է `NewAccount`-ից, արգելված է `genesis` տիրույթում; `genesis` հաշիվը չի կարող գրանցվել:
+  - Նախադրյալներ. տիրույթը պետք է գոյություն ունենա; հաշվի բացակայություն; ոչ Ծննդոց տիրույթում:
+  - Իրադարձություններ՝ `DomainEvent::Account(AccountEvent::Created)`:
+  - Սխալներ՝ `Repetition(Register, AccountId)`, `InvariantViolation("Not allowed to register account in genesis domain")`: Կոդ՝ `core/.../isi/domain.rs`։
+
+- Գրանցեք AssetDefinition. կառուցում է շինարարից; հավաքածուներ `owned_by = authority`:
+  - Նախադրյալներ. սահմանման բացակայություն; տիրույթը գոյություն ունի.
+  - Իրադարձություններ՝ `DomainEvent::AssetDefinition(AssetDefinitionEvent::Created)`:
+  - Սխալներ՝ `Repetition(Register, AssetDefinitionId)`: Կոդ՝ `core/.../isi/domain.rs`։
+
+- Գրանցեք NFT. կառուցումներ շինարարից; հավաքածուներ `owned_by = authority`:
+  - Նախադրյալներ. NFT-ի բացակայություն; տիրույթը գոյություն ունի.
+  - Իրադարձություններ՝ `DomainEvent::Nft(NftEvent::Created)`:
+  - Սխալներ՝ `Repetition(Register, NftId)`: Կոդ՝ `core/.../isi/nft.rs`։
+
+- Գրանցման դեր. կառուցումներ `NewRole { inner, grant_to }`-ից (առաջին սեփականատերը գրանցված է հաշվի դերերի քարտեզագրման միջոցով), պահում է `inner: Role`:
+  - Նախադրյալներ. դերի բացակայություն:
+  - Իրադարձություններ՝ `RoleEvent::Created`:
+  - Սխալներ՝ `Repetition(Register, RoleId)`: Կոդ՝ `core/.../isi/world.rs`։
+
+- Գրանցման ձգան. ձգանը պահում է համապատասխան ձգանման մեջ, որը սահմանված է ըստ ֆիլտրի տեսակի:
+  - Նախապայմաններ. Եթե ֆիլտրը հնարավոր չէ հատել, `action.repeats` պետք է լինի `Exactly(1)` (հակառակ դեպքում `MathError::Overflow`): Նույնականացման կրկնօրինակներն արգելված են:
+  - Իրադարձություններ՝ `TriggerEvent::Created(TriggerId)`:
+  - Սխալներ՝ `Repetition(Register, TriggerId)`, `InvalidParameterError::SmartContract(..)` փոխակերպման/վավերացման ձախողումների դեպքում Կոդ՝ `core/.../isi/triggers/mod.rs`։
+
+- Չգրանցել Peer/Domain/Account/AssetDefinition/NFT/Role/Trigger. հեռացնում է թիրախը. թողարկում է ջնջման իրադարձություններ: Լրացուցիչ կասկադային հեռացումներ.
+  - Չգրանցել տիրույթը. հեռացնում է տիրույթի բոլոր հաշիվները, դրանց դերերը, թույլտվությունները, tx-sequence հաշվիչները, հաշվի պիտակները և UAID-ի կապերը. ջնջում է նրանց ակտիվները (և յուրաքանչյուր ակտիվի մետատվյալները); հեռացնում է տիրույթի բոլոր ակտիվների սահմանումները. ջնջում է NFT-ները տիրույթում և ցանկացած NFT-ներ, որոնք պատկանում են հեռացված հաշիվներին. հեռացնում է գործարկիչները, որոնց հեղինակության տիրույթը համընկնում է: Իրադարձություններ՝ `DomainEvent::Deleted`, գումարած յուրաքանչյուր տարրի ջնջման իրադարձություններ: Սխալներ. `FindError::Domain`, եթե բացակայում է: Կոդ՝ `core/.../isi/world.rs`։
+  - Չեղարկել հաշիվը. հեռացնում է հաշվի թույլտվությունները, դերերը, tx-sequence հաշվիչը, հաշվի պիտակի քարտեզագրումը և UAID-ի կապերը. ջնջում է հաշվին պատկանող ակտիվները (և յուրաքանչյուր ակտիվի մետատվյալները). ջնջում է հաշվին պատկանող NFT-ները. հեռացնում է գործարկիչները, որոնց հեղինակությունն այդ հաշիվն է: Իրադարձություններ՝ `AccountEvent::Deleted`, գումարած `NftEvent::Deleted` մեկ հեռացված NFT-ի համար: Սխալներ. `FindError::Account`, եթե բացակայում է: Կոդ՝ `core/.../isi/domain.rs`։
+  - Unregister AssetDefinition. ջնջում է այդ սահմանման բոլոր ակտիվները և դրանց յուրաքանչյուր ակտիվի մետատվյալները: Իրադարձություններ՝ `AssetDefinitionEvent::Deleted` և `AssetEvent::Deleted` մեկ ակտիվի համար: Սխալներ՝ `FindError::AssetDefinition`: Կոդ՝ `core/.../isi/domain.rs`։
+  - Չգրանցել NFT. հեռացնում է NFT-ն: Իրադարձություններ՝ `NftEvent::Deleted`: Սխալներ՝ `FindError::Nft`: Կոդ՝ `core/.../isi/nft.rs`։
+  - Չգրանցել դերը. նախ չեղյալ է հայտարարում դերը բոլոր հաշիվներից; ապա հեռացնում է դերը: Իրադարձություններ՝ `RoleEvent::Deleted`: Սխալներ՝ `FindError::Role`: Կոդ՝ `core/.../isi/world.rs`։
+  - Unregister Trigger. հեռացնում է ձգանին, եթե առկա է; կրկնօրինակ ապագրանցումը տալիս է `Repetition(Unregister, TriggerId)`: Իրադարձություններ՝ `TriggerEvent::Deleted`: Կոդ՝ `core/.../isi/triggers/mod.rs`։
+
+### Անանուխ / Այրել
+Տեսակները՝ `Mint<O, D: Identifiable>` և `Burn<O, D: Identifiable>`, տուփով որպես `MintBox`/`BurnBox`:- Ակտիվ (Թվային) անանուխ/այրում. կարգավորում է մնացորդները և սահմանման `total_quantity`:
+  - Նախապայմաններ. `Numeric` արժեքը պետք է բավարարի `AssetDefinition.spec()`; անանուխը թույլատրված է `mintable`-ով:
+    - `Infinitely`. միշտ թույլատրվում է:
+    - `Once`. թույլատրվում է ուղիղ մեկ անգամ; առաջին անանուխը փոխում է `mintable`-ը դեպի `Not` և արտանետում `AssetDefinitionEvent::MintabilityChanged`, գումարած մանրամասն `AssetDefinitionEvent::MintabilityChangedDetailed { asset_definition, minted_amount, authority }`՝ աուդիտի համար:
+    - `Limited(n)`. թույլ է տալիս `n` լրացուցիչ անանուխի գործառնություններ: Յուրաքանչյուր հաջող անանուխ նվազեցնում է հաշվիչը; երբ այն հասնում է զրոյի, սահմանումը վերածվում է `Not`-ի և թողարկում է նույն `MintabilityChanged` իրադարձությունները, ինչպես վերևում:
+    - `Not`՝ սխալ `MintabilityError::MintUnmintable`:
+  - Պետական ​​փոփոխություններ. ստեղծում է ակտիվ, եթե բացակայում է դրամահատարանում; հեռացնում է ակտիվների մուտքագրումը, եթե այրման ժամանակ մնացորդը դառնում է զրո:
+  - Իրադարձություններ՝ `AssetEvent::Added`/`AssetEvent::Removed`, `AssetDefinitionEvent::MintabilityChanged` (երբ `Once`-ը կամ `Limited(n)`-ը սպառում է իր թույլտվությունը):
+  - Սխալներ՝ `TypeError::AssetNumericSpec(Mismatch)`, `MathError::Overflow`/`NotEnoughQuantity`: Կոդ՝ `core/.../isi/asset.rs`։
+
+- Ձգան կրկնողություններ անանուխ/այրվածք. `action.repeats` փոփոխությունները հաշվարկվում են ձգանի համար:
+  - Նախապայմաններ. անանուխի վրա ֆիլտրը պետք է լինի հատվող; թվաբանությունը չպետք է հեղեղի/հեղեղի.
+  - Իրադարձություններ՝ `TriggerEvent::Extended`/`TriggerEvent::Shortened`:
+  - Սխալներ. `MathError::Overflow` անվավեր անանուխի վրա; `FindError::Trigger`, եթե բացակայում է: Կոդ՝ `core/.../isi/triggers/mod.rs`։
+
+### Փոխանցում
+Տեսակները՝ `Transfer<S: Identifiable, O, D: Identifiable>`, տուփով որպես `TransferBox`:
+
+- Ակտիվ (Թվային). հանել `AssetId` աղբյուրից, ավելացնել նպատակակետին `AssetId` (նույն սահմանումը, տարբեր հաշիվ): Ջնջել զրոյացված աղբյուրի ակտիվը:
+  - Նախադրյալներ. աղբյուր ակտիվը գոյություն ունի. արժեքը բավարարում է `spec`-ին:
+  - Իրադարձություններ՝ `AssetEvent::Removed` (աղբյուր), `AssetEvent::Added` (նպատակակետ):
+  - Սխալներ՝ `FindError::Asset`, `TypeError::AssetNumericSpec`, `MathError::NotEnoughQuantity/Overflow`: Կոդ՝ `core/.../isi/asset.rs`։
+
+- Դոմենի սեփականություն. փոխում է `Domain.owned_by` դեպի նպատակակետ հաշիվ:
+  - Նախապայմաններ. երկու հաշիվներն էլ կան. տիրույթը գոյություն ունի.
+  - Իրադարձություններ՝ `DomainEvent::OwnerChanged`:
+  - Սխալներ՝ `FindError::Account/Domain`: Կոդ՝ `core/.../isi/domain.rs`։
+
+- AssetDefinition-ի սեփականությունը. փոխում է `AssetDefinition.owned_by`-ը դեպի նպատակակետ հաշիվ:
+  - Նախապայմաններ. երկու հաշիվներն էլ կան. սահմանումը գոյություն ունի; աղբյուրը ներկայումս պետք է տիրապետի դրան:
+  - Իրադարձություններ՝ `AssetDefinitionEvent::OwnerChanged`:
+  - Սխալներ՝ `FindError::Account/AssetDefinition`: Կոդ՝ `core/.../isi/account.rs`։
+
+- NFT-ի սեփականություն. փոխում է `Nft.owned_by`-ը դեպի նպատակակետ:
+  - Նախապայմաններ. երկու հաշիվներն էլ կան. NFT գոյություն ունի; աղբյուրը ներկայումս պետք է տիրապետի դրան:
+  - Իրադարձություններ՝ `NftEvent::OwnerChanged`:
+  - Սխալներ. `FindError::Account/Nft`, `InvariantViolation`, եթե աղբյուրը չի պատկանում NFT-ին: Կոդ՝ `core/.../isi/nft.rs`։
+
+### Մետատվյալներ. Սահմանել/հեռացնել բանալի-արժեքը
+Տեսակները՝ `SetKeyValue<T>` և `RemoveKeyValue<T>` `T ∈ { Domain, Account, AssetDefinition, Nft, Trigger }`-ով: Տրվում են արկղային թվեր:
+
+- Հավաքածու՝ տեղադրում կամ փոխարինում է `Metadata[key] = Json(value)`:
+- Հեռացնել. հանում է բանալին; սխալ, եթե բացակայում է:
+- Իրադարձություններ՝ `<Target>Event::MetadataInserted` / `MetadataRemoved` հին/նոր արժեքներով:
+- Սխալներ. `FindError::<Target>`, եթե թիրախը գոյություն չունի; `FindError::MetadataKey` բացակայող բանալին հանելու համար: Կոդ՝ `crates/iroha_data_model/src/isi/transparent.rs` և կատարողի ենթադրություններ՝ յուրաքանչյուր թիրախի համար:### Թույլտվություններ և դերեր՝ շնորհում/չեղարկում
+Տեսակները՝ `Grant<O, D>` և `Revoke<O, D>`, `Permission`/`Role`-ից/`Account`-ից և `Account`-ից և `Account`-ից և `Account`-ից և Norito-ից տուփերով թվերով:
+
+- Տրամադրել թույլտվություն հաշվին. ավելացնում է `Permission`, եթե արդեն իսկ բնորոշ չէ: Իրադարձություններ՝ `AccountEvent::PermissionAdded`: Սխալներ. `Repetition(Grant, Permission)`, եթե կրկնօրինակ է: Կոդ՝ `core/.../isi/account.rs`։
+- Չեղարկել թույլտվությունը հաշվից. հանվում է, եթե առկա է: Իրադարձություններ՝ `AccountEvent::PermissionRemoved`: Սխալներ. `FindError::Permission`, եթե բացակայում է: Կոդ՝ `core/.../isi/account.rs`։
+- Տրամադրել դերը հաշվին. բացակայելու դեպքում տեղադրում է `(account, role)` քարտեզագրում: Իրադարձություններ՝ `AccountEvent::RoleGranted`: Սխալներ՝ `Repetition(Grant, RoleId)`: Կոդ՝ `core/.../isi/account.rs`։
+- Չեղյալ համարել դերը հաշվից. հեռացնում է քարտեզագրումը, եթե առկա է: Իրադարձություններ՝ `AccountEvent::RoleRevoked`: Սխալներ. `FindError::Role`, եթե բացակայում է: Կոդ՝ `core/.../isi/account.rs`։
+- Տրամադրել դերի թույլտվություն. վերակառուցում է դերը՝ ավելացված թույլտվությամբ: Իրադարձություններ՝ `RoleEvent::PermissionAdded`: Սխալներ՝ `Repetition(Grant, Permission)`: Կոդ՝ `core/.../isi/world.rs`։
+- Չեղարկել թույլտվությունը դերից. վերակառուցում է դերն առանց այդ թույլտվության: Իրադարձություններ՝ `RoleEvent::PermissionRemoved`: Սխալներ. `FindError::Permission`, եթե չկա: Կոդ՝ `core/.../isi/world.rs`։
+
+### Գործարկիչներ. Կատարել
+Տեսակը՝ `ExecuteTrigger { trigger: TriggerId, args: Json }`:
+- Վարքագիծ. հերթագրում է `ExecuteTriggerEvent { trigger_id, authority, args }` ձգանման ենթահամակարգի համար: Ձեռքով կատարումը թույլատրվում է միայն ուղեկցող ազդակների համար (`ExecuteTrigger` զտիչ); զտիչը պետք է համընկնի, և զանգահարողը պետք է լինի ձգան գործողության հեղինակը կամ պահի `CanExecuteTrigger` այդ լիազորության համար: Երբ օգտագործողի կողմից տրամադրված կատարողը ակտիվ է, գործարկման գործարկումը վավերացվում է գործարկման ժամանակի կատարողի կողմից և սպառում է գործարքի կատարողի վառելիքի բյուջեն (բազային `executor.fuel`, գումարած կամընտիր մետատվյալներ `additional_fuel`):
+- Սխալներ. `FindError::Trigger`, եթե գրանցված չէ; `InvariantViolation`, եթե կանչվում է ոչ լիազորված անձի կողմից: Կոդ՝ `core/.../isi/triggers/mod.rs` (և փորձարկումներ `core/.../smartcontracts/isi/mod.rs`-ում):
+
+### Թարմացում և գրանցում
+- `Upgrade { executor }`. տեղափոխում է կատարողը` օգտագործելով տրամադրված `Executor` բայթ կոդը, թարմացնում է կատարողը և դրա տվյալների մոդելը, արտանետում `ExecutorEvent::Upgraded`: Սխալներ. միգրացիայի ձախողման դեպքում փաթաթված է որպես `InvalidParameterError::SmartContract`: Կոդ՝ `core/.../isi/world.rs`։
+- `Log { level, msg }`. թողարկում է տվյալ մակարդակով հանգույցի մատյան; պետական ​​փոփոխություններ չկան. Կոդ՝ `core/.../isi/world.rs`։
+
+### Սխալի մոդել
+Ընդհանուր ծրար՝ `InstructionExecutionError` տարբերակներով՝ գնահատման սխալների, հարցումների ձախողումների, փոխակերպումների, օբյեկտի չգտնվելու, կրկնության, հատման հնարավորության, մաթեմատիկայի, անվավեր պարամետրի և անփոփոխ խախտման համար: Թվարկումները և օգնականները գտնվում են `crates/iroha_data_model/src/isi/mod.rs`-ում՝ `pub mod error`-ում:
+
+---## Գործարքներ և գործադիրներ
+- `Executable`՝ կամ `Instructions(ConstVec<InstructionBox>)` կամ `Ivm(IvmBytecode)`; բայթկոդը սերիականացվում է որպես base64: Կոդ՝ `crates/iroha_data_model/src/transaction/executable.rs`։
+- `TransactionBuilder`/`SignedTransaction`. կառուցում, ստորագրում և փաթեթավորում է գործարկվող նյութը մետատվյալներով, `chain_id`, `authority`, Iroha, կամընտիր I08 և ընտրովի I08: `nonce`. Կոդ՝ `crates/iroha_data_model/src/transaction/`։
+- Գործարկման ժամանակ `iroha_core`-ը կատարում է `InstructionBox` խմբաքանակներ `Execute for InstructionBox`-ի միջոցով՝ իջեցնելով համապատասխան `*Box` կամ կոնկրետ հրահանգին: Կոդ՝ `crates/iroha_core/src/smartcontracts/isi/mod.rs`։
+- Գործողության կատարողի վավերացման բյուջե (օգտագործողի կողմից տրամադրված կատարող). բազային `executor.fuel` պարամետրերից գումարած կամընտիր գործարքի մետատվյալներ `additional_fuel` (`u64`), որոնք համօգտագործվում են գործարքի ընթացքում հրահանգների/գործարկման վավերացումների միջև:
 
 ---
 
-## Traceability (selected sources)
- - Data model core: `crates/iroha_data_model/src/{account.rs,domain.rs,asset/**,nft.rs,role.rs,permission.rs,metadata.rs,trigger/**,parameter/**}`.
- - ISI definitions and registry: `crates/iroha_data_model/src/isi/{mod.rs,register.rs,transfer.rs,mint_burn.rs,transparent.rs,registry.rs}`.
- - ISI execution: `crates/iroha_core/src/smartcontracts/isi/{mod.rs,world.rs,domain.rs,account.rs,asset.rs,nft.rs,triggers/**}`.
- - Events: `crates/iroha_data_model/src/events/**`.
- - Transactions: `crates/iroha_data_model/src/transaction/**`.
+## Ինվարիանտներ և նշումներ (թեստերից և պահակներից)
+- Genesis պաշտպանություն. չի կարող գրանցվել `genesis` տիրույթը կամ հաշիվները `genesis` տիրույթում; `genesis` հաշիվը չի կարող գրանցվել: Կոդ/թեստեր՝ `core/.../isi/world.rs`, `core/.../smartcontracts/isi/mod.rs`:
+- Թվային ակտիվները պետք է բավարարեն իրենց `NumericSpec`-ը անանուխի/փոխանցման/այրման վրա. բնութագրերի անհամապատասխանությունը տալիս է `TypeError::AssetNumericSpec`:
+- Դրամահատելիությունը. `Limited(n)`-ը թույլ է տալիս ճիշտ `n`-ը մատնանշել `Not`-ին անցնելուց առաջ: `Infinitely`-ի հատումն արգելելու փորձերը հանգեցնում են `MintabilityError::ForbidMintOnMintable`-ի, իսկ `Limited(0)`-ի կարգավորումը՝ բերում է `MintabilityError::InvalidMintabilityTokens`:
+- Մետատվյալների գործողությունները ստույգ են. գոյություն չունեցող բանալի հեռացնելը սխալ է:
+- ձգանման ֆիլտրերը կարող են լինել չմշակվող; ապա `Register<Trigger>` թույլ է տալիս միայն `Exactly(1)` կրկնել:
+- Ձգան մետատվյալների բանալին `__enabled` (bool) դարպասների կատարում; բացակայում են կանխադրվածները միացված են, իսկ անջատված գործարկիչները բաց են թողնվում տվյալների/ժամանակի/զանգերի միջոցով:
+- Դետերմինիզմ. բոլոր թվաբանությունն օգտագործում է ստուգված գործողություններ; under/overflow վերադարձնում է մուտքագրված մաթեմատիկական սխալները; զրոյական մնացորդները նվազեցնում են ակտիվների մուտքերը (թաքնված վիճակ չկա):
 
-If you want this spec expanded into a rendered API/behavior table or cross‑linked to every concrete event/error, say the word and I’ll extend it.
+---## Գործնական օրինակներ
+- հատում և փոխանցում.
+  - `Mint::asset_numeric(10, asset_id)` → ավելացնում է 10, եթե դա թույլատրվում է ըստ սպեցիֆիկացիայի/հատկացման; իրադարձություններ՝ `AssetEvent::Added`:
+  - `Transfer::asset_numeric(asset_id, 5, to_account)` → շարժվում է 5; միջոցառումներ հեռացման/ավելացման համար:
+- Մետատվյալների թարմացումներ.
+  - `SetKeyValue::account(account_id, "avatar".parse()?, json)` → վերև; հեռացում `RemoveKeyValue::account(...)`-ի միջոցով:
+- Դերի/թույլտվությունների կառավարում.
+  - `Grant::account_role(role_id, account)`, `Grant::role_permission(perm, role)` և նրանց `Revoke` գործընկերները:
+- Գործարկիչի կյանքի ցիկլը.
+  - `Register::trigger(Trigger::new(id, Action::new(exec, repeats, authority, filter)))`՝ ֆիլտրով ենթադրվող հատման ստուգմամբ; `ExecuteTrigger::new(id).with_args(&args)`-ը պետք է համապատասխանի կազմաձևված հեղինակությանը:
+  - Գործարկիչները կարող են անջատվել՝ `__enabled` մետատվյալների ստեղնը դնելով `false`-ին (կանխադրվածները բացակայում են՝ միացված են); փոխարկեք `SetKeyValue::trigger` կամ IVM `set_trigger_enabled` syscall-ի միջոցով:
+  - Գործարկիչի պահեստավորումը վերանորոգվում է բեռնվածության դեպքում. կրկնօրինակ ID-ները, անհամապատասխան ID-ները և բացակայող բայթկոդի հղումով գործարկիչները հեռացվում են. բայթկոդի տեղեկանքների քանակը վերահաշվարկվում է:
+  - Եթե գործարկման պահին գործարկողի IVM բայթկոդը բացակայում է, գործարկիչը հանվում է, և կատարումը դիտվում է որպես անգործունակ՝ ձախողման հետևանքով:
+  - սպառված ձգանները անմիջապես հեռացվում են. եթե կատարման ընթացքում նկատվում է սպառված մուտք, այն կտրվում և համարվում է բացակայող:
+- Պարամետրի թարմացում.
+  - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())`-ը թարմացնում և թողարկում է `ConfigurationEvent::Changed`:
+
+---
+
+## Հետագծելիություն (ընտրված աղբյուրներ)
+ - Տվյալների մոդելի միջուկը՝ `crates/iroha_data_model/src/{account.rs,domain.rs,asset/**,nft.rs,role.rs,permission.rs,metadata.rs,trigger/**,parameter/**}`:
+ - ISI սահմանումներ և գրանցամատյան՝ `crates/iroha_data_model/src/isi/{mod.rs,register.rs,transfer.rs,mint_burn.rs,transparent.rs,registry.rs}`:
+ - ISI-ի կատարում՝ `crates/iroha_core/src/smartcontracts/isi/{mod.rs,world.rs,domain.rs,account.rs,asset.rs,nft.rs,triggers/**}`:
+ - Իրադարձություններ՝ `crates/iroha_data_model/src/events/**`:
+ - Գործարքներ՝ `crates/iroha_data_model/src/transaction/**`:
+
+Եթե ​​ցանկանում եք, որ այս հատկանիշն ընդլայնվի վերածված API-ի/վարքագծի աղյուսակի մեջ կամ փոխկապակցված լինի յուրաքանչյուր կոնկրետ իրադարձության/սխալի հետ, ասեք բառը և ես կընդլայնեմ այն:

@@ -7,107 +7,105 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 3be11bea2cb39520bc3c09f4614555d4ac97760e3590609e2f8df27bf28d1a1a
 source_last_modified: "2026-01-19T07:43:34.047491+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# AGENTS Development Workflow
+# AGENTS གོང་འཕེལ་ལས་རིམ།
 
-This runbook consolidates the contributor guardrails from the AGENTS roadmap so
-new patches follow the same default gates.
+འདི་གི་དོན་ལུ་ རན་དེབ་འདི་གིས་ AGENTS ལམ་སྟོན་ནང་ལས་ ཕན་འདེབས་འབད་མི་ ལྟ་རྟོག་པ་ཚུ་ མཉམ་སྡེབ་འབདཝ་ཨིན།
+ཐིག་ཁྲམ་གསརཔ་ཚུ་གིས་ སྔོན་སྒྲིག་སྒོ་ཚུ་ ཅོག་འཐདཔ་ཨིན།
 
-## Quickstart targets
+## མགྱོགས་མྱུར་དམིགས་ཚད།
 
-- Run `make dev-workflow` (wrapper around `scripts/dev_workflow.sh`) to execute:
+- ལག་ལེན་འཐབ་ནིའི་དོན་ལུ་ `make dev-workflow` གཡོག་བཀོལ།
   1. `cargo fmt --all`
   2. `cargo clippy --workspace --all-targets --locked -- -D warnings`
   3. `cargo build --workspace --locked`
   4. `cargo test --workspace --locked`
-  5. `swift test` from `IrohaSwift/`
-- `cargo test --workspace` is long-running (often hours). For quick iterations,
-  use `scripts/dev_workflow.sh --skip-tests` or `--skip-swift`, then run the full
-  sequence before shipping.
-- If `cargo test --workspace` stalls on build directory locks, rerun with
-  `scripts/dev_workflow.sh --target-dir target/codex-tests` (or set
-  `CARGO_TARGET_DIR` to an isolated path) to avoid contention.
-- All cargo steps use `--locked` to respect the repository policy of keeping
-  `Cargo.lock` untouched. Prefer extending existing crates rather than adding
-  new workspace members; seek approval before introducing a new crate.
+  5. `swift test` ལས་ `IrohaSwift/`
+- `cargo test --workspace` ནི་ཡུན་རིང་འགྲོ་བཞིན་ཡོད། (འཕྲལ་འཕྲལ་ཆུ་ཚོད་) མགྱོགས་དྲགས་བསྐྱར་ལོག་ཚུ་གི་དོན་ལུ་
+  `scripts/dev_workflow.sh --skip-tests` ལག་ལེན་འཐབ། ཡང་ན་ `--skip-swift` ལག་ལེན་འཐབ།
+  གྲུ་གཟིངས་མ་འབད་བའི་ཧེ་མ་ གོ་རིམ་ཡོདཔ།
+- `cargo test --workspace` བཟོ་བསྐྲུན་སྣོད་ཐོ་ལྡེ་མིག་ཚུ་གུ་བཀག་བཞག་པ་ཅིན་ ལོག་གཡོག་བཀོལ།
+  `scripts/dev_workflow.sh --target-dir target/codex-tests` (ཡང་ན་སྒྲིག་སྟངས།
+  རྩོད་རྙོགས་ལས་ བཀག་ཐབས་ལུ་ `CARGO_TARGET_DIR` ལུ་ སོ་སོ་སྦེ་བཞག་ཚུགས།
+- ཅ་ཆས་ཚུ་ཆ་མཉམ་གྱིས་ `--locked` ལག་ལེན་འཐབ་ཨིན།
+  `Cargo.lock` མ་ཐོབ། ཁ་སྐོང་འབད་ནི་ལས་ ཡོད་བཞིན་པའི་ ཀེརཊིསི་རྒྱ་བསྐྱེད་འབད་ནི་ལུ་དགའ་བ།
+  ལཱ་གི་ས་སྒོ་འཐུས་མི་གསརཔ་; ཀེརེ་ཊི་གསརཔ་ངོ་སྤྲོད་མ་འབད་བའི་ཧེ་མ་ ཆ་འཇོག་འཚོལ་དགོ།
 
-## Guardrails
-
-- `make check-agents-guardrails` (or `ci/check_agents_guardrails.sh`) fails if a
-  branch modifies `Cargo.lock`, introduces new workspace members, or adds new
-  dependencies. The script compares the working tree and `HEAD` against
-  `origin/main` by default; set `AGENTS_BASE_REF=<ref>` to override the base.
-- `make check-dependency-discipline` (or `ci/check_dependency_discipline.sh`)
-  diffs `Cargo.toml` dependencies against the base and fails on new crates; set
-  `DEPENDENCY_DISCIPLINE_ALLOW=<dep1,dep2>` to acknowledge intentional
-  additions.
-- `make check-missing-docs` (or `ci/check_missing_docs_guard.sh`) blocks new
-  `#[allow(missing_docs)]` entries, flags touched crates (nearest `Cargo.toml`)
-  whose `src/lib.rs`/`src/main.rs` lack crate-level `//!` docs, and rejects new
-  public items without `///` docs relative to the base ref; set
-  `MISSING_DOCS_GUARD_ALLOW=1` only with reviewer approval. The guard also
-  verifies that `docs/source/agents/missing_docs_inventory.{json,md}` are fresh;
-  regenerate with `python3 scripts/inventory_missing_docs.py`.
-- `make check-tests-guard` (or `ci/check_tests_guard.sh`) flags crates whose
-  changed Rust functions lack unit-test evidence. The guard maps changed lines
-  to functions, passes if crate tests changed in the diff, and otherwise scans
-  existing test files for matching function calls so pre-existing coverage
-  counts; crates without any matching tests will fail. Set `TEST_GUARD_ALLOW=1`
-  only when changes are truly test-neutral and the reviewer agrees.
-- `make check-docs-tests-metrics` (or `ci/check_docs_tests_metrics_guard.sh`)
-  enforces the roadmap policy that milestones move alongside documentation,
-  tests, and metrics/dashboards. When `roadmap.md` changes relative to
-  `AGENTS_BASE_REF`, the guard expects at least one doc change, one test change,
-  and one metrics/telemetry/dashboard change. Set `DOC_TEST_METRIC_GUARD_ALLOW=1`
-  only with reviewer approval.
-- `make check-todo-guard` (or `ci/check_todo_guard.sh`) fails when TODO markers
-  disappear without accompanying docs/tests changes. Add or update coverage
-  when resolving a TODO, or set `TODO_GUARD_ALLOW=1` for intentional removals.
-- `make check-std-only` (or `ci/check_std_only.sh`) blocks `no_std`/`wasm32`
-  cfgs so the workspace stays `std`-only. Set `STD_ONLY_GUARD_ALLOW=1` only for
-  sanctioned CI experiments.
-- `make check-status-sync` (or `ci/check_status_sync.sh`) keeps the roadmap open
-  section free of completed items and requires `roadmap.md`/`status.md` to
-  change together so plan/status stay aligned; set
-  `STATUS_SYNC_ALLOW_UNPAIRED=1` only for rare status-only typo fixes after
-  pinning `AGENTS_BASE_REF`.
-- `make check-proc-macro-ui` (or `ci/check_proc_macro_ui.sh`) runs the trybuild
-  UI suites for derive/proc-macro crates. Run it when touching proc-macros to
-  keep `.stderr` diagnostics stable and catch panicking UI regressions; set
-  `PROC_MACRO_UI_CRATES="crate1 crate2"` to focus on specific crates.
-- `make check-env-config-surface` (or `ci/check_env_config_surface.sh`) rebuilds
-  the env-toggle inventory (`docs/source/agents/env_var_inventory.{json,md}`),
-  fails if it is stale, **and** fails when new production env shims appear
-  relative to `AGENTS_BASE_REF` (auto-detected; set explicitly when needed).
-  Refresh the tracker after adding/removing env lookups via
+## གཱར་ཌི་རེལ་ཚུ།- `make check-agents-guardrails` (ཡང་ན་ `ci/check_agents_guardrails.sh`) འདི་ a ཨིན་པ་ཅིན་ འཐུས་ཤོར་བྱུང་ཡོདཔ་ཨིན།
+  ཡན་ལག་གིས་ `Cargo.lock` ལེགས་བཅོས་འབད་ཡོདཔ་དང་ ལཱ་གི་ས་སྒོ་གསརཔ་ཚུ་ ངོ་སྤྲོད་འབདཝ་ཨིན་ ཡང་ན་ གསརཔ་ཁ་སྐོང་བརྐྱབ་ཨིན།
+  རྟེན་འབྲེལ་ཚུ། ཡིག་ཆ་འདི་གིས་ ལཱ་འབད་བའི་ཤིང་དང་ `HEAD` གཉིས་ལུ་ ག་བསྡུར་འབདཝ་ཨིན།
+  སྔོན་སྒྲིག་གིས་ `make dev-workflow`; གཞི་རྟེན་འདི་བཀག་ཆ་འབད་ནིའི་དོན་ལུ་ `AGENTS_BASE_REF=<ref>` གཞི་སྒྲིག་འབད་ཡོདཔ།
+- `make check-dependency-discipline` (ཡང་ན་ `ci/check_dependency_discipline.sh`)
+  diffs `Cargo.toml` གཞི་རྟེན་ལུ་བརྟེན་ཏེ་ ཀེརེཊ་གསརཔ་གུ་བརྟེན་ཏེ་ འཐུས་ཤོར་འགྱོཝ་ཨིན། སྡེ༌ཚན༌
+  `DEPENDENCY_DISCIPLINE_ALLOW=<dep1,dep2>` ངོས་ལེན་གྱི་ངོས་འཛིན།
+  ཁ་སྐོང་།
+- `make check-missing-docs` (ཡང་ན་ `ci/check_missing_docs_guard.sh`) གསརཔ་བཀག་བཞགཔ་ཨིན།
+  `#[allow(missing_docs)]` དར་ཆ་ཚུ་གིས་ ཀེརེསི་ལུ་ ལགཔ་བརྐྱབ་ཡོདཔ་ཨིན།
+  གང་ལྟར་ `src/lib.rs`/`src/main.rs` ཀེརེཊ་-གནས་རིམ་ `//!` docs མེད་པ་དང་།
+  གཞི་རྟེན་གྱི་ བཀོད་སྒྲིག་དང་འབྲེལ་བའི་ `///` docs མེད་པའི་ མི་མང་གི་རྣམ་གྲངས་ཚུ། སྡེ༌ཚན༌
+  `MISSING_DOCS_GUARD_ALLOW=1` བསྐྱར་ཞིབ་པ་ཆ་འཇོག་ཐོག་ལས་རྐྱངམ་ཅིག་ཨིན། བདག་པོ་འདི་ཡང་།
+  `scripts/dev_workflow.sh`X འདི་ གསརཔ་ཨིནམ་སྦེ་ བདེན་དཔྱད་འབདཝ་ཨིན།
+  `python3 scripts/inventory_missing_docs.py` དང་མཉམ་དུ་བསྐྱར་བཟོ་འབད།
+- `make check-tests-guard` (ཡང་ན་ `ci/check_tests_guard.sh`) དར་ཆ་ཚུ་ ག་གིས་
+  བསྒྱུར་བཅོས་འབད་ཡོད་པའི་ Rust ལས་འགན་ཚུ་ ཡུ་ནིཊ་བརྟག་དཔྱད་སྒྲུབ་བྱེད་མེདཔ་ཨིན། བདག་འཛིན་ས་ཁྲ་ཚུ་གིས་ ཐིག་ཚུ་བསྒྱུར་བཅོས་འབད་ཡོདཔ།
+  ལས་འགན་ཚུ་དང་ གལ་སྲིད་ ཀེརེཊི་བརྟག་དཔྱད་ཚུ་ ཌིཕ་ནང་ འགྱུར་བཅོས་འགྱོ་བ་ཅིན་ དེ་ལས་ དེ་མེན་པ་ཅིན་ པར་ལེན་འབདཝ་ཨིན།
+  མཐུན་སྒྲིག་ལས་འགན་འབོད་བརྡ་ཚུ་གི་དོན་ལུ་ ད་ལྟོ་ཡོད་པའི་བརྟག་དཔྱད་ཡིག་སྣོད་ཚུ་ དེ་འབདཝ་ལས་ ཧེ་མ་ལས་ཡོད་པའི་ཁྱབ་ཁོངས།
+  གྱངས་ཁ་; མཐུན་སྒྲིག་བརྟག་དཔྱད་ག་ནི་ཡང་མེད་པའི་ crates འདི་ འཐུས་ཤོར་འགྱོ་འོང་། `TEST_GUARD_ALLOW=1` གཞི་སྒྲིག་འབད།
+  བསྒྱུར་བཅོས་ཚུ་ ངོ་མ་རང་ བརྟག་དཔྱད་མེདཔ་སྦེ་ཡོད་པའི་སྐབས་རྐྱངམ་ཅིག་ བསྐྱར་ཞིབ་འབད་མི་འདི་གིས་ ངོས་ལེན་འབདཝ་ཨིན།
+- `make check-docs-tests-metrics` (ཡང་ན་ `ci/check_docs_tests_metrics_guard.sh`)
+  ཡིག་ཆ་ཚུ་དང་གཅིག་ཁར་ ལམ་རིམ་གྱི་སྲིད་བྱུས་འདི་ བསྟར་སྤྱོད་འབདཝ་ཨིན།
+  བརྟག་དཔྱད་ཚུ་, དང་ མེ་ཊིགསི་/ཌེཤ་བོརཌི་ཚུ། `roadmap.md` ལུ་འབྲེལ་བའི་བསྒྱུར་བཅོས་བྱུང་པའི་སྐབས།
+  `AGENTS_BASE_REF`, ཉེན་སྲུངཔ་གིས་ ཉུང་མཐའ་ལུ་ ཌོག་བསྒྱུར་བཅོས་གཅིག་ ཉུང་ཤོས་རང་ བརྟག་དཔྱད་བསྒྱུར་བཅོས་གཅིག་འབད་འོང་ཟེར་ རེ་བ་བསྐྱེདཔ་ཨིན།
+  དང་ མེ་ཊིགསི་/ཊེ་ལི་མི་ཊི་རི་/ཌེཤ་བོརཌི་བསྒྱུར་བཅོས་གཅིག། `DOC_TEST_METRIC_GUARD_ALLOW=1` གཞི་སྒྲིག་འབད།
+  བསྐྱར་ཞིབ་པ་གི་ཆ་འཇོག་དང་གཅིག་ཁར་རྐྱངམ་ཅིག།
+- `make check-todo-guard` (ཡང་ན་ `cargo fmt --all`) TODO རྟགས་བཀལ་བའི་སྐབས་ འཐུས་ཤོར་བྱུང་ཡོད།
+  དེ་དང་གཅིག་ཁར་ ཌོཀ་/བརྟག་དཔྱད་ཚུ་ མཉམ་སྦྲགས་མ་འབད་བར་ ཡལ་འགྱོཝ་ཨིན། ཁ་སྐོང་ཡང་ན་དུས་མཐུན་བཟོ་ནི།
+  TODO ཅིག་སེལ་བའི་སྐབས་ ཡང་ན་ དམིགས་ཡུལ་ཅན་གྱི་བཏོན་གཏང་ནིའི་དོན་ལུ་ `TODO_GUARD_ALLOW=1` གཞི་སྒྲིག་འབད་བའི་སྐབས་ལུ།
+- `make check-std-only` (ཡང་ན་ `ci/check_std_only.sh`) བཀག་ཆ་ `no_std`/`wasm32`
+  cfgs ཡིན་པས་ལས་ཀའི་ས་ཁོངས། `std`-རྐྱངམ་གཅིག། `cargo clippy --workspace --all-targets --locked -- -D warnings` གི་དོན་ལུ་རྐྱངམ་ཅིག་གཞི་སྒྲིག་འབད།
+  ཆ་འཇོག་འབད་མི་ CI བརྟག་དཔྱད་ཚུ།
+- `make check-status-sync` (ཡང་ན་ `ci/check_status_sync.sh`) གིས་ ལམ་སྟོན་འདི་ ཁ་ཕྱེ་བཞགཔ་ཨིན།
+  དབྱེ་ཁག་རིན་མེད་ཐོག་ལས་ ཅ་ཆས་ཚུ་ `roadmap.md`/`status.md` ལུ་དགོཔ་ཨིན།
+  བསྒྱུར་བཅོས་འབད་དེ་ འཆར་གཞི་/གནས་ཚད་འདི་ ཕྲང་སྒྲིག་འབད་ཡོདཔ། སྡེ༌ཚན༌
+  `STATUS_SYNC_ALLOW_UNPAIRED=1` འདི་ དཀོན་དྲགས་ཅན་གྱི་གནས་ཚད་རྐྱངམ་གཅིག་གི་ ཊའིཔོ་ བཅོ་ཁ་རྐྱབ་ནིའི་དོན་ལུ་རྐྱངམ་ཅིག་ཨིན།
+  `AGENTS_BASE_REF`.
+- `make check-proc-macro-ui` (ཡང་ན་ `ci/check_proc_macro_ui.sh`) གིས་ trybuild གཡོག་བཀོལཝ་ཨིན།
+  འབྱུང་ཁུངས་/proc-macro cretes གི་དོན་ལུ་ ཡུ་ཨའི་ཕིཊ་ཚུ། འདི་གཡོག་བཀོལ།
+  `.stderr` བརྟག་དཔྱད་ཚུ་ བརྟན་ཏོག་ཏོ་སྦེ་བཞག་སྟེ་ ཡུ་ཨའི་འགྱུར་ལྡོག་ཚུ་ འདྲོག་བྱེལ་འཐབ་སྟེ་ བཟུང་དགོ། སྡེ༌ཚན༌
+  `PROC_MACRO_UI_CRATES="crate1 crate2"` དམིགས་བསལ་གྱི་ཀེཊ་ཚུ་ལུ་གཙོ་བོར་བཏོན་དགོ།
+- `make check-env-config-surface` (ཡང་ན་ `ci/check_env_config_surface.sh`) བསྐྱར་བཟོ་འབད་ནི།
+  env-topggle ཐོ་གཞུང་ (`docs/source/agents/env_var_inventory.{json,md}`);
+  འདི་ལོ་རྒྱུས་འགག་པ་ཨིན་པ་ཅིན་ འཐུས་ཤོར་བྱུང་དོ་ཡོདཔ་ཨིན།
+  འབྲེལ་བའི་ `AGENTS_BASE_REF` (རང་རང་བཞིན་ཤེས་རྟོགས་བྱུང་ཡོདཔ་; དགོས་མཁོ་ཡོད་པའི་སྐབས་ གསལ་ཏོག་ཏོ་སྦེ་གཞི་སྒྲིག་འབད་ནི།)
+  བརྒྱུད་དེ་ env འཚོལ་ཞིབ་ཚུ་ཁ་སྐོང་བརྐྱབ་པའི་སྐབས་ འཚོལ་ཞིབ་འདི་ གསར་བསྐྲུན་འབད་བའི་ཤུལ་ལས་ གསར་བསྐྲུན་འབད།
   `python3 scripts/inventory_env_toggles.py --json docs/source/agents/env_var_inventory.json --md docs/source/agents/env_var_inventory.md`;
-  use `ENV_CONFIG_GUARD_ALLOW=1` only after documenting intentional env knobs
-  in the migration tracker.
-- `make check-serde-guard` (or `ci/check_serde_guard.sh`) regenerates the serde
-  usage inventory (`docs/source/norito_json_inventory.{json,md}`) into a temp
-  location, fails if the committed inventory is stale, and rejects any new
-  production `serde`/`serde_json` hits relative to `AGENTS_BASE_REF`. Set
-  `SERDE_GUARD_ALLOW=1` only for CI experiments after filing a migration plan.
-- `make guards` enforces the Norito serialization policy: it denies new
-  `serde`/`serde_json` usage, ad-hoc AoS helpers, and SCALE dependencies outside
-  the Norito benches (`scripts/deny_serde_json.sh`,
+  `ENV_CONFIG_GUARD_ALLOW=1` གིས་ དམིགས་ཡུལ་ཅན་གྱི་ཨེན་ཝི་ མཛུབ་གནོན་ཚུ་ ཡིག་ཐོག་ལུ་བཀོད་པའི་ཤུལ་ལས་རྐྱངམ་ཅིག་ ལག་ལེན་འཐབ།གནས་སྤོའི་འཚོལ་ཞིབ་ནང་།
+- `make check-serde-guard` (ཡང་ན་ `ci/check_serde_guard.sh`) གིས་ སར་ཌི་འདི་ བསྐྱར་བཟོ་འབདཝ་ཨིན།
+  ལག་ལེན་ཐོ་གཞུང་ (`docs/source/norito_json_inventory.{json,md}`) འདི་ temp.
+  གནས་ས་, ཁས་བླངས་ཐོ་གཞུང་འདི་ རབས་ཆད་འབད་བ་ཅིན་ འཐུས་ཤོར་བྱུང་ཡོདཔ་དང་ གསརཔ་ག་ཅི་རང་འབད་རུང་ ངོས་ལེན་མ་འབད་བས།
+  ཐོན་སྐྱེད་ `serde`/`serde_json` `AGENTS_BASE_REF` དང་འབྲེལ་བ་ཡོད། སྡེ༌ཚན
+  `SERDE_GUARD_ALLOW=1` གནས་སྤོ་འཆར་གཞི་བཙུགས་པའི་ཤུལ་ལས་ CI བརྟག་དཔྱད་ཚུ་གི་དོན་ལུ་རྐྱངམ་ཅིག་ཨིན།
+- `make guards` གིས་ Norito རིམ་སྒྲིག་སྲིད་བྱུས་: གསརཔ་ ངོས་ལེན་མི་འབད།
+  Norito/`serde_json` ལག་ལེན་དང་ ad-hoc AoS གྲོགས་རམ་པ་ དེ་ལས་ SCALE བརྟེན་པའི་གནས་སྟངས་ཚུ་ ཕྱི་ཁར་ཨིན།
+  the Norito བཞུགས་ཁྲི་ (`scripts/deny_serde_json.sh`,
   `scripts/check_no_direct_serde.sh`, `scripts/deny_handrolled_aos.sh`,
   `scripts/check_no_scale.sh`).
-- **Proc-macro UI policy:** every proc-macro crate must ship a `trybuild`
-  harness (`tests/ui.rs` with pass/fail globs) behind the `trybuild-tests`
-  feature. Place happy-path samples under `tests/ui/pass`, rejection cases under
-  `tests/ui/fail` with committed `.stderr` outputs, and keep diagnostics
-  non-panicking and stable. Refresh fixtures with
-  `TRYBUILD=overwrite cargo test -p <crate> -F trybuild-tests` (optionally with
-  `CARGO_TARGET_DIR=target-codex` to avoid clobbering existing builds) and
-  avoid relying on coverage builds (`cfg(not(coverage))` guards are expected).
-  For macros that do not emit a binary entrypoint, prefer
-  `// compile-flags: --crate-type lib` in fixtures to keep errors focused. Add
-  new negative cases whenever diagnostics change.
-- CI runs the guardrail scripts via `.github/workflows/agents-guardrails.yml`
-  so pull requests fail fast when the policies are violated.
-- The sample git hook (`hooks/pre-commit.sample`) runs guardrail, dependency,
-  missing-docs, std-only, env-config, and status-sync scripts so contributors
-  catch policy violations before CI. Keep TODO breadcrumbs for any intentional
-  follow-ups instead of deferring large changes silently.
+- **Proc-macro UI སྲིད་བྱུས་:** proc-macro crete རེ་རེ་གིས་ `trybuild` ཅིག་བཏང་དགོ།
+  harness (`tests/ui.rs` དང་མཉམ་པའི་ ཆོག་མཆན/འཐུས་ཤོར་) གི་རྒྱབ་ལྗོངས་ `swift test` གི་རྒྱབ་ལྗོངས།
+  ཁྱད་ཆོས། `tests/ui/pass` གི་འོག་ལུ་ བདེ་སྐྱིད་ཀྱི་ལམ་གྱི་དཔེ་ཚད་ཚུ་ གཤམ་གསལ་ལྟར་ བཀག་ཆ་འབད་བའི་གནད་དོན་ཚུ་ འོག་ལུ་བཀོད་དེ་ཡོདཔ་ཨིན།
+  `tests/ui/fail` དང་ `.stderr` གི་ཐོན་འབྲས་ཚུ་དང་ བརྟག་དཔྱད་ཚུ་བཞག་དགོ།
+  འགག་མེད་དང་བརྟན་པ་ཡི། དང་བཅས་པའི་སྒྲིག་བཀོད་ཚུ་གསར་བསྐྲུན་འབད།
+  `TRYBUILD=overwrite cargo test -p <crate> -F trybuild-tests` (གདམ་ཁ་དང་བཅས་ཡོད།
+  `CARGO_TARGET_DIR=target-codex` ད་ལྟོ་ཡོད་པའི་བཟོ་བསྐྲུན་ཚུ་ བཀག་ཐབས་ལུ་) དང་།
+  ཁྱབ་ཁོངས་བཟོ་སྐྲུན་ལུ་བློ་གཏད་ནི་ལས་འཛེམ་དགོ།
+  གཉིས་ལྡན་འཛུལ་སྤྱོད་ས་ཚིགས་མ་བཏོན་པའི་མེཀ་རོསི་ཚུ་གི་དོན་ལུ་ གདམ་ཁ་རྐྱབས།
+  འཛོལ་བ་ཚུ་ གཙོ་བོར་བཏོན་ནིའི་དོན་ལུ་ `// compile-flags: --crate-type lib` གཏན་བཟོས་ཚུ་ནང་། བསྡོམ༌ནི
+  ནད་བརྟག་འགྱུར་བ་འགྱོ་བའི་སྐབས་ ངན་པའི་གནད་དོན་ཚུ་ཨིན།
+- CI གིས་ `.github/workflows/agents-guardrails.yml` བརྒྱུད་དེ་ སྲུང་ཆས་ཡིག་གཟུགས་ཚུ་གཡོག་བཀོལཝ་ཨིན།
+  དེ་འབདཝ་ལས་ སྲིད་བྱུས་ཚུ་འགལ་བའི་སྐབས་ ཞུ་བ་ཚུ་ མགྱོགས་དྲགས་སྦེ་ འཐུས་ཤོར་བྱུང་ཡོདཔ།
+- དཔེ་ཚད་ གིཊ་ཧུཀ་ (`hooks/pre-commit.sample`) གིས་ བཀག་འཛིན་འབད་མི་ བརྟེན་པའི་གནས་ཚུལ།
+  བརླག་སྟོར་ཞུགས་མི་ docs, std-only, env-config, དང་ གནས་རིམ་མཉམ་སྒྲིག ཡིག་གཟུགས་ཚུ་ ཕན་འདེབས་འབད་མི་ཚུ།
+  CI གི་ཧེ་མ་ སྲིད་བྱུས་འགལ་འཛོལ་ཚུ་ བཟུང་ཡོདཔ། TODO བག་ལེབ་ཚུ་ ག་ཅི་གི་དོན་ལུ་ཡང་བཞག་དགོ།
+  འགྱུར་བ་སྦོམ་ཚུ་ ཁུ་སིམ་སིམ་སྦེ་ ཕར་འགྱངས་འབད་ནིའི་ཚབ་ལུ་ རྗེས་འཇུག་ཚུ།

@@ -14,23 +14,23 @@ use crate::{Error, KeyGenOption, ParseError};
 pub type PublicKey = ed25519_dalek::VerifyingKey;
 pub type PrivateKey = ed25519_dalek::SigningKey;
 
-use std::{cell::RefCell, collections::HashMap, format, string::ToString as _, vec::Vec};
+use std::{cell::RefCell, collections::HashSet, format, string::ToString as _, vec::Vec};
 
 const VERIFY_OK_CACHE_LIMIT: usize = 4096;
 
 struct VerifyOkCache {
-    map: HashMap<[u8; 32], ()>,
+    map: HashSet<[u8; 32]>,
 }
 
 impl VerifyOkCache {
     fn new() -> Self {
         Self {
-            map: HashMap::new(),
+            map: HashSet::new(),
         }
     }
 
     fn contains(&self, key: &[u8; 32]) -> bool {
-        self.map.contains_key(key)
+        self.map.contains(key)
     }
 
     fn insert(&mut self, key: [u8; 32]) {
@@ -38,7 +38,7 @@ impl VerifyOkCache {
             // Simple bounded cache: clear rather than paying LRU bookkeeping cost.
             self.map.clear();
         }
-        self.map.insert(key, ());
+        self.map.insert(key);
     }
 }
 

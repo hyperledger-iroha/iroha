@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c5fe52a907606a67a09e0ff229adb94f91dda73d809d8a8344166862dc62def9
 source_last_modified: "2025-12-29T18:16:35.947414+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Template for recording SM rollout decisions during Crypto WG syncs.
+//! Crypto WG синхрондау кезінде SM шығару шешімдерін жазуға арналған үлгі.
 
-# SM Rollout – WG Sync Notes (Template)
+# SM Rollout – WG Sync жазбалары (үлгі)
 
-- **Date:** 2025-__-__
-- **Participants:** Crypto WG core, Release Eng, Security Review, SDK leads
-- **Facilitator:** ___________________
+- **Күні:** 2025-__-__
+- **Қатысушылар:** Crypto WG өзегі, Release Eng, Қауіпсіздікті шолу, SDK жетекшілері
+- **Фосилитатор:** ___________________
 
-## Agenda
-1. Lock refresh approval (`sm_lock_refresh_plan.md`)
-2. Deterministic policy & config knobs (SM-1/SM-3 tasks)
-3. Compliance brief status (SM-6a complete) & operator checklist updates (SM-6b)
-4. Dependency audit reviewers for `sm2`, `sm3`, `sm4`, `rfc6979`
+## Күн тәртібі
+1. Құлыпты жаңартуды мақұлдау (`sm_lock_refresh_plan.md`)
+2. Детерминистік саясат және конфигурациялау тұтқалары (SM-1/SM-3 тапсырмалары)
+3. Сәйкестік қысқаша күйі (SM-6a аяқталды) және оператордың тексеру тізімінің жаңартулары (SM-6b)
+4. `sm2`, `sm3`, `sm4`, `rfc6979` үшін тәуелділік аудиторлары
 
-## Decisions
-- [ ] Lock refresh approved? Details:
-- [ ] Deterministic policy affirmed? Notes:
-- [ ] Compliance brief owner + due date:
-- [ ] Audit reviewers assigned:
+## Шешімдер
+- [ ] Құлыпты жаңарту мақұлданды ма? Мәліметтер:
+- [ ] Детерминистік саясат бекітілді ме? Ескертулер:
+- [ ] Сәйкестік қысқаша иесі + мерзімі:
+- [ ] Аудит тексерушілері тағайындалды:
 
-## Action Items
-| Item | Owner | Due | Status |
+## Әрекет элементтері
+| Элемент | Иесі | Мерзімі | Күй |
 |------|-------|-----|--------|
-| Prepare Cargo.lock PR after approval | Release Eng | ████ | ☐ |
-| Verify Annex D OpenSSL checks | Crypto WG | ████ | ☐ |
-| Track compliance brief revisions & operator checklist addenda | Docs/Legal | ████ | ☐ |
+| Бекітілгеннен кейін Cargo.lock PR дайындаңыз Eng | шығарылымы ████ | ☐ |
+| D қосымшасының OpenSSL тексерулерін тексеру | Crypto WG | ████ | ☐ |
+| Сәйкестік туралы қысқаша түзетулерді және оператордың бақылау тізімінің қосымшаларын қадағалау | Құжаттар/Заңдық | ████ | ☐ |
 
-## Notes / Risks
-- _______________________________
-- _______________________________
+## Ескертпелер / Тәуекелдер
+- _________________________________
+- _________________________________
 
-## Follow-up
-- Next review date:
-- Reporting back channel:
+## Бақылау
+- Келесі қарау күні:
+- Арна туралы хабарлау:

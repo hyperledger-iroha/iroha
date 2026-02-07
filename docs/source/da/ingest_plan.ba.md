@@ -7,77 +7,78 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 1bf79d000e0536da04eafac6c0d896b1bf8f0c454e1bf4c4b97ba22c7c7f5db1
 source_last_modified: "2026-01-22T14:35:37.693070+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Sora Nexus Data Availability Ingest Plan
+# Сора Nexus мәғлүмәттәрҙең булыуы ингест планы
 
-_Drafted: 2026-02-20 - Owner: Core Protocol WG / Storage Team / DA WG_
+_2026-02-20 - Хужаһы: Ядро протоколы WG / Һаҡлау командаһы / DA WG_
 
-The DA-2 workstream extends Torii with a blob ingest API that emits Norito
-metadata and seeds SoraFS replication. This document captures the proposed
-schema, API surface, and validation flow so implementation can proceed without
-blocking on outstanding simulations (DA-1 follow-ups). All payload formats MUST
-use Norito codecs; no serde/JSON fallbacks are permitted.
+DA-2 эш ағымы оҙайтыу Torii менән блоб ингест API, был Norito сығара.
+метамағлүмәттәр һәм орлоҡтар SoraFS репликацияһы. Был документта тәҡдим ителгән
+схема, API өҫтө, һәм раҫлау ағымы шулай тормошҡа ашырыу мөмкин түгел, тип дауам итә.
+блокировка өҫтөндә күренекле моделләштереү (DA-1 күҙәтеүҙәр). Бөтә файҙалы йөк форматтары МУСТ
+Norito кодектарын ҡулланыу; бер ниндәй ҙә серҙә/JSON fallbacks рөхсәт ителмәй.
 
-## Goals
+## Маҡсаттар
 
-- Accept large blobs (Taikai segments, lane sidecars, governance artefacts)
-  deterministically over Torii.
-- Produce canonical Norito manifests describing the blob, codec parameters,
-  erasure profile, and retention policy.
-- Persist chunk metadata in SoraFS hot storage and enqueue replication jobs.
-- Publish pin intents + policy tags to the SoraFS registry and governance
-  observers.
-- Expose admission receipts so clients regain deterministic proof of publication.
+- Ҙур таптарҙы ҡабул итеү (Тайкай сегменттары, һыҙатлы мейка, идара итеү артефакттары)
+  детерминистик яҡтан Torii.
+- Norito канонлы етештереү blob, кодек параметрҙарын һүрәтләгән,
+  юйыу профиле, һәм һаҡлау сәйәсәте.
+- SoraFS X эҫе һаҡлау һәм репликация эш урындары персивный өлөшө метамағлүмәттәре.
+- Prometheus реестрына һәм идара итеүгә нәшриәт булавка ниәттәре + сәйәсәт тегтары
+  күҙәтеүселәр.
+- Ҡабул итеү квитанцияларын фашлау, шулай итеп, клиенттар тергеҙергә детерминистик иҫбатлау баҫма.
 
-## API Surface (Torii)
+## API өҫтө (Torii)
 
 ```
 POST /v1/da/ingest
 Content-Type: application/norito+v1
 ```
 
-Payload is a Norito-encoded `DaIngestRequest`. Responses use
-`application/norito+v1` and return `DaIngestReceipt`.
+Payload — Norito-кодланған `DaIngestRequest`. Яуаптар ҡулланыу
+`application/norito+v1` һәм ҡайтарыу `DaIngestReceipt`.
 
-| Response | Meaning |
+| Яуап | Мәғәнәһе |
 | --- | --- |
-| 202 Accepted | Blob queued for chunking/replication; receipt returned. |
-| 400 Bad Request | Schema/size violation (see validation checks). |
-| 401 Unauthorized | Missing/invalid API token. |
-| 409 Conflict | Duplicate `client_blob_id` with mismatched metadata. |
-| 413 Payload Too Large | Exceeds configured blob length limit. |
-| 429 Too Many Requests | Rate limit hit. |
-| 500 Internal Error | Unexpected failure (logged + alert). |
+| 202 Ҡабул ителгән | Блоб сиратҡа эләккән өсөн өлөшләтә/репликация; квитанция ҡайтты. |
+| 400 Насар үтенес | Схема/размер хоҡуҡ боҙоу (ҡара: раҫлау тикшерелгән). |
+| 401 Рөхсәтһеҙ | Юғалған/дөрөҫ түгел API токен. |
+| 409 Конфликт | Дубликат `client_blob_id` менән тап килмәгән метамағлүмәттәр. |
+| 413 Тулы йөк бик ҙур | Артыҡ конфигурацияланған тап оҙонлоғо сиге. |
+| 429 Бик күп үтенестәр | Стенд сиге хит. |
+| 500 Эске хата | Көтөлмәгән етешһеҙлек (лог, + иҫкәртмә). |
 
 ```
 GET /v1/da/proof_policies
 Accept: application/json | application/x-norito
 ```
 
-Returns a versioned `DaProofPolicyBundle` derived from the current lane catalog.
-The bundle advertises `version` (currently `1`), a `policy_hash` (hash of the
-ordered policy list), and `policies` entries carrying `lane_id`, `dataspace_id`,
-`alias`, and the enforced `proof_scheme` (`merkle_sha256` today; KZG lanes are
-rejected by ingest until KZG commitments are available). The block header now
-commits to the bundle via `da_proof_policies_hash`, so clients can pin the
-active policy set when verifying DA commitments or proofs. Fetch this endpoint
-before building proofs to ensure they match the lane’s policy and the current
-bundle hash. Commitment list/prove endpoints carry the same bundle so SDKs
-don’t need an extra round-trip to bind a proof to the active policy set.
+Ҡайтарыу версияһында `DaProofPolicyBundle` алынған ағымдағы һыҙат каталогы.
+Ҡайнатма реклама `version` (әлеге ваҡытта `1`), `policy_hash` (Хэш.
+сәйәсәт исемлегенә заказ биргән), һәм `policies` X, `lane_id`, Prometheus, йөрөтөүсе яҙмалар,
+`alias`, һәм мәжбүр ителгән `proof_scheme` (`merkle_sha256` бөгөн; КЗГ һыҙаттары 2000 й.
+KZG йөкләмәләре булғанға тиклем ингест аша кире ҡағыла). Блок башы хәҙер
+`da_proof_policies_hash` аша өйөмгә йөкмәтә, шуға күрә клиенттар шинель ала
+әүҙем сәйәсәт йыйылмаһы ҡасан тикшергән DA йөкләмәләр йәки дәлилдәр. Был ос нөктәһен алыу
+1990 йылдарҙа был йүнәлештәге эшмәкәрлекте үҫтереүҙең төп маҡсаты булып тора.
+өйөм хеш. Ҡулға алыу исемлеге/иҫбатлау ос нөктәләре йөрөтә бер үк өйөм шулай SDKs .
+don’t кәрәк өҫтәмә round-сәйәхәт бәйләү өсөн дәлил әүҙем сәйәсәт йыйылмаһы.
 
 ```
 GET /v1/da/proof_policy_snapshot
 Accept: application/json | application/x-norito
 ```
 
-Returns a `DaProofPolicyBundle` carrying the ordered policy list plus a
-`policy_hash` so SDKs can pin the version used when a block was produced. The
-hash is computed over the Norito-encoded policy array and changes whenever a
-lane’s `proof_scheme` is updated, allowing clients to detect drift between
-cached proofs and the chain configuration.
+Ҡайтарып Norito йөк ташыу тәртибе сәйәсәт исемлеге плюс а
+`policy_hash` шулай SDKs блок етештерелгәндә ҡулланылған версияны ҡаҙаҡлай ала. 1990 й.
+хеш иҫәпләнә өҫтөндә Norito-кодланған сәйәсәт массив һәм үҙгәрештәр ҡасан да булһа
+2012 йылда был йүнәлештәге эштәрҙең иң мөһимдәренең береһе булып тора.
+кэш дәлилдәре һәм сылбырлы конфигурация.
 
-## Proposed Norito Schema
+## тәҡдим Norito схемаһы
 
 ```rust
 /// Top-level ingest request.
@@ -153,322 +154,300 @@ pub struct DaIngestReceipt {
     pub rent_quote: DaRentQuote,        // XOR rent + incentives derived from policy
     pub operator_signature: Signature,
 }
-```
+```> Ғәмәлгә ашырыу иҫкәрмәһе: был файҙалы йөктәр өсөн канонлы Руст күрһәтеүҙәре хәҙер йәшәй.
+> `iroha_data_model::da::types`, запрос менән/квитанция урауҙары менән `iroha_data_model::da::ingest`
+> һәм `iroha_data_model::da::manifest`-тағы асыҡ структура.
 
-> Implementation note: the canonical Rust representations for these payloads now live under
-> `iroha_data_model::da::types`, with request/receipt wrappers in `iroha_data_model::da::ingest`
-> and the manifest structure in `iroha_data_model::da::manifest`.
+`compression` яланында шылтыратыусылар файҙалы йөктө нисек әҙерләгәнен рекламалай. Norito ҡабул итә
+`identity`, `gzip`, `deflate`, һәм `zstd`, байттарҙы асыҡтан-асыҡ декомпрессияға тиклем.
+хешинг, чанкинг һәм опциональ манифесттарҙы раҫлау.
 
-The `compression` field advertises how callers prepared the payload. Torii accepts
-`identity`, `gzip`, `deflate`, and `zstd`, transparently decompressing the bytes before
-hashing, chunking, and verifying optional manifests.
+### раҫлаусы исемлек
 
-### Validation Checklist
+1. Тикшерергә үтенес Norito баш матчтары `DaIngestRequest`.
+2. Әгәр `total_size` канонлы (декомпрессияланған) файҙалы йөк оҙонлоғонан айырылһа йәки конфигурацияланған макстан артып китһә.
+3. `chunk_size` тура килтереп үтәү (ҡөҙрәт-ике, = 2 тәьмин итеү.
+5. `retention_policy.required_replica_count` идара итеү башланғыс һыҙығын хөрмәт итергә тейеш.
+6. Каноник хешҡа ҡаршы ҡултамға тикшерелеүе (ҡулташ яланын иҫәпкә алмағанда).
+7. дубликаты `client_blob_id`, әгәр ҙә файҙалы йөк хеш + метамағлүмәт бер үк.
+8. Ҡасан `norito_manifest` бирелгән, раҫлау схемаһы + хеш матчтары яңынан иҫәпләнгән
+   өлөшләтә торғандан һуң күренә; юғиһә төйөн генерациялай, уны асыҡ һәм һаҡлай.
+9. Конфигурацияланған репликация сәйәсәтен үтәү: Torii тапшырылғанды ​​яңынан яҙа
+   `RetentionPolicy` менән `torii.da_ingest.replication_policy` менән (ҡара:
+   `replication_policy.md`) һәм алдан төҙөлгән манифестарҙы кире ҡаға, уларҙы һаҡлау
+   метамағлүмәттәр мәжбүр ителгән профилгә тап килмәй.
 
-1. Verify request Norito header matches `DaIngestRequest`.
-2. Fail if `total_size` differs from the canonical (decompressed) payload length or exceeds the configured max.
-3. Enforce `chunk_size` alignment (power-of-two, <= 2 MiB).
-4. Ensure `data_shards + parity_shards` <= global maximum and parity >= 2.
-5. `retention_policy.required_replica_count` must respect governance baseline.
-6. Signature verification against canonical hash (excluding signature field).
-7. Reject duplicate `client_blob_id` unless payload hash + metadata identical.
-8. When `norito_manifest` provided, verify schema + hash matches recalculated
-   manifest after chunking; otherwise node generates manifest and stores it.
-9. Enforce the configured replication policy: Torii rewrites the submitted
-   `RetentionPolicy` with `torii.da_ingest.replication_policy` (see
-   `replication_policy.md`) and rejects pre-built manifests whose retention
-   metadata does not match the enforced profile.
+### Chunking & репликация ағымы.
+.
+   юйыу планировкаһы (рәт һәм бағана паритеты һаны плюс `ipa_commitment`), һаҡлау сәйәсәте,
+   һәм метамағлүмәттәр.
+.
+   (Torii яҙа `manifest.encoded` файлдар клавиатура һыҙат/эпоха/эҙмә-эҙлеклелек/билет/бармаҡ эҙҙәре) шулай SoraFS .
+   оркестрлаштырыу уларҙы ашап ала һәм һаҡлау билетын һаҡланған мәғлүмәттәргә бәйләй ала.
+4. `sorafs_car::PinIntent` аша идара итеү тег + сәйәсәте менән баҫтырыу булавка ниәттәре.
+5. Emit Norito сараһы `DaIngestPublished` күҙәтеүселәргә хәбәр итеү өсөн (еңел клиенттар,
+   идара итеү, аналитика).
+.
+   `Sora-PDP-Commitment` яуап башы составында base64 Norito кодлау
+   алынған йөкләмә, шулай итеп, SDKs stash ала өлгөһө орлоҡ шунда уҡ.
+   Квитанция хәҙер `rent_quote` (`DaRentQuote`) һәм `stripe_layout` спектакле.
+   шулай итеп, тапшырыусылар XOR бурыстарын күтәрә ала, запас өлөшө, PDP/PoTR бонус өмөттәре,
+   һәм 2D юйыу матрица үлсәмдәре менән бер рәттән һаҡлау-билет метамағлүмәттәре аҡса эшләгәнсе.
+7. Опциональ реестр метамағлүмәттәре:
+   - `da.registry.alias` — йәмәғәт, шифрланмаған UTF-8 псевдонимы ептәре орлоҡ өсөн булавка реестрына инеү.
+   - `da.registry.owner` — йәмәғәт, шифрланмаған `AccountId` епте теркәү өсөн реестр милекселеге.
+   Torii был генерацияланған `DaPinIntent` генерацияланған күсермәләр шулай аҫҡы өлөшөндә булавка эшкәртергә мөмкин псевдоним .
+   һәм сей метамағлүмәт картаһын ҡабаттан анализламайынса хужалар; дөрөҫ булмаған формалаштырылған йәки буш ҡиммәттәр ваҡытында кире ҡағыла.
+   ингест раҫлау.
 
-### Chunking & Replication Flow
+## Һаҡлау / Реестр яңыртыуҙары
 
-1. Chunk payload into `chunk_size`, compute BLAKE3 per chunk + Merkle root.
-2. Build Norito `DaManifestV1` (new struct) capturing chunk commitments (role/group_id),
-   erasure layout (row and column parity counts plus `ipa_commitment`), retention policy,
-   and metadata.
-3. Queue the canonical manifest bytes under `config.da_ingest.manifest_store_dir`
-   (Torii writes `manifest.encoded` files keyed by lane/epoch/sequence/ticket/fingerprint) so SoraFS
-   orchestration can ingest them and link the storage ticket to persisted data.
-4. Publish pin intents via `sorafs_car::PinIntent` with governance tag + policy.
-5. Emit Norito event `DaIngestPublished` to notify observers (light clients,
-   governance, analytics).
-6. Return `DaIngestReceipt` (signed by Torii DA service key) and add the
-   `Sora-PDP-Commitment` response header containing the base64 Norito encoding
-   of the derived commitment so SDKs can stash the sampling seed immediately.
-   The receipt now embeds `rent_quote` (a `DaRentQuote`) and `stripe_layout`
-   so submitters can surface the XOR obligations, reserve share, PDP/PoTR bonus expectations,
-   and the 2D erasure matrix dimensions alongside the storage-ticket metadata before committing funds.
-7. Optional registry metadata:
-   - `da.registry.alias` — public, unencrypted UTF-8 alias string to seed the pin registry entry.
-   - `da.registry.owner` — public, unencrypted `AccountId` string to record registry ownership.
-   Torii copies these into the generated `DaPinIntent` so downstream pin processing can bind aliases
-   and owners without re-parsing the raw metadata map; malformed or empty values are rejected during
-   ingest validation.
+- `sorafs_manifest` менән `DaManifestV1` менән оҙатыла, детерминистик анализдар үткәреү мөмкинлеген бирә.
+- Яңы теркәү ағымы `da.pin_intent` версияһында версияланған файҙалы йөкләмәләр һылтанмалары менән өҫтәй.
+  асыҡ хеш + билет id.
+- Яңыртыу күҙәтеүсәнлек торбалары аша күҙәтеү glatenty, чанный үткәреүсәнлеге,
+  репликация артта ҡалыу, һәм етешһеҙлектәр һаны.
+- Torii `/status` яуаптар хәҙер `taikai_ingest` массивын үҙ эсенә ала, ул һуңғы урынды яулай
+  кодер-инеп-ин-интенция, йәшәү-көҙгө дрейф, һәм хаталар иҫәпләүселәр (кластер, ағым), мөмкинлек бирә DA-9.
+  Приборҙар панелдәре туранан-тура төйөндәрҙән һаулыҡ һаҡлау снимоктарын ашау өсөн Prometheus.
 
-## Storage / Registry Updates
+## Һынау стратегияһы- Схемаларҙы раҫлау, ҡултамға тикшерелеүе, дубликатын асыҡлау өсөн берәмек һынауҙары.
+- Norito тикшерелгән алтын һынауҙар `DaIngestRequest`, манифест һәм квитанция.
+- Интеграция жгут әйләндереп өҫкә макет Sumeragi + реестр, раҫлау өлөшө + булавка ағымдары.
+- осраҡлы юйыу профилдәрен һәм һаҡлау комбинацияларын ҡаплаған мөлкәт һынауҙары.
+- Norito файҙалы йөкләмәләренең федералы, дөрөҫ булмаған метамағлүмәттәрҙән һаҡланыу өсөн.
+- Алтын ҡоролмалары өсөн һәр блоб класы өсөн йәшәй .
+  `fixtures/da/ingest/manifests/<blob_class>/manifest.{norito.hex,json}` менән иптәш өлөшө
+  `fixtures/da/ingest/sample_chunk_records.txt`-та исемлеккә инә. Иғтибарһыҙ һынау
+  `regenerate_da_ingest_fixtures` ҡоролмаларын яңырта, ә
+  `manifest_fixtures_cover_all_blob_classes` тиҙ арала уңышһыҙлыҡҡа осрай, яңы `BlobClass` варианты өҫтәлә.
+  Norito/JSON өйөмөн яңыртмайынса. Был Torii, SDKs, һәм docs намыҫлы һаҡлай, ҡасан DA-2.
+  Яңы блоб өҫтөн ҡабул итә.【тәүләүҙәр/да/ин-ингест/README.md:1】【крат/ироха_тории/срк/да/тесттар.rs:2902】
 
-- Extend `sorafs_manifest` with `DaManifestV1`, enabling deterministic parsing.
-- Add new registry stream `da.pin_intent` with versioned payload referencing
-  manifest hash + ticket id.
-- Update observability pipelines to track ingest latency, chunking throughput,
-  replication backlog, and failure counts.
-- Torii `/status` responses now include a `taikai_ingest` array that surfaces the latest
-  encoder-to-ingest latency, live-edge drift, and error counters per (cluster, stream), enabling DA-9
-  dashboards to ingest health snapshots directly from nodes without scraping Prometheus.
-
-## Testing Strategy
-
-- Unit tests for schema validation, signature checks, duplicate detection.
-- Golden tests verifying Norito encoding of `DaIngestRequest`, manifest, and receipt.
-- Integration harness spinning up mock SoraFS + registry, asserting chunk + pin flows.
-- Property tests covering random erasure profiles and retention combinations.
-- Fuzzing of Norito payloads to guard against malformed metadata.
-- Golden fixtures for every blob class live under
-  `fixtures/da/ingest/manifests/<blob_class>/manifest.{norito.hex,json}` with a companion chunk
-  listing in `fixtures/da/ingest/sample_chunk_records.txt`. The ignored test
-  `regenerate_da_ingest_fixtures` refreshes the fixtures, while
-  `manifest_fixtures_cover_all_blob_classes` fails as soon as a new `BlobClass` variant is added
-  without updating the Norito/JSON bundle. This keeps Torii, SDKs, and docs honest whenever DA-2
-  accepts a new blob surface.【fixtures/da/ingest/README.md:1】【crates/iroha_torii/src/da/tests.rs:2902】
-
-## CLI & SDK Tooling (DA-8)
-
-- `iroha app da submit` (new CLI entrypoint) now wraps the shared ingest builder/publisher so operators
-  can ingest arbitrary blobs outside of the Taikai bundle flow. The command lives in
-  `crates/iroha_cli/src/commands/da.rs:1` and consumes a payload, erasure/retention profile, and
-  optional metadata/manifest files before signing the canonical `DaIngestRequest` with the CLI
-  config key. Successful runs persist `da_request.{norito,json}` and `da_receipt.{norito,json}` under
-  `artifacts/da/submission_<timestamp>/` (override via `--artifact-dir`) so release artefacts can
-  record the exact Norito bytes used during ingestion.
-- The command defaults to `client_blob_id = blake3(payload)` but accepts overrides via
-  `--client-blob-id`, honours metadata JSON maps (`--metadata-json`) and pre-generated manifests
-  (`--manifest`), and supports `--no-submit` for offline preparation plus `--endpoint` for custom
-  Torii hosts. Receipt JSON is printed to stdout in addition to being written to disk, closing the
-  DA-8 “submit_blob” tooling requirement and unblocking SDK parity work.
-- `iroha app da get` adds a DA-focused alias for the multi-source orchestrator that already powers
-  `iroha app sorafs fetch`. Operators can point it at manifest + chunk-plan artefacts (`--manifest`,
-  `--plan`, `--manifest-id`) **or** simply pass a Torii storage ticket via `--storage-ticket`. When the
-  ticket path is used the CLI pulls the manifest from `/v1/da/manifests/<ticket>`, persists the bundle
-  under `artifacts/da/fetch_<timestamp>/` (override with `--manifest-cache-dir`), derives the **manifest
-  hash** for `--manifest-id`, and then runs the orchestrator with the supplied `--gateway-provider`
-  list. Payload verification still relies on the embedded CAR/`blob_hash` digest while the gateway id is
-  now the manifest hash so clients and validators share a single blob identifier. All advanced knobs from
-  the SoraFS fetcher surface intact (manifest envelopes, client labels, guard caches, anonymity transport
-  overrides, scoreboard export, and `--output` paths), and the manifest endpoint can be overridden via
-  `--manifest-endpoint` for custom Torii hosts, so end-to-end availability checks live entirely under the
-  `da` namespace without duplicating orchestrator logic.
-- `iroha app da get-blob` pulls canonical manifests straight from Torii via `GET /v1/da/manifests/{storage_ticket}`.
-  The command now labels artefacts with the manifest hash (blob id), writing
-  `manifest_{manifest_hash}.norito`, `manifest_{manifest_hash}.json`, and `chunk_plan_{manifest_hash}.json`
-  under `artifacts/da/fetch_<timestamp>/` (or a user-supplied `--output-dir`) while echoing the exact
-  `iroha app da get` invocation (including `--manifest-id`) required for the follow-up orchestrator fetch.
-  This keeps operators out of the manifest spool directories and guarantees the fetcher always uses the
-  signed artefacts emitted by Torii. The JavaScript Torii client mirrors this flow via
-  `ToriiClient.getDaManifest(storageTicketHex)` while the Swift SDK now exposes
-  `ToriiClient.getDaManifestBundle(...)`. Both return the decoded Norito bytes, manifest JSON, manifest hash,
-  and chunk plan so SDK callers can hydrate orchestrator sessions without shelling out to the CLI, and Swift
-  clients can additionally call `fetchDaPayloadViaGateway(...)` to pipe those bundles through the native
-  SoraFS orchestrator wrapper.【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:240】
-- `/v1/da/manifests` responses now surface `manifest_hash`, and both CLI + SDK helpers (`iroha app da get`,
-  `ToriiClient.fetchDaPayloadViaGateway`, and the Swift/JS gateway wrappers) treat this digest as the
-  canonical manifest identifier while continuing to verify payloads against the embedded CAR/blob hash.
-- `iroha app da rent-quote` computes deterministic rent and incentive breakdowns for a supplied storage size
-  and retention window. The helper consumes either the active `DaRentPolicyV1` (JSON or Norito bytes) or
-  the built-in default, validates the policy, and prints a JSON summary (`gib`, `months`, policy metadata,
-  and the `DaRentQuote` fields) so auditors can cite exact XOR charges inside governance minutes without
-  writing ad hoc scripts. The command now also emits a one-line `rent_quote ...` summary before the JSON
-  payload to make console logs and runbooks easier to scan when quotes are generated during incidents.
-  Pass `--quote-out artifacts/da/rent_quotes/<stamp>.json` (or any other path)
-  to persist the pretty-printed summary and use `--policy-label "governance ticket #..."` when the
-  artefact needs to cite a specific vote/config bundle; the CLI trims custom labels and rejects blank
-  strings to keep `policy_source` values meaningful in evidence bundles. See
-  `crates/iroha_cli/src/commands/da.rs` for the subcommand and `docs/source/da/rent_policy.md`
-  for the policy schema.【crates/iroha_cli/src/commands/da.rs:1】【docs/source/da/rent_policy.md:1】
-- Pin registry parity now extends to SDKs: `ToriiClient.registerSorafsPinManifest(...)` in the
-  JavaScript SDK builds the exact payload used by `iroha app sorafs pin register`, enforcing canonical
-  chunker metadata, pin policies, alias proofs, and successor digests before POSTing to
-  `/v1/sorafs/pin/register`. This keeps CI bots and automation from shelling out to the CLI when
-  recording manifest registrations, and the helper ships with TypeScript/README coverage so DA-8’s
-  “submit/get/prove” tooling parity is fully satisfied on JS alongside Rust/Swift.【javascript/iroha_js/src/toriiClient.js:1045】【javascript/iroha_js/test/toriiClient.test.js:788】
-- `iroha app da prove-availability` chains all of the above: it takes a storage ticket, downloads the
-  canonical manifest bundle, runs the multi-source orchestrator (`iroha app sorafs fetch`) against the
-  supplied `--gateway-provider` list, persists the downloaded payload + scoreboard under
-  `artifacts/da/prove_availability_<timestamp>/`, and immediately invokes the existing PoR helper
-  (`iroha app da prove`) using the fetched bytes. Operators can tweak the orchestrator knobs
-  (`--max-peers`, `--scoreboard-out`, manifest endpoint overrides) and the proof sampler
-  (`--sample-count`, `--leaf-index`, `--sample-seed`) while a single command produces the artefacts
-  expected by DA-5/DA-9 audits: payload copy, scoreboard evidence, and JSON proof summaries.
-- `da_reconstruct` (new in DA-6) reads a canonical manifest plus the chunk directory emitted by the chunk
-  store (`chunk_{index:05}.bin` layout) and deterministically reassembles the payload while verifying
-  every Blake3 commitment. The CLI lives under `crates/sorafs_car/src/bin/da_reconstruct.rs` and ships as
-  part of the SoraFS tooling bundle. Typical flow:
-  1. `iroha app da get-blob --storage-ticket <ticket>` to download `manifest_<manifest_hash>.norito` and the chunk plan.
+## CLI & SDK инструмент (DA-8)- `iroha app da submit` (яңы CLI инеү нөктәһе) хәҙер дөйөм ингест төҙөүсе/нәшриәтсе шулай операторҙарҙы урап ала
+  аласыз, үҙ ирке менән таптар тышында тыш Тайкай өйөм ағымы. Команда 1991 йылда йәшәй.
+  `crates/iroha_cli/src/commands/da.rs:1` һәм файҙалы йөк ҡуллана, юйыу/һаҡлау профиле, һәм
+  опциональ метамағлүмәттәр/махсус файлдар канон `DaIngestRequest` менән CLI ҡул ҡуйғансы
+  конфиг асҡысы. Уңышлы йүгерә һаҡлана `da_request.{norito,json}` һәм `da_receipt.{norito,json}` йәшкә тиклемге .
+  `artifacts/da/submission_<timestamp>/` (өҫтөнлөк аша `--artifact-dir` X) шулай сығарыу артефакттары ала
+  аныҡ Norito байттарҙы ашау ваҡытында ҡулланылған.
+- Команда `client_blob_id = blake3(payload)` тиклем ғәҙәттәгесә, әммә ҡабул итә аша өҫтөнлөк .
+  `--client-blob-id`, JSON карталары (`--metadata-json`) һәм алдан генерацияланған манифестарҙы хөрмәтләй
+  (`--manifest`), һәм офлайн әҙерләү өсөн `--no-submit` ярҙам итә плюс Norito X
+  Torii хосттар. Квитанция JSON баҫыла stdout өҫтәүенә, дискҡа яҙылған, ябыу
+  DA-8 “тапшырыу_блоб” инструменталь талап һәм блокировканы асыу SDK паритет эше.
+- `iroha app da get` өҫтәй DA-ориентированный псевдоним өсөн күп сығанаҡлы оркестр, тип инде власть
+  `iroha app sorafs fetch`. Операторҙар уны асыҡ + өлөш-план артефакттарында күрһәтә ала (`--manifest`,
+  `--plan`, `--manifest-id`) ** йәки** `--storage-ticket` аша Sumeragi һаҡлау билетын үткәреүҙе ябай ғына тапшыра. Ҡасан .
+  билет юлы ҡулланыла CLI тарта манифест `/v1/da/manifests/<ticket>`, һаҡлана өйөм
+  `artifacts/da/fetch_<timestamp>/` буйынса (`--manifest-cache-dir` менән өҫтөнлөк), **манифест ала
+  хеш** өсөн `--manifest-id`, ә һуңынан оркестр менән тәьмин итеү менән тәьмин ителгән `--gateway-provider`
+  күсермә. Сығыш тикшерелгән һаман да таяна встроенный CAR/`blob_hash` disight, ә шлюз id id
+  хәҙер манифест хеш шулай клиенттар һәм валидаторҙар менән уртаҡлаша бер блоб идентификаторы. Бөтә алдынғы ручкалар 1990 йылдан алып.
+  SoraFS fetcher ер өҫтө бөтөн (нисек конверттар, клиент ярлыҡтары, һаҡ кэштары, анонимлыҡ транспорты
+  өҫтөнлөктәре, табло экспорты, һәм `--output` юлдар), һәм асыҡ нөктә аша өҫтөнлөк бирергә мөмкин.
+  `--manifest-endpoint` өсөн ҡулланыусылар өсөн Torii хосттар, шуға күрә ос-осҡа тиклем доступность тикшерелгән тулыһынса йәшәй аҫтында .
+  `da` исемдәр киңлеге оркестр логикаһын дубляжһыҙ.
+- `iroha app da get-blob` канонлы манифестарҙы туранан-тура Torii аша `GET /v1/da/manifests/{storage_ticket}` аша тарта.
+  Команда хәҙер артефакттарҙы асыҡ хеш (блоб id) менән яҙа.
+  `manifest_{manifest_hash}.norito`, `manifest_{manifest_hash}.json`, һәм `chunk_plan_{manifest_hash}.json`
+  `artifacts/da/fetch_<timestamp>/` буйынса (йәки ҡулланыусы менән тәьмин ителгән `--output-dir`) теүәл яңғырағанда
+  `iroha app da get` саҡырыу (шул иҫәптән `--manifest-id`) өсөн кәрәкле эҙмә-эҙлекле оркестр өсөн.
+  Был операторҙарҙы асыҡ катушка каталогтарынан ситтә тота һәм гарантиялай fetcher һәр ваҡыт ҡуллана
+  ҡул ҡуйылған артефакттар сығарылған Torii. JavaScript Torii клиент был ағымды көҙгөләй аша
+  `ToriiClient.getDaManifest(storageTicketHex)`, ә Swift SDK хәҙер фашлай
+  `ToriiClient.getDaManifestBundle(...)`. Икеһе лә ҡайтарып декодланған Norito байт, асыҡ JSON, асыҡ хеш,һәм өлөшө планы шулай SDK шылтыратыусылар гидратацион оркестр сессияларын гидратать снарядтарһыҙ сығарып CLI, һәм Swift .
+  клиенттар өҫтәмә рәүештә шылтырата ала `fetchDaPayloadViaGateway(...)` торба аша, был өйөмдәр аша тыуған ерле .
+  SoraFS оркестры урау.【ИрохаСвифт/Сығанаҡтар/ИрохаСвифт/ТориКлиент.swift:240】
+- `/v1/da/manifests` яуаптар хәҙер `manifest_hash`, һәм икеһе лә CLI + SDK ярҙамсылары (`iroha app da get`,
+  `ToriiClient.fetchDaPayloadViaGateway`, һәм Свифт/JS шлюз уратып) был distest дауалау, тип.
+  канонлы күренекле идентификатор, шул уҡ ваҡытта дауам итеү өсөн раҫлау файҙалы йөкләмәләр ҡаршы встроенный CAR/блоб хеш.
+- `iroha app da rent-quote` иҫәпләү детерминистик аренда һәм стимул өҙөлгән өсөн тәьмин ителгән һаҡлау күләме
+  һәм һаҡлау тәҙрәһе. Ярҙам йәки әүҙем `DaRentPolicyV1` (JSON йәки Norito байт) йәки әүҙем ҡуллана.
+  Встроенный ғәҙәттәгесә, сәйәсәтте раҫлай һәм JSON резюмеһын баҫтырып сығара (`gib`, `months`, сәйәсәт метамағлүмәттәре,
+  һәм `DaRentQuote` ятҡылыҡтары) шулай итеп, аудиторҙар идара итеү минуттары эсендә теүәл XOR ғәйепләүҙәрен килтерә ала.
+  яҙыу ad hoc сценарийҙары. Команда хәҙер шулай уҡ бер юллыҡ `rent_quote ...` резюме JSON алдынан сығарыла.
+  файҙалы йөк консоль журналдар һәм runbooks еңел сканерлау ҡасан цитаталар генерацияланған инциденттар ваҡытында.
+  `--quote-out artifacts/da/rent_quotes/<stamp>.json` (йәки башҡа юл) үткән.
+  һылыу резюме һәм ҡулланыу `--policy-label "governance ticket #..."` ҡасан ҡасан
+  артефакт аныҡ тауыш биреүҙе/конфиг өйөмөн килтерергә кәрәк; CLI-ның ҡулланыусылар өсөн ярлыҡтарын ҡырҡып, бушлыҡты кире ҡаға
+  ептәр һаҡлау өсөн Norito X ҡиммәттәре мәғәнәле дәлилдәр өйөмдәре. Күрергә
+  `crates/iroha_cli/src/commands/da.rs` өсөн подкомманд һәм `docs/source/da/rent_policy.md`
+  сәйәсәт схемаһы өсөн.【крат/ироха_кли/срк/командалар/да.р.р.:1】【Сығанаҡ/да/да/алент_полиция.мд:1】
+- Пин реестр паритеты хәҙер SDK-ға тиклем һуҙыла: Norito-ла.
+  JavaScript SDK аныҡ файҙалы йөкләмәһен төҙөй, `iroha app sorafs pin register` тарафынан ҡулланылған, канонлы тормошҡа ашырыу
+  chunker метамағлүмәттәр, булавка сәйәсәте, псевдоним дәлилдәр, һәм вариҫы үҙләштереү алдынан POSTing .
+  `/v1/sorafs/pin/register`. Был CI боттарҙы һәм автоматлаштырыуҙы CLI-ға снарядтарҙан тота, ҡасан
+  яҙма рәүештә теркәүҙәр, һәм ярҙамсы суднолар менән TypeScript/README ҡаплау шулай DA-8’s
+  “Дауа/алыу/иҫбатлау” инструменталь паритет тулыһынса ҡәнәғәт JS менән бер рәттән JS.【javascript/iroha_js/scr/sriiClient.js:1045】【жавастрипт/ироха_js/тест/toriClienClient.test.tes.js:788】
+- `iroha app da prove-availability` сылбырҙары бөтә өҫтәге: ул һаҡлау билеты кәрәк, скачать
+  канонлы манифест өйөмө, күп сығанаҡлы оркестрҙа (`iroha app sorafs fetch`) ҡаршы йүгерә
+  тәьмин итеү `--gateway-provider` исемлеге, һаҡлана скачать файҙалы йөк + табло аҫтында .
+  `artifacts/da/prove_availability_<timestamp>/`, һәм шунда уҡ ғәмәлдәге PoR ярҙамсыһын саҡыра
+  (`iroha app da prove`) алынған байттарҙы ҡулланып. Операторҙар оркестр ручкаларын үҙгәртә ала
+  (`--max-peers`, `--scoreboard-out`, асыҡ нөктә өҫтөнлөктәре) һәм иҫбатлаусы проба
+  (`--sample-count`, `--leaf-index`, `--sample-seed`), ә бер команда артефакттарын етештерә.
+  көтөлгән DA-5/DA-9 аудиттар: файҙалы йөк күсермәһе, табло дәлилдәре, һәм JSON иҫбатлау резюмеһы.- `da_reconstruct` (DA-6-ла яңы) канонлы манифест уҡый плюс өлөш каталогы сығарыла
+  магазин (`chunk_{index:05}.bin` планировкаһы) һәм детерминистик рәүештә файҙалы йөкләмәне тикшергәндә яңынан йыйыла
+  һәр Blake3 йөкләмә. CLI йәшәй аҫтында `crates/sorafs_car/src/bin/da_reconstruct.rs` һәм суднолар тип .
+  өлөшө SoraFS инструменталь өйөмө. Типик ағым:
+  1. `iroha app da get-blob --storage-ticket <ticket>` скачать `manifest_<manifest_hash>.norito` һәм өлөшө планы.
   2. `iroha app sorafs fetch --manifest manifest_<manifest_hash>.json --plan chunk_plan_<manifest_hash>.json --output payload.car`
-     (or `iroha app da prove-availability`, which writes the fetch artefacts under
-     `artifacts/da/prove_availability_<ts>/` and persists per-chunk files inside the `chunks/` directory).
+     (йәки `iroha app da prove-availability`, унда 2000 йылдағы артефакттар яҙа.
+     `artifacts/da/prove_availability_<ts>/` һәм `chunks/` каталогы эсендәге парлы файлдарҙы һаҡлай).
   3. `cargo run -p sorafs_car --features cli --bin da_reconstruct --manifest manifest_<manifest_hash>.norito --chunks-dir ./artifacts/da/prove_availability_<ts>/chunks --output reconstructed.bin --json-out summary.json`.
 
-  A regression fixture lives under `fixtures/da/reconstruct/rs_parity_v1/` and captures the full manifest
-  and chunk matrix (data + parity) used by `tests::reconstructs_fixture_with_parity_chunks`. Regenerate it with
+  Регрессия ҡоролмаһы `fixtures/da/reconstruct/rs_parity_v1/` аҫтында йәшәй һәм тулы манифестын тота.
+  һәм Sumeragi тарафынан ҡулланылған өлөш матрицаһы (мәғлүмәттәр + паритеты. Уны 2012 йыл менән тергеҙергә.
 
-  ```sh
-  cargo test -p sorafs_car --features da_harness regenerate_da_reconstruct_fixture_assets -- --ignored --nocapture
-  ```
+  Norito.
 
-  The fixture emits:
+  Ҡоролма сыға:
 
-  - `manifest.{norito.hex,json}` — canonical `DaManifestV1` encodings.
-  - `chunk_matrix.json` — ordered index/offset/length/digest/parity rows for doc/testing references.
-  - `chunks/` — `chunk_{index:05}.bin` payload slices for both data and parity shards.
-  - `payload.bin` — deterministic payload used by the parity-aware harness test.
-  - `commitment_bundle.{json,norito.hex}` — sample `DaCommitmentBundle` with a deterministic KZG commitment for docs/tests.
+  - `manifest.{norito.hex,json}` — канонлы `DaManifestV1` кодлауҙары.
+  - `chunk_matrix.json` — индексы/офсет/оҙонлоғо/үҙгәреш/паритет рәттәре өсөн doc/һынау һылтанмалар.
+  - `chunks/` — `chunk_{index:05}.bin` файҙалы йөк киҫәктәре өсөн мәғлүмәттәр һәм паритет ярсыҡтары өсөн.
+  - `payload.bin` — паритет-аңлы йүгән тесты ҡулланған детерминистик файҙалы йөк.
+  - `commitment_bundle.{json,norito.hex}` — өлгө `DaCommitmentBundle` менән детерминистик КЗГ йөкләмәһе өсөн docs/тестар.
 
-  The harness refuses missing or truncated chunks, checks the final payload Blake3 hash against `blob_hash`,
-  and emits a summary JSON blob (payload bytes, chunk count, storage ticket) so CI can assert reconstruction
-  evidence. This closes the DA-6 requirement for a deterministic reconstruction tool that operators and QA
-  jobs can invoke without wiring bespoke scripts.
+  Йүгән юғалған йәки ҡыҫҡартылған өлөштәрҙән баш тарта, һуңғы файҙалы йөкләмәне тикшерә Blake3 хеш `blob_hash`,
+  һәм дөйөм JSON блоб (түләү байттары, өлөшө иҫәбе, һаҡлау билеты) сығара, шуға күрә CI реконструкциялай ала
+  дәлил. Был DA-6 талапты ябып, операторҙар һәм QA
+  эш урындары тураһында өндәй ала, проводкаһыҙ заказ буйынса сценарийҙар.
 
-## TODO Resolution Summary
+## ТОДО ҡарары йомғаҡлау
 
-All previously blocked ingest TODOs have been implemented and verified:
+Бөтә элек блокировкаланған ингест ТОДО-лар тормошҡа ашырылған һәм раҫланған:- **Ҡыҫыу һиҙеүҙәре** — Torii шылтыратыусы менән тәьмин ителгән лейблдарҙы ҡабул итә (`identity`, `gzip`, `deflate`,
+  `zstd`) һәм нормализация файҙалы йөктәр раҫлау алдынан шулай канонлы манифест хеш тап килә
+  161
+- **Идара итеү-тик метамағлүмәттәр шифрлау** — Torii хәҙер идара итеү метамағлүмәттәрен шифрлай.
+  ChaCha20-Poly1305 асҡысын конфигурациялаған, тап килмәгән ярлыҡтарҙы кире ҡаға, ике асыҡтан-асыҡ ер өҫтөнә сыға
+  конфигурация ручкалары (`torii.da_ingest.governance_metadata_key_hex`,
+  `torii.da_ingest.governance_metadata_key_label`) әйләнеш детерминистик һаҡлау өсөн.【крат/ироха_тории/срк/да/жест. grs:707】【крат/ироха_конфиг/срк/параметрҙар/ысын.р.
+- **Иң ҙур файҙалы йөк стриминг** — күп өлөшлө ашау тура эфирҙа. Клиенттар ағымы детерминистик
+  `DaIngestChunk` конверттар `client_blob_id` X, Torii һәр киҫәге раҫлай, уларҙы этаплай
+  `manifest_store_dir` буйынса, һәм атомик рәүештә тергеҙелә манифест бер тапҡыр `is_last` флаг ерҙәре,
+  бер шылтыратыу тейәү менән күрелгән RAM шпицтарын бөтөрөү.【крат/ироха_тории/срк/да/инжест.р.с.392】
+- **Manifest версиялау** — `DaManifestV1` асыҡтан-асыҡ `version` яланы һәм Torii ташлай.
+  билдәһеҙ версиялар, гарантиялау детерминистик яңыртыу ҡасан яңы манифест макеттар судно.【крат/ироха_мәғлүмәттәр/src/d/pys.rs:308】
+- **PDP/PoTR ҡармаҡтар** — PDP йөкләмәләре туранан-тура магазиндан килеп сыға һәм һаҡланған
+  эргәһендә манифест шулай DA-5 планлаштырыусылар канон мәғлүмәттәренән үлсәү проблемаларын башлай ала; был
+  Norito башы хәҙер `/v1/da/ingest` һәм `/v1/da/manifests/{ticket}` менән судноларҙы йөкмәтә.
+  яуаптар шулай SDKs шунда уҡ өйрәнергә ҡул ҡуйылған йөкләмә, тип буласаҡ зондтар һылтанма буласаҡ.【крат/sorafs_cr/src/lib.rs:360:360】【крат/sorafs_manifest/src/pdp.rs:1】 carte/iroha_tori/srii/src/diest. gryest.476】
+- **Шард курсор журналы** — һыҙат метамағлүмәттәре `da_shard_id` (`lane_id` тиклем) һәм
+  Sumeragi хәҙер иң юғары `(epoch, sequence)`X XNI000000250X-ҡа иң юғары 1990 йылға тиклем һаҡлана.
+  `da-shard-cursors.norito` DA катушкаһы менән бер рәттән, шулай итеп, перезапускать перезапуска
+  детерминистик реплей. Хәтерҙәге осҡоро курсор индексы хәҙер тиҙ уңышһыҙлыҡҡа осрай йөкләмәләр өсөн .
+  Һылтанмаға дефолтинг урынына картаһыҙ һыҙаттар, курсор алға китеш һәм ҡабатлау хаталарын эшләү
+  асыҡ, һәм блок валидация кире ҡаға осколка-курсор регрессиялары менән бағышланған .
+  `DaShardCursorViolation` сәбәп + операторҙар өсөн телеметрия ярлыҡтары. Стартап/тотоу хәҙер туҡтата DA
+  индекс гидратацияһы, әгәр Кура билдәһеҙ һыҙат йәки регрессия курсоры булһа һәм рәнйеште теркәй.
+  блок бейеклеге, шулай итеп, операторҙар DA хеҙмәтләндерер алдынан төҙәтә ала 1990 йылдарҙа был йүнәлештәге эштәрҙең иң мөһимдәренең береһе булып тора. suteragi/main_lop.rs】【крат/ироха_ядро/срк/ср..rs】【крат/ироха_ядро/срк/блок.р docs/nexus_lanes.md:47】
+- **Шард курсор лаг телеметрия** — `da_shard_cursor_lag_blocks{lane,shard}` датчигы тураһында хәбәр итәалыҫта осколка эҙҙәре бейеклеге раҫланған. Юғалған/урыҡ/билдәһеҙ һыҙаттар ҡуйҙы лагҡа
+  кәрәкле бейеклек (йәки дельта), һәм уңышлы алға китеш уны нульгә тиклем ҡайтанан тергеҙергә шулай стабиль-дәүләт тигеҙ ҡала.
+  Операторҙар тейеш тревожность өҫтөндә нуль булмаған лагтар, тикшерергә DA катушка/журнал өсөн рәнйеткес һыҙат,
+  һәм раҫлау өсөн һыҙат каталогы өсөн осраҡлы рәүештә resharding алдынан реплей блок таҙартыу өсөн
+  бушлыҡ.
+- **Конфиденциаль иҫәпләү һыҙаттары** — 2012 йылда билдәләнгән һыҙаттар
+  `metadata.confidential_compute=true` һәм `confidential_key_version` 1800 тип ҡабул ителә.
+  SMPC/шифрланған DA юлдары: Sumeragi нуль булмаған файҙалы йөк/диспечаткалар һәм һаҡлау билеттарын үтәй,
+  тулы реплика һаҡлау профилдәрен кире ҡаға, һәм индекстар SoraFS билет + сәйәсәт версияһы.
+  файҙалы йөк байттарын фашлау. Квитанциялар гидрат Кура ваҡытында реплей ваҡытында шулай валитаторҙар шул уҡ тергеҙелә
+  конфиденциальлыҡ метамағлүмәттәренән һуң 1990 йылдарҙа был йүнәлештәге эштәрҙең иң мөһимдәренең береһе булып тора.
 
-- **Compression hints** — Torii accepts caller-provided labels (`identity`, `gzip`, `deflate`,
-  `zstd`) and normalises payloads before validation so the canonical manifest hash matches the
-  decompressed bytes.【crates/iroha_torii/src/da/ingest.rs:220】【crates/iroha_data_model/src/da/types.rs:161】
-- **Governance-only metadata encryption** — Torii now encrypts governance metadata with the
-  configured ChaCha20-Poly1305 key, rejects mismatched labels, and surfaces two explicit
-  configuration knobs (`torii.da_ingest.governance_metadata_key_hex`,
-  `torii.da_ingest.governance_metadata_key_label`) to keep rotation deterministic.【crates/iroha_torii/src/da/ingest.rs:707】【crates/iroha_config/src/parameters/actual.rs:1662】
-- **Large payload streaming** — multi-part ingestion is live. Clients stream deterministic
-  `DaIngestChunk` envelopes keyed by `client_blob_id`, Torii validates each slice, stages them
-  under `manifest_store_dir`, and atomically rebuilds the manifest once the `is_last` flag lands,
-  eliminating the RAM spikes seen with single-call uploads.【crates/iroha_torii/src/da/ingest.rs:392】
-- **Manifest versioning** — `DaManifestV1` carries an explicit `version` field and Torii refuses
-  unknown versions, guaranteeing deterministic upgrades when new manifest layouts ship.【crates/iroha_data_model/src/da/types.rs:308】
-- **PDP/PoTR hooks** — PDP commitments derive directly from the chunk store and are persisted
-  beside manifests so DA-5 schedulers can launch sampling challenges from canonical data; the
-  `Sora-PDP-Commitment` header now ships with both `/v1/da/ingest` and `/v1/da/manifests/{ticket}`
-  responses so SDKs immediately learn the signed commitment that future probes will reference.【crates/sorafs_car/src/lib.rs:360】【crates/sorafs_manifest/src/pdp.rs:1】【crates/iroha_torii/src/da/ingest.rs:476】
-- **Shard cursor journal** — lane metadata may specify `da_shard_id` (defaulting to `lane_id`), and
-  Sumeragi now persists the highest `(epoch, sequence)` per `(shard_id, lane_id)` into
-  `da-shard-cursors.norito` alongside the DA spool so restarts drop resharded/unknown lanes and keep
-  replay deterministic. The in-memory shard cursor index now fails fast on commitments for
-  unmapped lanes instead of defaulting to the lane id, making cursor advancement and replay errors
-  explicit, and block validation rejects shard-cursor regressions with a dedicated
-  `DaShardCursorViolation` reason + telemetry labels for operators. Startup/catch-up now halts DA
-  index hydration if Kura contains an unknown lane or regressing cursor and records the offending
-  block height so operators can remediate before serving DA state.【crates/iroha_config/src/parameters/actual.rs】【crates/iroha_core/src/da/shard_cursor.rs】【crates/iroha_core/src/sumeragi/main_loop.rs】【crates/iroha_core/src/state.rs】【crates/iroha_core/src/block.rs】【docs/source/nexus_lanes.md:47】
-- **Shard cursor lag telemetry** — the `da_shard_cursor_lag_blocks{lane,shard}` gauge reports how
-  far a shard trails the height being validated. Missing/stale/unknown lanes set the lag to the
-  required height (or delta), and successful advances reset it to zero so steady-state stays flat.
-  Operators should alarm on non-zero lags, inspect the DA spool/journal for the offending lane,
-  and verify the lane catalog for accidental resharding before replaying the block to clear the
-  gap.
-- **Confidential compute lanes** — lanes marked with
-  `metadata.confidential_compute=true` and a `confidential_key_version` are treated as
-  SMPC/encrypted DA paths: Sumeragi enforces non-zero payload/manifest digests and storage tickets,
-  rejects full-replica storage profiles, and indexes the SoraFS ticket + policy version without
-  exposing payload bytes. Receipts hydrate from Kura during replay so validators recover the same
-  confidentiality metadata after restarts.【crates/iroha_config/src/parameters/actual.rs】【crates/iroha_core/src/da/confidential.rs】【crates/iroha_core/src/da/confidential_store.rs】【crates/iroha_core/src/state.rs】
+## Ғәмәлгә ашырыу Иҫкәрмәләр- Torii’s `/v1/da/ingest` ос нөктәһе хәҙер файҙалы йөк ҡыҫыуҙы нормалләштерә, реплей кэшын үтәй,
+  детерминистик яҡтан канонлы байттарҙы, `DaManifestV1`-ты яңынан төҙөү һәм кодланған файҙалы йөктө төшөрә
+  `config.da_ingest.manifest_store_dir` өсөн SoraFS өсөн квитанция биргәнсе; был
+  обработчик шулай уҡ беркетелгән `Sora-PDP-Commitment` башлығы шулай клиенттар кодланған йөкләмәне тота ала
+  Шунда уҡ.【крат/ироха_тории/срк/да/ингест.р. 220】
+- Һуң, канонлы `DaCommitmentRecord`, Sumeragi X хәҙер сыға.
+  `da-commitment-schedule-<lane>-<epoch>-<sequence>-<ticket>.norito` файлы янында манифест катушкаһы.
+  Һәр яҙма сеймал Norito `PdpCommitment` байт менән рекордты йыйып, шулай DA-3 өйөм төҙөүселәр һәм
+  DA-5 планлаштырыусыларҙы ҡабаттан уҡыу йәки өлөшләтә магазиндарһыҙ бер үк индереүҙәрҙе һеңдерергә.
+- SDK ярҙамсылары PDP баш байттарын фашлай, һәр клиентты Norito анализлауҙы ҡабаттан тормошҡа ашырыуға мәжбүр итмәйенсә:
+  `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}` ҡаплау Руст, Python `ToriiClient`
+  хәҙер экспорт `decode_pdp_commitment_header`, һәм `IrohaSwift` суднолар тап килгән ярҙамсылары шулай мобиль
+  Клиенттар тиҙ арала кодланған үлсәүҙәр графигын йәшерә ала.【крат/ироха/срк/да.р. 1】【путон/ироха_клиент/клиент.п:1】【ИрохаСвифт/ИрохаСвифт/ТориКлиент.свифт:1】
+- Torii шулай уҡ `GET /v1/da/manifests/{storage_ticket}` X шулай SDKs һәм операторҙар манифесттар ала ала
+  һәм өлөшләтә пландар теймәйенсә, төйөн’s катушка каталогы. Яуап Norito байт ҡайтара.
+  (база64), рендерланған манифест JSON, `chunk_plan` JSON блоб әҙер `sorafs fetch`, плюс тейешле
+  18NI00000270X, `client_blob_id`, `blob_hash`, `chunk_root`) шулай аҫҡы инструменталь инструменттар
+  оркестраторҙы һеңдермәйенсә ашатырға, ә шул уҡ `Sora-PDP-Commitment` башын сығара.
+  көҙгө ингест яуаптар. `block_hash=<hex>` аша үткән параметр булараҡ детерминистик ҡайтара
+  `sampling_plan` тамырланған `block_hash || client_blob_id` (валитасылар араһында уртаҡлашҡан) составында.
+  `assignment_hash`, һораған `sample_window`, һәм `(index, role, group)` кортеждары үткән.
+  бөтә 2D һыҙат макеты шулай PoR asdys һәм валидаторҙар шул уҡ индекстарҙы ҡабатлай ала. Өлгөлө кеше
+  `client_blob_id`, `chunk_root`, һәм `ipa_commitment` ҡатнашмалары задание хеш; `ироха ҡушымтаһы да ала
+  --блок-хэш ` now writes `sampling_plan_.json` янында манифест + өлөшө планы менән .
+  хеш һаҡланған, һәм JS/Swift Torii клиенттары шул уҡ `assignment_hash_hex` шулай валитаторҙар фашлай
+  һәм проверстары бер детерминистик зонд йыйылмаһы менән бүлешә. Ҡасан Torii ҡайтарып алыу планы, `ироха ҡушымта да .
+  иҫбатлау-доступностьИ18NI0000000286Xsample_seed`) урынына
+  ad-hoc өлгөләре шулай PoR шаһиттар рәткә валитатор заданиелары менән теҙелеп, хатта оператор of of of of of .
+  `--block-hash` өҫтөнлөклө.【краттар/ироха_тории_шере/срк/да/үлемдә:1】【крат/ироха_кли/срк/командалар/да.р.:523】 【javascript/iroha_js/src/toriClienClient.js:15903】【ИрохаСвифт/ИрохаСвифт/ToriiClient.swift:170】
 
-## Implementation Notes
+### Ҙур түләү стручка ағымыКлиенттар, улар кәрәк, активтарҙы күберәк ашау өсөн конфигурацияланған бер запрос сиге башлана а .
+потоковый сессияһы шылтыратып `POST /v1/da/ingest/chunk/start`. ToriiX менән яуап бирә
+`ChunkSessionId` (BLAKE3-производство һоралған блоб метамағлүмәттәренән алынған) һәм һөйләшеүҙәр алып барылған өлөшө ҙурлығы.
+Артабанғы һәр `DaIngestChunk` запросы йөрөтә:
 
-- Torii’s `/v1/da/ingest` endpoint now normalises payload compression, enforces the replay cache,
-  deterministically chunks the canonical bytes, rebuilds `DaManifestV1`, and drops the encoded payload
-  into `config.da_ingest.manifest_store_dir` for SoraFS orchestration before issuing the receipt; the
-  handler also attaches a `Sora-PDP-Commitment` header so clients can capture the encoded commitment
-  immediately.【crates/iroha_torii/src/da/ingest.rs:220】
-- After persisting the canonical `DaCommitmentRecord`, Torii now emits a
-  `da-commitment-schedule-<lane>-<epoch>-<sequence>-<ticket>.norito` file beside the manifest spool.
-  Each entry bundles the record with the raw Norito `PdpCommitment` bytes so DA-3 bundle builders and
-  DA-5 schedulers ingest identical inputs without re-reading manifests or chunk stores.【crates/iroha_torii/src/da/ingest.rs:1814】
-- SDK helpers expose the PDP header bytes without forcing every client to reimplement Norito parsing:
-  `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}` cover Rust, the Python `ToriiClient`
-  now exports `decode_pdp_commitment_header`, and `IrohaSwift` ships matching helpers so mobile
-  clients can stash the encoded sampling schedule immediately.【crates/iroha/src/da.rs:1】【python/iroha_torii_client/client.py:1】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:1】
-- Torii also exposes `GET /v1/da/manifests/{storage_ticket}` so SDKs and operators can fetch manifests
-  and chunk plans without touching the node’s spool directory. The response returns the Norito bytes
-  (base64), rendered manifest JSON, a `chunk_plan` JSON blob ready for `sorafs fetch`, plus the relevant
-  hex digests (`storage_ticket`, `client_blob_id`, `blob_hash`, `chunk_root`) so downstream tooling can
-  feed the orchestrator without recomputing digests, and emits the same `Sora-PDP-Commitment` header to
-  mirror ingest responses. Passing `block_hash=<hex>` as a query parameter returns a deterministic
-  `sampling_plan` rooted in `block_hash || client_blob_id` (shared across validators) containing the
-  `assignment_hash`, the requested `sample_window`, and sampled `(index, role, group)` tuples spanning
-  the entire 2D stripe layout so PoR samplers and validators can replay the same indices. The sampler
-  mixes `client_blob_id`, `chunk_root`, and `ipa_commitment` into the assignment hash; `iroha app da get
-  --block-hash <hex>` now writes `sampling_plan_<ticket>.json` next to the manifest + chunk plan with
-  the hash preserved, and the JS/Swift Torii clients expose the same `assignment_hash_hex` so validators
-  and provers share a single deterministic probe set. When Torii returns a sampling plan, `iroha app da
-  prove-availability` now reuses that deterministic probe set (seed derived from `sample_seed`) instead
-  of ad-hoc sampling so PoR witnesses line up with validator assignments even if the operator omits a
-  `--block-hash` override.【crates/iroha_torii_shared/src/da/sampling.rs:1】【crates/iroha_cli/src/commands/da.rs:523】【javascript/iroha_js/src/toriiClient.js:15903】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:170】
+- `client_blob_id` — `DaIngestRequest` йомғаҡлауы менән бер үк.
+- `chunk_session_id` — йүгерә сеансҡа ҡырҡылған өлөштәрҙе бәйләй.
+- `chunk_index` һәм `offset` — детерминистик тәртипте үтәй.
+- `payload` — һөйләшеүҙәр алып барылған өлөш ҙурлығына тиклем.
+- `payload_hash` — BLAKE3 хеш өлөшө шулай Torii бөтә тапты буферһыҙ раҫлай ала.
+- `is_last` — терминаль киҫәкте күрһәтә.
 
-### Large Payload Streaming Flow
+Torii һаҡлана раҫланған киҫәктәр буйынса `config.da_ingest.manifest_store_dir/chunks/<session>/` һәм .
+рекордтар эсендә прогресс реплей кэш идемпотенцияны хөрмәтләү өсөн. Һуңғы киҫәк ерҙәрҙә, ToriiX
+диск өҫтөндә файҙалы йөктө яңынан йыйып ала (хәтер шпицтарынан ҡотолоу өсөн өлөш каталогы аша стриминг),
+канонлы манифест/квитанцияны тап бер тапҡыр төшөрөлгән тейәү менән иҫәпләгән, һәм, ниһайәт, яуап бирә
+`POST /v1/da/ingest` сәхнәләштерелгән артефакт ҡулланыу юлы менән. Уңышһыҙ сеанстарҙы асыҡтан-асыҡ туҡтатырға мөмкин йәки
+`config.da_ingest.replay_cache_ttl` һуң сүп-сар менән йыйылған. Был дизайн селтәр форматында һаҡлай .
+Norito-дуҫ, клиентҡа махсус тергеҙелгән протоколдарҙан ҡотолорға һәм ғәмәлдәге манифест торбаһын ҡабаттан файҙалана
+үҙгәрешһеҙ.
 
-Clients that need to ingest assets larger than the configured single-request limit initiate a
-streaming session by calling `POST /v1/da/ingest/chunk/start`. Torii responds with a
-`ChunkSessionId` (BLAKE3-derived from the requested blob metadata) and the negotiated chunk size.
-Each subsequent `DaIngestChunk` request carries:
-
-- `client_blob_id` — identical to the final `DaIngestRequest`.
-- `chunk_session_id` — ties slices to the running session.
-- `chunk_index` and `offset` — enforce deterministic ordering.
-- `payload` — up to the negotiated chunk size.
-- `payload_hash` — BLAKE3 hash of the slice so Torii can validate without buffering the entire blob.
-- `is_last` — indicates the terminal slice.
-
-Torii persists validated slices under `config.da_ingest.manifest_store_dir/chunks/<session>/` and
-records progress inside the replay cache to honour idempotency. When the final slice lands, Torii
-reassembles the payload on disk (streaming through the chunk directory to avoid memory spikes),
-computes the canonical manifest/receipt exactly as with single-shot uploads, and finally responds to
-`POST /v1/da/ingest` by consuming the staged artifact. Failed sessions can be aborted explicitly or
-are garbage-collected after `config.da_ingest.replay_cache_ttl`. This design keeps the network format
-Norito-friendly, avoids client-specific resumable protocols, and reuses the existing manifest pipeline
-unchanged.
-
-**Implementation status.** The canonical Norito types now live in
+**Торологик статусы.** Канон Norito типтары хәҙер йәшәй.
 `crates/iroha_data_model/src/da/`:
 
-- `ingest.rs` defines `DaIngestRequest`/`DaIngestReceipt`, together with the
-  `ExtraMetadata` container used by Torii.【crates/iroha_data_model/src/da/ingest.rs:1】
-- `manifest.rs` hosts `DaManifestV1` and `ChunkCommitment`, which Torii emits after
-  chunking completes.【crates/iroha_data_model/src/da/manifest.rs:1】
-- `types.rs` provides shared aliases (`BlobDigest`, `RetentionPolicy`,
-  `ErasureProfile`, etc.) and encodes the default policy values documented below.【crates/iroha_data_model/src/da/types.rs:240】
-- Manifest spool files land in `config.da_ingest.manifest_store_dir`, ready for the SoraFS orchestration
-  watcher to pull into storage admission.【crates/iroha_torii/src/da/ingest.rs:220】
-- Sumeragi enforces manifest availability when sealing or validating DA bundles:
-  blocks fail validation if the spool is missing the manifest or the hash differs
-  from the commitment.【crates/iroha_core/src/sumeragi/main_loop.rs:5335】【crates/iroha_core/src/sumeragi/main_loop.rs:14506】
+- `ingest.rs` `DaIngestRequest`/`DaIngestReceipt`, бергә билдәләй.
+  Norito контейнеры Prometheus ҡулланылған.
+- `manifest.rs` хосушеттары `DaManifestV1` һәм `ChunkCommitment` X, был Torii-тан һуң сыға.
+  1990 йылдарҙа был йүнәлештәге эштәрҙең иң мөһимдәренең береһе булып тора.
+- `types.rs` дөйөм плиталар тәьмин итә (`BlobDigest`, `RetentionPolicy`,
+  `ErasureProfile`, һ.
+- Манифест катушка файлдары `config.da_ingest.manifest_store_dir` ергә төшә, SoraFS оркестрына әҙер.
+  күҙәтеүсе һаҡлау ҡабул итеүгә тартыу өсөн.【краттар/ироха_тории/срк/да/жест.rs:220】
+- Sumeragi үтәү күрһәтә, ҡасан герметизация йәки раҫлау DA өйөмдәре:
+  блоктар етешһеҙлектәр раҫлау, әгәр катушка юҡ, йәки хеш айырыла
+  14535
 
-Roundtrip coverage for the request, manifest, and receipt payloads is tracked in
-`crates/iroha_data_model/tests/da_ingest_roundtrip.rs`, ensuring the Norito codec
-remains stable across updates.【crates/iroha_data_model/tests/da_ingest_roundtrip.rs:1】
+Запрос, асыҡ һәм квитанция файҙалы йөктәре өсөн түңәрәк яҡтыртыу 1990 йылда күҙәтелә.
+`crates/iroha_data_model/tests/da_ingest_roundtrip.rs`, Norito codec тәьмин итеү
+Яңыртыуҙар буйынса тотороҡло ҡала.【краттар/ироха_мәғлүмәттәр/модель/тестар/da_ingest_ruptrip.rs:1】
 
-**Retention defaults.** Governance ratified the initial retention policy during
-SF-6; the defaults enforced by `RetentionPolicy::default()` are:
+**Тотороҡһоҙлоҡ һаҡлау.** Идара итеү ратификацияланған тәүге һаҡлау сәйәсәте ваҡытында 2019.
+SF-6; `RetentionPolicy::default()` XX X`RetentionPolicy::default()` тарафынан үтәлгән ғәҙәттәгесә:- эҫе ярус: 7 көн (`604_800` секунд)
+- һалҡын ярус: 90 көн (`7_776_000` секунд)
+- кәрәкле репликалар: `3`
+- һаҡлау класы: `StorageClass::Hot`
+- идара итеү тегы: `"da.default"`
 
-- hot tier: 7 days (`604_800` seconds)
-- cold tier: 90 days (`7_776_000` seconds)
-- required replicas: `3`
-- storage class: `StorageClass::Hot`
-- governance tag: `"da.default"`
+Аҫҡы операторҙар был ҡиммәттәрҙе асыҡтан-асыҡ өҫтөнлөк бирергә тейеш, ҡасан һыҙат ҡабул итә .
+ҡәтғиерәк талаптар.
 
-Downstream operators must override these values explicitly when a lane adopts
-stricter requirements.
+## Клиент иҫбатлау артефакттары
 
-## Rust client proof artefacts
+SDKs, тип һеңдергән Rust клиент башҡа кәрәкмәй снарядтар сығарып CLI .
+канонлы PoR JSON өйөмөн етештереү. `Client` ике ярҙамсы фашлай:
 
-SDKs that embed the Rust client no longer need to shell out to the CLI to
-produce the canonical PoR JSON bundle. The `Client` exposes two helpers:
+- `build_da_proof_artifact` 2012 йылға тиклем генерацияланған теүәл структураны кире ҡайтара.
+  `iroha app da prove --json-out`, шул иҫәптән манифест/түләү аннотациялары бирелгән
+  аша [`DaProofArtifactMetadata`].【краттар/ироха/срк/клиент.р.:3638】
+- `write_da_proof_artifact` төҙөүсе урап, диск өсөн артефакт һаҡлана
+  (бик JSON + routing newline ғәҙәттәгесә) шулай автоматлаштырыу файл беркетергә мөмкин
+  йәки идара итеү дәлилдәре өйөмдәргә.
 
-- `build_da_proof_artifact` returns the exact structure generated by
-  `iroha app da prove --json-out`, including the manifest/payload annotations supplied
-  via [`DaProofArtifactMetadata`].【crates/iroha/src/client.rs:3638】
-- `write_da_proof_artifact` wraps the builder and persists the artefact to disk
-  (pretty JSON + trailing newline by default) so automation can attach the file
-  to releases or governance evidence bundles.【crates/iroha/src/client.rs:3653】
-
-### Example
+### Миҫал
 
 ```rust
 use iroha::{
@@ -503,26 +482,26 @@ client.write_da_proof_artifact(
 )?;
 ```
 
-The JSON payload that leaves the helper matches the CLI down to the field names
-(`manifest_path`, `payload_path`, `proofs[*].chunk_digest`, etc.), so existing
-automation can diff/parquet/upload the file without format-specific branches.
+JSON файҙалы йөк, был ярҙамсы ҡалдыра, CLI тура килә, ялан исемдәренә аҫҡа
+(`manifest_path`, `payload_path`, Norito.
+автоматлаштырыу дифф/паркет/файлды форматҡа хас филиалдарһыҙ тейәп була.
 
-## Proof verification benchmark
+## Дәлилдәрҙе раҫлау ориентиры
 
-Use the DA proof benchmark harness to validate verifier budgets on representative payloads before
-tightening block-level caps:
+Ҡулланыу DA иҫбатлау эталон йүгән раҫлау өсөн тикшерелгән бюджеттар буйынса вәкиллекле файҙалы йөктәр алдынан .
+тығыҙлау блок-кимәле ҡапҡастары:
 
-- `cargo xtask da-proof-bench` rebuilds the chunk store from the manifest/payload pair, samples PoR
-  leaves, and times verification against the configured budget. Taikai metadata is auto-filled, and the
-  harness falls back to a synthetic manifest if the fixture pair is inconsistent. When `--payload-bytes`
-  is set without an explicit `--payload`, the generated blob is written to
-  `artifacts/da/proof_bench/payload.bin` so fixtures stay untouched.【xtask/src/da.rs:1332】【xtask/src/main.rs:2515】
-- Reports default to `artifacts/da/proof_bench/benchmark.{json,md}` and include proofs/run, total and
-  per-proof timings, budget pass rate, and a recommended budget (110% of the slowest iteration) to
-  line up with `zk.halo2.verifier_budget_ms`.【artifacts/da/proof_bench/benchmark.md:1】
-- Latest run (synthetic 1 MiB payload, 64 KiB chunks, 32 proofs/run, 10 iterations, 250 ms budget)
-  recommended a 3 ms verifier budget with 100% of iterations inside the cap.【artifacts/da/proof_bench/benchmark.md:1】
-- Example (generates a deterministic payload and writes both reports):
+- SoraFS тергеҙелә, өлөшө магазиндан манифест/түләүле парҙан, өлгөләр PoR .
+  япраҡтары, һәм ваҡыт тикшерелгән ҡаршы конфигурацияланған бюджет. Тайкай метамағлүмәттәр автоматик тултырылған, ә
+  жгут синтетик күренешкә кире төшә, әгәр ҙә ҡоролма пары эҙмә-эҙлекһеҙ булһа. Ҡасан `--payload-bytes`
+  асыҡ `--payload` асыҡланмаған, генерацияланған блоб яҙылған.
+  `artifacts/da/proof_bench/payload.bin` шулай ҡорамалдар тейелмәй ҡала.【xtask/src/da.rs:1332】【xstask/src/main.rs:2515】
+- `artifacts/da/proof_bench/benchmark.{json,md}`-ҡа тиклем ғәҙәттәгесә отчеттар һәм дәлилдәр/йүгереүҙе, дөйөм һәм
+  110% иң яй итерацион 110%) өсөн 2012 йылға тиклем бюджет үткәреү кимәле һәм тәҡдим ителгән бюджет.
+  `zk.halo2.verifier_budget_ms` менән рәткә теҙеү.【Арфакттар/да/иҫбатлау_ҡала/эталон.мд:1】 .
+- Һуңғы йүгерә (синтетик 1 МиБ файҙалы йөк, 64 KiB өлөштәре, 32 дәлилдәр/йүгереү, 10 итерацион, 250 мс бюджет)
+  мс тикшерелгән бюджет тәҡдим итә 100% итерацион эсендә ҡапҡас.【арфакт/да/иҫбатлау_ҡала/эталон.мд:1】 .
+- Миҫал (детерминистик файҙалы йөктө генерациялай һәм ике отчетты ла яҙа):
 
 ```shell
 cargo xtask da-proof-bench \
@@ -534,37 +513,35 @@ cargo xtask da-proof-bench \
   --markdown-out artifacts/da/proof_bench/benchmark.md
 ```
 
-Block assembly enforces the same budgets: `sumeragi.da_max_commitments_per_block` and
-`sumeragi.da_max_proof_openings_per_block` gate the DA bundle before it is embedded in a block, and
-each commitment must carry a non-zero `proof_digest`. The guard treats the bundle length as the
-proof-opening count until explicit proof summaries are threaded through consensus, keeping the
-≤128-opening target enforceable at the block boundary.【crates/iroha_core/src/sumeragi/main_loop.rs:6573】
+Блок йыйыу шул уҡ бюджеттарҙы үтәй: SoraFSX һәм
+SoraFS ҡапҡаһы DA өйөмө блокҡа индерелгәнсе, һәм
+һәр йөкләмә нуль булмаған `proof_digest` йөрөтөргә тейеш. Һаҡсы өйөм оҙонлоғон дауалай, тип
+иҫбатлау-асыу һаны тиклем асыҡ иҫбатлау резюмеһы консенсус аша рез., һаҡлау
+≤128-асыу маҡсаты блок сигендә үтәлергә тейеш.【крат/ироха_ядро/срк/смераги/маин_цик.р. 6573】
 
-## PoR failure handling and slashing
+## PoR етешһеҙлектәре менән эш итеү һәм ҡырҡыуҺаҡлау эшселәре хәҙер өҫкә күтәрелә PoR етешһеҙлектәре һыҙаттары һәм бер-береһенә йәбештерелгән slash тәҡдимдәре менән бергә һәр береһе
+хөкөм ҡарары. Эҙмә-эҙлекле уңышһыҙлыҡтар өҫтөндә конфигурацияланған забастовка сиге тәҡдим сығара, тип
+үҙ эсенә провайдер/манифест пары, һыҙыҡ оҙонлоғо, тип, ҡабарынҡы ҡабыҙылған, һәм тәҡдим ителгән
+штраф провайдер облигацияһынан иҫәпләнгән һәм `penalty_bond_bps` X; һыуытыу тәҙрәләре (икенсе) һаҡлана
+дубликат ҡырҡып ташлауҙан шул уҡ ваҡиға.【крат/sorafs_node/src/lib.s:486】【краттар/sorafs_node/src/cift.rs:89】【крат/sorafs_node/src/bin/sorafs-node.343】
 
-Storage workers now surface PoR failure streaks and bonded slash recommendations alongside each
-verdict. Consecutive failures above the configured strike threshold emit a recommendation that
-includes the provider/manifest pair, the streak length that triggered the slash, and the proposed
-penalty computed from the provider bond and `penalty_bond_bps`; cooldown windows (seconds) keep
-duplicate slashes from firing on the same incident.【crates/sorafs_node/src/lib.rs:486】【crates/sorafs_node/src/config.rs:89】【crates/sorafs_node/src/bin/sorafs-node.rs:343】
+- Конфигурациялау сиктәрен/һыуытыу аша һаҡлау эшсеһе төҙөүсе (постройкалар идара итеү көҙгө
+  штраф сәйәсәте).
+- Слэш тәҡдимдәре теркәлгән ҡарар резюме JSON шулай идара итеү/аудиторҙар беркетергә мөмкин
+  уларҙы дәлилдәр өсөн өйөмдәр.
+- Стрипт макеты + пер-верс ролдәре хәҙер еп аша Torii’s һаҡлау булавка ос нөктәһе .
+  (`stripe_layout` + `chunk_roles` яландары) һәм һаҡлау эшсеһе шулай һаҡланған.
+  аудиторҙар/ремонтлау инструменттары планлаштырыу рәт/бағана ремонтлау өсөн ҡабаттан алынған макет өҫкө ағымдан .
 
-- Configure thresholds/cooldown via the storage worker builder (defaults mirror the governance
-  penalty policy).
-- Slash recommendations are recorded in the verdict summary JSON so governance/auditors can attach
-  them to evidence bundles.
-- Stripe layout + per-chunk roles are now threaded through Torii’s storage pin endpoint
-  (`stripe_layout` + `chunk_roles` fields) and persisted into the storage worker so
-  auditors/repair tooling can plan row/column repairs without re-deriving layout from upstream
+### Урынлаштырыу + ремонтлау йүгән
 
-### Placement + repair harness
+Sumeragi хәҙер
+`(index, role, stripe/column, offsets)` өҫтөндә урынлаштырыу хешын иҫәпләү һәм рәт-беренсе рәт-беренсе башҡара.
+бағана RS(16) ремонтлау алдынан реконструкциялау файҙалы йөк:
 
-`cargo run -p sorafs_car --bin da_reconstruct -- --manifest <path> --chunks-dir <dir>` now
-computes a placement hash over `(index, role, stripe/column, offsets)` and performs row-first then
-column RS(16) repair before reconstructing the payload:
-
-- Placement defaults to `total_stripes`/`shards_per_stripe` when present and falls back to chunk
-- Missing/corrupted chunks are rebuilt with row parity first; remaining gaps are repaired with
-  stripe (column) parity. Repaired chunks are written back to the chunk directory, and the JSON
-  summary captures the placement hash plus row/column repair counters.
-- If row+column parity cannot satisfy the missing set, the harness fails fast with the unrecoverable
-  indices so auditors can flag irreparable manifests.
+- `total_stripes`/`shards_per_stripe`-ҡа тиклем ғәҙәттәгесә урынлаштырыу һәм ҡасан бар һәм кире төшкән өлөшө
+- Миңле/коррупцияланған өлөштәр тәүҙә рәт паритеты менән яңынан төҙөлә; ҡалған бушлыҡтар менән ремонтлана.
+  һыҙат (бағана) паритеты. Ремонтланған өлөштәр өлөш каталогына кире яҙылған, ә JSON
+  резюме урынлаштырыу хеш плюс рәт/бағана ремонтлау иҫәпләүселәр.
+- Әгәр рәт+бағана паритеты юғалған комплектты ҡәнәғәтләндерә алмаһа, йүгән тергеҙелмәҫлек менән тиҙ уңышһыҙлыҡҡа осрай.
+  индекстар шулай аудиторҙар флаг ала төҙәтеп булмаған манифест.

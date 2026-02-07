@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c5fe52a907606a67a09e0ff229adb94f91dda73d809d8a8344166862dc62def9
 source_last_modified: "2025-12-29T18:16:35.947414+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Template for recording SM rollout decisions during Crypto WG syncs.
+//! Crypto WG စင့်ခ်လုပ်နေစဉ်အတွင်း SM ၏ ဆုံးဖြတ်ချက်များကို မှတ်တမ်းတင်ရန်အတွက် နမူနာပုံစံ။
 
-# SM Rollout – WG Sync Notes (Template)
+# SM မိတ်ဆက်ခြင်း – WG Sync Notes (Template)
 
-- **Date:** 2025-__-__
-- **Participants:** Crypto WG core, Release Eng, Security Review, SDK leads
-- **Facilitator:** ___________________
+- **ရက်စွဲ-** 2025-__-__
+- **ပါဝင်သူများ-** Crypto WG core၊ Release Eng၊ Security Review၊ SDK ဦးဆောင်သူများ
+- **ကူညီဆောင်ရွက်ပေးသူ-** ___________________
 
-## Agenda
-1. Lock refresh approval (`sm_lock_refresh_plan.md`)
-2. Deterministic policy & config knobs (SM-1/SM-3 tasks)
-3. Compliance brief status (SM-6a complete) & operator checklist updates (SM-6b)
-4. Dependency audit reviewers for `sm2`, `sm3`, `sm4`, `rfc6979`
+## အစီအစဉ်
+1. ပြန်လည်စတင်ခြင်း အတည်ပြုချက် လော့ခ်ချခြင်း (`sm_lock_refresh_plan.md`)
+2. အဆုံးအဖြတ်ပေးသော မူဝါဒနှင့် ပြင်ဆင်သည့်ခလုတ်များ (SM-1/SM-3 လုပ်ဆောင်စရာများ)
+3. လိုက်နာမှုအကျဉ်းချုပ် အခြေအနေ (SM-6a ပြီးပါပြီ) နှင့် အော်ပရေတာ စစ်ဆေးစာရင်း အပ်ဒိတ်များ (SM-6b)
+4. `sm2`၊ `sm3`၊ `sm4`၊ `rfc6979` အတွက် မှီခိုသူ စာရင်းစစ်များ
 
-## Decisions
-- [ ] Lock refresh approved? Details:
-- [ ] Deterministic policy affirmed? Notes:
-- [ ] Compliance brief owner + due date:
-- [ ] Audit reviewers assigned:
+## ဆုံးဖြတ်ချက်များ
+- [ ] လော့ခ်ပြန်လည်စတင်ခြင်းကို အတည်ပြုမလား။ အသေးစိတ်အချက်များ
+- [ ] Deterministic policy ကို အတည်ပြုပြီးပြီလား။ မှတ်စုများ-
+- [ ] လိုက်နာမှုအတိုချုံးပိုင်ရှင် + ကုန်ဆုံးရက်-
+- [ ] စာရင်းစစ် သုံးသပ်သူများကို တာဝန်ပေးအပ်သည်-
 
-## Action Items
-| Item | Owner | Due | Status |
+## လုပ်ဆောင်ချက်ပစ္စည်းများ
+| ပစ္စည်း | ပိုင်ရှင် | စူးစူး | အဆင့်အတန်း |
 |------|-------|-----|--------|
-| Prepare Cargo.lock PR after approval | Release Eng | ████ | ☐ |
-| Verify Annex D OpenSSL checks | Crypto WG | ████ | ☐ |
-| Track compliance brief revisions & operator checklist addenda | Docs/Legal | ████ | ☐ |
+| အတည်ပြုပြီးနောက် Cargo.lock PR ကို ပြင်ဆင်ပါ။ Eng | ထုတ်ဝေသည်။ ████ | ☐ |
+| နောက်ဆက်တွဲ D OpenSSL စစ်ဆေးမှုများကို အတည်ပြုပါ | Crypto WG | ████ | ☐ |
+| လိုက်နာမှုအကျဉ်းချုပ် တည်းဖြတ်မှုများနှင့် အော်ပရေတာ စစ်ဆေးရေးစာရင်း အပိုဆောင်း | Docs/Legal | ████ | ☐ |
 
-## Notes / Risks
-- _______________________________
-- _______________________________
+## မှတ်စုများ/အန္တရာယ်များ
+- _____________________________________
+- _____________________________________
 
-## Follow-up
-- Next review date:
-- Reporting back channel:
+## နောက်ဆက်တွဲ
+- နောက်တစ်ကြိမ် ပြန်လည်သုံးသပ်သည့်ရက်စွဲ-
+- ချန်နယ်ကို ပြန်လည်တင်ပြခြင်း-

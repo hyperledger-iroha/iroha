@@ -58,7 +58,7 @@ struct PublicKeyFullCacheEntry {
 
 thread_local! {
     static PUBLIC_KEY_FULL_CACHE: RefCell<Vec<PublicKeyFullCacheEntry>> =
-        RefCell::new(Vec::new());
+        const { RefCell::new(Vec::new()) };
 }
 
 fn public_key_full_cached(public_key: &PublicKey) -> PublicKeyFull {

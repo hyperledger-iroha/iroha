@@ -7,28 +7,29 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 1bf79d000e0536da04eafac6c0d896b1bf8f0c454e1bf4c4b97ba22c7c7f5db1
 source_last_modified: "2026-01-22T14:35:37.693070+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Sora Nexus Data Availability Ingest Plan
+# Sora Nexus ဒေတာရရှိနိုင်မှု Ingest အစီအစဉ်
 
-_Drafted: 2026-02-20 - Owner: Core Protocol WG / Storage Team / DA WG_
+_Drafted: 2026-02-20 - ပိုင်ရှင်- Core Protocol WG / Storage Team / DA WG_
 
-The DA-2 workstream extends Torii with a blob ingest API that emits Norito
-metadata and seeds SoraFS replication. This document captures the proposed
-schema, API surface, and validation flow so implementation can proceed without
-blocking on outstanding simulations (DA-1 follow-ups). All payload formats MUST
-use Norito codecs; no serde/JSON fallbacks are permitted.
+DA-2 အလုပ်ရေစီးကြောင်းသည် Torii ကို Norito ထုတ်လွှတ်သည့် blob ingest API ဖြင့် တိုးချဲ့သည်
+မက်တာဒေတာနှင့် အစေ့များ SoraFS ပွားခြင်း။ ဤစာတမ်းသည် အဆိုပြုချက်ကို ဖမ်းယူထားသည်။
+schema၊ API မျက်နှာပြင်နှင့် validation flow တို့ကို အကောင်အထည်မဖော်ဘဲ ဆက်လက်လုပ်ဆောင်နိုင်သည်။
+ထင်ရှားသော simulations များကိုပိတ်ဆို့ခြင်း (DA-1 နောက်ဆက်တွဲ)။ payload ဖော်မတ်များအားလုံး လိုအပ်သည်။
+Norito ကုဒ်ဒစ်များကို အသုံးပြုပါ။ serde/JSON တုံ့ပြန်မှုများကို ခွင့်မပြုပါ။
 
-## Goals
+## ပန်းတိုင်
 
-- Accept large blobs (Taikai segments, lane sidecars, governance artefacts)
-  deterministically over Torii.
-- Produce canonical Norito manifests describing the blob, codec parameters,
-  erasure profile, and retention policy.
-- Persist chunk metadata in SoraFS hot storage and enqueue replication jobs.
-- Publish pin intents + policy tags to the SoraFS registry and governance
-  observers.
-- Expose admission receipts so clients regain deterministic proof of publication.
+- ကြီးမားသော blob များ (Taikai အပိုင်းများ၊ လမ်းသွားဆိုက်ကားများ၊ အုပ်ချုပ်မှုဆိုင်ရာပစ္စည်းများ) ကိုလက်ခံပါ။
+  Torii ကို အဆုံးအဖြတ်ပေးသည်။
+- blob၊ codec ဘောင်များကို ဖော်ပြသည့် canonical Norito ကို ထုတ်လုပ်ပါ
+  ပရိုဖိုင်ကို ဖျက်ရန်နှင့် ထိန်းသိမ်းမှုမူဝါဒ။
+- SoraFS hot storage နှင့် enqueue replication အလုပ်များတွင် chunk metadata ကို ဆက်ရှိနေပါစေ။
+- SoraFS မှတ်ပုံတင်ခြင်းနှင့် အုပ်ချုပ်မှုသို့ ပင်ထိုးရည်ရွယ်ချက်များ + မူဝါဒတဂ်များကို ထုတ်ဝေပါ
+  လေ့လာသူများ။
+- ဝင်ခွင့်လက်ခံဖြတ်ပိုင်းများကို ဖောက်သည်များသည် တိကျသေချာသော ထုတ်ဝေမှုဆိုင်ရာ အထောက်အထားများ ပြန်လည်ရရှိစေရန် ထုတ်ဖော်ပြသပါ။
 
 ## API Surface (Torii)
 
@@ -37,47 +38,47 @@ POST /v1/da/ingest
 Content-Type: application/norito+v1
 ```
 
-Payload is a Norito-encoded `DaIngestRequest`. Responses use
-`application/norito+v1` and return `DaIngestReceipt`.
+Payload သည် Norito-encoded `DaIngestRequest` ဖြစ်သည်။ တုံ့ပြန်မှုများကို အသုံးပြုသည်။
+`application/norito+v1` နှင့် `DaIngestReceipt` ကို ပြန်ပေးပါ။
 
-| Response | Meaning |
-| --- | --- |
-| 202 Accepted | Blob queued for chunking/replication; receipt returned. |
-| 400 Bad Request | Schema/size violation (see validation checks). |
-| 401 Unauthorized | Missing/invalid API token. |
-| 409 Conflict | Duplicate `client_blob_id` with mismatched metadata. |
-| 413 Payload Too Large | Exceeds configured blob length limit. |
-| 429 Too Many Requests | Rate limit hit. |
-| 500 Internal Error | Unexpected failure (logged + alert). |
+| တုံ့ပြန်မှု | အဓိပ္ပါယ် |
+| ---| ---|
+| 202 လက်ခံ | အတုံးအခဲ/ပုံတူခြင်းအတွက် Blob တန်းစီထားသည်။ ပြေစာ ပြန်ပေးတယ်။ |
+| 400 Bad Request | အစီအစဉ်/အရွယ်အစား ချိုးဖောက်မှု (တရားဝင်စစ်ဆေးမှုများကို ကြည့်ပါ)။ |
+| 401 ခွင့်ပြုချက်မရှိဘဲ | API တိုကင် ပျောက်နေသည်/မမှန်ပါ။ |
+| 409 ပဋိပက္ခ | မကိုက်ညီသော မက်တာဒေတာဖြင့် `client_blob_id` ကို မိတ္တူပွားပါ။ |
+| 413 Payload Too Large | ပြင်ဆင်သတ်မှတ်ထားသော blob အရှည်ကန့်သတ်ချက်ထက် ကျော်လွန်နေပါသည်။ |
+| 429 တောင်းဆိုမှုများ အလွန်များ | နှုန်းကန့်သတ်ချက်ထိသွားတယ်။ |
+| 500 အတွင်းပိုင်းအမှား | မမျှော်လင့်ထားသော ပျက်ကွက်မှု (မှတ်တမ်းဝင် + သတိပေးချက်)။ |
 
 ```
 GET /v1/da/proof_policies
 Accept: application/json | application/x-norito
 ```
 
-Returns a versioned `DaProofPolicyBundle` derived from the current lane catalog.
-The bundle advertises `version` (currently `1`), a `policy_hash` (hash of the
-ordered policy list), and `policies` entries carrying `lane_id`, `dataspace_id`,
-`alias`, and the enforced `proof_scheme` (`merkle_sha256` today; KZG lanes are
-rejected by ingest until KZG commitments are available). The block header now
-commits to the bundle via `da_proof_policies_hash`, so clients can pin the
-active policy set when verifying DA commitments or proofs. Fetch this endpoint
-before building proofs to ensure they match the lane’s policy and the current
-bundle hash. Commitment list/prove endpoints carry the same bundle so SDKs
-don’t need an extra round-trip to bind a proof to the active policy set.
+လက်ရှိလမ်းကြောင်းကက်တလောက်မှဆင်းသက်လာသော `DaProofPolicyBundle` ဗားရှင်းကို ပြန်ပေးသည်။
+အစုအစည်းသည် `version` (လောလောဆယ် `1`)၊ `policy_hash` (ဟက်ရှ်)
+မှာယူထားသည့် မူဝါဒစာရင်း) နှင့် `policies` တွင် `lane_id`၊ `dataspace_id` တို့ကို သယ်ဆောင်လာခြင်း၊
+`alias` နှင့် ပြဌာန်းထားသော `proof_scheme` (ယနေ့ `merkle_sha256`၊ KZG လမ်းကြောများဖြစ်သည်
+KZG ကတိကဝတ်များ မရရှိနိုင်မချင်း ထည့်သွင်းခြင်းဖြင့် ပယ်ချခဲ့သည်။) အခု block header ပါ။
+`da_proof_policies_hash` မှတစ်ဆင့် အစုအဝေးသို့ ကတိပြုသည်၊ ထို့ကြောင့် သုံးစွဲသူများသည် ပင်နံပါတ်ကို ချိတ်နိုင်သည်။
+DA ကတိကဝတ်များ သို့မဟုတ် အထောက်အထားများကို အတည်ပြုသည့်အခါတွင် တက်ကြွသောမူဝါဒကို သတ်မှတ်ထားသည်။ ဤအဆုံးမှတ်ကို ရယူပါ။
+လမ်းကြော၏မူဝါဒနှင့် လက်ရှိနှင့်ကိုက်ညီကြောင်း သေချာစေရန် အထောက်အထားများ မတည်ဆောက်မီ
+အစုအဝေး hash ။ ကတိကဝတ်စာရင်း/အဆုံးမှတ်များသည် တူညီသောအစုအစည်းများပါရှိသောကြောင့် SDK များ
+တက်ကြွသောမူဝါဒသတ်မှတ်ထားသည့် သက်သေအထောက်အထားကို ချည်နှောင်ရန် အပိုအသွားအပြန် မလိုအပ်ပါ။
 
 ```
 GET /v1/da/proof_policy_snapshot
 Accept: application/json | application/x-norito
 ```
 
-Returns a `DaProofPolicyBundle` carrying the ordered policy list plus a
-`policy_hash` so SDKs can pin the version used when a block was produced. The
-hash is computed over the Norito-encoded policy array and changes whenever a
-lane’s `proof_scheme` is updated, allowing clients to detect drift between
-cached proofs and the chain configuration.
+မှာယူထားသော မူဝါဒစာရင်း နှင့် a ပါရှိသော `DaProofPolicyBundle` ကို ပြန်ပေးသည်။
+`policy_hash` ထို့ကြောင့် SDK များသည် ဘလောက်တစ်ခုထုတ်လုပ်သောအခါ အသုံးပြုသည့်ဗားရှင်းကို ပင်ထိုးနိုင်သည်။ ဟိ
+hash ကို Norito-ကုဒ်လုပ်ထားသော မူဝါဒ ခင်းကျင်းမှုအပေါ် တွက်ချက်ပြီး ပြောင်းလဲသည့်အခါတိုင်း၊
+Lane ၏ `proof_scheme` ကို အပ်ဒိတ်လုပ်ထားပြီး သုံးစွဲသူများအကြား ပျံ့လွင့်မှုကို သိရှိနိုင်စေသည်
+သိမ်းဆည်းထားသော အထောက်အထားများနှင့် ကွင်းဆက်ဖွဲ့စည်းမှု။
 
-## Proposed Norito Schema
+## အဆိုပြုထားသော Norito Schema
 
 ```rust
 /// Top-level ingest request.
@@ -153,322 +154,302 @@ pub struct DaIngestReceipt {
     pub rent_quote: DaRentQuote,        // XOR rent + incentives derived from policy
     pub operator_signature: Signature,
 }
-```
+```> အကောင်အထည်ဖော်မှုမှတ်စု- ဤ payloads အတွက် canonical Rust ကိုယ်စားပြုမှုများသည် ယခုအောက်တွင် ရှိနေပါသည်။
+> `iroha_data_model::da::types`၊ `iroha_data_model::da::ingest` ရှိ တောင်းဆိုချက်/ပြေစာထုပ်ပိုးမှုများပါရှိသော
+> နှင့် `iroha_data_model::da::manifest` ရှိ ထင်ရှားသော ဖွဲ့စည်းပုံ။
 
-> Implementation note: the canonical Rust representations for these payloads now live under
-> `iroha_data_model::da::types`, with request/receipt wrappers in `iroha_data_model::da::ingest`
-> and the manifest structure in `iroha_data_model::da::manifest`.
+`compression` အကွက်သည် ခေါ်ဆိုသူများသည် ဝန်ဆောင်ခကို မည်သို့ပြင်ဆင်ကြောင်း ကြော်ငြာသည်။ Torii လက်ခံသည်။
+`identity`၊ `gzip`၊ `deflate` နှင့် `zstd` မတိုင်မီ bytes အား ပွင့်လင်းမြင်သာစွာ ချုံ့ခြင်း
+ဟက်ခြင်း၊ ချခြင်း နှင့် ရွေးချယ်နိုင်သော မန်နီးဖက်စ်များကို အတည်ပြုခြင်း။
 
-The `compression` field advertises how callers prepared the payload. Torii accepts
-`identity`, `gzip`, `deflate`, and `zstd`, transparently decompressing the bytes before
-hashing, chunking, and verifying optional manifests.
+### မှန်ကန်ကြောင်း စစ်ဆေးချက်စာရင်း
 
-### Validation Checklist
+1. တောင်းဆိုချက် Norito ခေါင်းစီး `DaIngestRequest` ကိုက်ညီကြောင်း အတည်ပြုပါ။
+2. `total_size` သည် canonical (decompressed) payload length နှင့် ကွာခြားသည် သို့မဟုတ် configured max ထက်ကျော်လွန်ပါက မအောင်မြင်ပါ။
+3. `chunk_size` ချိန်ညှိမှု (ပါဝါ-နှစ်ခု၊ = 2 ကို သေချာပါစေ။
+5. `retention_policy.required_replica_count` သည် အုပ်ချုပ်မှုအခြေခံလိုင်းအား လေးစားရမည်။
+6. Canonical hash (လက်မှတ်အကွက်မှအပ မပါ) ကို လက်မှတ်စစ်ခြင်း
+7. payload hash + metadata တူညီခြင်းမရှိပါက `client_blob_id` ပွားခြင်းကို ငြင်းပယ်ပါ။
+8. `norito_manifest` ကို ပံ့ပိုးပေးသောအခါ၊ schema + hash ကိုက်ညီမှုများကို ပြန်လည်တွက်ချက်အတည်ပြုပါ
+   အတုံးလိုက်ပြီးနောက် ထင်ရှားသည်။ မဟုတ်ပါက node သည် manifest ကိုထုတ်ပေးပြီး ၎င်းကို သိမ်းဆည်းသည်။
+9. ပြင်ဆင်ထားသော ပုံတူပွားခြင်းမူဝါဒကို ကျင့်သုံးပါ- Torii သည် တင်သွင်းထားသောစာကို ပြန်လည်ရေးသားသည်
+   `RetentionPolicy` နှင့် `torii.da_ingest.replication_policy` (ကြည့်ပါ
+   `replication_policy.md`) နှင့် ထိန်းသိမ်းထားသည့် ကြိုတင်တည်ဆောက်ထားသော သရုပ်များကို ငြင်းပယ်သည်
+   မက်တာဒေတာသည် ပြဌာန်းထားသော ပရိုဖိုင်နှင့် မကိုက်ညီပါ။
 
-1. Verify request Norito header matches `DaIngestRequest`.
-2. Fail if `total_size` differs from the canonical (decompressed) payload length or exceeds the configured max.
-3. Enforce `chunk_size` alignment (power-of-two, <= 2 MiB).
-4. Ensure `data_shards + parity_shards` <= global maximum and parity >= 2.
-5. `retention_policy.required_replica_count` must respect governance baseline.
-6. Signature verification against canonical hash (excluding signature field).
-7. Reject duplicate `client_blob_id` unless payload hash + metadata identical.
-8. When `norito_manifest` provided, verify schema + hash matches recalculated
-   manifest after chunking; otherwise node generates manifest and stores it.
-9. Enforce the configured replication policy: Torii rewrites the submitted
-   `RetentionPolicy` with `torii.da_ingest.replication_policy` (see
-   `replication_policy.md`) and rejects pre-built manifests whose retention
-   metadata does not match the enforced profile.
+### Chunking & Replication Flow1. payload ကို `chunk_size` တွင် အပိုင်းလိုက်၊ အတုံးတစ်ခုလျှင် BLAKE3 + Merkle root ကို တွက်ချက်ပါ။
+2. တည်ဆောက်ခြင်း Norito `DaManifestV1` (ဖွဲ့စည်းပုံအသစ်) အပိုင်းအစများကို ကတိကဝတ်များရယူခြင်း (အခန်းကဏ္ဍ/group_id)၊
+   ဖျက်ပစ်သည့် အပြင်အဆင် (အတန်းနှင့် ကော်လံ တူညီမှု အရေအတွက်များ အပေါင်း `ipa_commitment`)၊ ထိန်းသိမ်းမှု မူဝါဒ၊
+   နှင့် metadata။
+3. `config.da_ingest.manifest_store_dir` အောက်တွင် canonical manifest bytes ကို တန်းစီပါ
+   (Torii သည် `manifest.encoded` ဖိုင်များကို lane/epoch/sequence/ticket/ fingerprint ဖြင့် သော့ခတ်ထားသော `manifest.encoded` ဖြင့်ရေးသည်) ထို့ကြောင့် SoraFS
+   Orchestration သည် ၎င်းတို့ကို ထည့်သွင်းနိုင်ပြီး သိုလှောင်မှုလက်မှတ်ကို ဆက်တိုက်ဒေတာနှင့် ချိတ်ဆက်နိုင်သည်။
+4. အုပ်ချုပ်မှုတက်ဂ် + မူဝါဒဖြင့် `sorafs_car::PinIntent` မှတစ်ဆင့် ပင်ထိုးရည်ရွယ်ချက်များကို ထုတ်ဝေပါ။
+5. လေ့လာသူများကို အသိပေးရန် Norito ဖြစ်ရပ် `DaIngestPublished` ကို ထုတ်လွှတ်သည် (အလင်းဖောက်သည်များ၊
+   အုပ်ချုပ်မှု၊ ခွဲခြမ်းစိတ်ဖြာမှု)။
+6. Return `DaIngestReceipt` (Torii DA ဝန်ဆောင်မှုကီးဖြင့် လက်မှတ်ထိုး) နှင့် ထည့်ပါ
+   Base64 Norito ကုဒ်နံပါတ်ပါဝင်သော `Sora-PDP-Commitment` တုံ့ပြန်မှုခေါင်းစီး
+   SDK များသည် နမူနာမျိုးစေ့ကို ချက်ချင်း သိမ်းဆည်းထားနိုင်သောကြောင့် ရရှိလာသော ကတိကဝတ်များ။
+   ယခုပြေစာတွင် `rent_quote` (`DaRentQuote`) နှင့် `stripe_layout` တို့ကို မြှုပ်နှံထားသည်
+   ထို့ကြောင့် တင်ပြသူများသည် XOR တာဝန်များ၊ အရန်ရှယ်ယာများ၊ PDP/PoTR ဘောနပ်စ်မျှော်လင့်ချက်များကို ဖော်ပြနိုင်သည်၊
+   နှင့် ရန်ပုံငွေမတည်မီ သိုလှောင်မှု-လက်မှတ် မက်တာဒေတာနှင့်အတူ 2D မက်ထရစ်ကို ဖျက်ပစ်သည်။
+7. ရွေးချယ်နိုင်သော မှတ်ပုံတင်ခြင်း မက်တာဒေတာ-
+   - `da.registry.alias` — pin registry entry ကို ရှာဖွေရန် အများသူငှာ၊ ကုဒ်မထားသော UTF-8 alias string။
+   - `da.registry.owner` — မှတ်ပုံတင်ခြင်းပိုင်ဆိုင်မှုကို မှတ်တမ်းတင်ရန်အတွက် အများသူငှာ၊ ကုဒ်မထားသော `AccountId` စာကြောင်း။
+   Torii သည် ၎င်းတို့ကို ထုတ်လုပ်ထားသော `DaPinIntent` သို့ မိတ္တူကူးထားသောကြောင့် downstream pin processing သည် aliases ကို ချည်နှောင်နိုင်သည်
+   ကုန်ကြမ်း မက်တာဒေတာမြေပုံကို ပြန်လည်ခွဲခြမ်းစိတ်ဖြာခြင်းမရှိဘဲ ပိုင်ရှင်များ၊ ပုံမမှန်သော သို့မဟုတ် ဗလာတန်ဖိုးများကို ပယ်ချပါသည်။
+   စားသုံးမှုအတည်ပြုချက်။
 
-### Chunking & Replication Flow
+## သိုလှောင်မှု / Registry အပ်ဒိတ်များ
 
-1. Chunk payload into `chunk_size`, compute BLAKE3 per chunk + Merkle root.
-2. Build Norito `DaManifestV1` (new struct) capturing chunk commitments (role/group_id),
-   erasure layout (row and column parity counts plus `ipa_commitment`), retention policy,
-   and metadata.
-3. Queue the canonical manifest bytes under `config.da_ingest.manifest_store_dir`
-   (Torii writes `manifest.encoded` files keyed by lane/epoch/sequence/ticket/fingerprint) so SoraFS
-   orchestration can ingest them and link the storage ticket to persisted data.
-4. Publish pin intents via `sorafs_car::PinIntent` with governance tag + policy.
-5. Emit Norito event `DaIngestPublished` to notify observers (light clients,
-   governance, analytics).
-6. Return `DaIngestReceipt` (signed by Torii DA service key) and add the
-   `Sora-PDP-Commitment` response header containing the base64 Norito encoding
-   of the derived commitment so SDKs can stash the sampling seed immediately.
-   The receipt now embeds `rent_quote` (a `DaRentQuote`) and `stripe_layout`
-   so submitters can surface the XOR obligations, reserve share, PDP/PoTR bonus expectations,
-   and the 2D erasure matrix dimensions alongside the storage-ticket metadata before committing funds.
-7. Optional registry metadata:
-   - `da.registry.alias` — public, unencrypted UTF-8 alias string to seed the pin registry entry.
-   - `da.registry.owner` — public, unencrypted `AccountId` string to record registry ownership.
-   Torii copies these into the generated `DaPinIntent` so downstream pin processing can bind aliases
-   and owners without re-parsing the raw metadata map; malformed or empty values are rejected during
-   ingest validation.
+- `sorafs_manifest` ကို `DaManifestV1` ဖြင့် ချဲ့ထွင်ပြီး အဆုံးအဖြတ်ပိုင်းခြားမှုကို ဖွင့်ပေးသည်။
+- ဗားရှင်းလုပ်ထားသော payload ရည်ညွှန်းချက်ဖြင့် registry stream အသစ် `da.pin_intent` ကိုထည့်ပါ။
+  hash + လက်မှတ် ID ကိုဖော်ပြပါ။
+- စားသုံးနိုင်မှု latency ကိုခြေရာခံရန်၊ အတုံးလိုက်အတုံးလိုက်အတုံးလိုက်အခဲလိုက်ပြုလုပ်ရန်၊
+  ပုံတူကူးယူခြင်း နှင့် ပျက်ကွက်မှု အရေအတွက်။
+- Torii `/status` တုံ့ပြန်မှုများသည် နောက်ဆုံးပေါ်ထွက်ပေါ်နေသည့် `taikai_ingest` ခင်းကျင်းတစ်ခု ပါ၀င်သည်
+  ကုဒ်ဒါမှထည့်သွင်းခြင်း latency၊ တိုက်ရိုက်-အစွန်း ပျံ့လွင့်ခြင်းနှင့် (အစုအဝေး၊ ထုတ်လွှင့်မှု) တစ်ခုချင်းအလိုက် အမှားကောင်တာ DA-9
+  Prometheus ကို မဖြုန်းတီးဘဲ node များမှ ကျန်းမာရေး လျှပ်တစ်ပြက်ပုံများကို တိုက်ရိုက်ထည့်သွင်းရန် ဒက်ရှ်ဘုတ်များ။
 
-## Storage / Registry Updates
+## စမ်းသပ်ခြင်းဗျူဟာ- schema validation၊ လက်မှတ်စစ်ဆေးမှုများ၊ ထပ်နေသောရှာဖွေတွေ့ရှိမှုအတွက်ယူနစ်စမ်းသပ်မှုများ။
+- `DaIngestRequest` ၏ Norito ကုဒ်နံပါတ်ကို အတည်ပြုသည့် ရွှေရောင်စစ်ဆေးမှုများ၊
+- ပေါင်းစည်းခြင်းကြိုးသည် SoraFS + registry ကို အတုယူ၍ အတုံးအခဲ + ပင်နံပါတ် စီးဆင်းမှုများကို အခိုင်အမာ ပေါင်းစပ်ထားသည်။
+- ကျပန်းဖျက်ပစ်သည့်ပရိုဖိုင်များနှင့် ထိန်းသိမ်းမှုပေါင်းစပ်မှုများ ပါဝင်သည့် ပိုင်ဆိုင်မှုစစ်ဆေးမှုများ။
+- ပုံသဏ္ဍာန်မမှန်သော မက်တာဒေတာကို ကာကွယ်ရန် Norito ပေးချေမှုများအား ရှုပ်ယှက်ခတ်ခြင်း။
+- blob အတန်းတိုင်းအတွက် ရွှေရောင်ပွဲများ
+  `fixtures/da/ingest/manifests/<blob_class>/manifest.{norito.hex,json}` အဖော်အတုံးတစ်ခု
+  `fixtures/da/ingest/sample_chunk_records.txt` တွင် စာရင်းပေးထားသည်။ လျစ်လျူရှုစမ်းပါ။
+  `regenerate_da_ingest_fixtures` သည် ပွဲစဉ်များကို လန်းဆန်းစေသည်။
+  `manifest_fixtures_cover_all_blob_classes` ဗားရှင်းအသစ် `BlobClass` ကို ထည့်လိုက်သည်နှင့် ပျက်သွားသည်
+  Norito/JSON အတွဲကို အပ်ဒိတ်မလုပ်ဘဲ။ ၎င်းသည် Torii၊ SDKs နှင့် DA-2 အား အချိန်တိုင်းတွင် ရိုးသားနေပါသည်။
+  blob မျက်နှာပြင်အသစ်ကို လက်ခံသည်။【fixtures/da/ingest/README.md:1】【crates/iroha_torii/src/da/tests.rs:2902】
 
-- Extend `sorafs_manifest` with `DaManifestV1`, enabling deterministic parsing.
-- Add new registry stream `da.pin_intent` with versioned payload referencing
-  manifest hash + ticket id.
-- Update observability pipelines to track ingest latency, chunking throughput,
-  replication backlog, and failure counts.
-- Torii `/status` responses now include a `taikai_ingest` array that surfaces the latest
-  encoder-to-ingest latency, live-edge drift, and error counters per (cluster, stream), enabling DA-9
-  dashboards to ingest health snapshots directly from nodes without scraping Prometheus.
-
-## Testing Strategy
-
-- Unit tests for schema validation, signature checks, duplicate detection.
-- Golden tests verifying Norito encoding of `DaIngestRequest`, manifest, and receipt.
-- Integration harness spinning up mock SoraFS + registry, asserting chunk + pin flows.
-- Property tests covering random erasure profiles and retention combinations.
-- Fuzzing of Norito payloads to guard against malformed metadata.
-- Golden fixtures for every blob class live under
-  `fixtures/da/ingest/manifests/<blob_class>/manifest.{norito.hex,json}` with a companion chunk
-  listing in `fixtures/da/ingest/sample_chunk_records.txt`. The ignored test
-  `regenerate_da_ingest_fixtures` refreshes the fixtures, while
-  `manifest_fixtures_cover_all_blob_classes` fails as soon as a new `BlobClass` variant is added
-  without updating the Norito/JSON bundle. This keeps Torii, SDKs, and docs honest whenever DA-2
-  accepts a new blob surface.【fixtures/da/ingest/README.md:1】【crates/iroha_torii/src/da/tests.rs:2902】
-
-## CLI & SDK Tooling (DA-8)
-
-- `iroha app da submit` (new CLI entrypoint) now wraps the shared ingest builder/publisher so operators
-  can ingest arbitrary blobs outside of the Taikai bundle flow. The command lives in
-  `crates/iroha_cli/src/commands/da.rs:1` and consumes a payload, erasure/retention profile, and
-  optional metadata/manifest files before signing the canonical `DaIngestRequest` with the CLI
-  config key. Successful runs persist `da_request.{norito,json}` and `da_receipt.{norito,json}` under
-  `artifacts/da/submission_<timestamp>/` (override via `--artifact-dir`) so release artefacts can
-  record the exact Norito bytes used during ingestion.
-- The command defaults to `client_blob_id = blake3(payload)` but accepts overrides via
-  `--client-blob-id`, honours metadata JSON maps (`--metadata-json`) and pre-generated manifests
-  (`--manifest`), and supports `--no-submit` for offline preparation plus `--endpoint` for custom
-  Torii hosts. Receipt JSON is printed to stdout in addition to being written to disk, closing the
-  DA-8 “submit_blob” tooling requirement and unblocking SDK parity work.
-- `iroha app da get` adds a DA-focused alias for the multi-source orchestrator that already powers
-  `iroha app sorafs fetch`. Operators can point it at manifest + chunk-plan artefacts (`--manifest`,
-  `--plan`, `--manifest-id`) **or** simply pass a Torii storage ticket via `--storage-ticket`. When the
-  ticket path is used the CLI pulls the manifest from `/v1/da/manifests/<ticket>`, persists the bundle
-  under `artifacts/da/fetch_<timestamp>/` (override with `--manifest-cache-dir`), derives the **manifest
-  hash** for `--manifest-id`, and then runs the orchestrator with the supplied `--gateway-provider`
-  list. Payload verification still relies on the embedded CAR/`blob_hash` digest while the gateway id is
-  now the manifest hash so clients and validators share a single blob identifier. All advanced knobs from
-  the SoraFS fetcher surface intact (manifest envelopes, client labels, guard caches, anonymity transport
-  overrides, scoreboard export, and `--output` paths), and the manifest endpoint can be overridden via
-  `--manifest-endpoint` for custom Torii hosts, so end-to-end availability checks live entirely under the
-  `da` namespace without duplicating orchestrator logic.
-- `iroha app da get-blob` pulls canonical manifests straight from Torii via `GET /v1/da/manifests/{storage_ticket}`.
-  The command now labels artefacts with the manifest hash (blob id), writing
-  `manifest_{manifest_hash}.norito`, `manifest_{manifest_hash}.json`, and `chunk_plan_{manifest_hash}.json`
-  under `artifacts/da/fetch_<timestamp>/` (or a user-supplied `--output-dir`) while echoing the exact
-  `iroha app da get` invocation (including `--manifest-id`) required for the follow-up orchestrator fetch.
-  This keeps operators out of the manifest spool directories and guarantees the fetcher always uses the
-  signed artefacts emitted by Torii. The JavaScript Torii client mirrors this flow via
-  `ToriiClient.getDaManifest(storageTicketHex)` while the Swift SDK now exposes
-  `ToriiClient.getDaManifestBundle(...)`. Both return the decoded Norito bytes, manifest JSON, manifest hash,
-  and chunk plan so SDK callers can hydrate orchestrator sessions without shelling out to the CLI, and Swift
-  clients can additionally call `fetchDaPayloadViaGateway(...)` to pipe those bundles through the native
-  SoraFS orchestrator wrapper.【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:240】
-- `/v1/da/manifests` responses now surface `manifest_hash`, and both CLI + SDK helpers (`iroha app da get`,
-  `ToriiClient.fetchDaPayloadViaGateway`, and the Swift/JS gateway wrappers) treat this digest as the
-  canonical manifest identifier while continuing to verify payloads against the embedded CAR/blob hash.
-- `iroha app da rent-quote` computes deterministic rent and incentive breakdowns for a supplied storage size
-  and retention window. The helper consumes either the active `DaRentPolicyV1` (JSON or Norito bytes) or
-  the built-in default, validates the policy, and prints a JSON summary (`gib`, `months`, policy metadata,
-  and the `DaRentQuote` fields) so auditors can cite exact XOR charges inside governance minutes without
-  writing ad hoc scripts. The command now also emits a one-line `rent_quote ...` summary before the JSON
-  payload to make console logs and runbooks easier to scan when quotes are generated during incidents.
-  Pass `--quote-out artifacts/da/rent_quotes/<stamp>.json` (or any other path)
-  to persist the pretty-printed summary and use `--policy-label "governance ticket #..."` when the
-  artefact needs to cite a specific vote/config bundle; the CLI trims custom labels and rejects blank
-  strings to keep `policy_source` values meaningful in evidence bundles. See
-  `crates/iroha_cli/src/commands/da.rs` for the subcommand and `docs/source/da/rent_policy.md`
-  for the policy schema.【crates/iroha_cli/src/commands/da.rs:1】【docs/source/da/rent_policy.md:1】
-- Pin registry parity now extends to SDKs: `ToriiClient.registerSorafsPinManifest(...)` in the
-  JavaScript SDK builds the exact payload used by `iroha app sorafs pin register`, enforcing canonical
-  chunker metadata, pin policies, alias proofs, and successor digests before POSTing to
-  `/v1/sorafs/pin/register`. This keeps CI bots and automation from shelling out to the CLI when
-  recording manifest registrations, and the helper ships with TypeScript/README coverage so DA-8’s
-  “submit/get/prove” tooling parity is fully satisfied on JS alongside Rust/Swift.【javascript/iroha_js/src/toriiClient.js:1045】【javascript/iroha_js/test/toriiClient.test.js:788】
-- `iroha app da prove-availability` chains all of the above: it takes a storage ticket, downloads the
-  canonical manifest bundle, runs the multi-source orchestrator (`iroha app sorafs fetch`) against the
-  supplied `--gateway-provider` list, persists the downloaded payload + scoreboard under
-  `artifacts/da/prove_availability_<timestamp>/`, and immediately invokes the existing PoR helper
-  (`iroha app da prove`) using the fetched bytes. Operators can tweak the orchestrator knobs
-  (`--max-peers`, `--scoreboard-out`, manifest endpoint overrides) and the proof sampler
-  (`--sample-count`, `--leaf-index`, `--sample-seed`) while a single command produces the artefacts
-  expected by DA-5/DA-9 audits: payload copy, scoreboard evidence, and JSON proof summaries.
-- `da_reconstruct` (new in DA-6) reads a canonical manifest plus the chunk directory emitted by the chunk
-  store (`chunk_{index:05}.bin` layout) and deterministically reassembles the payload while verifying
-  every Blake3 commitment. The CLI lives under `crates/sorafs_car/src/bin/da_reconstruct.rs` and ships as
-  part of the SoraFS tooling bundle. Typical flow:
-  1. `iroha app da get-blob --storage-ticket <ticket>` to download `manifest_<manifest_hash>.norito` and the chunk plan.
+## CLI & SDK Tooling (DA-8)- `iroha app da submit` (CLI ဝင်ခွင့်အမှတ်အသစ်) သည် ယခုအခါ မျှဝေသုံးစွဲနေသော တည်ဆောက်သူ/ထုတ်ဝေသူအား ခြုံငုံမိသောကြောင့် အော်ပရေတာများ
+  Taikai အစုအဝေးစီးဆင်းမှု၏ အပြင်ဘက်တွင် မထင်သလို blobs များကို ထည့်သွင်းနိုင်သည်။ အမိန့်ပေးသည်။
+  `crates/iroha_cli/src/commands/da.rs:1` နှင့် payload ကိုအသုံးပြုသည်၊ ဖျက်/သိမ်းထားသော ပရိုဖိုင်နှင့်
+  CLI ဖြင့် canonical `DaIngestRequest` ကို မလက်မှတ်မထိုးမီ ရွေးချယ်နိုင်သော မက်တာဒေတာ/မန်နီးဖက်စ်ဖိုင်များ
+  config key အောင်မြင်သော လုပ်ဆောင်မှုများသည် `da_request.{norito,json}` နှင့် `da_receipt.{norito,json}` အောက်တွင် ဆက်ရှိနေသည်
+  `artifacts/da/submission_<timestamp>/` (`--artifact-dir` မှတဆင့် override) ထို့ကြောင့် ပစ္စည်းများကို ထုတ်ဝေနိုင်သည်
+  စားသုံးနေစဉ်အသုံးပြုသည့် Norito bytes အတိအကျကို မှတ်တမ်းတင်ပါ။
+- command သည် `client_blob_id = blake3(payload)` သို့ ပုံသေသတ်မှတ်ထားသော်လည်း မှတဆင့် overrides ကိုလက်ခံပါသည်။
+  `--client-blob-id`၊ မက်တာဒေတာ JSON မြေပုံများ (`--metadata-json`) နှင့် ကြိုတင်ထုတ်လုပ်ထားသော မန်နီးဖက်စ်များကို ဂုဏ်ပြုပါသည်။
+  (`--manifest`) နှင့် စိတ်ကြိုက်အတွက် အော့ဖ်လိုင်းပြင်ဆင်မှုအပြင် `--endpoint` အတွက် `--endpoint` ကို ပံ့ပိုးပေးသည်
+  Torii တန်ဆာပလာများ။ ပြေစာကို JSON ကို ပိတ်ပြီး disk သို့ စာရေးထားသည့်အပြင် stdout သို့ ရိုက်နှိပ်ထားသည်။
+  DA-8 "submit_blob" ကိရိယာတန်ဆာပလာလိုအပ်ချက်နှင့် SDK တူညီမှုလုပ်ငန်းကို ပိတ်ဆို့ခြင်းအား ပြန်ဖွင့်ခြင်း။
+- `iroha app da get` သည် စွမ်းအားရှိပြီးသား ရင်းမြစ်အစုံလိုက်သံစုံတီးဝိုင်းအတွက် DA-အာရုံစူးစိုက်မှုကို ပေါင်းထည့်သည်
+  `iroha app sorafs fetch`။ အော်ပရေတာများသည် ၎င်းကို manifest + chunk-plan artefacts (`--manifest`၊
+  `--plan`၊ `--manifest-id`) ** သို့မဟုတ် ** Torii သိုလှောင်မှုလက်မှတ်ကို `--storage-ticket` မှတစ်ဆင့် ရိုးရိုးရှင်းရှင်း ဖြတ်သန်းပါ။ ဟို
+  လက်မှတ်လမ်းကြောင်းကို အသုံးပြုပြီး CLI သည် မန်နီးဖက်စ်ကို `/v1/da/manifests/<ticket>` မှ ဆွဲထုတ်ကာ အတွဲလိုက်ကို ဆက်ရှိနေသည်
+  `artifacts/da/fetch_<timestamp>/` အောက်တွင် (`--manifest-cache-dir`) ဖြင့် ပြန်ရေးသည် **manifest မှ ဆင်းသက်လာသည်
+  `--manifest-id` အတွက် hash**၊ ထို့နောက် ပံ့ပိုးပေးထားသော `--gateway-provider` ဖြင့် သံစုံတီးဝိုင်းကို လုပ်ဆောင်သည်
+  စာရင်း။ ဂိတ်ဝေး ID သည် ရှိနေစဉ် Payload အတည်ပြုခြင်းတွင် ထည့်သွင်းထားသော CAR/`blob_hash` အချေအတင်ပေါ်တွင် မှီခိုနေရဆဲဖြစ်သည်။
+  ယခုဖော်ပြချက် hash သည် client များနှင့် validators သည် blob identifier တစ်ခုတည်းကိုမျှဝေပါသည်။ အဆင့်မြင့် အဖုများ အားလုံး
+  SoraFS ထုတ်ယူသည့် မျက်နှာပြင်သည် နဂိုအတိုင်း (ထင်ရှားသော စာအိတ်များ၊ သုံးစွဲသူ တံဆိပ်များ၊ အစောင့်ကက်ရှ်များ၊ အမည်ဝှက် သယ်ယူပို့ဆောင်ရေး
+  အစားထိုးမှုများ၊ ရမှတ်ဘုတ်တင်ပို့ခြင်းနှင့် `--output` လမ်းကြောင်းများ) နှင့် manifest endpoint မှတဆင့် လွှမ်းမိုးနိုင်သည်
+  စိတ်ကြိုက် Torii hosts အတွက် `--manifest-endpoint`၊ ထို့ကြောင့် အဆုံးမှ အဆုံးအထိရရှိနိုင်မှုစစ်ဆေးမှုများသည် လုံး၀အောက်တွင်ရှိသည်။
+  `da` တီးမှုတ်တီးခတ်သူ လော့ဂျစ်ကို ထပ်ခြင်းမပြုဘဲ namespace။
+- `iroha app da get-blob` သည် `GET /v1/da/manifests/{storage_ticket}` မှတစ်ဆင့် Torii မှ တိုက်ရိုက် Canonical manifest များကို ဆွဲထုတ်သည်။
+  ယခု command သည် artefacts များကို manifest hash (blob id) ဖြင့် အညွှန်းရေးပေးပါသည်။
+  `manifest_{manifest_hash}.norito`၊ `manifest_{manifest_hash}.json` နှင့် `chunk_plan_{manifest_hash}.json`
+  အတိအကျကို သံယောင်လိုက်နေစဉ် `artifacts/da/fetch_<timestamp>/` (သို့မဟုတ် အသုံးပြုသူမှပေးသော `--output-dir`) အောက်တွင်
+  `iroha app da get` တောင်းခံလွှာ (`--manifest-id` အပါအဝင်) နောက်ဆက်တွဲ တီးမှုတ်သူ ထုတ်ယူမှုအတွက် လိုအပ်သည်။
+  ၎င်းသည် အော်ပရေတာများအား manifest spool လမ်းညွှန်များမှနေ၍ ဖမ်းယူသူသည် ၎င်းကို အမြဲတမ်းအသုံးပြုကြောင်း အာမခံပါသည်။
+  Torii မှ ထုတ်လွှတ်သော လက်မှတ်ရေးထိုးထားသော ရှေးဟောင်းပစ္စည်းများ။ JavaScript Torii client သည် ဤစီးဆင်းမှုကို ထင်ဟပ်စေသည်။
+  `ToriiClient.getDaManifest(storageTicketHex)` သည် Swift SDK ကို ယခု ထုတ်ဖော်နေစဉ်
+  `ToriiClient.getDaManifestBundle(...)`။ နှစ်ခုလုံးကုဒ်သုံးထားသော Norito bytes၊ manifest JSON၊ manifest hash၊SDK ခေါ်ဆိုသူများသည် CLI သို့ ပစ်မချဘဲ တီးမှုတ်ခြင်းဆက်ရှင်များကို ရေဓာတ်ဖြည့်ပေးနိုင်သောကြောင့် အတုံးလိုက်အစီအမံများ နှင့် Swift
+  ဖောက်သည်များသည် ၎င်းအစုအဝေးများကို ဇာတိမှတဆင့် ပိုက်ရန် `fetchDaPayloadViaGateway(...)` ကို ထပ်မံခေါ်ဆိုနိုင်သည်
+  SoraFS သံစုံတီးဝိုင်း ထုပ်ပိုးခြင်း။【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:240】
+- `/v1/da/manifests` တုံ့ပြန်မှုများ ယခု `manifest_hash` နှင့် CLI + SDK အကူအညီပေးသူများ (`iroha app da get`၊
+  `ToriiClient.fetchDaPayloadViaGateway` နှင့် Swift/JS gateway wrappers များ) သည် ဤ digest အဖြစ် မှတ်ယူသည် ။
+  ထည့်သွင်းထားသော CAR/blob hash ကို ဆက်လက်စစ်ဆေးနေစဉ် canonical manifest identifier
+- `iroha app da rent-quote` သည် ပံ့ပိုးပေးထားသော သိုလှောင်မှုအရွယ်အစားအတွက် အဆုံးအဖြတ်ပေးသော ငှားရမ်းခနှင့် မက်လုံးပေးမှု အပိုင်းများကို တွက်ချက်သည်
+  နှင့် retention window ။ အကူအညီပေးသူက လက်ရှိအသုံးပြုနေသော `DaRentPolicyV1` (JSON သို့မဟုတ် Norito bytes) သို့မဟုတ်
+  built-in မူရင်း၊ မူဝါဒကို အတည်ပြုပြီး JSON အကျဉ်းချုပ် (`gib`၊ `months`၊ မူဝါဒ မက်တာဒေတာ၊
+  နှင့် `DaRentQuote` အကွက်များ) ထို့ကြောင့် စာရင်းစစ်များသည် အုပ်ချုပ်မှုမိနစ်အတွင်း မလိုအပ်ဘဲ XOR ကောက်ခံမှုများကို အတိအကျကိုးကားနိုင်သည်။
+  ad hoc script တွေရေးတယ်။ ယခု command သည် JSON မတိုင်မီ တစ်ကြောင်း `rent_quote ...` အကျဉ်းချုပ်ကိုလည်း ထုတ်လွှတ်သည်
+  ဖြစ်ရပ်များအတွင်း ကိုးကားချက်များထုတ်ပေးသည့်အခါ ကွန်ဆိုးလ်မှတ်တမ်းများနှင့် runbooks များကို ပိုမိုလွယ်ကူစွာ စကင်န်ဖတ်နိုင်စေရန် payload။
+  `--quote-out artifacts/da/rent_quotes/<stamp>.json` ကိုဖြတ်ပါ (သို့မဟုတ် အခြားလမ်းကြောင်း)
+  လှပသောပုံနှိပ်ထားသောအနှစ်ချုပ်ကိုဆက်လက်ထိန်းသိမ်းထားရန်နှင့် `--policy-label "governance ticket #..."` ကိုအသုံးပြုသည့်အခါ၊
+  artefact သည် တိကျသောမဲ/ config အတွဲတစ်ခုကို ကိုးကားရန် လိုအပ်သည်။ CLI သည် စိတ်ကြိုက်တံဆိပ်များကို ချုံ့ပြီး ဗလာကို ပယ်ချသည်။
+  အထောက်အထားအစုအဝေးများတွင် `policy_source` တန်ဖိုးများကို အဓိပ္ပါယ်ရှိစေရန် ကြိုးများ။ ကြည့်ပါ။
+  subcommand အတွက် `crates/iroha_cli/src/commands/da.rs` နှင့် `docs/source/da/rent_policy.md`
+  မူဝါဒအစီအစဉ်အတွက်။ 【crates/iroha_cli/src/commands/da.rs:1】【docs/source/da/rent_policy.md:1】
+- Pin registry parity ကို ယခု SDKs တွင် တိုးချဲ့ထားသည်- `ToriiClient.registerSorafsPinManifest(...)`
+  JavaScript SDK သည် `iroha app sorafs pin register` မှအသုံးပြုသော တိကျသော payload ကိုတည်ဆောက်သည်၊ canonical ကိုလိုက်နာသည်
+  chunker metadata၊ pin policy၊ alias proofs နှင့် ပို့စ်မတင်မီ ဆက်ခံမည့် digest များ
+  `/v1/sorafs/pin/register`။ ၎င်းသည် CI ဘော့တ်များနှင့် အလိုအလျောက်လုပ်ဆောင်မှုကို CLI ထံသို့ မည်သည့်အချိန်တွင် ဖယ်ရှားခြင်းမှ ကာကွယ်ပေးသည်။
+  ထင်ရှားသော မှတ်ပုံတင်မှုများကို မှတ်တမ်းတင်ခြင်း နှင့် ကူညီသူသည် TypeScript/README လွှမ်းခြုံမှုဖြင့် ပို့ဆောင်ပေးသောကြောင့် DA-8 ၏
+  "submit/get/prove" tooling parity သည် Rust/Swift နှင့်အတူ JS တွင် အပြည့်အဝ စိတ်ကျေနပ်မှုရှိပါသည်။ 【javascript/iroha_js/src/toriiClient.js:1045】【javascript/iroha_js/test/toriiClient.test.js:788】
+- `iroha app da prove-availability` သည် အထက်ဖော်ပြပါ အားလုံးကို ချိတ်ဆက်ထားသည်- ၎င်းသည် သိုလှောင်မှု လက်မှတ်တစ်ခုယူသည်၊ ဒေါင်းလုဒ်လုပ်သည်
+  canonical manifest အစုအစည်းသည် အရင်းအမြစ်ပေါင်းစုံ သံစုံတီးဝိုင်း (`iroha app sorafs fetch`) ကို လုပ်ဆောင်သည်
+  ပေးထားသော `--gateway-provider` စာရင်း၊ ဒေါင်းလုဒ်လုပ်ထားသော payload + scoreboard အောက်တွင် ဆက်ရှိနေသည်
+  `artifacts/da/prove_availability_<timestamp>/` နှင့် လက်ရှိ PoR အထောက်အကူကို ချက်ချင်းခေါ်သည်။
+  ရယူထားသော ဘိုက်များကို အသုံးပြု၍ (`iroha app da prove`) အော်ပရေတာများသည် သံစုံတီးဝိုင်းခလုတ်များကို ညှိနိုင်သည်။
+  (`--max-peers`၊ `--scoreboard-out`၊ manifest endpoint overrides) နှင့် သက်သေနမူနာ
+  (`--sample-count`၊ `--leaf-index`၊ `--sample-seed`) တစ်ခုတည်းသော command သည် artefacts ကိုထုတ်လုပ်နေစဉ်
+  DA-5/DA-9 စာရင်းစစ်များမှ မျှော်လင့်ထားသည်- ပေးဆောင်မှုမိတ္တူ၊ အမှတ်စာရင်းအထောက်အထားများနှင့် JSON အထောက်အထား အနှစ်ချုပ်များ။- `da_reconstruct` (DA-6 တွင်အသစ်) သည် အတုံးလိုက်မှထုတ်လွှတ်သော အတုံးအခဲလမ်းညွှန်ကို ခွဲခြမ်းစိတ်ဖြာခြင်းအပြင် Canonical manifest ကိုဖတ်သည်
+  စတိုးဆိုင် (`chunk_{index:05}.bin` အပြင်အဆင်) နှင့် စစ်ဆေးအတည်ပြုနေစဉ် ပေးဆောင်မှုအား ပြန်လည်စုစည်းပေးသည် ။
+  Blake3 ကတိကဝတ်တိုင်း။ CLI သည် `crates/sorafs_car/src/bin/da_reconstruct.rs` အောက်တွင်နေထိုင်ပြီး သင်္ဘောအဖြစ် ပို့ဆောင်သည်။
+  SoraFS ကိရိယာအစုံအလင်၏ အစိတ်အပိုင်း။ ပုံမှန်စီးဆင်းမှု-
+  1. `iroha app da get-blob --storage-ticket <ticket>` `manifest_<manifest_hash>.norito` နှင့် အတုံးအခဲအစီအစဉ်ကို ဒေါင်းလုဒ်လုပ်ရန်။
   2. `iroha app sorafs fetch --manifest manifest_<manifest_hash>.json --plan chunk_plan_<manifest_hash>.json --output payload.car`
-     (or `iroha app da prove-availability`, which writes the fetch artefacts under
-     `artifacts/da/prove_availability_<ts>/` and persists per-chunk files inside the `chunks/` directory).
-  3. `cargo run -p sorafs_car --features cli --bin da_reconstruct --manifest manifest_<manifest_hash>.norito --chunks-dir ./artifacts/da/prove_availability_<ts>/chunks --output reconstructed.bin --json-out summary.json`.
+     (သို့မဟုတ် `iroha app da prove-availability`၊ အောက်တွင် ထုတ်ယူထားသော ပစ္စည်းများကို ရေးသည်။
+     `artifacts/da/prove_availability_<ts>/` နှင့် `chunks/` လမ်းညွှန်အတွင်းတွင် တစ်ခုချင်းအတုံးဖိုင်များကို ဆက်လက်တည်ရှိနေပါသည်။
+  3. `cargo run -p sorafs_car --features cli --bin da_reconstruct --manifest manifest_<manifest_hash>.norito --chunks-dir ./artifacts/da/prove_availability_<ts>/chunks --output reconstructed.bin --json-out summary.json`။
 
-  A regression fixture lives under `fixtures/da/reconstruct/rs_parity_v1/` and captures the full manifest
-  and chunk matrix (data + parity) used by `tests::reconstructs_fixture_with_parity_chunks`. Regenerate it with
+  Regression fixture သည် `fixtures/da/reconstruct/rs_parity_v1/` အောက်တွင် နေထိုင်ပြီး အပြည့်အစုံကို ဖမ်းယူသည်
+  နှင့် `tests::reconstructs_fixture_with_parity_chunks` မှအသုံးပြုသော အတုံးလိုက်မက်ထရစ် (ဒေတာ + တူညီမှု)။ ၎င်းကို ပြန်ထုတ်ပါ။
 
   ```sh
   cargo test -p sorafs_car --features da_harness regenerate_da_reconstruct_fixture_assets -- --ignored --nocapture
   ```
 
-  The fixture emits:
+  ခံစစ်မှ ထုတ်လွှတ်သည်-
 
-  - `manifest.{norito.hex,json}` — canonical `DaManifestV1` encodings.
-  - `chunk_matrix.json` — ordered index/offset/length/digest/parity rows for doc/testing references.
-  - `chunks/` — `chunk_{index:05}.bin` payload slices for both data and parity shards.
-  - `payload.bin` — deterministic payload used by the parity-aware harness test.
-  - `commitment_bundle.{json,norito.hex}` — sample `DaCommitmentBundle` with a deterministic KZG commitment for docs/tests.
+  - `manifest.{norito.hex,json}` — canonical `DaManifestV1` ကုဒ်နံပါတ်များ။
+  - `chunk_matrix.json` — doc/testing အကိုးအကားများအတွက် အညွှန်း/အော့ဖ်ဆက်/အလျား/ဒိုင်ဂျစ်/ကွာဟမှုအတန်းများ။
+  - `chunks/` — `chunk_{index:05}.bin` ဒေတာနှင့် parity shard နှစ်ခုလုံးအတွက် payload အချပ်များ။
+  - `payload.bin` — parity-aware harness test မှအသုံးပြုသော အဆုံးအဖြတ်ပေးဆောင်မှု။
+  - `commitment_bundle.{json,norito.hex}` — နမူနာ `DaCommitmentBundle` စာရွက်စာတမ်း/စစ်ဆေးမှုများအတွက် အဆုံးအဖြတ်ပေးသော KZG ကတိကဝတ်။
 
-  The harness refuses missing or truncated chunks, checks the final payload Blake3 hash against `blob_hash`,
-  and emits a summary JSON blob (payload bytes, chunk count, storage ticket) so CI can assert reconstruction
-  evidence. This closes the DA-6 requirement for a deterministic reconstruction tool that operators and QA
-  jobs can invoke without wiring bespoke scripts.
+  ကြိုးသည် ပျောက်ဆုံးနေသော သို့မဟုတ် ဖြတ်တောက်ထားသော အတုံးများကို ငြင်းဆန်သည်၊ `blob_hash` နှင့် ပတ်သက်သည့် နောက်ဆုံး payload Blake3 hash ကို စစ်ဆေးသည်၊
+  နှင့် အကျဉ်းချုပ် JSON blob (payload bytes၊ chunk count, storage ticket) ကို ထုတ်လွှတ်သောကြောင့် CI သည် ပြန်လည်တည်ဆောက်မှုကို အခိုင်အမာရနိုင်သည်
+  အထောက်အထား။ ၎င်းသည် အော်ပရေတာများနှင့် QA တို့၏ အဆုံးအဖြတ်ပေးသော ပြန်လည်တည်ဆောက်ရေးကိရိယာအတွက် DA-6 လိုအပ်ချက်ကို ပိတ်လိုက်သည်။
+  အလုပ်များသည် စိတ်ကြိုက် script များကို ကြိုးတပ်ခြင်းမပြုဘဲ ခေါ်ဆိုနိုင်ပါသည်။
 
-## TODO Resolution Summary
+## TODO Resolution အကျဉ်းချုပ်
 
-All previously blocked ingest TODOs have been implemented and verified:
+ယခင်က ပိတ်ဆို့ထားသော စားသုံးမှု TODO အားလုံးကို အကောင်အထည် ဖော်ပြီး စစ်ဆေးပြီးပါပြီ-- **Compression အရိပ်အမြွက်** — Torii သည် ခေါ်ဆိုသူမှပေးသော အညွှန်းများ (`identity`၊ `gzip`၊ `deflate`၊
+  `zstd`) နှင့် validation မလုပ်မီ payload များကို ပုံမှန်ဖြစ်အောင် ပြုလုပ်ပေးသောကြောင့် canonical manifest hash သည် ၎င်းနှင့် ကိုက်ညီပါသည်။
+  ချုံ့လိုက်သော bytes။【crates/iroha_torii/src/da/ingest.rs:220】【crates/iroha_data_model/src/da/types.rs:161】
+- **အုပ်ချုပ်မှု-သီးသန့် မက်တာဒေတာ ကုဒ်ဝှက်ခြင်း** — Torii သည် ယခုအခါ အုပ်ချုပ်မှု မက်တာဒေတာကို ကုဒ်ဝှက်ထားသည်
+  ChaCha20-Poly1305 သော့ကို configure လုပ်ထားပြီး၊ မကိုက်ညီသော အညွှန်းများကို ပယ်ချပြီး ရှင်းလင်းပြတ်သားသော နှစ်ခုကို ပြသည်
+  ဖွဲ့စည်းမှုခလုတ်များ (`torii.da_ingest.governance_metadata_key_hex`၊
+  `torii.da_ingest.governance_metadata_key_label`) လှည့်ပတ်မှုကို အဆုံးအဖြတ်ပေးသည်။【crates/iroha_torii/src/da/ingest.rs:707】【crates/iroha_config/src/parameters/actual.rs:1662】
+- **ကြီးမားသော payload streaming** — အပိုင်းပေါင်းများစွာ ထည့်သွင်းအသုံးပြုမှုကို တိုက်ရိုက်ထုတ်လွှင့်နေသည်။ ဖောက်သည်များသည် အဆုံးအဖြတ်ပေးသော စီးဆင်းမှုဖြစ်သည်။
+  `DaIngestChunk` သော့ခတ်ထားသော စာအိတ်များကို `client_blob_id`၊ Torii သည် အချပ်တစ်ခုစီကို အတည်ပြုပြီး ၎င်းတို့ကို အဆင့်လိုက်ပြုလုပ်သည်
+  `manifest_store_dir` အောက်တွင် နှင့် `is_last` အလံ ပြုတ်ကျသည်နှင့် တပြိုင်နက် ထင်ရှားသော အနုမြူကို ပြန်လည်တည်ဆောက်သည်၊
+  ခေါ်ဆိုမှုတစ်ခုတည်းဖြင့် အပ်လုဒ်တင်မှုများဖြင့် မြင်တွေ့ရသည့် RAM spikes များကို ဖယ်ရှားခြင်း။【crates/iroha_torii/src/da/ingest.rs:392】
+- **Manifest ဗားရှင်း** — `DaManifestV1` သည် တိကျသော `version` အကွက်ကို သယ်ဆောင်ထားပြီး Torii သည် ငြင်းဆိုသည်
+  manifest အပြင်အဆင်အသစ်များ ပို့ဆောင်သည့်အခါတွင် အဆုံးအဖြတ်ပေးသော အဆင့်မြှင့်တင်မှုများကို အာမခံသော အမည်မသိဗားရှင်းများ။ 【crates/iroha_data_model/src/da/types.rs:308】
+- **PDP/PoTR ချိတ်များ** — PDP ကတိကဝတ်များသည် အတုံးလိုက်စတိုးမှ တိုက်ရိုက်ဆင်းသက်လာပြီး ဆက်ရှိနေသည်
+  DA-5 အချိန်ဇယားဆွဲသူများသည် canonical data မှနမူနာစိန်ခေါ်မှုများကိုစတင်နိုင်သည်၊ အဆိုပါ
+  `Sora-PDP-Commitment` ခေါင်းစီးကို ယခု `/v1/da/ingest` နှင့် `/v1/da/manifests/{ticket}` နှစ်မျိုးလုံးဖြင့် ပို့ဆောင်ပေးနေပါပြီ
+  တုံ့ပြန်မှုများကြောင့် SDKs များသည် အနာဂတ်စုံစမ်းစစ်ဆေးမှုများကို ကိုးကားမည့် လက်မှတ်ရေးထိုးထားသည့် ကတိကဝတ်များကို ချက်ခြင်းသိရှိနိုင်သည်။【crates/sorafs_car/src/lib.rs:360】【crates/sorafs_manifest/src/pdp.rs:1】【crates/iroha_torii/src/da/ingest.rs:476】
+- **Shard cursor journal** — လမ်းသွား မက်တာဒေတာသည် `da_shard_id` (`lane_id` သို့ ပုံသေသတ်မှတ်ထားသည်) နှင့်
+  ယခု Sumeragi သည် `(shard_id, lane_id)` တွင် အမြင့်ဆုံး `(epoch, sequence)` ကို ဆက်ရှိနေသည်
+  `da-shard-cursors.norito` သည် DA spool နှင့် တွဲလျက် ဖြစ်သောကြောင့် ပြန်လည်စတင်ပြီး ပြန်လည်ပြင်ဆင်ထားသော/အမည်မသိလမ်းကြောင်းများကို ချလိုက်ပြီး ဆက်ထားပါ
+  အဆုံးအဖြတ်ကို ပြန်ဖွင့်သည်။ in-memory shard cursor အညွှန်းသည် ယခု ကတိကဝတ်များအတွက် အမြန်ပျက်ကွက်ပါသည်။
+  လမ်းကြောင်း id ကို ပုံသေလုပ်မည့်အစား မြေပုံမပြထားသော လမ်းကြောများ၊ cursor တိုးတက်မှုနှင့် ပြန်ဖွင့်သည့် အမှားများ ပြုလုပ်သည်
+  ပြတ်သားစွာနှင့် ပိတ်ဆို့အတည်ပြုချက်သည် သီးခြားတစ်ခုဖြင့် shard-cursor ဆုတ်ယုတ်မှုများကို ငြင်းပယ်သည်။
+  `DaShardCursorViolation` အကြောင်းပြချက် + အော်ပရေတာများအတွက် တယ်လီမီတာ အညွှန်းများ။ စတင်ခြင်း/ဖမ်းယူခြင်းများသည် DA ကို ရပ်တန့်လိုက်ပါပြီ။
+  Kura သည် အမည်မသိလမ်းကြောတစ်ခု သို့မဟုတ် နောက်ပြန်လှည့်နေသော cursor ပါ၀င်ပြီး ပြစ်မှားမှုကို မှတ်တမ်းတင်ထားလျှင် အညွှန်းကိန်း ရေဓါတ်ဖြည့်ပေးသည်။
+  DA ကို မထမ်းဆောင်မီ အော်ပရေတာများက ပြန်လည်ပြင်ဆင်နိုင်စေရန် အမြင့်ပိတ်ဆို့ခြင်း ပြည်နယ်။ 【crates/iroha_config/src/parameters/actual.rs】【crates/iroha_core/src/da/shard_cursor.rs】【crates/iroha_core/src/ sumeragi/main_loop.rs 】【crates/iroha_core/src/state.rs】【crates/iroha_core/src/block.rs】【docs/source/nexus_lanes.md:47】
+- **Shard cursor lag တယ်လီမီတာ** — `da_shard_cursor_lag_blocks{lane,shard}` gauge က မည်သို့တင်ပြသည်အတည်ပြုထားတဲ့ အမြင့်ကို ခက်ခက်ခဲခဲနဲ့ လိုက်နေပါတယ်။ ပျောက်ဆုံးနေသော/ဟောင်းနွမ်း/အမည်မသိလမ်းကြောင်းများသည် နောက်ကျကျန်နေမှုကို သတ်မှတ်ပေးသည်။
+  လိုအပ်သော အမြင့် (သို့မဟုတ် မြစ်ဝကျွန်းပေါ်ဒေသ) နှင့် အောင်မြင်သော တိုးတက်မှုများက ၎င်းကို သုညသို့ ပြန်လည်သတ်မှတ်ထားသောကြောင့် တည်ငြိမ်သောအခြေအနေသည် ပြားပြားနေမည်ဖြစ်သည်။
+  အော်ပရေတာများသည် သုညမဟုတ်သော ပြတ်တောက်မှုများတွင် အချက်ပေးသင့်သည်၊ ပြစ်မှားသောလမ်းအတွက် DA spool/ဂျာနယ်ကို စစ်ဆေးပါ၊
+  ပိတ်ဆို့ခြင်းကို ရှင်းလင်းရန် ပြန်လည်မကစားမီ မတော်တဆ ပြန်လည်မျှဝေခြင်းအတွက် လမ်းသွားကတ်တလောက်ကို စစ်ဆေးအတည်ပြုပါ။
+  ကွာဟချက်။
+- **လျှို့ဝှက်တွက်ချက်ထားသော လမ်းကြောများ** — ဖြင့် အမှတ်အသားပြုထားသော လမ်းကြောင်းများ
+  `metadata.confidential_compute=true` နှင့် `confidential_key_version` အဖြစ် ဆက်ဆံသည်
+  SMPC/ကုဒ်ဝှက်ထားသော DA လမ်းကြောင်းများ- Sumeragi သည် သုညမဟုတ်သော payload/manifest အချေအတင်များနှင့် သိုလှောင်မှုလက်မှတ်များကို တွန်းအားပေးသည်၊
+  ပုံတူသိုလှောင်မှုပရိုဖိုင်များ အပြည့်အစုံကို ပယ်ချပြီး SoraFS လက်မှတ် + မူဝါဒဗားရှင်းကို အညွှန်းမတင်ဘဲ၊
+  payload bytes ဖော်ထုတ်ခြင်း။ ပြန်လည်ပြသစဉ်တွင် Kura ထံမှ ပြေစာများသည် ရေဓာတ်ဖြည့်ပေးသောကြောင့် တရားဝင်စစ်ဆေးသူများသည် အလားတူပြန်လည်ရယူသည်။
+  ပြန်လည်စတင်ပြီးနောက် လျှို့ဝှက်အချက်အလက်များကို ပြန်လည်စတင်သည်။ 【crates/iroha_config/src/parameters/actual.rs】【crates/iroha_core/src/da/confidential.rs】【crates/iroha_core/src/da/confidential_store.rs】【crates/iroha_core/src/state.rs】
 
-- **Compression hints** — Torii accepts caller-provided labels (`identity`, `gzip`, `deflate`,
-  `zstd`) and normalises payloads before validation so the canonical manifest hash matches the
-  decompressed bytes.【crates/iroha_torii/src/da/ingest.rs:220】【crates/iroha_data_model/src/da/types.rs:161】
-- **Governance-only metadata encryption** — Torii now encrypts governance metadata with the
-  configured ChaCha20-Poly1305 key, rejects mismatched labels, and surfaces two explicit
-  configuration knobs (`torii.da_ingest.governance_metadata_key_hex`,
-  `torii.da_ingest.governance_metadata_key_label`) to keep rotation deterministic.【crates/iroha_torii/src/da/ingest.rs:707】【crates/iroha_config/src/parameters/actual.rs:1662】
-- **Large payload streaming** — multi-part ingestion is live. Clients stream deterministic
-  `DaIngestChunk` envelopes keyed by `client_blob_id`, Torii validates each slice, stages them
-  under `manifest_store_dir`, and atomically rebuilds the manifest once the `is_last` flag lands,
-  eliminating the RAM spikes seen with single-call uploads.【crates/iroha_torii/src/da/ingest.rs:392】
-- **Manifest versioning** — `DaManifestV1` carries an explicit `version` field and Torii refuses
-  unknown versions, guaranteeing deterministic upgrades when new manifest layouts ship.【crates/iroha_data_model/src/da/types.rs:308】
-- **PDP/PoTR hooks** — PDP commitments derive directly from the chunk store and are persisted
-  beside manifests so DA-5 schedulers can launch sampling challenges from canonical data; the
-  `Sora-PDP-Commitment` header now ships with both `/v1/da/ingest` and `/v1/da/manifests/{ticket}`
-  responses so SDKs immediately learn the signed commitment that future probes will reference.【crates/sorafs_car/src/lib.rs:360】【crates/sorafs_manifest/src/pdp.rs:1】【crates/iroha_torii/src/da/ingest.rs:476】
-- **Shard cursor journal** — lane metadata may specify `da_shard_id` (defaulting to `lane_id`), and
-  Sumeragi now persists the highest `(epoch, sequence)` per `(shard_id, lane_id)` into
-  `da-shard-cursors.norito` alongside the DA spool so restarts drop resharded/unknown lanes and keep
-  replay deterministic. The in-memory shard cursor index now fails fast on commitments for
-  unmapped lanes instead of defaulting to the lane id, making cursor advancement and replay errors
-  explicit, and block validation rejects shard-cursor regressions with a dedicated
-  `DaShardCursorViolation` reason + telemetry labels for operators. Startup/catch-up now halts DA
-  index hydration if Kura contains an unknown lane or regressing cursor and records the offending
-  block height so operators can remediate before serving DA state.【crates/iroha_config/src/parameters/actual.rs】【crates/iroha_core/src/da/shard_cursor.rs】【crates/iroha_core/src/sumeragi/main_loop.rs】【crates/iroha_core/src/state.rs】【crates/iroha_core/src/block.rs】【docs/source/nexus_lanes.md:47】
-- **Shard cursor lag telemetry** — the `da_shard_cursor_lag_blocks{lane,shard}` gauge reports how
-  far a shard trails the height being validated. Missing/stale/unknown lanes set the lag to the
-  required height (or delta), and successful advances reset it to zero so steady-state stays flat.
-  Operators should alarm on non-zero lags, inspect the DA spool/journal for the offending lane,
-  and verify the lane catalog for accidental resharding before replaying the block to clear the
-  gap.
-- **Confidential compute lanes** — lanes marked with
-  `metadata.confidential_compute=true` and a `confidential_key_version` are treated as
-  SMPC/encrypted DA paths: Sumeragi enforces non-zero payload/manifest digests and storage tickets,
-  rejects full-replica storage profiles, and indexes the SoraFS ticket + policy version without
-  exposing payload bytes. Receipts hydrate from Kura during replay so validators recover the same
-  confidentiality metadata after restarts.【crates/iroha_config/src/parameters/actual.rs】【crates/iroha_core/src/da/confidential.rs】【crates/iroha_core/src/da/confidential_store.rs】【crates/iroha_core/src/state.rs】
+## အကောင်အထည်ဖော်မှုမှတ်စုများ- ယခုအခါ Torii ၏ `/v1/da/ingest` အဆုံးမှတ်သည် payload ချုံ့မှုကို ပုံမှန်ဖြစ်စေပြီး ပြန်ဖွင့်သည့် ကက်ရှ်ကို တွန်းအားပေးသည်၊
+  Canonical bytes များကို ပိုင်းဖြတ်ပိုင်းဖြတ်ပြီး `DaManifestV1` ကို ပြန်လည်တည်ဆောက်ကာ ကုဒ်လုပ်ထားသော payload ကို ချပစ်လိုက်သည်
+  ပြေစာမထုတ်ပေးမီ SoraFS အတွက် `config.da_ingest.manifest_store_dir` သို့ အဆိုပါ
+  ကိုင်တွယ်သူသည် `Sora-PDP-Commitment` ခေါင်းစီးကိုလည်း ပူးတွဲပါရှိသည်
+  ချက်ချင်း။【crates/iroha_torii/src/da/ingest.rs:220】
+- Canonical `DaCommitmentRecord` ကို ဆက်လက်တည်မြဲပြီးနောက်၊ Torii သည် ယခုထွက်လာသည်
+  manifest spool ဘေးရှိ `da-commitment-schedule-<lane>-<epoch>-<sequence>-<ticket>.norito` ဖိုင်။
+  ထည့်သွင်းမှုတစ်ခုစီသည် အကြမ်းထည် Norito `PdpCommitment` bytes ဖြင့် မှတ်တမ်းကို စုစည်းထားသောကြောင့် DA-3 အစုအဝေးတည်ဆောက်သူများနှင့်
+  DA-5 အချိန်ဇယားဆွဲသူများသည် မန်နီးဖက်စ်များ သို့မဟုတ် အပိုင်းအစများကို ပြန်လည်ဖတ်ရှုခြင်းမပြုဘဲ ထပ်တူထပ်မျှသော ထည့်သွင်းမှုများကို ထည့်သွင်းပါသည်။ 【crates/iroha_torii/src/da/ingest.rs:1814】
+- SDK အကူအညီပေးသူများသည် Norito ခွဲခြမ်းစိတ်ဖြာမှုကို ပြန်လည်အသုံးမပြုဘဲ PDP ခေါင်းစီးဘိုက်များကို ထုတ်ဖော်ပြသသည်-
+  `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}` ကာဗာ Rust၊ Python `ToriiClient`
+  ယခု `decode_pdp_commitment_header` နှင့် `IrohaSwift` တို့သည် မိုဘိုင်းလ်အကူအညီပေးသူများနှင့် ကိုက်ညီသောသင်္ဘောများ
+  ဖောက်သည်များသည် ကုဒ်လုပ်ထားသောနမူနာအချိန်ဇယားကို ချက်ချင်းသိမ်းဆည်းနိုင်သည်။【crates/iroha/src/da.rs:1】【python/iroha_torii_client/client.py:1】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:1】
+- Torii သည် `GET /v1/da/manifests/{storage_ticket}` ကိုလည်း ဖော်ထုတ်ပေးသောကြောင့် SDK နှင့် အော်ပရေတာများသည် မန်နီးဖက်စ်များကို ရယူနိုင်သည်။
+  နှင့် node ၏ spool directory ကိုမထိဘဲ အစီအစဥ်များကို အပိုင်းပိုင်းဖြတ်ပါ။ တုံ့ပြန်မှုသည် Norito bytes ကို ပြန်ပေးသည်။
+  (base64)၊ manifest ပြန်ဆိုထားသော JSON၊ `chunk_plan` JSON blob သည် `sorafs fetch` အတွက် အဆင်သင့်ဖြစ်သည့်အပြင် သက်ဆိုင်ရာ၊
+  hex digests (`storage_ticket`၊ `client_blob_id`၊ `blob_hash`၊ `chunk_root`) ထို့ကြောင့် downstream tooling လုပ်နိုင်သည်
+  အချေအတင်များကို ပြန်လည်တွက်ချက်ခြင်းမပြုဘဲ တီးမှုတ်ဆရာအား ကျွေးမွေးပြီး တူညီသော `Sora-PDP-Commitment` ခေါင်းစီးအား ထုတ်လွှတ်သည်
+  mirror ingest တုံ့ပြန်မှုများ။ မေးမြန်းမှု ကန့်သတ်ချက်တစ်ခုအနေဖြင့် `block_hash=<hex>` ကို ကျော်ဖြတ်ခြင်းသည် အဆုံးအဖြတ်တစ်ခုကို ပြန်ပေးသည်
+  `sampling_plan` ပါဝင်သော `block_hash || client_blob_id` (တရားဝင်စစ်ဆေးသူများတွင် မျှဝေထားသည်)
+  တောင်းဆိုထားသော `assignment_hash`၊ တောင်းဆိုထားသော `sample_window`၊ နှင့် `(index, role, group)` ပတ်ထားသော tuples နမူနာများ
+  2D အစင်းအကွက် တစ်ခုလုံးသည် PoR နမူနာများနှင့် စစ်ဆေးသူများ တူညီသော အညွှန်းကိန်းများကို ပြန်ဖွင့်နိုင်သည်။ နမူနာယူပါ။
+  assignment hash တွင် `client_blob_id`၊ `chunk_root` နှင့် `ipa_commitment` တို့ကို ရောနှောထားသည်။ `iroha app da get
+  --block-hash ` now writes `sampling_plan_.json` နှင့်အတူ manifest + အတုံးအခဲ အစီအစဉ်ဘေးရှိ
+  hash ကို ထိန်းသိမ်းထားပြီး JS/Swift Torii ဖောက်သည်များသည် တူညီသော `assignment_hash_hex` ကို ဖော်ထုတ်ပေးသောကြောင့် validators
+  နှင့် သုသေသနများသည် တစ်ခုတည်းသော အဆုံးအဖြတ်ပေးသည့် စုံစမ်းစစ်ဆေးမှုတစ်ခုကို မျှဝေကြသည်။ Torii သည် နမူနာအစီအစဉ်ကို ပြန်ပေးသောအခါ `iroha app da
+  prove-availability` now reuses that deterministic probe set (seed derived from `sample_seed`) အစား
+  အော်ပရေတာမှ ချန်လှပ်ထားသော်လည်း PoR သက်သေများသည် တရားဝင်သတ်မှတ်ပေးထားသော တာဝန်များနှင့် ကိုက်ညီအောင် နမူနာယူခြင်း၏
+  `--block-hash` override
 
-## Implementation Notes
+### ကြီးမားသော Payload Streaming Flowစီစဉ်သတ်မှတ်ထားသော တောင်းဆိုချက် ကန့်သတ်ချက်ထက် ကြီးသော ပိုင်ဆိုင်မှုများကို ထည့်သွင်းရန် လိုအပ်သော ဖောက်သည်များသည် a စတင်သည်။
+`POST /v1/da/ingest/chunk/start` ကိုခေါ်ဆိုခြင်းဖြင့် တိုက်ရိုက်ထုတ်လွှင့်ခြင်း Torii သည် a ဖြင့် တုံ့ပြန်သည်။
+`ChunkSessionId` (တောင်းဆိုထားသော blob မက်တာဒေတာမှဆင်းသက်လာသော BLAKE3) နှင့် ညှိနှိုင်းထားသော အတုံးအရွယ်အစား။
+နောက်ဆက်တွဲ `DaIngestChunk` တောင်းဆိုမှုတစ်ခုစီသည်-
 
-- Torii’s `/v1/da/ingest` endpoint now normalises payload compression, enforces the replay cache,
-  deterministically chunks the canonical bytes, rebuilds `DaManifestV1`, and drops the encoded payload
-  into `config.da_ingest.manifest_store_dir` for SoraFS orchestration before issuing the receipt; the
-  handler also attaches a `Sora-PDP-Commitment` header so clients can capture the encoded commitment
-  immediately.【crates/iroha_torii/src/da/ingest.rs:220】
-- After persisting the canonical `DaCommitmentRecord`, Torii now emits a
-  `da-commitment-schedule-<lane>-<epoch>-<sequence>-<ticket>.norito` file beside the manifest spool.
-  Each entry bundles the record with the raw Norito `PdpCommitment` bytes so DA-3 bundle builders and
-  DA-5 schedulers ingest identical inputs without re-reading manifests or chunk stores.【crates/iroha_torii/src/da/ingest.rs:1814】
-- SDK helpers expose the PDP header bytes without forcing every client to reimplement Norito parsing:
-  `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}` cover Rust, the Python `ToriiClient`
-  now exports `decode_pdp_commitment_header`, and `IrohaSwift` ships matching helpers so mobile
-  clients can stash the encoded sampling schedule immediately.【crates/iroha/src/da.rs:1】【python/iroha_torii_client/client.py:1】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:1】
-- Torii also exposes `GET /v1/da/manifests/{storage_ticket}` so SDKs and operators can fetch manifests
-  and chunk plans without touching the node’s spool directory. The response returns the Norito bytes
-  (base64), rendered manifest JSON, a `chunk_plan` JSON blob ready for `sorafs fetch`, plus the relevant
-  hex digests (`storage_ticket`, `client_blob_id`, `blob_hash`, `chunk_root`) so downstream tooling can
-  feed the orchestrator without recomputing digests, and emits the same `Sora-PDP-Commitment` header to
-  mirror ingest responses. Passing `block_hash=<hex>` as a query parameter returns a deterministic
-  `sampling_plan` rooted in `block_hash || client_blob_id` (shared across validators) containing the
-  `assignment_hash`, the requested `sample_window`, and sampled `(index, role, group)` tuples spanning
-  the entire 2D stripe layout so PoR samplers and validators can replay the same indices. The sampler
-  mixes `client_blob_id`, `chunk_root`, and `ipa_commitment` into the assignment hash; `iroha app da get
-  --block-hash <hex>` now writes `sampling_plan_<ticket>.json` next to the manifest + chunk plan with
-  the hash preserved, and the JS/Swift Torii clients expose the same `assignment_hash_hex` so validators
-  and provers share a single deterministic probe set. When Torii returns a sampling plan, `iroha app da
-  prove-availability` now reuses that deterministic probe set (seed derived from `sample_seed`) instead
-  of ad-hoc sampling so PoR witnesses line up with validator assignments even if the operator omits a
-  `--block-hash` override.【crates/iroha_torii_shared/src/da/sampling.rs:1】【crates/iroha_cli/src/commands/da.rs:523】【javascript/iroha_js/src/toriiClient.js:15903】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:170】
+- `client_blob_id` — နောက်ဆုံး `DaIngestRequest` နှင့် ဆင်တူသည်။
+- `chunk_session_id` — အချပ်များကို လည်ပတ်နေသည့် စက်ရှင်နှင့် ချိတ်ဆက်ထားသည်။
+- `chunk_index` နှင့် `offset` — အဆုံးအဖြတ်ပေးသော အမိန့်ကို ပြဋ္ဌာန်းပါ။
+- `payload` — ညှိနှိုင်းထားသော အတုံးအရွယ်အစားအထိ။
+- `payload_hash` — အချပ်၏ BLAKE3 hash ဖြစ်သောကြောင့် Torii သည် blob တစ်ခုလုံးကို buffering မလုပ်ဘဲ validate လုပ်နိုင်သည်။
+- `is_last` — terminal အချပ်ကို ညွှန်ပြသည်။
 
-### Large Payload Streaming Flow
+Torii သည် `config.da_ingest.manifest_store_dir/chunks/<session>/` အောက်တွင် တရားဝင်အတည်ပြုထားသော အချပ်များကို ဆက်ရှိနေသည်နှင့်
+စွမ်းရည်ချို့တဲ့မှုကို ဂုဏ်ပြုရန်အတွက် ပြန်လည်ကစားသည့် ကက်ရှ်အတွင်း တိုးတက်မှုကို မှတ်တမ်းတင်သည်။ နောက်ဆုံးအချပ်က Torii
+disk ပေါ်ရှိ payload ကို ပြန်လည်စုစည်းသည် ( memory spikes ကိုရှောင်ရှားရန် chunk directory မှတဆင့် streaming )
+တစ်ချက်တည်းရိုက်ချက်ဖြင့် အပ်လုဒ်များကဲ့သို့ Canonical manifest/လက်ခံဖြတ်ပိုင်းကို အတိအကျတွက်ချက်ပြီး နောက်ဆုံးတွင် တုံ့ပြန်သည်
+အဆင့်ဆင့်ပြုလုပ်ထားသော ပစ္စည်းကိုစားသုံးခြင်းဖြင့် `POST /v1/da/ingest`။ မအောင်မြင်သော ဆက်ရှင်များကို ပြတ်သားစွာ ဖျက်သိမ်းနိုင်သည် သို့မဟုတ်
+`config.da_ingest.replay_cache_ttl` ပြီးနောက် အမှိုက်များကို စုဆောင်းကြသည်။ ဤဒီဇိုင်းသည် ကွန်ရက်ဖော်မတ်ကို ထိန်းသိမ်းထားသည်။
+Norito နှင့် အဆင်ပြေသည်၊ ကလိုင်းယင့်-သတ်သတ်မှတ်မှတ် ပြန်လည်စတင်နိုင်သော ပရိုတိုကောများကို ရှောင်ကြဉ်ပြီး ရှိပြီးသား manifest ပိုက်လိုင်းကို ပြန်သုံးသည်
+မပြောင်းလဲ။
 
-Clients that need to ingest assets larger than the configured single-request limit initiate a
-streaming session by calling `POST /v1/da/ingest/chunk/start`. Torii responds with a
-`ChunkSessionId` (BLAKE3-derived from the requested blob metadata) and the negotiated chunk size.
-Each subsequent `DaIngestChunk` request carries:
+** အကောင်အထည်ဖော်မှုအခြေအနေ။** Canonical Norito အမျိုးအစားများသည် ယခုနေထိုင်လျက်ရှိသည်
+`crates/iroha_data_model/src/da/`-
 
-- `client_blob_id` — identical to the final `DaIngestRequest`.
-- `chunk_session_id` — ties slices to the running session.
-- `chunk_index` and `offset` — enforce deterministic ordering.
-- `payload` — up to the negotiated chunk size.
-- `payload_hash` — BLAKE3 hash of the slice so Torii can validate without buffering the entire blob.
-- `is_last` — indicates the terminal slice.
+- `ingest.rs` သည် `DaIngestRequest`/`DaIngestReceipt` နှင့်အတူ၊
+  Torii အသုံးပြုသော `ExtraMetadata` ကွန်တိန်နာ။ 【crates/iroha_data_model/src/da/ingest.rs:1】
+- `manifest.rs` သည် `DaManifestV1` နှင့် `ChunkCommitment` ကို လက်ခံဆောင်ရွက်ပေးထားပြီး၊ Torii ပြီးနောက် Torii ထွက်လာသည်
+  အပိုင်းအစများ ပြီးပါပြီ။ 【crates/iroha_data_model/src/da/manifest.rs:1】
+- `types.rs` သည် မျှဝေထားသော aliases (`BlobDigest`၊ `RetentionPolicy`၊
+  `ErasureProfile` စသည်ဖြင့်) နှင့် အောက်တွင် မှတ်တမ်းတင်ထားသော မူရင်းမူဝါဒတန်ဖိုးများကို ကုဒ်လုပ်ပါသည်။【crates/iroha_data_model/src/da/types.rs:240】
+- Manifest spool ဖိုင်များသည် `config.da_ingest.manifest_store_dir` တွင် ဆင်းသက်ပြီး၊ SoraFS တီးမှုတ်ခြင်းအတွက် အဆင်သင့်ဖြစ်သည်
+  သိုလှောင်ခန်းထဲသို့ ဆွဲသွင်းရန် စောင့်ကြည့်သူ။【crates/iroha_torii/src/da/ingest.rs:220】
+- Sumeragi သည် DA အစုအဝေးများကို တံဆိပ်ခတ်ခြင်း သို့မဟုတ် အတည်ပြုသည့်အခါတွင် ထင်ရှားစွာရရှိနိုင်မှုကို တွန်းအားပေးသည်-
+  spool သည် manifest ပျောက်နေသည် သို့မဟုတ် hash ကွဲပြားပါက blocks များသည် validation ပျက်ကွက်ပါသည်။
+  ကတိကဝတ်များမှ။ 【crates/iroha_core/src/sumeragi/main_loop.rs:5335】【crates/iroha_core/src/sumeragi/main_loop.rs:14506】
 
-Torii persists validated slices under `config.da_ingest.manifest_store_dir/chunks/<session>/` and
-records progress inside the replay cache to honour idempotency. When the final slice lands, Torii
-reassembles the payload on disk (streaming through the chunk directory to avoid memory spikes),
-computes the canonical manifest/receipt exactly as with single-shot uploads, and finally responds to
-`POST /v1/da/ingest` by consuming the staged artifact. Failed sessions can be aborted explicitly or
-are garbage-collected after `config.da_ingest.replay_cache_ttl`. This design keeps the network format
-Norito-friendly, avoids client-specific resumable protocols, and reuses the existing manifest pipeline
-unchanged.
+တောင်းဆိုမှု၊ မန်နီးဖက်စ်နှင့် ပြေစာပေးချေမှုများအတွက် အသွားအပြန် အကျုံးဝင်မှုကို ခြေရာခံထားသည်။
+`crates/iroha_data_model/tests/da_ingest_roundtrip.rs`၊ Norito codec ကို သေချာစေသည်
+အပ်ဒိတ်များတွင် တည်ငြိမ်နေပါသည်။【crates/iroha_data_model/tests/da_ingest_roundtrip.rs:1】
 
-**Implementation status.** The canonical Norito types now live in
-`crates/iroha_data_model/src/da/`:
+**ထိန်းသိမ်းထားမှု ပုံသေများ။** အုပ်ချုပ်မှုစနစ်သည် ကာလအတွင်း ကနဦးထိန်းသိမ်းထားမှုမူဝါဒကို အတည်ပြုခဲ့သည်။
+SF-6; `RetentionPolicy::default()` မှ ပြဌာန်းထားသော ပုံသေများမှာ-- ပူပြင်းသောအဆင့်- 7 ရက် (`604_800` စက္ကန့်)
+- အအေးအဆင့်- ရက် 90 (`7_776_000` စက္ကန့်)
+- လိုအပ်သော ပုံတူများ- `3`
+- သိုလှောင်မှုအဆင့်- `StorageClass::Hot`
+- အုပ်ချုပ်မှု tag: `"da.default"`
 
-- `ingest.rs` defines `DaIngestRequest`/`DaIngestReceipt`, together with the
-  `ExtraMetadata` container used by Torii.【crates/iroha_data_model/src/da/ingest.rs:1】
-- `manifest.rs` hosts `DaManifestV1` and `ChunkCommitment`, which Torii emits after
-  chunking completes.【crates/iroha_data_model/src/da/manifest.rs:1】
-- `types.rs` provides shared aliases (`BlobDigest`, `RetentionPolicy`,
-  `ErasureProfile`, etc.) and encodes the default policy values documented below.【crates/iroha_data_model/src/da/types.rs:240】
-- Manifest spool files land in `config.da_ingest.manifest_store_dir`, ready for the SoraFS orchestration
-  watcher to pull into storage admission.【crates/iroha_torii/src/da/ingest.rs:220】
-- Sumeragi enforces manifest availability when sealing or validating DA bundles:
-  blocks fail validation if the spool is missing the manifest or the hash differs
-  from the commitment.【crates/iroha_core/src/sumeragi/main_loop.rs:5335】【crates/iroha_core/src/sumeragi/main_loop.rs:14506】
+လမ်းကြောင်းတစ်ခုကို လက်ခံလိုက်သောအခါ အောက်ပိုင်းအော်ပရေတာများသည် ဤတန်ဖိုးများကို ပြတ်သားစွာ အစားထိုးရပါမည်။
+တင်းကျပ်သောလိုအပ်ချက်များ။
 
-Roundtrip coverage for the request, manifest, and receipt payloads is tracked in
-`crates/iroha_data_model/tests/da_ingest_roundtrip.rs`, ensuring the Norito codec
-remains stable across updates.【crates/iroha_data_model/tests/da_ingest_roundtrip.rs:1】
+## သံချေးဖောက်သည် အထောက်အထားများ
 
-**Retention defaults.** Governance ratified the initial retention policy during
-SF-6; the defaults enforced by `RetentionPolicy::default()` are:
+Rust ကလိုင်းယင့်ကို မြှုပ်နှံထားသည့် SDK များသည် CLI သို့ ဖယ်ထုတ်ရန် မလိုအပ်တော့ပါ။
+Canonical PoR JSON အတွဲကို ထုတ်လုပ်သည်။ `Client` သည် အကူအညီပေးသူနှစ်ဦးကို ဖော်ထုတ်ပေးသည်-
 
-- hot tier: 7 days (`604_800` seconds)
-- cold tier: 90 days (`7_776_000` seconds)
-- required replicas: `3`
-- storage class: `StorageClass::Hot`
-- governance tag: `"da.default"`
+- `build_da_proof_artifact` သည် ထုတ်ပေးသော အတိအကျ ဖွဲ့စည်းပုံကို ပြန်ပေးသည်။
+  ပေးထားသော manifest/payload မှတ်ချက်များအပါအဝင် `iroha app da prove --json-out`
+  [`DaProofArtifactMetadata`] မှတဆင့်။【crates/iroha/src/client.rs:3638】
+- `write_da_proof_artifact` သည် builder ကို ခြုံပြီး artefact ကို disk တွင် ဆက်လက်ထားရှိသည်
+  (ပုံမှန်အားဖြင့် JSON + လိုင်းအသစ်နောက်သို့ လိုက်နေသည်) ထို့ကြောင့် အလိုအလျောက်စနစ်ဖြင့် ဖိုင်ကို ပူးတွဲနိုင်သည်။
+  ထုတ်ပြန်ရန် သို့မဟုတ် အုပ်ချုပ်မှုဆိုင်ရာ အထောက်အထား အစုအဝေးများ။【crates/iroha/src/client.rs:3653】
 
-Downstream operators must override these values explicitly when a lane adopts
-stricter requirements.
-
-## Rust client proof artefacts
-
-SDKs that embed the Rust client no longer need to shell out to the CLI to
-produce the canonical PoR JSON bundle. The `Client` exposes two helpers:
-
-- `build_da_proof_artifact` returns the exact structure generated by
-  `iroha app da prove --json-out`, including the manifest/payload annotations supplied
-  via [`DaProofArtifactMetadata`].【crates/iroha/src/client.rs:3638】
-- `write_da_proof_artifact` wraps the builder and persists the artefact to disk
-  (pretty JSON + trailing newline by default) so automation can attach the file
-  to releases or governance evidence bundles.【crates/iroha/src/client.rs:3653】
-
-### Example
+### ဥပမာ
 
 ```rust
 use iroha::{
@@ -503,26 +484,26 @@ client.write_da_proof_artifact(
 )?;
 ```
 
-The JSON payload that leaves the helper matches the CLI down to the field names
-(`manifest_path`, `payload_path`, `proofs[*].chunk_digest`, etc.), so existing
-automation can diff/parquet/upload the file without format-specific branches.
+ကူညီသူမှထားခဲ့သော JSON payload သည် CLI ကို အကွက်အမည်များနှင့် ကိုက်ညီသည်။
+(`manifest_path`, `payload_path`, `proofs[*].chunk_digest`, etc.) ဒါကြောင့် ရှိပြီးသား၊
+အလိုအလျောက်စနစ်သည် ဖောမတ်သီးသန့်အကိုင်းအခက်များမပါဘဲ ဖိုင်ကို ကွဲပြား/ပါကေး/တင်နိုင်သည်။
 
-## Proof verification benchmark
+## အထောက်အထားစိစစ်ရေးစံနှုန်း
 
-Use the DA proof benchmark harness to validate verifier budgets on representative payloads before
-tightening block-level caps:
+ကိုယ်စားလှယ်ပေးဆောင်မှုများမတိုင်မီတွင် ကိုယ်စားလှယ်ပေးဆောင်မှုများအတွက် စိစစ်ရေးဘတ်ဂျက်များကို တရားဝင်အတည်ပြုရန် DA အထောက်အထားစံကြိုးကြိုးကို အသုံးပြုပါ။
+တင်းကျပ်သောပိတ်ဆို့အဆင့်ထုပ်များ
 
-- `cargo xtask da-proof-bench` rebuilds the chunk store from the manifest/payload pair, samples PoR
-  leaves, and times verification against the configured budget. Taikai metadata is auto-filled, and the
-  harness falls back to a synthetic manifest if the fixture pair is inconsistent. When `--payload-bytes`
-  is set without an explicit `--payload`, the generated blob is written to
-  `artifacts/da/proof_bench/payload.bin` so fixtures stay untouched.【xtask/src/da.rs:1332】【xtask/src/main.rs:2515】
-- Reports default to `artifacts/da/proof_bench/benchmark.{json,md}` and include proofs/run, total and
-  per-proof timings, budget pass rate, and a recommended budget (110% of the slowest iteration) to
-  line up with `zk.halo2.verifier_budget_ms`.【artifacts/da/proof_bench/benchmark.md:1】
-- Latest run (synthetic 1 MiB payload, 64 KiB chunks, 32 proofs/run, 10 iterations, 250 ms budget)
-  recommended a 3 ms verifier budget with 100% of iterations inside the cap.【artifacts/da/proof_bench/benchmark.md:1】
-- Example (generates a deterministic payload and writes both reports):
+- `cargo xtask da-proof-bench` သည် manifest/payload pair မှ အတုံးအခဲစတိုးဆိုင်ကို ပြန်လည်တည်ဆောက်သည်၊ နမူနာ PoR
+  ပြင်ဆင်ထားသော ဘတ်ဂျက်နှင့် ကိုက်ညီသော အချိန်များကို စိစစ်ခြင်း။ Taikai မက်တာဒေတာကို အလိုအလျောက် ဖြည့်ပေးပါသည်။
+  ကြိုးတစ်စုံသည် တစ်သမတ်တည်း မကိုက်ညီပါက ကြိုးသည် ပေါင်းစပ်ဖော်ပြချက်သို့ ပြန်ကျသည်။ `--payload-bytes` တုန်းက
+  အတိအလင်း `--payload` မပါဘဲ သတ်မှတ်ထားသည်၊ ထုတ်လုပ်ထားသော blob ကို စာရေးသည်။
+  `artifacts/da/proof_bench/payload.bin` ထို့ကြောင့် ပွဲများကို မထိမခိုက်မိပါစေနှင့်။【xtask/src/da.rs:1332】【xtask/src/main.rs:2515】
+- `artifacts/da/proof_bench/benchmark.{json,md}` သို့ မူရင်းအစီရင်ခံချက်များနှင့် အထောက်အထားများ/လည်ပတ်မှု၊ စုစုပေါင်းနှင့်
+  သက်သေပြမည့်အချိန်၊ ဘတ်ဂျက်ဖြတ်နှုန်းနှင့် အကြံပြုထားသောဘတ်ဂျက် (အနှေးဆုံးထပ်ခြင်း၏ 110%) သို့
+  `zk.halo2.verifier_budget_ms` ဖြင့် တန်းစီပါ။【artifacts/da/proof_bench/benchmark.md:1】
+- နောက်ဆုံးထွက်ပြေးခြင်း (ဓာတု 1 MiB ပေးဆောင်မှု၊ 64 KiB အပိုင်းများ၊ 32 အထောက်အထားများ/ပြေးခြင်း၊ 10 ထပ်လုပ်ခြင်း၊ 250 ms ဘတ်ဂျက်)
+  ဦးထုပ်အတွင်းတွင် 100% ထပ်တလဲလဲပြုလုပ်ထားသည့် 3 ms အတည်ပြုသည့်ဘတ်ဂျက်ကို အကြံပြုထားသည်။ 【artifacts/da/proof_bench/benchmark.md:1】
+- ဥပမာ (အဆုံးအဖြတ်ပေးသော ဝန်ထုပ်ဝန်ပိုးကို ဖန်တီးပြီး အစီရင်ခံစာ နှစ်ခုလုံးကို ရေးသားသည်)။
 
 ```shell
 cargo xtask da-proof-bench \
@@ -534,37 +515,35 @@ cargo xtask da-proof-bench \
   --markdown-out artifacts/da/proof_bench/benchmark.md
 ```
 
-Block assembly enforces the same budgets: `sumeragi.da_max_commitments_per_block` and
-`sumeragi.da_max_proof_openings_per_block` gate the DA bundle before it is embedded in a block, and
-each commitment must carry a non-zero `proof_digest`. The guard treats the bundle length as the
-proof-opening count until explicit proof summaries are threaded through consensus, keeping the
-≤128-opening target enforceable at the block boundary.【crates/iroha_core/src/sumeragi/main_loop.rs:6573】
+Block assembly သည် တူညီသောဘတ်ဂျက်များကို တွန်းအားပေးသည်- `sumeragi.da_max_commitments_per_block` နှင့်
+`sumeragi.da_max_proof_openings_per_block` သည် ဘလောက်တစ်ခုတွင် မမြှုပ်မီ DA အစုအဝေးကို ဂိတ်ပေါက်၊
+ကတိကဝတ်တစ်ခုစီတွင် သုညမဟုတ်သော `proof_digest` ကို ဆောင်ထားရမည်။ အစောင့်သည် အစုအဝေးကို အရှည်အဖြစ် သတ်မှတ်သည်။
+တိကျသေချာသော သက်သေအနှစ်ချုပ်များကို အများသဘောဆန္ဒဖြင့် ပေါင်းစပ်ပြီးသည်အထိ သက်သေဖွင့်ဆိုမှု အရေအတွက်ကို ထိန်းသိမ်းခြင်း၊
+≤128-အဖွင့်ပစ်မှတ်သည် ဘလောက်နယ်နိမိတ်တွင် ပြဋ္ဌာန်းနိုင်သည်။ 【crates/iroha_core/src/sumeragi/main_loop.rs:6573】
 
-## PoR failure handling and slashing
+## PoR ကိုင်တွယ်ခြင်းနှင့် ဖြတ်တောက်ခြင်း မအောင်မြင်ခြင်း။ယခုအခါ သိုလှောင်မှုလုပ်သားများသည် PoR ချို့ယွင်းချက်များနှင့် အချိတ်အဆက်ရှိသော မျဉ်းစောင်း အကြံပြုချက်များကို တစ်ခုစီနှင့်တွဲလျက် ဖော်ပြသည်။
+စီရင်ချက်။ ပြင်ဆင်သတ်မှတ်ထားသော ဒဏ်ခတ်မှုအဆင့်ထက် ဆက်တိုက်မအောင်မြင်ပါက အကြံပြုချက်တစ်ခု ထုတ်လွှတ်ပါသည်။
+ပံ့ပိုးပေးသူ/မန်နီးဖက်စ်အတွဲ၊ မျဥ်းစောင်းကို အစပျိုးပေးသည့် မျဉ်းစောင်းအရှည်နှင့် အဆိုပြုထားသည့် အပိုင်းများ ပါဝင်သည်
+ပေးဆောင်သူစာချုပ်မှတွက်ချက်ထားသောပြစ်ဒဏ်နှင့် `penalty_bond_bps`၊ cooldown windows (စက္ကန့်) ထားပါ။
+တူညီသော ဖြစ်ရပ်တွင် ပစ်ခတ်ခြင်းမှ မျဉ်းစောင်းများ ထပ်နေခြင်း။ 【crates/sorafs_node/src/lib.rs:486】 【crates/sorafs_node/src/config.rs:89】 【crates/sorafs_node/src/bin/sorafs-node.rs:343】
 
-Storage workers now surface PoR failure streaks and bonded slash recommendations alongside each
-verdict. Consecutive failures above the configured strike threshold emit a recommendation that
-includes the provider/manifest pair, the streak length that triggered the slash, and the proposed
-penalty computed from the provider bond and `penalty_bond_bps`; cooldown windows (seconds) keep
-duplicate slashes from firing on the same incident.【crates/sorafs_node/src/lib.rs:486】【crates/sorafs_node/src/config.rs:89】【crates/sorafs_node/src/bin/sorafs-node.rs:343】
+- သိုလှောင်မှုလုပ်သားတည်ဆောက်သူမှတစ်ဆင့် သတ်မှတ်ချက်များ/အအေးခံစနစ်ကို စီစဉ်သတ်မှတ်ပါ (မူရင်းများသည် အုပ်ချုပ်ရေးကို ထင်ဟပ်စေသည်
+  ပြစ်ဒဏ်မူဝါဒ)။
+- Slash အကြံပြုချက်များကို စီရင်ချက်အကျဉ်းချုပ် JSON တွင် မှတ်တမ်းတင်ထားသောကြောင့် အုပ်ချုပ်ရေး/စာရင်းစစ်များ ပူးတွဲဆောင်ရွက်နိုင်သည်
+  အထောက်အထား အစုအဝေးများဆီသို့
+- Stripe layout + per-chunk roles များကို ယခု Torii ၏ storage pin endpoint မှတဆင့် ချည်နှောင်ထားပါသည်။
+  (`stripe_layout` + `chunk_roles` အကွက်များ) နှင့် သိုလှောင်မှုဝန်ထမ်းသို့ ဆက်လက်ရှိနေသည် ။
+  စာရင်းစစ်/ပြုပြင်ရေးကိရိယာများသည် အထက်ပိုင်းမှ အဆင်အပြင်ကို ပြန်လည်ရယူခြင်းမရှိဘဲ အတန်း/ကော်လံ ပြုပြင်မှုများကို စီစဉ်နိုင်သည်
 
-- Configure thresholds/cooldown via the storage worker builder (defaults mirror the governance
-  penalty policy).
-- Slash recommendations are recorded in the verdict summary JSON so governance/auditors can attach
-  them to evidence bundles.
-- Stripe layout + per-chunk roles are now threaded through Torii’s storage pin endpoint
-  (`stripe_layout` + `chunk_roles` fields) and persisted into the storage worker so
-  auditors/repair tooling can plan row/column repairs without re-deriving layout from upstream
+### နေရာချထားခြင်း + ကြိုးဝိုင်းပြုပြင်ခြင်း။
 
-### Placement + repair harness
+ယခု `cargo run -p sorafs_car --bin da_reconstruct -- --manifest <path> --chunks-dir <dir>`
+`(index, role, stripe/column, offsets)` ထက် နေရာချထားမှု hash ကိုတွက်ချက်ပြီး row-first လုပ်သည်
+payload ကို ပြန်လည်မတည်ဆောက်မီ RS(16) ကော်လံ ပြုပြင်ခြင်း-
 
-`cargo run -p sorafs_car --bin da_reconstruct -- --manifest <path> --chunks-dir <dir>` now
-computes a placement hash over `(index, role, stripe/column, offsets)` and performs row-first then
-column RS(16) repair before reconstructing the payload:
-
-- Placement defaults to `total_stripes`/`shards_per_stripe` when present and falls back to chunk
-- Missing/corrupted chunks are rebuilt with row parity first; remaining gaps are repaired with
-  stripe (column) parity. Repaired chunks are written back to the chunk directory, and the JSON
-  summary captures the placement hash plus row/column repair counters.
-- If row+column parity cannot satisfy the missing set, the harness fails fast with the unrecoverable
-  indices so auditors can flag irreparable manifests.
+- နေရာချထားမှု ပုံသေသည် `total_stripes`/`shards_per_stripe` သို့ ပစ္စုပ္ပန်နှင့် အတုံးလိုက်ပြန်ကျသွားသောအခါ၊
+- ပျောက်ဆုံးနေသော/ပျက်စီးနေသောအပိုင်းများကို အတန်းချိန်ညှိမှုဖြင့် ပထမဦးစွာ ပြန်လည်တည်ဆောက်ပါသည်။ ကျန်ကွက်လပ်များကို ပြုပြင်ပေးပါသည်။
+  stripe (ကော်လံ) parity။ ပြုပြင်ထားသောအပိုင်းများကို အတုံးလိုက်လမ်းညွှန်နှင့် JSON သို့ ပြန်ရေးထားသည်။
+  အနှစ်ချုပ်သည် နေရာချထားမှု hash နှင့် အတန်း/ကော်လံ ပြုပြင်ရေးကောင်တာများကို ဖမ်းယူသည်။
+- row+column parity သည် ပျောက်ဆုံးနေသော set ကို ကျေနပ်အောင် မလုပ်နိုင်ပါက၊ ကြိုးသည် အမြန်ပြန်မရနိုင်တော့ပါ။
+  စာရင်းစစ်များသည် ပြန်လည်ပြုပြင်၍မရသောဖော်ပြချက်များကို အလံပြနိုင်စေရန် အညွှန်းကိန်းများ။

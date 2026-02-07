@@ -460,7 +460,8 @@ mod tests {
         for seed in 0u8..=u8::MAX {
             let mut relay = [0u8; 32];
             for (idx, byte) in relay.iter_mut().enumerate() {
-                *byte = seed.wrapping_add(idx as u8);
+                let idx = u8::try_from(idx).expect("relay index fits in u8");
+                *byte = seed.wrapping_add(idx);
             }
             if relay.as_slice() == base.relay_id {
                 continue;

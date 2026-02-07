@@ -6,258 +6,249 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 0bff91e735291e82d0d50b5dad4dfbf2b57af68f2f7067760add5da81fc7f554
 source_last_modified: "2026-01-19T07:28:06.298292+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Sora Nexus Data Availability Threat Model
+# Sora Nexus Modelo de amenaza de disponibilidad de datos
 
-_Last reviewed: 2026-01-19 — Next scheduled review: 2026-04-19_
+_Última revisión: 2026-01-19 — Próxima revisión programada: 2026-04-19_
 
-Maintenance cadence: Data Availability Working Group (<=90 days). Every revision must
-appear in `status.md` with links to active mitigation tickets and simulation artefacts.
+Cadencia de mantenimiento: Grupo de Trabajo de Disponibilidad de Datos (<=90 días). Cada revisión debe
+aparecen en `status.md` con enlaces a tickets de mitigación activos y artefactos de simulación.
 
-## Purpose and Scope
+## Propósito y alcance
 
-The Data Availability (DA) program keeps Taikai broadcasts, Nexus lane blobs, and
-governance artefacts retrievable under Byzantine, network, and operator faults.
-This threat model anchors engineering work for DA-1 (architecture and threat model)
-and serves as the baseline for downstream DA tasks (DA-2 through DA-10).
+El programa de disponibilidad de datos (DA) mantiene las transmisiones de Taikai, los blobs de carril Nexus y
+artefactos de gobernanza recuperables bajo fallas bizantinas, de red y de operador.
+Este modelo de amenazas sustenta el trabajo de ingeniería para DA-1 (modelo de arquitectura y amenazas)
+y sirve como base para las tareas posteriores de DA (DA-2 a DA-10).
 
-In-scope components:
-- Torii DA ingest extension and Norito metadata writers.
-- SoraFS-backed blob storage trees (hot/cold tiers) and replication policies.
-- Nexus block commitments (wire formats, proofs, light-client APIs).
-- PDP/PoTR enforcement hooks specific to DA payloads.
-- Operator workflows (pinning, eviction, slashing) and observability pipelines.
-- Governance approvals that admit or evict DA operators and content.
+Componentes dentro del alcance:
+- Extensión de ingesta DA Torii y escritores de metadatos Norito.
+- Políticas de replicación y árboles de almacenamiento de blobs respaldados por SoraFS (niveles activos/inactivos).
+- Compromisos de bloque Nexus (formatos de conexión, pruebas, API de cliente ligero).
+- Ganchos de aplicación de PDP/PoTR específicos para cargas útiles de DA.
+- Flujos de trabajo del operador (fijación, desalojo, corte) y canales de observabilidad.
+- Aprobaciones de gobernanza que admiten o desalojan a operadores y contenidos de DA.
 
-Out-of-scope for this document:
-- Full economics modelling (captured in DA-7 workstream).
-- SoraFS base protocols already covered by the SoraFS threat model.
-- Client SDK ergonomics beyond threat-surface considerations.
+Fuera del alcance de este documento:
+- Modelado económico completo (capturado en el flujo de trabajo DA-7).
+- Protocolos base SoraFS ya cubiertos por el modelo de amenaza SoraFS.
+- Ergonomía del SDK del cliente más allá de las consideraciones de superficie de amenaza.
 
-## Architectural Overview
+## Descripción general arquitectónica
 
-1. **Submission:** Clients submit blobs via the Torii DA ingest API. The node
-   chunks blobs, encodes Norito manifests (blob type, lane, epoch, codec flags),
-   and stores chunks in the hot SoraFS tier.
-2. **Advertisement:** Pin intents and replication hints propagate to storage
-   providers through the registry (SoraFS marketplace) with policy tags that
-   state hot/cold retention targets.
-3. **Commitment:** Nexus sequencers include blob commitments (CID + optional KZG
-   roots) in the canonical block. Light clients rely on the commitment hash and
-   advertised metadata to verify availability.
-4. **Replication:** Storage nodes pull assigned shares/chunks, satisfy PDP/PoTR
-   challenges, and promote data between hot and cold tiers per policy.
-5. **Fetch:** Consumers fetch data through SoraFS or DA-aware gateways, verifying
-   proofs and raising repair requests when replicas disappear.
-6. **Governance:** Parliament and the DA oversight committee approve operators,
-   rent schedules, and enforcement escalations. Governance artefacts are stored
-   via the same DA path to ensure process transparency. The rent parameters
-   tracked under DA-7 are recorded in `docs/source/da/rent_policy.md` so audits
-   and enforcement reviews can reference the exact XOR amounts applied per blob.
+1. **Envío:** Los clientes envían blobs a través de la API de ingesta de DA Torii. el nodo
+   fragmenta blobs, codifica manifiestos Norito (tipo de blob, carril, época, indicadores de códec),
+   y almacena fragmentos en el nivel activo SoraFS.
+2. **Anuncio:** Las intenciones de fijación y las sugerencias de replicación se propagan al almacenamiento
+   proveedores a través del registro (mercado SoraFS) con etiquetas de política que
+   Indique los objetivos de retención de calor/frío.
+3. **Compromiso:** Los secuenciadores Nexus incluyen compromisos de blobs (CID + KZG opcional).
+   raíces) en el bloque canónico. Los clientes ligeros confían en el hash de compromiso y
+   metadatos anunciados para verificar la disponibilidad.
+4. **Replicación:** Los nodos de almacenamiento extraen recursos compartidos/fragmentos asignados y satisfacen PDP/PoTR
+   desafíos y promover datos entre niveles fríos y calientes por política.
+5. **Obtener:** Los consumidores obtienen datos a través de SoraFS o puertas de enlace compatibles con DA, verificando
+   pruebas y plantear solicitudes de reparación cuando las réplicas desaparecen.
+6. **Gobernanza:** El Parlamento y el comité de supervisión de la DA aprueban operadores,
+   cronogramas de alquiler y escaladas de cumplimiento. Los artefactos de gobernanza se almacenan
+   a través de la misma ruta DA para garantizar la transparencia del proceso. Los parámetros de alquiler
+   rastreados bajo DA-7 se registran en `docs/source/da/rent_policy.md`, por lo que las auditorías
+   y las revisiones de cumplimiento pueden hacer referencia a las cantidades exactas de XOR aplicadas por blob.
 
-## Assets and Owners
+## Activos y propietarios
 
-Impact scale: **Critical** breaks ledger safety/liveness; **High** blocks DA
-backfill or clients; **Moderate** degrades quality but remains recoverable;
-**Low** limited effect.
-
-| Asset | Description | Integrity | Availability | Confidentiality | Owner |
+Escala de impacto: **Crítico** rompe la seguridad y vitalidad del libro mayor; **Alto** bloquea DA
+reabastecimiento o clientes; **Moderado** degrada la calidad pero sigue siendo recuperable;
+**Bajo** efecto limitado.| Activo | Descripción | Integridad | Disponibilidad | Confidencialidad | Propietario |
 | --- | --- | --- | --- | --- | --- |
-| DA blobs (chunks + manifests) | Taikai, lane, governance blobs stored in SoraFS | Critical | Critical | Moderate | DA WG / Storage Team |
-| Norito DA manifests | Typed metadata describing blobs | Critical | High | Moderate | Core Protocol WG |
-| Block commitments | CIDs + KZG roots inside Nexus blocks | Critical | High | Low | Core Protocol WG |
-| PDP/PoTR schedules | Enforcement cadence for DA replicas | High | High | Low | Storage Team |
-| Operator registry | Approved storage providers & policies | High | High | Low | Governance Council |
-| Rent and incentive records | Ledger entries for DA rent & penalties | High | Moderate | Low | Treasury WG |
-| Observability dashboards | DA SLOs, replication depth, alerts | Moderate | High | Low | SRE / Observability |
-| Repair intents | Requests to rehydrate missing chunks | Moderate | Moderate | Low | Storage Team |
+| Blobs DA (fragmentos + manifiestos) | Taikai, carril, blobs de gobernanza almacenados en SoraFS | Crítico | Crítico | Moderado | DA WG / Equipo de almacenamiento |
+| Norito Manifiestos DA | Metadatos escritos que describen blobs | Crítico | Alto | Moderado | Grupo de Trabajo sobre el Protocolo Básico |
+| Compromisos en bloque | CID + raíces KZG dentro de bloques Nexus | Crítico | Alto | Bajo | Grupo de Trabajo sobre el Protocolo Básico |
+| Horarios del PDP/PoTR | Cadencia de aplicación de réplicas de DA | Alto | Alto | Bajo | Equipo de almacenamiento |
+| Registro de operadores | Políticas y proveedores de almacenamiento aprobados | Alto | Alto | Bajo | Consejo de Gobierno |
+| Registros de alquileres e incentivos | Asientos contables para alquileres y sanciones del DA | Alto | Moderado | Bajo | Grupo de Trabajo de Tesorería |
+| Paneles de observabilidad | DA SLO, profundidad de replicación, alertas | Moderado | Alto | Bajo | SRE / Observabilidad |
+| Intentos de reparación | Solicitudes para rehidratar los trozos faltantes | Moderado | Moderado | Bajo | Equipo de almacenamiento |
 
-## Adversaries and Capabilities
+## Adversarios y Capacidades
 
-| Actor | Capabilities | Motivations | Notes |
+| Actor | Capacidades | Motivaciones | Notas |
 | --- | --- | --- | --- |
-| Malicious client | Submit malformed blobs, replay stale manifests, attempt DoS on ingest. | Disrupt Taikai broadcasts, inject invalid data. | No privileged keys. |
-| Byzantine storage node | Drop assigned replicas, forge PDP/PoTR proofs, collude with others. | Cut DA retention, avoid rent, hold data hostage. | Possesses valid operator credentials. |
-| Compromised sequencer | Omit commitments, equivocate on blocks, reorder blob metadata. | Hide DA submissions, create inconsistency. | Limited by consensus majority. |
-| Insider operator | Abuse governance access, tamper with retention policies, leak credentials. | Economic gain, sabotage. | Access to hot/cold tier infrastructure. |
-| Network adversary | Partition nodes, delay replication, inject MITM traffic. | Reduce availability, degrade SLOs. | Cannot break TLS but can drop/slow links. |
-| Observability attacker | Tamper dashboards/alerts, suppress incidents. | Hide DA outages. | Requires access to telemetry pipeline. |
+| Cliente malicioso | Envíe blobs con formato incorrecto, reproduzca manifiestos obsoletos, intente DoS durante la ingesta. | Interrumpe las transmisiones de Taikai, inyecta datos no válidos. | Sin claves privilegiadas. |
+| Nodo de almacenamiento bizantino | Eliminar réplicas asignadas, falsificar pruebas PDP/PoTR, confabularse con otros. | Reduzca la retención de DA, evite el alquiler, mantenga los datos como rehenes. | Posee credenciales de operador válidas. |
+| Secuenciador comprometido | Omitir compromisos, equivocarse en bloques, reordenar los metadatos de blobs. | Ocultar envíos de DA, crear inconsistencia. | Limitado por mayoría de consenso. |
+| Operador interno | Abusar del acceso a la gobernanza, alterar las políticas de retención, filtrar credenciales. | Ganancia económica, sabotaje. | Acceso a infraestructura de nivel frío/caliente. |
+| Adversario de la red | Particionar nodos, retrasar la replicación, inyectar tráfico MITM. | Reducir la disponibilidad, degradar los SLO. | No se puede romper TLS pero puede soltar o ralentizar enlaces. |
+| Atacante de observabilidad | Manipular paneles/alertas, suprimir incidentes. | Ocultar interrupciones de DA. | Requiere acceso a la canalización de telemetría. |
 
-## Trust Boundaries
+## Límites de confianza
 
-- **Ingress boundary:** Client to Torii DA extension. Requires request-level auth,
-  rate limiting, and payload validation.
-- **Replication boundary:** Storage nodes exchanging chunks and proofs. Nodes are
-  mutually authenticated but may behave Byzantine.
-- **Ledger boundary:** Committed block data vs off-chain storage. Consensus guards
-  integrity, but availability requires off-chain enforcement.
-- **Governance boundary:** Council/Parliament decisions approving operators,
-  budgets, and slashing. Breaks here directly impact DA deployment.
-- **Observability boundary:** Metrics/log collection exported to dashboards/alert
-  tooling. Tampering hides outages or attacks.
+- **Límite de ingreso:** Cliente a la extensión DA Torii. Requiere autenticación a nivel de solicitud,
+  limitación de velocidad y validación de carga útil.
+- **Límite de replicación:** Nodos de almacenamiento que intercambian fragmentos y pruebas. Los nodos son
+  mutuamente autenticados pero pueden comportarse como bizantinos.
+- **Límite del libro mayor:** Datos de bloque comprometidos versus almacenamiento fuera de la cadena. Guardias del consenso
+  integridad, pero la disponibilidad requiere aplicación fuera de la cadena.
+- **Límite de gobernanza:** Decisiones del Consejo/Parlamento que aprueban operadores,
+  presupuestos y recortes. Las interrupciones aquí impactan directamente en la implementación de DA.
+- **Límite de observabilidad:** Métricas/recopilación de registros exportados a paneles/alertas
+  herramientas. La manipulación oculta interrupciones o ataques.
 
-## Threat Scenarios and Controls
+## Escenarios de amenazas y controles
 
-### Ingest Path Attacks
+### Ataques de ruta de ingesta**Escenario:** El cliente malintencionado envía cargas útiles Norito con formato incorrecto o de gran tamaño
+blobs para agotar recursos o contrabandear metadatos no válidos.
 
-**Scenario:** Malicious client submits malformed Norito payloads or oversized
-blobs to exhaust resources or smuggle invalid metadata.
+**Controles**
+- Validación del esquema Norito con negociación estricta de la versión; rechazar banderas desconocidas.
+- Limitación de velocidad y autenticación en el punto final de ingesta Torii.
+- Límites de tamaño de fragmento y codificación determinista aplicada por el fragmento SoraFS.
+- La canalización de admisión solo conserva los manifiestos después de que coincida la suma de comprobación de integridad.
+- La caché de reproducción determinista (`ReplayCache`) rastrea las ventanas `(lane, epoch, sequence)`, conserva marcas altas en el disco y rechaza repeticiones duplicadas o obsoletas; Los arneses de propiedad y fuzz cubren huellas dactilares divergentes y envíos fuera de orden.
 
-**Controls**
-- Norito schema validation with strict version negotiation; reject unknown flags.
-- Rate limiting and authentication at the Torii ingest endpoint.
-- Chunk size bounds and deterministic encoding enforced by SoraFS chunker.
-- Admission pipeline only persists manifests after integrity checksum matches.
-- Deterministic replay cache (`ReplayCache`) tracks `(lane, epoch, sequence)` windows, persists high-water marks on disk, and rejects duplicates/stale replays; property and fuzz harnesses cover divergent fingerprints and out-of-order submissions.【crates/iroha_core/src/da/replay_cache.rs:1】【fuzz/da_replay_cache.rs:1】【crates/iroha_torii/src/da/ingest.rs:1】
+**Brechas residuales**
+- La ingesta de Torii debe enhebrar el caché de reproducción en la admisión y persistir los cursores de secuencia durante los reinicios.
+- Los esquemas DA Norito ahora tienen un arnés fuzz dedicado (`fuzz/da_ingest_schema.rs`) para enfatizar las invariantes de codificación/decodificación; Los paneles de cobertura deben alertar si el objetivo retrocede.
 
-**Residual gaps**
-- Torii ingest must thread the replay cache into admission and persist sequence cursors across restarts.
-- Norito DA schemas now have a dedicated fuzz harness (`fuzz/da_ingest_schema.rs`) to stress encode/decode invariants; coverage dashboards should alert if the target regresses.
+### Retención de replicación
 
-### Replication Withholding
+**Escenario:** Los operadores de almacenamiento bizantinos aceptan asignaciones de pines pero descartan fragmentos,
+pasar los desafíos del PDP/PoTR a través de respuestas falsificadas o colusión.
 
-**Scenario:** Byzantine storage operators accept pin assignments but drop chunks,
-passing PDP/PoTR challenges via forged responses or collusion.
+**Controles**
+- El cronograma de desafío PDP/PoTR se extiende a las cargas útiles de DA con cobertura por época.
+- Replicación de múltiples fuentes con umbrales de quórum; buscar orquestador detecta
+  Fragmentos faltantes y reparación de desencadenantes.
+- Recorte de la gobernanza vinculado a pruebas fallidas y réplicas faltantes.
 
-**Controls**
-- PDP/PoTR challenge schedule extends to DA payloads with per-epoch coverage.
-- Multi-source replication with quorum thresholds; fetch orchestrator detects
-  missing shards and triggers repair.
-- Governance slashing linked to failed proofs and missing replicas.
+**Brechas residuales**
+- Arnés de simulación en `integration_tests/src/da/pdp_potr.rs` (cubierto por
+  `integration_tests/tests/da/pdp_potr_simulation.rs`) ahora ejerce colusión
+  y escenarios de partición, validando que el cronograma PDP/PoTR detecte
+  Comportamiento bizantino de manera determinista. Continúe ampliándolo junto a la DA-5 hasta
+  Cubra nuevas superficies de prueba.
+- La política de desalojo de nivel frío requiere un registro de auditoría firmado para evitar caídas encubiertas.
 
-**Residual gaps**
-- Simulation harness in `integration_tests/src/da/pdp_potr.rs` (covered by
-  `integration_tests/tests/da/pdp_potr_simulation.rs`) now exercises collusion
-  and partition scenarios, validating that the PDP/PoTR schedule detects
-  Byzantine behaviour deterministically. Continue extending it alongside DA-5 to
-  cover new proof surfaces.
-- Cold-tier eviction policy requires signed audit trail to prevent covert drops.
+### Manipulación de compromiso
 
-### Commitment Tampering
+**Escenario:** El secuenciador comprometido publica bloques omitiendo o alterando DA
+compromisos, provocando fallas en la recuperación o inconsistencias en el cliente ligero.
 
-**Scenario:** Compromised sequencer publishes blocks omitting or altering DA
-commitments, causing fetch failures or light-client inconsistencies.
+**Controles**
+- El consenso verifica las propuestas de bloque con las colas de envío de DA; los compañeros rechazan
+  a las propuestas les faltan los compromisos requeridos.
+- Los clientes ligeros verifican las pruebas de inclusión de compromiso antes de salir a la superficie para buscar identificadores.
+- Pista de auditoría que compara los recibos de envío con los compromisos en bloque.
+- El trabajo de conciliación automatizado (`cargo xtask da-commitment-reconcile`) compara
+  ingerir recibos con compromisos de DA (SignedBlockWire, `.norito` o JSON),
+  emite un paquete de evidencia JSON para la gobernanza y falla si falta o
+  tickets no coincidentes para que Alertmanager pueda localizar omisiones/manipulación.
 
-**Controls**
-- Consensus cross-checks block proposals with DA submission queues; peers reject
-  proposals missing required commitments.
-- Light clients verify commitment inclusion proofs before surfacing fetch handles.
-- Audit trail comparing submission receipts with block commitments.
-- Automated reconciliation job (`cargo xtask da-commitment-reconcile`) compares
-  ingest receipts with DA commitments (SignedBlockWire, `.norito`, or JSON),
-  emits a JSON evidence bundle for governance, and fails on missing or
-  mismatched tickets so Alertmanager can page on omission/tampering.
+**Brechas residuales**
+- Cubierto por el trabajo de conciliación + gancho Alertmanager; paquetes de gobernanza ahora
+  ingiera el paquete de pruebas JSON de forma predeterminada.
 
-**Residual gaps**
-- Covered by the reconciliation job + Alertmanager hook; governance packets now
-  ingest the JSON evidence bundle by default.
+### Partición de red y censura**Escenario:** El adversario divide la red de replicación, evitando que los nodos
+obtener fragmentos asignados o responder a desafíos de PDP/PoTR.
 
-### Network Partition and Censorship
+**Controles**
+- Los requisitos de proveedores multirregionales garantizan diversas rutas de red.
+- Las ventanas de desafío incluyen fluctuación y retroceso a canales de reparación fuera de banda.
+- Los paneles de observabilidad monitorean la profundidad de la replicación, el éxito del desafío y
+  recuperar latencia con umbrales de alerta.
 
-**Scenario:** Adversary partitions replication network, preventing nodes from
-obtaining assigned chunks or responding to PDP/PoTR challenges.
+**Brechas residuales**
+- Aún faltan simulaciones de partición para eventos en vivo de Taikai; Necesita pruebas de remojo.
+- Reparar la política de reserva de ancho de banda aún no codificada.
 
-**Controls**
-- Multi-region provider requirements ensure diverse network paths.
-- Challenge windows include jitter and fallback to out-of-band repair channels.
-- Observability dashboards monitor replication depth, challenge success, and
-  fetch latency with alert thresholds.
+### Abuso interno
 
-**Residual gaps**
-- Partition simulations for Taikai live events still missing; need soak tests.
-- Repair bandwidth reservation policy not yet codified.
+**Escenario:** El operador con acceso al registro manipula las políticas de retención,
+incluye en la lista blanca proveedores maliciosos o suprime alertas.
 
-### Insider Abuse
+**Controles**
+- Las acciones de gobernanza requieren firmas de varias partes y registros notariados Norito.
+- Los cambios de política emiten eventos a los registros de monitoreo y archivo.
+- La canalización de observabilidad aplica registros Norito de solo agregar con encadenamiento hash.
+- Paseos de automatización de revisión de acceso trimestral (`cargo xtask da-privilege-audit`)
+  los directorios de manifiesto/reproducción de DA (más las rutas proporcionadas por el operador), banderas
+  entradas faltantes/que no pertenecen al directorio/que se pueden escribir en todo el mundo y emite un paquete JSON firmado
+  para paneles de control de gobernanza.
 
-**Scenario:** Operator with registry access manipulates retention policies,
-whitelists malicious providers, or suppresses alerts.
+**Brechas residuales**
+- La prueba de manipulación del panel requiere instantáneas firmadas.
 
-**Controls**
-- Governance actions require multi-party signatures and Norito-notarised records.
-- Policy changes emit events to monitoring and archival logs.
-- Observability pipeline enforces append-only Norito logs with hash chaining.
-- Quarterly access review automation (`cargo xtask da-privilege-audit`) walks
-  the DA manifest/replay directories (plus operator-supplied paths), flags
-  missing/non-directory/world-writable entries, and emits a signed JSON bundle
-  for governance dashboards.
+## Registro de riesgos residuales
 
-**Residual gaps**
-- Dashboard tamper-evidence requires signed snapshots.
-
-## Residual Risk Register
-
-| Risk | Likelihood | Impact | Owner | Mitigation Plan |
+| Riesgo | Probabilidad | Impacto | Propietario | Plan de Mitigación |
 | --- | --- | --- | --- | --- |
-| Replay of DA manifests before DA-2 sequence cache lands | Possible | Moderate | Core Protocol WG | Implement sequence cache + nonce validation in DA-2; add regression tests. |
-| PDP/PoTR collusion when >f nodes compromise | Unlikely | High | Storage Team | Derive new challenge schedule with cross-provider sampling; validate via simulation harness. |
-| Cold-tier eviction audit gap | Possible | High | SRE / Storage Team | Attach signed audit logs & on-chain receipts for evictions; monitor via dashboards. |
-| Sequencer omission detection latency | Possible | High | Core Protocol WG | Nightly `cargo xtask da-commitment-reconcile` compares receipts vs commitments (SignedBlockWire/`.norito`/JSON) and pages governance on missing or mismatched tickets. |
-| Partition resilience for Taikai live streams | Possible | Critical | Networking TL | Execute partition drills; reserve repair bandwidth; document failover SOP. |
-| Governance privilege drift | Unlikely | High | Governance Council | Quarterly `cargo xtask da-privilege-audit` run (manifest/replay dirs + extra paths) with signed JSON + dashboard gate; anchor audit artefacts on-chain. |
+| Reproducción de manifiestos DA antes de que llegue el caché de secuencia DA-2 | Posible | Moderado | Grupo de Trabajo sobre el Protocolo Básico | Implementar caché de secuencia + validación nonce en DA-2; agregar pruebas de regresión. |
+| Colusión PDP/PoTR cuando >f nodos se comprometen | Improbable | Alto | Equipo de almacenamiento | Derivar un nuevo cronograma de desafío con muestreo entre proveedores; validar mediante arnés de simulación. |
+| Brecha en la auditoría de desalojos de nivel frío | Posible | Alto | SRE / Equipo de Almacenamiento | Adjunte registros de auditoría firmados y recibos en cadena para desalojos; monitorear a través de paneles de control. |
+| Latencia de detección de omisiones del secuenciador | Posible | Alto | Grupo de Trabajo sobre el Protocolo Básico | Todas las noches, `cargo xtask da-commitment-reconcile` compara recibos con compromisos (SignedBlockWire/`.norito`/JSON) y controla las páginas sobre tickets faltantes o que no coinciden. |
+| Resiliencia de partición para transmisiones en vivo de Taikai | Posible | Crítico | Redes TL | Ejecutar simulacros de partición; reservar ancho de banda de reparación; SOP de conmutación por error de documentos. |
+| Deriva de los privilegios de gobernanza | Improbable | Alto | Consejo de Gobierno | Ejecución trimestral de `cargo xtask da-privilege-audit` (directorios de manifiesto/reproducción + rutas adicionales) con JSON firmado + puerta del panel; anclar artefactos de auditoría en la cadena. |
 
-## Required Follow-Ups
+## Seguimientos requeridos1. Publicar esquemas de ingesta Norito de DA y vectores de ejemplo (incorporados a DA-2).
+2. Pase el caché de reproducción a través de los cursores de secuencia de ingesta y persistencia de DA Torii durante los reinicios del nodo.
+3. **Terminado (05/02/2026):** El arnés de simulación PDP/PoTR ahora ejercita escenarios de colusión + partición con modelado de acumulación de QoS; consulte [`integration_tests/src/da/pdp_potr.rs`](/integration_tests/src/da/pdp_potr.rs) (con pruebas en `integration_tests/tests/da/pdp_potr_simulation.rs`) para conocer la implementación y los resúmenes deterministas que se muestran a continuación.
+4. **Completado (29 de mayo de 2026):** `cargo xtask da-commitment-reconcile` compara los recibos de ingesta con los compromisos de DA (SignedBlockWire/`.norito`/JSON), emite `artifacts/da/commitment_reconciliation.json` y está conectado a Alertmanager/paquetes de gobernanza para alertas de omisión/manipulación (`xtask/src/da.rs`).
+5. **Completado (29 de mayo de 2026):** `cargo xtask da-privilege-audit` recorre el spool de manifiesto/reproducción (más las rutas proporcionadas por el operador), marca entradas faltantes/que no son de directorio/escribibles mundialmente y produce un paquete JSON firmado para paneles/revisiones de gobernanza (`artifacts/da/privilege_audit.json`), cerrando la brecha de automatización de acceso-revisión.
 
-1. Publish DA ingest Norito schemas and example vectors (carried into DA-2).
-2. Thread the replay cache through Torii DA ingest and persist sequence cursors across node restarts.
-3. **Completed (2026-02-05):** PDP/PoTR simulation harness now exercises collusion + partition scenarios with QoS backlog modelling; see [`integration_tests/src/da/pdp_potr.rs`](/integration_tests/src/da/pdp_potr.rs) (with tests under `integration_tests/tests/da/pdp_potr_simulation.rs`) for the implementation and deterministic summaries captured below.
-4. **Completed (2026-05-29):** `cargo xtask da-commitment-reconcile` compares ingest receipts against DA commitments (SignedBlockWire/`.norito`/JSON), emits `artifacts/da/commitment_reconciliation.json`, and is wired into Alertmanager/governance packets for omission/tampering alerts (`xtask/src/da.rs`).
-5. **Completed (2026-05-29):** `cargo xtask da-privilege-audit` walks the manifest/replay spool (plus operator-supplied paths), flags missing/non-directory/world-writable entries, and produces a signed JSON bundle for dashboards/governance reviews (`artifacts/da/privilege_audit.json`), closing the access-review automation gap.
+**Dónde buscar a continuación:**
 
-**Where to look next:**
+- La caché de reproducción de DA y la persistencia del cursor llegaron a DA-2. Ver el
+  implementación en `crates/iroha_core/src/da/replay_cache.rs` (lógica de caché) y
+  la integración Torii en `crates/iroha_torii/src/da/ingest.rs`, que enhebra el
+  Verificaciones de huellas dactilares a través de `/v1/da/ingest`.
+- Las simulaciones de transmisión PDP/PoTR se realizan a través del arnés de transmisión de prueba en
+  `crates/sorafs_car/tests/sorafs_cli.rs`, que cubre los flujos de solicitud PoR/PDP/PoTR
+  y escenarios de falla animados en el modelo de amenaza.
+- Los resultados de capacidad y remoción de reparación están disponibles en
+  `docs/source/sorafs/reports/sf2c_capacity_soak.md`, mientras que el más amplio
+  La matriz de remojo Sumeragi se rastrea en `docs/source/sumeragi_soak_matrix.md`
+  (variantes localizadas incluidas). Estos artefactos capturan los simulacros de larga duración.
+  referenciados en el registro de riesgos residuales.
+- La automatización de la conciliación y la auditoría de privilegios existe
+  `docs/automation/da/README.md` y el nuevo `cargo xtask da-commitment-reconcile`
+  / comandos `cargo xtask da-privilege-audit`; utilice las salidas predeterminadas en
+  `artifacts/da/` al adjuntar evidencia a los paquetes de gobernanza.
 
-- The DA replay cache and cursor persistence landed in DA-2. See the
-  implementation in `crates/iroha_core/src/da/replay_cache.rs` (cache logic) and
-  the Torii integration in `crates/iroha_torii/src/da/ingest.rs`, which threads the
-  fingerprint checks through `/v1/da/ingest`.
-- PDP/PoTR streaming simulations are exercised via the proof-stream harness in
-  `crates/sorafs_car/tests/sorafs_cli.rs`, covering PoR/PDP/PoTR request flows
-  and failure scenarios animated in the threat model.
-- Capacity and repair soak results live under
-  `docs/source/sorafs/reports/sf2c_capacity_soak.md`, while the broader
-  Sumeragi soak matrix is tracked in `docs/source/sumeragi_soak_matrix.md`
-  (localized variants included). These artefacts capture the long-running drills
-  referenced in the residual risk register.
-- Reconciliation + privilege-audit automation lives in
-  `docs/automation/da/README.md` and the new `cargo xtask da-commitment-reconcile`
-  / `cargo xtask da-privilege-audit` commands; use the default outputs under
-  `artifacts/da/` when attaching evidence to governance packets.
+## Evidencia de simulación y modelado de QoS (2026-02)
 
-## Simulation Evidence & QoS Modelling (2026-02)
-
-To close DA-1 follow-up #3, we codified a deterministic PDP/PoTR simulation
-harness under `integration_tests/src/da/pdp_potr.rs` (covered by
-`integration_tests/tests/da/pdp_potr_simulation.rs`). The harness
-allocates nodes across three regions, injects partitions/collusion according to
-the roadmap probabilities, tracks PoTR lateness, and feeds a repair-backlog
-model that mirrors the hot-tier repair budget. Running the default scenario
-(12 epochs, 18 PDP challenges + 2 PoTR windows per epoch) produced the
-following metrics:
-
-<!-- BEGIN_DA_SIM_TABLE -->
+Para cerrar el seguimiento #3 de DA-1, codificamos una simulación determinista de PDP/PoTR
+arnés bajo `integration_tests/src/da/pdp_potr.rs` (cubierto por
+`integration_tests/tests/da/pdp_potr_simulation.rs`). el arnés
+Asigna nodos en tres regiones, inyecta particiones/colusión según
+las probabilidades de la hoja de ruta, rastrea los retrasos de PoTR y alimenta una acumulación de reparaciones
+modelo que refleja el presupuesto de reparación de nivel más alto. Ejecutando el escenario predeterminado
+(12 épocas, 18 desafíos PDP + 2 ventanas PoTR por época) produjeron el
+siguientes métricas:<!-- BEGIN_DA_SIM_TABLE -->
 <!-- AUTO-GENERATED by scripts/docs/render_da_threat_model_tables.py; do not edit manually. -->
-| Metric | Value | Notes |
+| Métrica | Valor | Notas |
 | --- | --- | --- |
-| PDP failures detected | 48 / 49 (98.0%) | Partitions still trigger detection; a single undetected failure comes from honest jitter. |
-| PDP mean detection latency | 0.0 epochs | Failures are surfaced within the originating epoch. |
-| PoTR failures detected | 28 / 77 (36.4%) | Detection fires once a node misses ≥2 PoTR windows, leaving most events in the residual-risk register. |
-| PoTR mean detection latency | 2.0 epochs | Matches the two-epoch lateness threshold baked into archival escalation. |
-| Repair queue peak | 38 manifests | Backlog spikes when partitions stack faster than the four repairs available per epoch. |
-| Response latency p95 | 30,068 ms | Mirrors the 30 s challenge window with the ±75 ms jitter applied for QoS sampling. |
+| Fallos de PDP detectados | 48 / 49 (98,0%) | Las particiones aún activan la detección; un solo fallo no detectado proviene de un nerviosismo sincero. |
+| Latencia media de detección de PDP | 0,0 épocas | Los fracasos surgen en la época de origen. |
+| Fallos PoTR detectados | 28/77 (36,4%) | La detección se activa una vez que un nodo pierde ≥2 ventanas PoTR, lo que deja la mayoría de los eventos en el registro de riesgo residual. |
+| Latencia media de detección de PoTR | 2.0 épocas | Coincide con el umbral de retraso de dos épocas incluido en la escalada de archivos. |
+| Pico de cola de reparación | 38 manifiestos | El trabajo pendiente aumenta cuando las particiones se acumulan más rápido que las cuatro reparaciones disponibles por época. |
+| Latencia de respuesta p95 | 30.068 ms | Refleja la ventana de desafío de 30 s con la fluctuación de ±75 ms aplicada para el muestreo de QoS. |
 <!-- END_DA_SIM_TABLE -->
 
-These outputs now drive the DA dashboard prototypes and satisfy the “simulation
-harness + QoS modelling” acceptance criteria referenced in the roadmap.
+Estas salidas ahora impulsan los prototipos del tablero de DA y satisfacen la "simulación".
+Arnés + modelado QoS” criterios de aceptación a los que se hace referencia en la hoja de ruta.
 
-Automation now lives behind `cargo xtask da-threat-model-report [--out <path|->] [--seed <u64|0xhex>] [--config <path>]`, which calls the shared harness and
-emits Norito JSON to `artifacts/da/threat_model_report.json` by default. Nightly
-jobs consume this file to refresh the matrices in this document and to alert on
-drift in detection rates, repair queues, or QoS samples.
+La automatización ahora reside detrás de `cargo xtask da-threat-model-report [--out <path|->] [--seed <u64|0xhex>] [--config <path>]`, que llama al arnés compartido y
+emite Norito JSON a `artifacts/da/threat_model_report.json` de forma predeterminada. todas las noches
+Los trabajos consumen este archivo para actualizar las matrices en este documento y alertar sobre
+variación en las tasas de detección, colas de reparación o muestras de QoS.
 
-To refresh the table above for docs, run `make docs-da-threat-model`, which
-invokes `cargo xtask da-threat-model-report`, regenerates
-`docs/source/da/_generated/threat_model_report.json`, and rewrites this section
-via `scripts/docs/render_da_threat_model_tables.py`. The `docs/portal` mirror
-(`docs/portal/docs/da/threat-model.md`) is updated in the same pass so both
-copies stay in sync.
+Para actualizar la tabla anterior para documentos, ejecute `make docs-da-threat-model`, que
+invoca `cargo xtask da-threat-model-report`, regenera
+`docs/source/da/_generated/threat_model_report.json`, y reescribe esta sección
+vía `scripts/docs/render_da_threat_model_tables.py`. El espejo `docs/portal`
+(`docs/portal/docs/da/threat-model.md`) se actualiza en la misma pasada para que ambos
+las copias permanecen sincronizadas.

@@ -7,188 +7,179 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 8b6388355a41797eb7d0b7f47cfa8fcac4e136c5a2e5eb0a264384ecdba930b8
 source_last_modified: "2026-02-01T13:51:49.945202+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Iroha v2 Data Model – Deep Dive
+# Iroha v2 የውሂብ ሞዴል - ጥልቅ ዳይቭ
 
-This document explains the structures, identifiers, traits, and protocols that form the Iroha v2 data model, as implemented in the `iroha_data_model` crate and used across the workspace. It is meant to be a precise reference you can review and propose updates to.
+ይህ ሰነድ በ `iroha_data_model` ሣጥን ውስጥ እንደተተገበረ እና በስራ ቦታ ላይ ጥቅም ላይ እንደዋለ የIroha v2 ውሂብ ሞዴል የሆኑትን አወቃቀሮች፣ መለያዎች፣ ባህሪያት እና ፕሮቶኮሎች ያብራራል። እርስዎ መገምገም እና ዝማኔዎችን መጠቆም የሚችሉበት ትክክለኛ ማጣቀሻ ነው።
 
-## Scope and Foundations
+## ወሰን እና መሰረቶች
 
-- Purpose: Provide canonical types for domain objects (domains, accounts, assets, NFTs, roles, permissions, peers), state-changing instructions (ISI), queries, triggers, transactions, blocks, and parameters.
-- Serialization: All public types derive Norito codecs (`norito::codec::{Encode, Decode}`) and schema (`iroha_schema::IntoSchema`). JSON is used selectively (e.g., for HTTP and `Json` payloads) behind feature flags.
-- IVM note: Certain deserialization-time validations are disabled when targeting the Iroha Virtual Machine (IVM), since the host performs validation before invoking contracts (see crate docs in `src/lib.rs`).
-- FFI gates: Some types are conditionally annotated for FFI via `iroha_ffi` behind `ffi_export`/`ffi_import` to avoid overhead when FFI is not needed.
+ዓላማ፡ ቀኖናዊ ዓይነቶችን ለጎራ ነገሮች (ጎራዎች፣ መለያዎች፣ ንብረቶች፣ ኤንኤፍቲዎች፣ ሚናዎች፣ ፈቃዶች፣ እኩዮች)፣ የግዛት ለውጥ መመሪያዎችን (ISI)፣ መጠይቆችን፣ ቀስቅሴዎችን፣ ግብይቶችን፣ ብሎኮችን እና ግቤቶችን ያቅርቡ።
+- ተከታታይነት፡ ሁሉም የወል አይነቶች Norito ኮዴኮች (`norito::codec::{Encode, Decode}`) እና ሼማ (`iroha_schema::IntoSchema`) ያመጣሉ። JSON ከባህሪ ባንዲራዎች በስተጀርባ (ለምሳሌ ለኤችቲቲፒ እና `Json` ክፍያ ጭነቶች) እየተመረጠ ጥቅም ላይ ይውላል።
+- IVM ማስታወሻ፡ Iroha ቨርቹዋል ማሽን (IVM) ዒላማ ሲደረግ አስተናጋጁ ኮንትራቶችን ከመጥራቱ በፊት ማረጋገጫ ስለሚፈጽም የተወሰኑ የዲሴሪያላይዜሽን ጊዜ ማረጋገጫዎች ይሰናከላሉ።
+- FFI በሮች፡ አንዳንድ አይነቶች FFI በማይፈለግበት ጊዜ ከአቅም በላይ ለማስቀረት በ`iroha_ffi` በ `ffi_export`/`ffi_import` በኩል በሁኔታዊ ሁኔታ ተብራርተዋል።
 
-## Core Traits and Helpers
+## ዋና ባህሪያት እና አጋዦች
 
-- `Identifiable`: Entities have a stable `Id` and `fn id(&self) -> &Self::Id`. Should be derived with `IdEqOrdHash` for map/set friendliness.
-- `Registrable`/`Registered`: Many entities (e.g., `Domain`, `AssetDefinition`, `Role`) use a builder pattern. `Registered` ties the runtime type to a lightweight builder type (`With`) suitable for registration transactions.
-- `HasMetadata`: Unified access to a key/value `Metadata` map.
-- `IntoKeyValue`: Storage split helper to store `Key` (ID) and `Value` (data) separately to reduce duplication.
-- `Owned<T>`/`Ref<'world, K, V>`: Lightweight wrappers used in storages and query filters to avoid unnecessary copies.
+- `Identifiable`: አካላት የተረጋጋ `Id` እና `fn id(&self) -> &Self::Id` አላቸው. ከ`IdEqOrdHash` ጋር ለካርታ/ለወዳጅነት መገኘት አለበት።
+- `Registrable`/`Registered`: ብዙ አካላት (ለምሳሌ, `Domain`, `AssetDefinition`, `Role`) ግንበኛ ንድፍ ይጠቀማሉ. `Registered` የሩጫ አይነትን ለምዝገባ ግብይቶች ተስማሚ ከሆነው ቀላል ክብደት ገንቢ አይነት (`With`) ጋር ያገናኛል።
+- `HasMetadata`: ለቁልፍ/ዋጋ `Metadata` ካርታ የተዋሃደ መዳረሻ።
+- `IntoKeyValue`፡ `Key` (መታወቂያ) እና `Value` (መረጃ) ለማከማቸት የተከፋፈለ ረዳት ብዜትን ለመቀነስ።
+- `Owned<T>`/`Ref<'world, K, V>`: ቀላል ክብደት ያላቸው መጠቅለያዎች በማከማቻዎች እና በመጠይቅ ማጣሪያዎች ውስጥ አላስፈላጊ ቅጂዎችን ለማስወገድ ያገለግላሉ።
 
-## Names and Identifiers
+## ስሞች እና መለያዎች
 
-- `Name`: Valid textual identifier. Disallows whitespace and reserved characters `@`, `#`, `$` (used in composite IDs). Constructible via `FromStr` with validation. Names are normalized to Unicode NFC on parse (canonically equivalent spellings are treated as identical and stored composed). The special name `genesis` is reserved (checked case-insensitively).
-- `IdBox`: A sum-type envelope for any supported ID (`DomainId`, `AccountId`, `AssetDefinitionId`, `AssetId`, `NftId`, `PeerId`, `TriggerId`, `RoleId`, `Permission`, `CustomParameterId`). Useful for generic flows and Norito encoding as a single type.
-- `ChainId`: Opaque chain identifier used for replay protection in transactions.
+- `Name`: ትክክለኛ የጽሑፍ መለያ። ነጭ ቦታን እና የተያዙ ቁምፊዎችን አይፈቅድም `@`, `#`, `$` (በተቀናበረ መታወቂያዎች ውስጥ ጥቅም ላይ ይውላል). ከማረጋገጫ ጋር በ `FromStr` በኩል የሚገነባ። ስሞች በዩኒኮድ NFC በመደበኛነት ተስተካክለዋል (ቀኖናዊ አቻ የፊደል አጻጻፍ እንደ አንድ ዓይነት እና የተከማቹ ናቸው)። ልዩ ስም `genesis` ተይዟል (የተረጋገጠ መያዣ ሳይሰማ)።
+- `IdBox`: ለማንኛውም የሚደገፍ መታወቂያ (`DomainId`, `AccountId`, `AssetDefinitionId`, `AssetId`, `AssetId`, Norito, Norito, Norito, Norito, Norito,00000062X. `TriggerId`፣ `RoleId`፣ `Permission`፣ `CustomParameterId`)። ለአጠቃላይ ፍሰቶች እና Norito ኢንኮዲንግ እንደ ነጠላ አይነት ይጠቅማል።
+- `ChainId`: በግብይቶች ውስጥ ድጋሚ ለማጫወት ጥበቃ የሚያገለግል ግልጽ ያልሆነ ሰንሰለት መለያ።የመታወቂያዎች ሕብረቁምፊ ቅርጾች (ከ `Display`/`FromStr` ጋር)፡
+- `DomainId`: `name` (ለምሳሌ `wonderland`)።
+- `AccountId`፡ ቀኖናዊ መለያ በ`AccountAddress` የተመዘገበ፣ ይህም IH58ን፣ Sora compressed (`sora…`) እና ቀኖናዊ ሄክስ ኮዴኮችን (`AccountAddress::to_ih58`፣ I18000000 `canonical_hex`፣ `parse_any`)። IH58 ተመራጭ መለያ ቅርጸት ነው; የ `sora…` ቅጽ ለሶራ-ብቻ UX ሁለተኛ-ምርጥ ነው። ለሰው ተስማሚ የሆነ የማዞሪያ ስም `alias@domain` ለ UX ተጠብቆ ቆይቷል ነገር ግን እንደ ባለስልጣን መለያ ከአሁን በኋላ አይታይም። Torii መጪ ሕብረቁምፊዎችን በ`AccountAddress::parse_any` በኩል መደበኛ ያደርጋል። የመለያ መታወቂያዎች ሁለቱንም ነጠላ ቁልፍ እና ባለብዙ ሲግ መቆጣጠሪያዎችን ይደግፋሉ።
+- `AssetDefinitionId`: `asset#domain` (ለምሳሌ `xor#soramitsu`)።
+- `AssetId`: `asset#domain#account` ወይም shorthand `asset##account` ትርጉም ጎራ መለያ ጎራ ጋር እኩል ከሆነ, `account` ቀኖናዊ `AccountId` ሕብረቁምፊ (IH58 ይመረጣል).
+- `NftId`፡ `nft$domain` (ለምሳሌ `rose$garden`)።
+- `PeerId`: `public_key` (የአቻ እኩልነት በወል ቁልፍ ነው)።
 
-String forms of IDs (round-trippable with `Display`/`FromStr`):
-- `DomainId`: `name` (e.g., `wonderland`).
-- `AccountId`: canonical identifier encoded via `AccountAddress`, which exposes IH58, Sora compressed (`sora…`), and canonical hex codecs (`AccountAddress::to_ih58`, `to_compressed_sora`, `canonical_hex`, `parse_any`). IH58 is the preferred account format; the `sora…` form is second-best for Sora-only UX. The human-friendly routing alias `alias@domain` is preserved for UX but is no longer treated as the authoritative identifier. Torii normalises incoming strings through `AccountAddress::parse_any`. Account IDs support both single-key and multisig controllers.
-- `AssetDefinitionId`: `asset#domain` (e.g., `xor#soramitsu`).
-- `AssetId`: `asset#domain#account` or shorthand `asset##account` if the definition domain equals the account domain, where `account` is the canonical `AccountId` string (IH58 preferred).
-- `NftId`: `nft$domain` (e.g., `rose$garden`).
-- `PeerId`: `public_key` (peer equality is by public key).
+# አካላት
 
-## Entities
-
-### Domain
-- `DomainId { name: Name }` – unique name.
+### ጎራ
+- `DomainId { name: Name }` - ልዩ ስም።
 - `Domain { id, logo: Option<IpfsPath>, metadata: Metadata, owned_by: AccountId }`.
-- Builder: `NewDomain` with `with_logo`, `with_metadata`, then `Registrable::build(authority)` sets `owned_by`.
+- ግንበኛ: `NewDomain` በ `with_logo`, `with_metadata`, ከዚያም `Registrable::build(authority)` ስብስቦች `owned_by`.
 
-### Account
-- `AccountId { domain: DomainId, controller: AccountController }` (controller = single key or multisig policy).
-- `Account { id, metadata, label?, uaid? }` — `label` is an optional stable alias used by rekey records, `uaid` carries the optional Nexus-wide [Universal Account ID](./universal_accounts_guide.md).
-- Builder: `NewAccount` via `Account::new(id)`; `HasMetadata` for both builder and entity.
+## መለያ
+- `AccountId { domain: DomainId, controller: AccountController }` (ተቆጣጣሪ = ነጠላ ቁልፍ ወይም ባለብዙ ሲግ ፖሊሲ)።
+- `Account { id, metadata, label?, uaid? }` — `label` አማራጭ የተረጋጋ ተለዋጭ ስም በሬኪ መዝገቦች ጥቅም ላይ ይውላል፣ `uaid` አማራጭ Nexus-ሰፊ [ዩኒቨርሳል መለያ መታወቂያ](Norito) ይይዛል።
+- ገንቢ: `NewAccount` በ `Account::new(id)`; `HasMetadata` ለሁለቱም ግንበኛ እና አካል።
 
-### Asset Definitions and Assets
+### የንብረት መግለጫዎች እና ንብረቶች
 - `AssetDefinitionId { domain: DomainId, name: Name }`.
 - `AssetDefinition { id, spec: NumericSpec, mintable: Mintable, logo: Option<IpfsPath>, metadata, owned_by: AccountId, total_quantity: Numeric }`.
   - `Mintable`: `Infinitely` | `Once` | `Limited(u32)` | `Not`.
-  - Builders: `AssetDefinition::new(id, spec)` or convenience `numeric(id)`; setters for `metadata`, `mintable`, `owned_by`.
+  - ግንበኞች: `AssetDefinition::new(id, spec)` ወይም ምቾት `numeric(id)`; አዘጋጅ ለ `metadata`፣ `mintable`፣ `owned_by`።
 - `AssetId { account: AccountId, definition: AssetDefinitionId }`.
-- `Asset { id, value: Numeric }` with storage-friendly `AssetEntry`/`AssetValue`.
-- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Numeric>` exposed for summary APIs.
+- `Asset { id, value: Numeric }` ለማከማቻ ተስማሚ `AssetEntry`/`AssetValue`።
+- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Numeric>` ለማጠቃለያ ኤፒአይዎች ተጋልጧል።
 
 ### NFTs
 - `NftId { domain: DomainId, name: Name }`.
-- `Nft { id, content: Metadata, owned_by: AccountId }` (content is arbitrary key/value metadata).
-- Builder: `NewNft` via `Nft::new(id, content)`.
+- `Nft { id, content: Metadata, owned_by: AccountId }` (ይዘቱ የዘፈቀደ ቁልፍ/የዋጋ ዲበ ውሂብ ነው)።
+- ገንቢ: `NewNft` በ `Nft::new(id, content)` በኩል።
 
-### Roles and Permissions
+### ሚናዎች እና ፈቃዶች
 - `RoleId { name: Name }`.
-- `Role { id, permissions: BTreeSet<Permission> }` with builder `NewRole { inner: Role, grant_to: AccountId }`.
-- `Permission { name: Ident, payload: Json }` – the `name` and payload schema must align with the active `ExecutorDataModel` (see below).
+- `Role { id, permissions: BTreeSet<Permission> }` ከገንቢ `NewRole { inner: Role, grant_to: AccountId }` ጋር።
+- `Permission { name: Ident, payload: Json }` - የ `name` እና የመጫኛ መርሃ ግብር ከገባሪው `ExecutorDataModel` ጋር መጣጣም አለባቸው (ከዚህ በታች ይመልከቱ)።
 
-### Peers
+### እኩዮች
 - `PeerId { public_key: PublicKey }`.
-- `Peer { address: SocketAddr, id: PeerId }` and parsable `public_key@address` string form.
+- `Peer { address: SocketAddr, id: PeerId }` እና ምሳሌ `public_key@address` ሕብረቁምፊ ቅጽ.### ክሪፕቶግራፊክ ፕሪሚቲቭስ (ባህሪ `sm`)
+- `Sm2PublicKey` እና `Sm2Signature`: SEC1 የሚያሟሉ ነጥቦች እና ቋሚ ስፋት `r∥s` ፊርማዎች ለ SM2. ገንቢዎች የጥምዝ አባልነት እና መለያ መታወቂያዎችን ያረጋግጣሉ; Norito ኢንኮዲንግ በ`iroha_crypto` ጥቅም ላይ የዋለውን ቀኖናዊ ውክልና ያሳያል።
+- `Sm3Hash`፡ `[u8; 32]` አዲስ ዓይነት የጂኤም/ቲ 0004 መፍጨትን የሚወክል፣ በማኒፌክት፣ በቴሌሜትሪ እና በሳይካል ምላሾች ውስጥ ጥቅም ላይ ይውላል።
+- `Sm4Key`፡ ባለ 128-ቢት ሲሜትሪክ ቁልፍ መጠቅለያ በአስተናጋጅ syscals እና በዳታ-ሞዴል መጫዎቻዎች መካከል ተጋርቷል።
+እነዚህ ዓይነቶች ከነባር Ed25519/BLS/ML-DSA primitives ጋር ተቀምጠው የመስሪያ ቦታው በ`--features sm` ከተገነባ በኋላ የህዝብ እቅድ አካል ይሆናሉ።
 
-### Cryptographic primitives (feature `sm`)
-- `Sm2PublicKey` and `Sm2Signature`: SEC1-compliant points and fixed-width `r∥s` signatures for SM2. Constructors validate curve membership and distinguishing IDs; Norito encoding mirrors the canonical representation used by `iroha_crypto`.
-- `Sm3Hash`: `[u8; 32]` newtype representing the GM/T 0004 digest, used in manifests, telemetry, and syscall responses.
-- `Sm4Key`: 128-bit symmetric key wrapper shared between host syscalls and data-model fixtures.
-These types sit alongside the existing Ed25519/BLS/ML-DSA primitives and become part of the public schema once the workspace is built with `--features sm`.
-
-### Triggers and Events
-- `TriggerId { name: Name }` and `Trigger { id, action: action::Action }`.
+### ቀስቅሴዎች እና ክስተቶች
+- `TriggerId { name: Name }` እና `Trigger { id, action: action::Action }`።
 - `action::Action { executable: Executable, repeats: Repeats, authority: AccountId, filter: EventFilterBox, metadata }`.
-  - `Repeats`: `Indefinitely` or `Exactly(u32)`; ordering and depletion utilities included.
-  - Safety: `TriggerCompleted` cannot be used as an action’s filter (validated during (de)serialization).
-- `EventBox`: sum type for pipeline, pipeline-batch, data, time, execute-trigger, and trigger-completed events; `EventFilterBox` mirrors that for subscriptions and trigger filters.
+  - `Repeats`: `Indefinitely` ወይም `Exactly(u32)`; ማዘዝ እና ማሟያ መገልገያዎች ተካትተዋል.
+  - ደህንነት፡ `TriggerCompleted` እንደ የድርጊት ማጣሪያ (በ(de) ተከታታይነት የተረጋገጠ) መጠቀም አይቻልም።
+- `EventBox`: የቧንቧ መስመር, የቧንቧ መስመር-ባች, ዳታ, ጊዜ, ማስፈጸሚያ-ቀስቃሽ እና ቀስቅሴ-የተጠናቀቁ ክስተቶች ድምር አይነት; `EventFilterBox` መስተዋቶች ለደንበኝነት ምዝገባዎች እና ማጣሪያዎች።
 
-## Parameters and Configuration
+## መለኪያዎች እና ውቅር
 
-- System parameter families (all `Default`ed, carry getters, and convert to individual enums):
+- የስርዓት መለኪያ ቤተሰቦች (ሁሉም `Default`ed፣ ተሸካሚዎች ተሸክመው ወደ ግለሰባዊ ቁጥሮች ይቀየራሉ)
 - `SumeragiParameters { block_time_ms, commit_time_ms, min_finality_ms, pacing_factor_bps, max_clock_drift_ms, collectors_k, collectors_redundant_send_r }`.
   - `BlockParameters { max_transactions: NonZeroU64 }`.
   - `TransactionParameters { max_signatures, max_instructions, ivm_bytecode_size, max_tx_bytes, max_decompressed_bytes }`.
   - `SmartContractParameters { fuel, memory, execution_depth }`.
-- `Parameters` groups all families and a `custom: BTreeMap<CustomParameterId, CustomParameter>`.
-- Single-parameter enums: `SumeragiParameter`, `BlockParameter`, `TransactionParameter`, `SmartContractParameter` for diff-like updates and iteration.
-- Custom parameters: executor-defined, carried as `Json`, identified by `CustomParameterId` (a `Name`).
+- `Parameters` ቡድኖች ሁሉንም ቤተሰቦች እና አንድ `custom: BTreeMap<CustomParameterId, CustomParameter>`.
+- ነጠላ-መለኪያ ቁጥሮች፡- `SumeragiParameter`፣ `BlockParameter`፣ `TransactionParameter`፣ `SmartContractParameter` ለዲፍ መሰል ዝማኔዎች እና ድግግሞሽ።
+- ብጁ መለኪያዎች፡ አስፈፃሚ-የተገለጸ፣ እንደ `Json` ተሸክሞ፣ በ`CustomParameterId` (a `Name`) ተለይቷል።
 
-## ISI (Iroha Special Instructions)
+## ISI (Iroha ልዩ መመሪያዎች)
 
-- Core trait: `Instruction` with `dyn_encode`, `as_any`, and a stable per-type identifier `id()` (defaults to the concrete type name). All instructions are `Send + Sync + 'static`.
-- `InstructionBox`: owned `Box<dyn Instruction>` wrapper with clone/eq/ord implemented via type ID + encoded bytes.
-- Built-in instruction families are organized under:
-  - `mint_burn`, `transfer`, `register`, and a `transparent` bundle of helpers.
-  - Type enums for meta flows: `InstructionType`, boxed sums like `SetKeyValueBox` (domain/account/asset_def/nft/trigger).
-- Errors: rich error model under `isi::error` (evaluation type errors, find errors, mintability, math, invalid parameters, repetition, invariants).
-- Instruction registry: the `instruction_registry!{ ... }` macro builds a runtime decode registry keyed by type name. Used by `InstructionBox` clone and Norito serde to achieve dynamic (de)serialization. If no registry has been explicitly set via `set_instruction_registry(...)`, a built-in default registry with all core ISI is lazily installed on first use to keep binaries robust.
+- ዋና ባህሪ: `Instruction` ከ `dyn_encode`, `as_any` ጋር, እና የተረጋጋ በዓይነት መለያ `id()` (ነባሪዎች የኮንክሪት አይነት ስም). ሁሉም መመሪያዎች `Send + Sync + 'static` ናቸው።
+- `InstructionBox`: በባለቤትነት የ `Box<dyn Instruction>` መጠቅለያ በ clone/eq/ord በአይነት መታወቂያ + የተመሰጠረ ባይት የተተገበረ።
+- አብሮገነብ የማስተማሪያ ቤተሰቦች የተደራጁት በ፡-
+  - `mint_burn`፣ `transfer`፣ `register`፣ እና `transparent` የረዳቶች ጥቅል።
+  - ለሜታ ፍሰቶች ዝርዝር ቁጥሮችን ይተይቡ፡ `InstructionType`፣ እንደ `SetKeyValueBox` (ጎራ/መለያ/asset_def/nft/ቀስቃሽ) ያሉ በቦክስ የተደረጉ ድምሮች።
+ስህተቶች፡ በ `isi::error` (የግምገማ አይነት ስህተቶች፣ስህተቶችን ፈልጎ ማግኘት፣mintability፣ ሂሳብ፣ልክ ያልሆኑ መለኪያዎች፣ድግግሞሽ፣ተለዋዋጮች) ስር የበለጸገ የስህተት ሞዴል።
+- የመመሪያ መዝገብ፡ `instruction_registry!{ ... }` ማክሮ በአይነት ስም የተከፈተ የሩጫ ጊዜ ዲኮድ መዝገብ ይገነባል። ተለዋዋጭ (de) ተከታታይነትን ለማግኘት በ`InstructionBox` clone እና Norito serde ጥቅም ላይ ይውላል። በ`set_instruction_registry(...)` በኩል ምንም አይነት መዝገብ በግልፅ ካልተዋቀረ፣ አብሮ የተሰራ ነባሪ መዝገብ ከሁሉም ኮር ISI ጋር በመጀመሪያ ጥቅም ላይ የዋለው ሁለትዮሽ ጥንካሬን ለመጠበቅ ነው።
 
-## Transactions
-
-- `Executable`: either `Instructions(ConstVec<InstructionBox>)` or `Ivm(IvmBytecode)`. `IvmBytecode` serializes as base64 (transparent newtype over `Vec<u8>`).
-- `TransactionBuilder`: constructs a transaction payload with `chain`, `authority`, `creation_time_ms`, optional `time_to_live_ms` and `nonce`, `metadata`, and an `Executable`.
-  - Helpers: `with_instructions`, `with_bytecode`, `with_executable`, `with_metadata`, `set_nonce`, `set_ttl`, `set_creation_time`, `sign`.
-- `SignedTransaction` (versioned with `iroha_version`): carries `TransactionSignature` and payload; provides hashing and signature verification.
-- Entrypoints and results:
+## ግብይቶች- `Executable`፡ ወይ `Instructions(ConstVec<InstructionBox>)` ወይም `Ivm(IvmBytecode)`። `IvmBytecode` እንደ base64 ተከታታይ ያደርገዋል (ግልጽ የሆነ አዲስ ዓይነት ከ `Vec<u8>` በላይ)።
+- `TransactionBuilder`፡ የግብይት ጭነትን በ`chain`፣ `authority`፣ `creation_time_ms`፣ አማራጭ `time_to_live_ms` እና `nonce`፣01000X እና `Executable`.
+  - ረዳቶች፡- `with_instructions`፣ `with_bytecode`፣ `with_executable`፣ `with_metadata`፣ `set_nonce`፣ `set_ttl`፣ Kotodama
+- `SignedTransaction` (በ `iroha_version` ስሪት): `TransactionSignature` እና ጭነትን ይይዛል; ሀሺንግ እና ፊርማ ማረጋገጫ ይሰጣል።
+- የመግቢያ ነጥቦች እና ውጤቶች;
   - `TransactionEntrypoint`: `External(SignedTransaction)` | `Time(TimeTriggerEntrypoint)`.
-  - `TransactionResult` = `Result<DataTriggerSequence, TransactionRejectionReason>` with hashing helpers.
-  - `ExecutionStep(ConstVec<InstructionBox>)`: a single ordered batch of instructions in a transaction.
+  - `TransactionResult` = `Result<DataTriggerSequence, TransactionRejectionReason>` ከሃሽ ረዳቶች ጋር።
+  - `ExecutionStep(ConstVec<InstructionBox>)`: በአንድ ግብይት ውስጥ አንድ የታዘዘ መመሪያ ስብስብ።
 
-## Blocks
+## ብሎኮች
 
-- `SignedBlock` (versioned) encapsulates:
-  - `signatures: BTreeSet<BlockSignature>` (from validators),
-  - `payload: BlockPayload { header: BlockHeader, transactions: Vec<SignedTransaction> }`,
-  - `result: BlockResult` (secondary execution state) containing `time_triggers`, entry/result Merkle trees, `transaction_results`, and `fastpq_transcripts: BTreeMap<Hash, Vec<TransferTranscript>>`.
-- Utilities: `presigned`, `set_transaction_results(...)`, `set_transaction_results_with_transcripts(...)`, `header()`, `signatures()`, `hash()`, `add_signature`, `replace_signatures`.
-- Merkle roots: transaction entrypoints and results are committed via Merkle trees; result Merkle root is placed into the block header.
-- Block inclusion proofs (`BlockProofs`) expose both entry/result Merkle proofs and the `fastpq_transcripts` map so off-chain provers can fetch the transfer deltas associated with a transaction hash.
-- `ExecWitness` messages (streamed via Torii and piggy-backed on consensus gossip) now include both `fastpq_transcripts` and prover-ready `fastpq_batches: Vec<FastpqTransitionBatch>` with embedded `public_inputs` (dsid, slot, roots, perm_root, tx_set_hash), so external provers can ingest canonical FASTPQ rows without re-encoding transcripts.
+- `SignedBlock` (የተሰራ) ያጠቃልላል፡-
+  - `signatures: BTreeSet<BlockSignature>` (ከአረጋጋጮች) ፣
+  - `payload: BlockPayload { header: BlockHeader, transactions: Vec<SignedTransaction> }`፣
+  - `result: BlockResult` (ሁለተኛ ደረጃ የማስፈጸሚያ ሁኔታ) `time_triggers`፣ የመግቢያ/ውጤት Merkle ዛፎች፣ `transaction_results` እና `fastpq_transcripts: BTreeMap<Hash, Vec<TransferTranscript>>` የያዘ።
+መገልገያዎች፡- `presigned`፣ `set_transaction_results(...)`፣ `set_transaction_results_with_transcripts(...)`፣ `header()`፣ `signatures()`፣ `hash()`፣ Kotodama
+- Merkle ሥሮች: የግብይት መግቢያ ነጥቦች እና ውጤቶች Merkle ዛፎች በኩል ፈጽሟል; ውጤት Merkle root ወደ የማገጃው ራስጌ ውስጥ ተቀምጧል.
+- የማካተት ማረጋገጫዎችን አግድ (`BlockProofs`) ሁለቱንም የመግቢያ/ውጤት Merkle ማረጋገጫዎችን እና የ`fastpq_transcripts` ካርታን ያጋልጣሉ ስለዚህ ከሰንሰለት ውጪ የሆኑ ፕሮቨሮች ከግብይት ሃሽ ጋር የተያያዙ የዝውውር ዴልታዎችን ማምጣት ይችላሉ።
+- `ExecWitness` መልእክቶች (በTorii የሚተላለፉ እና በስምምነት ወሬ ላይ በ piggy የተደገፈ) አሁን ሁለቱንም `fastpq_transcripts` እና prover-ዝግጁ `fastpq_batches: Vec<FastpqTransitionBatch>` (ሥርወ-ሥርወ-ስርወ-ሥር-ሥር-ሥዋ-ሥር-ሥር-ሥር-ሥር-ሥር-ሥር-ሥር-ሥር-ሥር) Norito tx_set_hash)፣ ስለዚህ የውጪ አራሚዎች የጽሑፍ ግልባጮችን እንደገና ሳይቀዱ ቀኖናዊ FASTPQ ረድፎችን ማስገባት ይችላሉ።
 
-## Queries
+##ጥያቄዎች
 
-- Two flavors:
-  - Singular: implement `SingularQuery<Output>` (e.g., `FindParameters`, `FindExecutorDataModel`).
-  - Iterable: implement `Query<Item>` (e.g., `FindAccounts`, `FindAssets`, `FindDomains`, etc.).
-- Type-erased forms:
-  - `QueryBox<T>` is a boxed, erased `Query<Item = T>` with Norito serde backed by a global registry.
-  - `QueryWithFilter<T> { query, predicate, selector }` pairs a query with a DSL predicate/selector; converts into an erased iterable query via `From`.
-- Registry and codecs:
-  - `query_registry!{ ... }` builds a global registry mapping concrete query types to constructors by type name for dynamic decode.
-  - `QueryRequest = Singular(SingularQueryBox) | Start(QueryWithParams) | Continue(ForwardCursor)` and `QueryResponse = Singular(..) | Iterable(QueryOutput)`.
-  - `QueryOutputBatchBox` is a sum-type over homogeneous vectors (e.g., `Vec<Account>`, `Vec<Name>`, `Vec<AssetDefinition>`, `Vec<BlockHeader>`), plus tuple and extension helpers for efficient pagination.
-- DSL: Implemented in `query::dsl` with projection traits (`HasProjection<PredicateMarker>` / `SelectorMarker`) for compile-time-checked predicates and selectors. A `fast_dsl` feature exposes a lighter variant if needed.
+- ሁለት ቅመሞች;
+  ነጠላ፡- `SingularQuery<Output>`ን (ለምሳሌ `FindParameters`፣ `FindExecutorDataModel`) ተግብር።
+  - ሊደጋገም የሚችል፡ `Query<Item>` (ለምሳሌ፡ `FindAccounts`፣ `FindAssets`፣ `FindDomains`፣ ወዘተ) መተግበር።
+- የተሰረዙ ቅጾች;
+  - `QueryBox<T>` በቦክስ የተሰረዘ `Query<Item = T>` ከ Norito serde በአለምአቀፍ መዝገብ የተደገፈ ነው።
+  - `QueryWithFilter<T> { query, predicate, selector }` ጥያቄን ከዲኤስኤል ተሳቢ/መራጭ ጋር ያጣምራል። በ`From` በኩል ወደ ተሰረዘ የሚደጋገም ጥያቄ ይቀየራል።
+- መዝገብ ቤት እና ኮዴክ;
+  - `query_registry!{ ... }` ዓለም አቀፋዊ የመዝገብ ካርታ ይሠራል የኮንክሪት መጠይቅ ዓይነቶች ለተለዋዋጭ ዲኮድ በአይነት ስም ለገንቢዎች።
+  - `QueryRequest = Singular(SingularQueryBox) | Start(QueryWithParams) | Continue(ForwardCursor)` እና `QueryResponse = Singular(..) | Iterable(QueryOutput)`።
+  - `QueryOutputBatchBox` ከተመሳሳይ ቬክተር በላይ (ለምሳሌ `Vec<Account>`፣ `Vec<Name>`፣ `Vec<AssetDefinition>`፣ `Vec<BlockHeader>`)፣ እንዲሁም ቱፕል እና ማራዘሚያ አጋዥዎች።
+- DSL፡ በ`query::dsl` በፕሮጀክሽን ባህሪያት (`HasProjection<PredicateMarker>`/`SelectorMarker`) የተተገበረ በጊዜ የተረጋገጡ ተሳቢዎች እና መራጮች። የ`fast_dsl` ባህሪ ካስፈለገ ቀለል ያለ ልዩነትን ያጋልጣል።
 
-## Executor and Extensibility
+## ፈፃሚ እና ኤክስቴንሽን- `Executor { bytecode: IvmBytecode }`: አረጋጋጭ-ተፈፃሚው የኮድ ጥቅል።
+- `ExecutorDataModel { parameters: CustomParameters, instructions: BTreeSet<Ident>, permissions: BTreeSet<Ident>, schema: Json }` በአስፈጻሚው የተገለጸውን ጎራ ያውጃል፡-
+  - ብጁ ውቅር መለኪያዎች,
+  - ብጁ መመሪያ መለያዎች;
+  - የፍቃድ ማስመሰያ መለያዎች ፣
+  - ለደንበኛ መገልገያ ብጁ ዓይነቶችን የሚገልጽ የJSON ንድፍ።
+የማበጀት ናሙናዎች በ `data_model/samples/executor_custom_data_model` ስር ይገኛሉ፡-
+  - ብጁ የፍቃድ ማስመሰያ በ `iroha_executor_data_model::permission::Permission` ውፅዓት ፣
+  - ብጁ ግቤት ወደ `CustomParameter` የሚቀየር ዓይነት ፣
+  - ብጁ መመሪያዎች ለአፈፃፀም ወደ `CustomInstruction` ተከታታይ።
 
-- `Executor { bytecode: IvmBytecode }`: the validator-executed code bundle.
-- `ExecutorDataModel { parameters: CustomParameters, instructions: BTreeSet<Ident>, permissions: BTreeSet<Ident>, schema: Json }` declares the executor-defined domain:
-  - Custom configuration parameters,
-  - Custom instruction identifiers,
-  - Permission token identifiers,
-  - A JSON schema describing custom types for client tooling.
-- Customization samples exist under `data_model/samples/executor_custom_data_model` demonstrating:
-  - Custom permission token via `iroha_executor_data_model::permission::Permission` derive,
-  - Custom parameter defined as a type convertible into `CustomParameter`,
-  - Custom instructions serialized into `CustomInstruction` for execution.
+### ብጁ መመሪያ (በአስፈጻሚው የተገለጸ ISI)
 
-### CustomInstruction (executor-defined ISI)
+- አይነት: `isi::CustomInstruction { payload: Json }` በተረጋጋ ሽቦ መታወቂያ `"iroha.custom"`.
+ዓላማው፡-የህዝብ ዳታ ሞዴልን ሳያንኳኳ በግላዊ/በኮንሰርቲየም ኔትወርኮች ወይም በፕሮቶታይፕ ለፈጻሚ-ተኮር መመሪያዎች ፖስታ።
+- ነባሪ የአስፈፃሚ ባህሪ፡ በ`iroha_core` ውስጥ አብሮ የተሰራው አስፈፃሚ `CustomInstruction` አይሰራም እና ካጋጠመው ይደነግጣል። አንድ ብጁ አስፈፃሚ `InstructionBox` ወደ `CustomInstruction` ዝቅ ማድረግ እና በሁሉም አረጋጋጮች ላይ ያለውን ጭነት በቆራጥነት መተርጎም አለበት።
+- Norito: በ `norito::codec::{Encode, Decode}` በኩል ያዘጋጃል / ከመርሃግብር ጋር; የ `Json` ክፍያው በተከታታይ ተወስኗል። የመመሪያው መዝገብ `CustomInstruction` (የነባሪው መዝገብ አካል ነው) እስካካተተ ድረስ ክብ ጉዞዎች የተረጋጋ ናቸው።
+- IVM: Kotodama ወደ IVM ባይትኮድ (`.to`) ያጠናቅራል እና ለትግበራ አመክንዮ የሚመከር መንገድ ነው። እስካሁን በKotodama ውስጥ ሊገለጹ ለማይችሉ ፈጻሚ-ደረጃ ማራዘሚያዎች `CustomInstruction` ብቻ ይጠቀሙ። በእኩዮች መካከል ቆራጥነት እና ተመሳሳይ አስፈፃሚ ሁለትዮሾችን ያረጋግጡ።
+- ለሕዝብ አውታረ መረቦች አይደለም: የተለያዩ አስፈፃሚዎች የጋራ ስምምነት ሹካዎችን አደጋ ላይ በሚጥሉበት የህዝብ ሰንሰለት አይጠቀሙ። የመድረክ ባህሪያትን በሚፈልጉበት ጊዜ አዲስ አብሮ የተሰራ ISI ዥረት ሃሳብ ማቅረብን ይምረጡ።
 
-- Type: `isi::CustomInstruction { payload: Json }` with stable wire id `"iroha.custom"`.
-- Purpose: envelope for executor-specific instructions in private/consortium networks or for prototyping, without forking the public data model.
-- Default executor behavior: the built-in executor in `iroha_core` does not execute `CustomInstruction` and will panic if encountered. A custom executor must downcast `InstructionBox` to `CustomInstruction` and deterministically interpret the payload on all validators.
-- Norito: encodes/decodes via `norito::codec::{Encode, Decode}` with schema included; the `Json` payload is serialized deterministically. Round-trips are stable so long as the instruction registry includes `CustomInstruction` (it is part of the default registry).
-- IVM: Kotodama compiles to IVM bytecode (`.to`) and is the recommended path for application logic. Only use `CustomInstruction` for executor-level extensions that cannot yet be expressed in Kotodama. Ensure determinism and identical executor binaries across peers.
-- Not for public networks: do not use for public chains where heterogeneous executors risk consensus forks. Prefer proposing new built-in ISI upstream when you need platform features.
+## ዲበ ውሂብ
 
-## Metadata
+- `Metadata(BTreeMap<Name, Json>)`፡ ቁልፍ/ እሴት ማከማቻ ከብዙ አካላት ጋር ተያይዟል (`Domain`፣ `Account`፣ `AssetDefinition`፣ `Nft`፣ ቀስቅሴዎች እና ግብይቶች)።
+- API፡ `contains`፣ `iter`፣ `get`፣ `insert`፣ እና (ከ`transparent_api` ጋር) `remove`።
 
-- `Metadata(BTreeMap<Name, Json>)`: key/value store attached to multiple entities (`Domain`, `Account`, `AssetDefinition`, `Nft`, triggers, and transactions).
-- API: `contains`, `iter`, `get`, `insert`, and (with `transparent_api`) `remove`.
+## ባህሪዎች እና ቆራጥነት
 
-## Features and Determinism
+- የአማራጭ ኤፒአይዎችን (`std`፣ `json`፣ `transparent_api`፣ `ffi_export`፣ `ffi_import`፣ `fast_dsl`፣ `fast_dsl`፣0100002X፣018 `fault_injection`).
+- ቆራጥነት፡ ሁሉም ተከታታይነት Norito ኢንኮዲንግ በሃርድዌር ላይ ተንቀሳቃሽ እንዲሆን ይጠቀማል። IVM ባይትኮድ ግልጽ ያልሆነ ባይት ብሎብ ነው። ማስፈጸሚያ የማይወስኑ ቅነሳዎችን ማስተዋወቅ የለበትም። አስተናጋጁ ግብይቶችን ያረጋግጣል እና ግብዓቶችን ለIVM በቆራጥነት ያቀርባል።
 
-- Features control optional APIs (`std`, `json`, `transparent_api`, `ffi_export`, `ffi_import`, `fast_dsl`, `http`, `fault_injection`).
-- Determinism: All serialization uses Norito encoding to be portable across hardware. IVM bytecode is an opaque byte blob; execution must not introduce non-deterministic reductions. The host validates transactions and supplies inputs to IVM deterministically.
+### ግልጽ ኤፒአይ (`transparent_api`)ዓላማው፡ እንደ Torii፣ ፈፃሚዎች እና የውህደት ፈተናዎች ለ`#[model]` መዋቅሮች/ኢነመሮች ሙሉ፣ ተለዋዋጭ መዳረሻን ያጋልጣል። ያለሱ፣ እነዚያ እቃዎች ሆን ብለው ግልጽ ያልሆኑ ናቸው ስለዚህ ውጫዊ ኤስዲኬዎች ደህንነቱ የተጠበቀ ግንበኞችን እና የተመሰጠሩ ጭነቶችን ብቻ ነው የሚያዩት።
+- ሜካኒክስ፡ `iroha_data_model_derive::model` ማክሮ እያንዳንዱን የህዝብ መስክ በ`#[cfg(feature = "transparent_api")] pub` እንደገና ይጽፋል እና ለነባሪ ግንባታ የግል ቅጂ ያስቀምጣል። ባህሪውን ማንቃት እነዛ cfgs ይገለብጣቸዋል፣ ስለዚህ `Account`፣ `Domain`፣ `Asset`፣ ወዘተ ማበላሸት ከገለጻቸው ሞጁሎች ውጭ ህጋዊ ይሆናል።
+- የገጽታ ማወቂያ፡ ሣጥኑ የ`TRANSPARENT_API: bool` ቋሚ (በ`transparent_api.rs` ወይም `non_transparent_api.rs` የተፈጠረ) ወደ ውጭ ይልካል። የታችኛው ተፋሰስ ኮድ ይህንን ባንዲራ እና ቅርንጫፍ ወደ ግልጽ ባልሆኑ ረዳቶች መመለስ ሲፈልግ ማረጋገጥ ይችላል።
+- በማንቃት ላይ፡ `features = ["transparent_api"]` ወደ ጥገኝነት በ`Cargo.toml` ይጨምሩ። የJSON ትንበያ (ለምሳሌ `iroha_torii`) የሚያስፈልጋቸው የመስሪያ ቦታ ሳጥኖች ባንዲራውን በራስ ሰር ያስተላልፋሉ፣ ነገር ግን የሶስተኛ ወገን ሸማቾች ማሰማራቱን ካልተቆጣጠሩ እና ሰፊውን የኤፒአይ ገጽ ካልተቀበሉ በስተቀር እሱን ማጥፋት አለባቸው።
 
-### Transparent API (`transparent_api`)
+## ፈጣን ምሳሌዎች
 
-- Purpose: exposes full, mutable access to the `#[model]` structs/enums for internal components such as Torii, executors, and integration tests. Without it, those items are intentionally opaque so external SDKs only see safe constructors and encoded payloads.
-- Mechanics: the `iroha_data_model_derive::model` macro rewrites each public field with `#[cfg(feature = "transparent_api")] pub` and keeps a private copy for the default build. Enabling the feature flips those cfgs, so destructuring `Account`, `Domain`, `Asset`, etc. becomes legal outside their defining modules.
-- Surface detection: the crate exports a `TRANSPARENT_API: bool` constant (generated into either `transparent_api.rs` or `non_transparent_api.rs`). Downstream code can check this flag and branch when it needs to fall back to opaque helpers.
-- Enabling: add `features = ["transparent_api"]` to the dependency in `Cargo.toml`. Workspace crates that need the JSON projection (e.g., `iroha_torii`) forward the flag automatically, but third-party consumers should keep it off unless they control the deployment and accept the broader API surface.
-
-## Quick Examples
-
-Create a domain and account, define an asset, and build a transaction with instructions:
+ጎራ እና መለያ ይፍጠሩ፣ ንብረትን ይግለጹ እና በመመሪያዎች ግብይት ይገንቡ፡
 
 ```rust
 use iroha_data_model::prelude::*;
@@ -218,7 +209,7 @@ let tx = TransactionBuilder::new(chain_id, account_id.clone())
     .sign(kp.private_key());
 ```
 
-Query accounts and assets with the DSL:
+መለያዎችን እና ንብረቶችን በDSL ይጠይቁ፡-
 
 ```rust
 use iroha_data_model::prelude::*;
@@ -237,7 +228,7 @@ let q: QueryBox<QueryOutputBatchBox> =
 // Encode and send via Torii; decode on server using the query registry
 ```
 
-Use IVM smart contract bytecode:
+IVM ብልጥ ውል ባይትኮድ ተጠቀም፡-
 
 ```rust
 use iroha_data_model::prelude::*;
@@ -248,14 +239,14 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
     .sign(kp.private_key());
 ```
 
-## Versioning
+## ስሪት ማውጣት
 
-- `SignedTransaction`, `SignedBlock`, and `SignedQuery` are canonical Norito-encoded structs. Each implements `iroha_version::Version` to prefix their payload with the current ABI version (currently `1`) when encoded via `EncodeVersioned`.
+- `SignedTransaction`፣ `SignedBlock`፣ እና `SignedQuery` ቀኖናዊ Norito የተመሰጠሩ መዋቅሮች ናቸው። እያንዳንዳቸው `iroha_version::Version` በ `EncodeVersioned` ሲመሰጠሩ ክፍያቸውን አሁን ባለው ABI ስሪት (በአሁኑ ጊዜ `1`) ቅድመ-ቅጥያ ያስገባሉ።
 
-## Review Notes / Potential Updates
+## የግምገማ ማስታወሻዎች / ሊሆኑ የሚችሉ ዝማኔዎች
 
-- Query DSL: consider documenting a stable user-facing subset and examples for common filters/selectors.
-- Instruction families: expand public docs listing the built-in ISI variants exposed by `mint_burn`, `register`, `transfer`.
+- መጠይቅ DSL፡ የተረጋጋ ተጠቃሚን የሚመለከት ንዑስ ስብስብ እና ለጋራ ማጣሪያዎች/መራጮች ምሳሌዎችን መመዝገብ ያስቡበት።
+- የማስተማር ቤተሰቦች፡- በ`mint_burn`፣ `register`፣ `transfer` የተጋለጠ አብሮገነብ የISI ልዩነቶችን የሚዘረዝሩ የህዝብ ሰነዶችን ዘርጋ።
 
 ---
-If any part needs more depth (e.g., full ISI catalog, complete query registry list, or block header fields), let me know and I’ll extend those sections accordingly.
+የትኛውም ክፍል የበለጠ ጥልቀት የሚያስፈልገው ከሆነ (ለምሳሌ፣ ሙሉ የአይኤስአይ ካታሎግ፣ የተሟላ የጥያቄ መዝገብ ዝርዝር፣ ወይም የራስጌ መስኮችን አግድ)፣ አሳውቀኝ እና እነዚያን ክፍሎች በዚሁ መሰረት እሰፋለሁ።
