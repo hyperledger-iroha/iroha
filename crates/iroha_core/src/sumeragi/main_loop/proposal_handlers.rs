@@ -1902,7 +1902,6 @@ impl Actor {
             .propose
             .proposal_cache
             .pop_proposal(height, view);
-        self.clear_missing_block_request(&block_hash, MissingBlockClearReason::PayloadAvailable);
         if let Some(block) = self
             .pending
             .pending_blocks
@@ -1911,6 +1910,7 @@ impl Actor {
         {
             self.flush_pending_fetch_requests(&block);
         }
+        self.clear_missing_block_request(&block_hash, MissingBlockClearReason::PayloadAvailable);
 
         // If votes or cached QCs already exist for this block, re-evaluate now that the payload is
         // present so late-arriving block payloads can still finalize with previously collected votes.

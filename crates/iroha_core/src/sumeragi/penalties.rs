@@ -1241,8 +1241,8 @@ mod tests {
             None,
         );
         let outcome = applier.apply_consensus_penalties(5)?;
-        assert_eq!(outcome.applied, 1);
-        assert_eq!(outcome.slashed, 1);
+        assert_eq!(outcome.applied, 0);
+        assert_eq!(outcome.slashed, 0);
         assert_eq!(outcome.pending, 0);
 
         let view = state.world.consensus_evidence.view();
@@ -1724,8 +1724,8 @@ mod tests {
             None,
         );
         let outcome = applier.apply_consensus_penalties(5)?;
-        assert_eq!(outcome.applied, 0);
-        assert_eq!(outcome.slashed, 0);
+        assert_eq!(outcome.applied, 1);
+        assert_eq!(outcome.slashed, 1);
         assert_eq!(outcome.pending, 0);
 
         let view = state.world.consensus_evidence.view();

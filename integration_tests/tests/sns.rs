@@ -198,10 +198,28 @@ async fn sns_renew_and_transfer_flow() -> Result<()> {
     let selector_literal = format!("{label}.sora");
     let record = register_name(&client, &label)?;
     let original_expiry = record.expires_at_ms;
+    let policy = client.sns().get_policy(record.selector.suffix_id)?;
+    let base_price = policy
+        .pricing
+        .iter()
+        .find(|tier| tier.tier_id == record.pricing_class)
+        .ok_or_else(|| {
+            eyre!(
+                "pricing class {} not found in suffix policy {}",
+                record.pricing_class,
+                record.selector.suffix_id
+            )
+        })?
+        .base_price
+        .amount;
+    let renew_term_years: u8 = 2;
+    let renew_amount = u64::try_from(base_price)
+        .map_err(|_| eyre!("base price {base_price} exceeds u64 range"))?
+        .saturating_mul(u64::from(renew_term_years));
 
     let renew_request = RenewNameRequestV1 {
-        term_years: 2,
-        payment: stub_payment_proof(&record.owner),
+        term_years: renew_term_years,
+        payment: stub_payment_proof_with_amount(&record.owner, renew_amount),
     };
     let renewed = client.sns().renew(&selector_literal, &renew_request)?;
     assert!(
@@ -259,10 +277,14 @@ fn build_register_request(label: &str) -> Result<RegisterNameRequestV1> {
 }
 
 fn stub_payment_proof(payer: &AccountId) -> PaymentProofV1 {
+    stub_payment_proof_with_amount(payer, 120)
+}
+
+fn stub_payment_proof_with_amount(payer: &AccountId, amount: u64) -> PaymentProofV1 {
     PaymentProofV1 {
         asset_id: "xor#sora".to_string(),
-        gross_amount: 120,
-        net_amount: 120,
+        gross_amount: amount,
+        net_amount: amount,
         settlement_tx: Json::from("mock-settlement"),
         payer: payer.clone(),
         signature: Json::from("mock-signature"),
@@ -310,7 +332,32 @@ fn stub_governance_hook() -> GovernanceHookV1 {
 fn unique_label(prefix: &str) -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(1);
     let next = COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("{prefix}-{next}")
+    let normalized_prefix: String = prefix
+        .chars()
+        .map(|ch| ch.to_ascii_lowercase())
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect();
+    let normalized_prefix = if normalized_prefix.is_empty() {
+        "sns"
+    } else {
+        normalized_prefix.as_str()
+    };
+    format!("{normalized_prefix}{next}")
+}
+
+#[test]
+fn unique_label_matches_default_pricing_constraints() {
+    let label = unique_label("renew-transfer");
+    assert!(
+        label.len() >= 3,
+        "generated labels must satisfy min length: `{label}`"
+    );
+    assert!(
+        label
+            .chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit()),
+        "generated labels must stay within [a-z0-9]: `{label}`"
+    );
 }
 
 fn now_millis() -> u64 {

@@ -421,9 +421,12 @@ mod test {
 
         let digest = sha2::Sha256::digest(message);
         let verifying_key = k256::ecdsa::VerifyingKey::from(&pk);
+        let normalized = high_sig
+            .normalize_s()
+            .expect("high-S signature must normalize to low-S");
         verifying_key
-            .verify_prehash(&digest, &high_sig)
-            .expect("high-S signature is still valid mathematically");
+            .verify_prehash(&digest, &normalized)
+            .expect("normalized low-S signature should verify");
 
         let err = EcdsaSecp256k1Sha256::verify(message, high_sig.to_bytes().as_ref(), &pk);
         assert!(matches!(err, Err(Error::BadSignature)));

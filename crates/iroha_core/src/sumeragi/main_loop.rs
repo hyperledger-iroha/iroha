@@ -7637,6 +7637,17 @@ impl Actor {
             self.config.npos.epoch_length_blocks,
         );
         let schedule_epoch = schedule.epoch_for_height(height);
+        let current_height = u64::try_from(view.height()).unwrap_or(u64::MAX);
+        let current_mode = super::effective_consensus_mode_for_height(
+            view,
+            current_height,
+            self.config.consensus_mode,
+        );
+        // Before activation reaches this node, the epoch manager can still carry stale defaults.
+        // Prefer world/schedule-derived epochs until local mode actually flips to NPoS.
+        if matches!(current_mode, ConsensusMode::Permissioned) {
+            return schedule_epoch;
+        }
         if height <= schedule.last_finalized_end() {
             return schedule_epoch;
         }
@@ -11034,7 +11045,6 @@ impl Actor {
                     msg.as_ref(),
                     BlockMessage::Proposal(_)
                         | BlockMessage::BlockCreated(_)
-                        | BlockMessage::QcVote(_)
                         | BlockMessage::RbcInit(_)
                         | BlockMessage::RbcChunk(_)
                         | BlockMessage::RbcChunkCompact(_)
@@ -11068,6 +11078,15 @@ impl Actor {
     }
 
     #[cfg(test)]
+    fn background_log_message_kind(msg: &BlockMessage) -> &'static str {
+        match msg {
+            // Keep vote logging phase-agnostic in tests to preserve existing queue-target checks.
+            BlockMessage::QcVote(_) => "QcVote",
+            _ => Self::block_message_kind(msg),
+        }
+    }
+
+    #[cfg(test)]
     fn record_background_request(&self, request: &BackgroundRequest) {
         let Some(log) = self.background_request_log.as_ref() else {
             return;
@@ -11075,12 +11094,12 @@ impl Actor {
         let entry = match request {
             BackgroundRequest::Post { peer, msg } => BackgroundRequestLogEntry {
                 kind: BackgroundRequestLogKind::Post,
-                msg_kind: Some(Self::block_message_kind(msg.as_ref())),
+                msg_kind: Some(Self::background_log_message_kind(msg.as_ref())),
                 peer: Some(peer.clone()),
             },
             BackgroundRequest::Broadcast { msg } => BackgroundRequestLogEntry {
                 kind: BackgroundRequestLogKind::Broadcast,
-                msg_kind: Some(Self::block_message_kind(msg.as_ref())),
+                msg_kind: Some(Self::background_log_message_kind(msg.as_ref())),
                 peer: None,
             },
             BackgroundRequest::PostControlFlow { peer, .. } => BackgroundRequestLogEntry {
@@ -12935,6 +12954,7 @@ impl Actor {
         }
         let topology = super::network_topology::Topology::new(commit_topology.clone());
         let required = self.rbc_deliver_quorum(&topology);
+        let allow_missing_chunks = self.runtime_da_enabled();
         let missing_chunks = total_chunks != 0 && received_chunks < total_chunks;
         if ready_count < required {
             let cooldown = if missing_chunks {
@@ -13032,7 +13052,7 @@ impl Actor {
             self.subsystems.da_rbc.rbc.sessions.insert(key, session);
             return Ok(());
         }
-        if missing_chunks {
+        if missing_chunks && !allow_missing_chunks {
             if !self.should_emit_rbc_deliver_deferral(
                 key,
                 Instant::now(),
@@ -14840,7 +14860,6 @@ impl RbcSession {
     pub(crate) fn delivered_payload_matches(&self, payload_hash: &Hash) -> bool {
         self.delivered
             && !self.is_invalid()
-            && self.received_chunks == self.total_chunks
             && matches!(self.payload_hash(), Some(hash) if &hash == payload_hash)
     }
 

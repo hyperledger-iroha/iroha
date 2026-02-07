@@ -1,6 +1,7 @@
 # Status
 
 Last update: 2026-02-06
+- Kagami codec test fixture: added `"opaque_ids": []` to `samples/codec/account.json` so `codec::tests::json_norito_roundtrip` stays stable with the current `NewAccount` JSON shape. Tests: `cargo test -p iroha_kagami codec::tests::json_norito_roundtrip -- --nocapture` (ok).
 - Integration tests/roles: fixed initial-executor permission handling so role registration validates/normalizes permissions without duplicate role grants, account metadata writes enforce `CanModifyAccountMetadata` unless genesis/domain-owner/self, and role tests now match wrapped rejection errors + robust peer-termination events for invalid-genesis startup failure. Tests: `TEST_NETWORK_BIN_IROHAD=/Users/takemiyamakoto/dev/iroha/target/release/iroha3d cargo test -p integration_tests --test roles -- --nocapture` (ok; 8 passed, 0 failed).
 - Sumeragi tests: ensure `TestActorHarness` always sends shutdown on drop to avoid lingering workers when a test panics; tests not run (not requested).
 - Integration tests: avoid flaky repo margin-call cadence check by using a 5-minute cadence in `repo_margin_call_enforces_cadence_and_participant_rules`. Tests not run (failure reported).

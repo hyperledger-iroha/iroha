@@ -274,16 +274,26 @@ pub enum NetworkMessage {
 
 impl<'a> norito::core::DecodeFromSlice<'a> for NetworkMessage {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let archived = norito::core::archived_from_slice::<Self>(bytes)?;
-        let archived_bytes = archived.bytes();
-        let _guard = norito::core::PayloadCtxGuard::enter(archived_bytes);
+        use std::borrow::Cow;
+
+        let min_size = core::mem::size_of::<norito::core::Archived<Self>>();
+        let decode_bytes: Cow<'a, [u8]> = if min_size > 0 && bytes.len() < min_size {
+            let mut padded = Vec::with_capacity(min_size);
+            padded.extend_from_slice(bytes);
+            padded.resize(min_size, 0);
+            Cow::Owned(padded)
+        } else {
+            Cow::Borrowed(bytes)
+        };
+        let archived = norito::core::archived_from_slice::<Self>(decode_bytes.as_ref())?;
+        let _guard = norito::core::PayloadCtxGuard::enter_with_len(archived.bytes(), bytes.len());
         let value =
             <Self as norito::core::NoritoDeserialize>::try_deserialize(archived.archived())?;
-        Ok((value, archived_bytes.len()))
+        Ok((value, bytes.len()))
     }
 }
 
-// Derive Encode/Decode above for NetworkMessage
+// Encode/Decode are derived above for `NetworkMessage`.
 
 // Classify core network messages into P2P topics for scheduling.
 impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
