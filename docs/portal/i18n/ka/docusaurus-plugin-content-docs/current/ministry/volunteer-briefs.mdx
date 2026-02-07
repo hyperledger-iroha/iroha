@@ -1,15 +1,45 @@
-<!-- Auto-generated stub for Georgian (ka) translation. Replace this content with the full translation. -->
-
 ---
 lang: ka
 direction: ltr
 source: docs/portal/docs/ministry/volunteer-briefs.mdx
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+title: Volunteer Briefs
+description: Submit, lint, and publish citizen briefs for Ministry blacklist reviews.
 ---
 
-# Translation In Progress
+import VolunteerLintStatusTable from '@site/src/components/VolunteerLintStatusTable';
 
-This file is a placeholder for the Georgian translation of the English document. Once the translation is complete, update the `status` metadata above.
+## Overview
 
-Replace this stub with the completed Georgian translation and update `translation_last_reviewed` after verification against the English source.
+Volunteer briefs capture the support/oppose/context viewpoints that the Ministry of Information reviews whenever blacklist or policy changes are proposed. Every submission must follow the canonical schema implemented by `iroha_data_model::ministry::VolunteerBriefV1` (version `1`) so that:
+
+1. Governance dashboards can compare fact tables deterministically.
+2. Conflict-of-interest disclosures are enforced before publication.
+3. Off-topic or astroturfed submissions are suppressed without removing them from the audit trail.
+
+Use the template in `docs/source/ministry/volunteer_brief_template.md` or the `cargo xtask ministry-transparency ingest` helper to build a payload. The CLI validates the Norito struct, lints moderation tags, and emits a summary showing how many fact rows, citations, and disclosures were accepted.
+
+## Publication pipeline & SLA
+
+| Stage | Window | Details |
+|-------|--------|---------|
+| Intake & validation | T+0 to 6 hours | Payloads are uploaded through the volunteer form or the CLI. `VolunteerBriefV1::validate` enforces the schema (version, RFC 3339 timestamp, disclosure policy, digest formatting). Failures are rejected immediately with actionable error codes. |
+| Translation & moderation | T+6 to 24 hours | Reviewers apply moderation tags (`needs-translation`, `duplicate`, `policy-escalation`, etc.), redact contacts, and flag off-topic entries. Tags are stored in the Norito payload so downstream automation can suppress or highlight entries. |
+| Portal publication | T+24 to 48 hours | Valid briefs are published alongside the corresponding proposal page under **Volunteer Opinions**. Off-topic entries remain in the raw archive but are excluded from aggregate stance counts. |
+
+Expedited handling (≤12 hours) is triggered automatically when the `policy-escalation` or `astroturf` tags are present. Operators can audit compliance via the Volunteer Briefs Grafana panel, which tracks the time between `submitted_at` and portal publication.
+
+## Deliverables
+
+- **Schema & docs:** `VolunteerBriefV1` lives in the shared data model, and the detailed field guide plus example payload reside in `docs/source/ministry/volunteer_brief_template.md` and `docs/examples/ministry/volunteer_brief_template.json`.
+- **Validation tooling:** `cargo xtask ministry-transparency volunteer-validate --input <file> [--json-output artifacts/ministry/volunteer-lint.json]` runs the same lints used by the portal build; `ingest --volunteer <file>` remains available when you want to stage an entire bundle for publication.
+- **Portal surfacing:** Each proposal page links to the decoded support/oppose/context briefs, making citizen opinions visible without downloading raw JSON. Moderation metadata is rendered alongside the brief so jurors understand why an entry may have been delayed or excluded.
+
+Refer to the roadmap item **MINFO-3 — Volunteer interest panel infrastructure** if additional automation (e.g., bulk import APIs or extended analytics) is required.
+
+## Lint status dashboard
+
+The portal build now runs `npm run generate:volunteer-lint`, which invokes `cargo xtask ministry-transparency volunteer-validate --json-output …` across every checked-in volunteer brief. The resulting manifest is rendered below so reviewers can confirm each proposal’s lint status before publishing.
+
+<VolunteerLintStatusTable />

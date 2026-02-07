@@ -2092,6 +2092,12 @@ impl Actor {
         if roster.is_empty() {
             return None;
         }
+        let view = self.state.view();
+        roster =
+            super::roster::filter_roster_with_live_consensus_keys_at_height(&view, roster, height);
+        if roster.is_empty() {
+            return None;
+        }
         roster = super::roster::canonicalize_roster_for_mode(roster, consensus_mode);
         Some(roster)
     }
@@ -2185,6 +2191,9 @@ impl Actor {
             roster = topology.as_ref().to_vec();
             current_height = current_height.saturating_add(1);
             if current_height == height {
+                roster = super::roster::filter_roster_with_live_consensus_keys_at_height(
+                    &view, roster, height,
+                );
                 if roster.is_empty() {
                     return None;
                 }

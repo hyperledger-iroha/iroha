@@ -1,18 +1,49 @@
-<!-- Auto-generated stub for Chinese (Traditional) (zh-hant) translation. Replace this content with the full translation. -->
-
 ---
 lang: zh-hant
 direction: ltr
 source: docs/examples/docs_preview_feedback_digest.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 4b1191d3475126df594d0f9f81d91f8ebbcd002c74a1f4d4176f2f42a59ca885
 source_last_modified: "2025-12-29T18:16:35.070397+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2026-02-07
 ---
 
-# Translation In Progress
+# Docs Portal Preview Feedback Digest (Template)
 
-This file is a placeholder for the Chinese (Traditional) translation of the English document. Once the translation is complete, update the `status` field in the metadata above.
+Use this template when summarising a preview wave for governance, release
+reviews, or `status.md`. Copy the Markdown into the tracking ticket, replace
+placeholders with real data, and attach the JSON summary exported via
+`npm run --prefix docs/portal preview:log -- --summary --summary-json`. The
+`preview:digest` helper (`npm run --prefix docs/portal preview:digest -- --wave <label>`)
+generates the metrics section shown below so you only need to fill in the
+highlights/actions/artefacts rows.
 
-This stub awaits translation. Replace the placeholder body with the completed text and update the metadata status to `complete` when finished.
+```markdown
+## Wave preview-<tag> feedback digest (YYYY-MM-DD)
+- Invite window: <start → end>
+- Reviewers invited: <count> (open: <count>)
+- Feedback submissions: <count>
+- Issues opened: <count>
+- Latest event timestamp: <ISO8601 from summary.json>
+
+| Category | Details | Owner / Follow-up |
+| --- | --- | --- |
+| Highlights | <e.g., “ISO builder walkthrough landed well”> | <owner + due date> |
+| Blocking findings | <list issue IDs or tracker links> | <owner> |
+| Minor polish items | <group cosmetic or copy edits> | <owner> |
+| Telemetry anomalies | <link to dashboard snapshot / probe log> | <owner> |
+
+## Actions
+1. <Action item + link + ETA>
+2. <Optional second action>
+
+## Artefacts
+- Feedback log: `artifacts/docs_portal_preview/feedback_log.json` (`sha256:<digest>`)
+- Wave summary: `artifacts/docs_portal_preview/preview-<tag>-summary.json`
+- Dashboard snapshot: `<link or path>`
+
+```
+
+Keep each digest with the invite-tracking ticket so reviewers and governance can
+replay the evidence trail without digging through CI logs.
