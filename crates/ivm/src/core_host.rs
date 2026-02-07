@@ -1013,7 +1013,8 @@ impl IVMHost for CoreHost {
                 Ok(0)
             }
             syscalls::SYSCALL_DECODE_INT => {
-                // r10 = &NoritoBytes (Norito-framed i64); return r10 = parsed i64
+                // r10 = &NoritoBytes (prefer Norito i64; legacy UTF-8 decimal is also accepted)
+                // return r10 = parsed i64
                 let addr = vm.register(10);
                 if addr == 0 {
                     if crate::dev_env::decode_trace_enabled() {
@@ -1034,7 +1035,15 @@ impl IVMHost for CoreHost {
                         type_id: tlv.type_id as u16,
                     });
                 }
-                let val: i64 = decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let val: i64 = if let Ok(value) = decode_from_bytes(tlv.payload) {
+                    value
+                } else if let Ok(raw) = core::str::from_utf8(tlv.payload) {
+                    raw.parse().map_err(|_| VMError::DecodeError)?
+                } else {
+                    let raw: String =
+                        decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
+                    raw.parse().map_err(|_| VMError::DecodeError)?
+                };
                 vm.set_register(10, val as u64);
                 Ok(0)
             }
@@ -1299,17 +1308,11 @@ impl IVMHost for CoreHost {
                         type_id: tlv.type_id as u16,
                     });
                 }
-                let json: Json = match tlv.type_id {
-                    PointerType::NoritoBytes | PointerType::Json => {
-                        decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?
-                    }
-                    PointerType::Blob => {
-                        let raw =
-                            std::str::from_utf8(tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
-                        Json::from_str_norito(raw).map_err(|_| VMError::NoritoInvalid)?
-                    }
-                    _ => return Err(VMError::NoritoInvalid),
-                };
+                if !matches!(tlv.type_id, PointerType::NoritoBytes | PointerType::Json) {
+                    return Err(VMError::NoritoInvalid);
+                }
+                let json: Json =
+                    decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
                 let body = to_bytes(&json).map_err(|_| VMError::NoritoInvalid)?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
                 out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
@@ -1648,7 +1651,8 @@ impl IVMHost for CoreHost {
                 Ok(0)
             }
             syscalls::SYSCALL_NAME_DECODE => {
-                // r10 = &NoritoBytes (Norito-framed Name) -> r10 = &Name
+                // r10 = &NoritoBytes (prefer Norito Name; legacy UTF-8 string is also accepted)
+                // -> r10 = &Name
                 let r10_before = vm.register(10);
                 if r10_before == 0 {
                     vm.set_register(10, 0);
@@ -1666,8 +1670,15 @@ impl IVMHost for CoreHost {
                         type_id: tlv.type_id as u16,
                     });
                 }
-                let name: Name =
-                    decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let name: Name = if let Ok(name) = decode_from_bytes(tlv.payload) {
+                    name
+                } else if let Ok(raw) = core::str::from_utf8(tlv.payload) {
+                    Name::from_str(raw).map_err(|_| VMError::NoritoInvalid)?
+                } else {
+                    let raw: String =
+                        decode_from_bytes(tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
+                    Name::from_str(&raw).map_err(|_| VMError::NoritoInvalid)?
+                };
                 // Build Name TLV and mirror into INPUT using the normalized form.
                 let body = to_bytes(&name).map_err(|_| VMError::NoritoInvalid)?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
