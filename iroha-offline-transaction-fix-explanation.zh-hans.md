@@ -7,42 +7,43 @@ generator: scripts/sync_docs_i18n.py
 source_hash: af87986c9860f978003331715b6b947a1a02f710a5a35e0e5673198c4c3f4db9
 source_last_modified: "2026-02-04T17:27:55.753652+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Iroha Offline Transaction Fixes
+# Iroha 离线交易修复
 
-**Source Branch**: `i23`
-**Cherry-pick Status**: In progress
+**来源分支**：`i23`
+**精选状态**：正在进行中
 
-## Overview
+## 概述
 
-This patch contains two related changes for the offline transaction system:
+该补丁包含离线交易系统的两个相关更改：
 
-1. **Bug Fix**: Scalar decoding for blinding factors (commit `b28473cd5`)
-2. **New Feature**: `OfflineSpendReceiptPayloadEncoder` for Android SDK
+1. **错误修复**：致盲因子的标量解码（提交 `b28473cd5`）
+2. **新功能**：`OfflineSpendReceiptPayloadEncoder` 适用于 Android SDK
 
 ---
 
-## Change 1: Scalar Decoding Fix
+## 更改 1：标量解码修复
 
-### Summary
+### 总结
 
-Fixes a critical bug where ~87% of randomly generated blinding factors would be rejected, causing offline balance proofs to fail intermittently.
+修复了一个严重错误，其中约 87% 的随机生成的致盲因素将被拒绝，导致离线余额证明间歇性失败。
 
-### The Problem
+### 问题
 
-The offline balance proof system uses Pedersen commitments with random blinding factors:
+离线余额证明系统使用具有随机致盲因子的 Pedersen 承诺：
 
 ```
 Commitment = value * G + blinding * H
 ```
 
-The original code used `Scalar::from_canonical_bytes()` which requires the input to be less than the curve order `L ≈ 2^252`. When clients generate random 32-byte values:
-- Maximum possible value: `2^256 - 1`
-- Curve order: `~2^252`
-- **Only ~6.25% of random values are valid**
+原始代码使用 `Scalar::from_canonical_bytes()` ，要求输入小于曲线阶数 `L ≈ 2^252` 。当客户端生成随机 32 字节值时：
+- 最大可能值：`2^256 - 1`
+- 曲线顺序：`~2^252`
+- **只有 ~6.25% 的随机值有效**
 
-### The Fix
+### 修复
 
 ```rust
 // BEFORE (broken - rejects ~87% of random blindings):
@@ -54,35 +55,35 @@ let scalar = Scalar::from_bytes_mod_order(array);
 Ok(scalar)
 ```
 
-`from_bytes_mod_order()` accepts any 32-byte input and reduces it modulo the curve order. This is cryptographically safe and is the standard approach used by libsodium and ed25519-dalek.
+`from_bytes_mod_order()` 接受任何 32 字节输入并以曲线阶数为模进行减少。这是加密安全的，是 libsodium 和 ed25519-dalek 使用的标准方法。
 
-### Files Changed
+### 文件已更改
 
-| File | Change |
+|文件|改变 |
 |------|--------|
-| `crates/connect_norito_bridge/src/lib.rs` | Line ~679: scalar decoding |
+| `crates/connect_norito_bridge/src/lib.rs` |第 ~679 行：标量解码 |
 
 ---
 
-## Change 2: OfflineSpendReceiptPayloadEncoder
+## 更改 2：OfflineSpendReceiptPayloadEncoder
 
-### Summary
+### 总结
 
-Adds a new JNI binding to encode `OfflineSpendReceiptPayload` for signing in the Android SDK. This enables mobile apps to properly serialize offline spend receipt data before signing.
+添加新的 JNI 绑定来编码 `OfflineSpendReceiptPayload` 以登录 Android SDK。这使得移动应用程序能够在签名之前正确序列化离线支出收据数据。
 
-### Purpose
+### 目的
 
-When a sender creates an offline spend receipt, they must:
-1. Construct the `OfflineSpendReceiptPayload` with all transaction details
-2. Serialize it to Norito bytes
-3. Sign the bytes with their spend key
-4. Attach the signature to the receipt
+当发件人创建离线支出收据时，他们必须：
+1. 构建包含所有交易详细信息的 `OfflineSpendReceiptPayload`
+2.序列化为Norito字节
+3. 使用支出密钥对字节进行签名
+4. 在收据上签名
 
-Previously, the Android SDK couldn't produce the correct signing bytes because the Norito serialization is complex and must match exactly what the Iroha node expects.
+以前，Android SDK 无法生成正确的签名字节，因为 Norito 序列化很复杂，并且必须与 Iroha 节点所期望的完全匹配。
 
 ### API
 
-**Java Class**: `org.hyperledger.iroha.android.offline.OfflineSpendReceiptPayloadEncoder`
+**Java 类**：`org.hyperledger.iroha.android.offline.OfflineSpendReceiptPayloadEncoder`
 
 ```java
 public static byte[] encode(
@@ -98,74 +99,72 @@ public static byte[] encode(
 );
 ```
 
-**Returns**: Norito-encoded bytes ready for signing
+**返回**：Norito编码字节准备签名
 
-### Files Changed
+### 文件已更改
 
-| File | Description |
+|文件|描述 |
 |------|-------------|
-| `crates/connect_norito_bridge/src/lib.rs` | New `encode_offline_spend_receipt_payload` function + JNI binding |
-| `java/iroha_android/.../OfflineSpendReceiptPayloadEncoder.java` | **NEW** - Java wrapper class |
-| `java/iroha_android/.../OfflineSpendReceiptPayloadEncoderTest.java` | **NEW** - Test class |
-| `java/iroha_android/core/build.gradle.kts` | Added `IROHA_NATIVE_LIBRARY_PATH` support for tests |
-| `java/iroha_android/.../GradleHarnessTests.java` | Registered new test |
+| `crates/connect_norito_bridge/src/lib.rs` |新的 `encode_offline_spend_receipt_payload` 函数 + JNI 绑定 |
+| `java/iroha_android/.../OfflineSpendReceiptPayloadEncoder.java` | **新** - Java 包装类 |
+| `java/iroha_android/.../OfflineSpendReceiptPayloadEncoderTest.java` | **新** - 测试类 |
+| `java/iroha_android/core/build.gradle.kts` |添加了 `IROHA_NATIVE_LIBRARY_PATH` 对测试的支持 |
+| `java/iroha_android/.../GradleHarnessTests.java` |注册新测试 |
 
-### Implementation Details
+### 实施细节
 
-**Rust side** (`connect_norito_bridge/src/lib.rs`):
-- Parses all string inputs (account IDs, asset ID, amount)
-- Deserializes JSON for platform proof and certificate
-- Constructs `OfflineSpendReceiptPayload` struct
-- Serializes using Norito codec (`to_bytes`)
-- Returns raw bytes to JNI caller
+**生锈面** (`connect_norito_bridge/src/lib.rs`)：
+- 解析所有字符串输入（账户 ID、资产 ID、金额）
+- 反序列化 JSON 以获取平台证明和证书
+- 构造 `OfflineSpendReceiptPayload` 结构体
+- 使用 Norito 编解码器 (`to_bytes`) 进行序列化
+- 将原始字节返回给 JNI 调用者
 
-**Java side** (`OfflineSpendReceiptPayloadEncoder.java`):
-- Validates all inputs before calling native
-- Loads `connect_norito_bridge` native library
-- Provides `isNativeAvailable()` check for graceful degradation
-- Throws `IllegalArgumentException` for invalid inputs
-- Throws `IllegalStateException` if native library unavailable
+**Java 端** (`OfflineSpendReceiptPayloadEncoder.java`)：
+- 在调用本机之前验证所有输入
+- 加载 `connect_norito_bridge` 本机库
+- 提供 `isNativeAvailable()` 检查以进行正常降级
+- 对于无效输入抛出 `IllegalArgumentException`
+- 如果本机库不可用，则抛出 `IllegalStateException`
 
-### Test Coverage
+### 测试覆盖率**防锈测试**：`encode_offline_spend_receipt_payload_matches_native`
+- 使用原生 Rust 类型创建完整的 `OfflineSpendReceipt`
+- 调用 `receipt.signing_bytes()` 获取预期字节
+- 使用等效的 JSON 输入调用 `encode_offline_spend_receipt_payload()`
+- 断言都产生相同的字节
 
-**Rust test**: `encode_offline_spend_receipt_payload_matches_native`
-- Creates a complete `OfflineSpendReceipt` using native Rust types
-- Calls `receipt.signing_bytes()` to get expected bytes
-- Calls `encode_offline_spend_receipt_payload()` with equivalent JSON inputs
-- Asserts both produce identical bytes
-
-**Java test**: `OfflineSpendReceiptPayloadEncoderTest`
-- Calls `encode()` with test data derived from Rust test
-- Verifies non-empty bytes returned
-- Verifies Norito header (`NRT0`) present
-- Skips gracefully if native library unavailable
-- Set `IROHA_NATIVE_REQUIRED=1` to fail instead of skip in CI
+**Java 测试**：`OfflineSpendReceiptPayloadEncoderTest`
+- 使用来自 Rust 测试的测试数据调用 `encode()`
+- 验证返回的非空字节
+- 验证 Norito 标头 (`NRT0`) 是否存在
+- 如果本机库不可用，则优雅地跳过
+- 在 CI 中将 `IROHA_NATIVE_REQUIRED=1` 设置为失败而不是跳过
 
 ---
 
-## Security Considerations
+## 安全考虑
 
-### Scalar Fix
-- **Safe**: Modular reduction is standard cryptographic practice
-- **No security impact**: Blinding factor randomness is preserved
-- **Same approach as**: libsodium, ed25519-dalek, most Ristretto implementations
+### 标量修复
+- **安全**：模块化缩减是标准的加密实践
+- **无安全影响**：保留致盲因素随机性
+- **与**相同的方法：libsodium、ed25519-dalek、大多数 Ristretto 实现
 
-### Payload Encoder
-- **No new crypto**: Just serialization, no key handling
-- **Input validation**: All parameters validated before native call
-- **Deterministic**: Same inputs always produce same bytes
+### 有效负载编码器
+- **没有新的加密**：仅序列化，无密钥处理
+- **输入验证**：在本机调用之前验证所有参数
+- **确定性**：相同的输入总是产生相同的字节
 
 ---
 
-## Testing Instructions
+## 测试说明
 
-### Rust Tests
+### 生锈测试
 ```bash
 cd /Users/sdi/work/iroha
 cargo test encode_offline_spend_receipt_payload_matches_native
 ```
 
-### Java Tests (requires native library)
+### Java 测试（需要本机库）
 ```bash
 export IROHA_NATIVE_LIBRARY_PATH=/path/to/libconnect_norito_bridge.so
 export IROHA_NATIVE_REQUIRED=1
@@ -175,10 +174,10 @@ cd java/iroha_android
 
 ---
 
-## Impact
+## 影响
 
-| Component | Before | After |
-|-----------|--------|-------|
-| Offline balance proofs | ~87% random failure | 100% success |
-| Android spend receipt signing | Not possible (wrong bytes) | Correct Norito encoding |
-| iOS/Swift | Already fixed in commit b28473cd5 | N/A |
+|组件|之前 |之后 |
+|------------|--------|--------|
+|离线余额证明 | ~87% 随机失败 | 100% 成功 |
+| Android 支出收据签名 |不可能（错误字节）|正确的 Norito 编码 |
+| iOS/Swift |已在提交 b28473cd5 中修复 |不适用 |

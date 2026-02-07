@@ -7,146 +7,140 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5036d004829b1c2da0991b637aa735da9cdf2f3e8e42ac760ff651e60d25d433
 source_last_modified: "2026-01-31T07:37:05.947018+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# AGENTS Instructions
+# Agents ညွှန်ကြားချက်များ
 
-These guidelines apply to the entire repository, which is organised as a Cargo workspace.
+ဤလမ်းညွှန်ချက်များသည် သိုလှောင်ရုံတစ်ခုလုံးအတွက် အကျုံးဝင်ပြီး ကုန်စည်ပို့ဆောင်မှုလုပ်ငန်းခွင်တစ်ခုအဖြစ် ဖွဲ့စည်းထားသည်။
 
-## Quickstart
-- Build workspace: `cargo build --workspace`
-- Builds can take about 20 minutes; use a 20-minute timeout for build steps.
-- Test everything: `cargo test --workspace` (note that this run typically takes several hours; plan accordingly)
-- Lint strictly: `cargo clippy --workspace --all-targets -- -D warnings`
-- Format code: `cargo fmt --all` (edition 2024)
-- Test one crate: `cargo test -p <crate>`
-- Run one test: `cargo test -p <crate> <test_name> -- --nocapture`
-- Swift SDK: from the `IrohaSwift` directory run `swift test` to execute the Swift package tests.
-- Android SDK: from `java/iroha_android` run `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test`.
+## အမြန်စတင်ပါ။
+- အလုပ်ခွင်တည်ဆောက်ခြင်း- `cargo build --workspace`
+- တည်ဆောက်မှုသည် မိနစ် 20 ခန့် ကြာနိုင်သည်။ တည်ဆောက်မှုအဆင့်များအတွက် မိနစ် 20 အချိန်ကုန်သွားပါသည်။
+- အရာအားလုံးကို စမ်းသပ်ပါ- `cargo test --workspace` (ဤအပြေးသည် ပုံမှန်အားဖြင့် နာရီပေါင်းများစွာ ကြာတတ်ကြောင်း သတိပြုပါ၊ သင့်လျော်စွာ စီစဉ်ပါ)
+- တင်းကြပ်စွာ ဖျာပုံ- `cargo clippy --workspace --all-targets -- -D warnings`
+- ဖော်မတ်ကုဒ်- `cargo fmt --all` (ထုတ်ဝေမှု 2024)
+- စမ်းသပ်ချက်တစ်ခု - `cargo test -p <crate>`
+- စမ်းသပ်မှုတစ်ခု လုပ်ဆောင်ပါ- `cargo test -p <crate> <test_name> -- --nocapture`
+- Swift SDK- `IrohaSwift` လမ်းညွှန်မှ `swift test` ကို Swift ပက်ကေ့ဂျ်စမ်းသပ်မှုများကို လုပ်ဆောင်ရန်။
+- Android SDK- `java/iroha_android` မှ `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test` ကို run ။
 
-## Overview
-- Hyperledger Iroha is a blockchain platform
-- DA/RBC support differs by major version: Iroha 2 can optionally have DA/RBC enabled; Iroha 3 can only have DA/RBC enabled.
-- IVM is the Iroha Virtual Machine (IVM), a virtual machine for the Hyperledger Iroha v2 blockchain
-- Kotodama is a high level smart contract language for the IVM that uses .ko file extension for raw contract code and it compiles to bytecode which uses .to file extension, when saved as a file or on-chain. Typically, .to bytecode is deployed onchain.
-  - Clarification: Kotodama targets the Iroha Virtual Machine (IVM) and produces IVM bytecode (`.to`). It does not target “risc5”/RISC‑V as a standalone architecture. Where RISC‑V–like encodings appear in the repository, they are implementation details of IVM’s instruction formats and must not change observable behavior across hardware.
-- Norito is the data serialization codec for Iroha
-- The entire workspace targets the Rust standard library (`std`). WASM/no-std builds are no longer supported and should not be considered when making changes.
+## ခြုံငုံသုံးသပ်ချက်
+- Hyperledger Iroha သည် blockchain ပလပ်ဖောင်းတစ်ခုဖြစ်သည်။
+- DA/RBC ပံ့ပိုးမှုသည် အဓိကဗားရှင်းအားဖြင့် ကွဲပြားသည်- Iroha 2 သည် ရွေးချယ်နိုင်သည် DA/RBC ဖွင့်ထားနိုင်သည်။ Iroha 3 တွင် DA/RBC ကိုသာ ဖွင့်ထားနိုင်သည်။
+- IVM သည် Iroha Virtual Machine (IVM) သည် I18NT0000001X Iroha v2 blockchain အတွက် virtual machine တစ်ခုဖြစ်သည်။
+- Kotodama သည် IVM အတွက် မြင့်မားသောအဆင့်မြင့် စာချုပ်ဘာသာစကားတစ်ခုဖြစ်ပြီး စာချုပ်ကြမ်းကုဒ်အတွက် .ko ဖိုင်တိုးချဲ့မှုကို အသုံးပြုကာ ဖိုင်တစ်ခု သို့မဟုတ် ကွင်းဆက်အဖြစ် သိမ်းဆည်းသည့်အခါ .to ဖိုင်တိုးချဲ့မှုကို အသုံးပြုသည့် bytecode သို့ စုစည်းပေးသည်။ ပုံမှန်အားဖြင့်၊ .to bytecode ကို onchain တွင် အသုံးပြုသည်။
+  - ရှင်းလင်းချက်- Kotodama သည် Iroha Virtual Machine (IVM) ကို ပစ်မှတ်ထားပြီး IVM bytecode (`.to`) ကို ထုတ်လုပ်သည်။ ၎င်းသည် “risc5”/RISC‑V ကို သီးခြားဗိသုကာအဖြစ် ပစ်မှတ်ထားခြင်းမရှိပါ။ RISC‑V-ကဲ့သို့သော ကုဒ်နံပါတ်များကို သိုလှောင်ခန်းတွင် ပေါ်လာသည့်အခါ ၎င်းတို့သည် IVM ၏ ညွှန်ကြားချက်ဖော်မတ်များ၏ အကောင်အထည်ဖော်မှုအသေးစိတ်များဖြစ်ပြီး ဟာ့ဒ်ဝဲတစ်လျှောက် ကြည့်ရှုနိုင်သော အပြုအမူများကို မပြောင်းလဲရပါ။
+- Norito သည် Iroha အတွက် data serialization codec ဖြစ်သည်
+- အလုပ်ခွင်တစ်ခုလုံးသည် Rust စံစာကြည့်တိုက် (`std`) ကို ပစ်မှတ်ထားသည်။ WASM/no-std တည်ဆောက်မှုများကို မပံ့ပိုးတော့ဘဲ အပြောင်းအလဲများ ပြုလုပ်သည့်အခါ ထည့်သွင်းစဉ်းစားရန် မသင့်ပါ။## Repository ဖွဲ့စည်းပုံ
+- repository root မှ `Cargo.toml` သည် workspace ကို သတ်မှတ်ပြီး အဖွဲ့ဝင်သေတ္တာများအားလုံးကို စာရင်းပြုစုသည်။
+- `crates/` - Iroha အစိတ်အပိုင်းများကို အသုံးပြုထားသည့် သံချေးသေတ္တာများ။ သေတ္တာတစ်ခုစီတွင် `src/`၊ `tests/`၊ `examples/` နှင့် `benches/` ပါရှိသော ၎င်း၏ကိုယ်ပိုင်လမ်းခွဲများရှိသည်။
+  - အရေးကြီးသောသေတ္တာများပါဝင်သည်-
+    - `iroha` - ထိပ်တန်းအဆင့် စာကြည့်တိုက် core functionality
+    - `irohad` – daemon binary သည် node အကောင်အထည်ဖော်မှုကို ပံ့ပိုးပေးသည်။
+    - `ivm` - Iroha Virtual Machine။
+    - `iroha_cli` - node တစ်ခုနှင့်အပြန်အလှန်ဆက်သွယ်ရန်အတွက် command-line interface။
+    - `iroha_core`၊ `iroha_data_model`၊ `iroha_crypto` နှင့် အခြားသော ပံ့ပိုးသေတ္တာများ။
+- `IrohaSwift/` - client/mobile SDK အတွက် Swift Package။ ၎င်း၏ရင်းမြစ်များသည် `Sources/IrohaSwift/` အောက်တွင်ရှိပြီး ၎င်း၏ယူနစ်စမ်းသပ်မှုများ `Tests/IrohaSwiftTests/` အောက်တွင် နေထိုင်ပါသည်။ Swift suite ကိုလေ့ကျင့်ရန် ဤလမ်းညွှန်မှ `swift test` ကိုဖွင့်ပါ။
+- `integration_tests/` - `tests/` အောက်တွင် အစိတ်အပိုင်းနှစ်ခုစမ်းသပ်မှုများကို လက်ခံဆောင်ရွက်ပေးနေသော ကုန်သေတ္တာ။
+- `data_model/` - စမ်းသပ်မှုများနှင့် စာရွက်စာတမ်းများတွင် အသုံးပြုသည့် နမူနာဒေတာမော်ဒယ် အဓိပ္ပါယ်ဖွင့်ဆိုချက်များ။
+- `docs/` - ပရောဂျက်စာရွက်စာတမ်းများနှင့် ဒီဇိုင်းမှတ်စုများ။ Markdown အရင်းအမြစ်များသည် `docs/source/` တွင်နေထိုင်သည်။
+- `pytests/` - သုံးစွဲသူအသုံးပြုမှုကို ပြသသည့် Python-based စမ်းသပ်မှုများနှင့် နမူနာများ။
+- `scripts/` - ဖွံ့ဖြိုးတိုးတက်မှုနှင့် CI ပိုက်လိုင်းများတွင် အသုံးပြုသည့် အသုံးဝင်သော Script များ။
+- `examples/ios/` နှင့် `examples/ios/NoritoDemoXcode/` - Swift SDK ကိုပြသထားသည့် iOS အက်ပ် နမူနာများ၊ ၎င်းတို့သည် `IrohaSwift` ပက်ကေ့ခ်ျကို အားကိုးပြီး ၎င်းတို့၏ကိုယ်ပိုင် XCTest ပစ်မှတ်များ ပါဝင်သည်။
+- `defaults/` နှင့် `hooks/` - ပံ့ပိုးပေးသူများအသုံးပြုသော ပြုပြင်ခြင်းဖိုင်များနှင့် Git ချိတ်များ။
+- `nix-appimage/` နှင့် Nix ဖိုင်များ - မျိုးပွားနိုင်သော တည်ဆောက်မှုနှင့် ထုပ်ပိုးမှုများအတွက် ကိရိယာ။## ဖွံ့ဖြိုးတိုးတက်ရေးလုပ်ငန်းစဉ်
+- အဓိကအကောင်အထည်ဖော်မှုများသည် `crates/` တွင်ဖြစ်သည်။
+- ဒေတာမော်ဒယ်သည် `data_model/` ဖြစ်သည်။
+- ပြောင်းလဲမှုများပြုလုပ်သည့်အခါ သေတ္တာအားလုံးကို သေချာကြည့်ပါ။
+- မည်သည့် Cargo.lock ဖိုင်များကိုမျှ မွမ်းမံပြင်ဆင်ခြင်းမပြုပါနှင့်
+- `Cargo.toml` တွင် သေတ္တာအသစ်များထည့်ခြင်းကို ရှောင်ကြဉ်ပါ။ ရှိပြီးသားသေတ္တာများအတွင်း လိုအပ်သည့်လုပ်ဆောင်ချက်ကို ဖြစ်နိုင်သမျှအချိန်တိုင်း အကောင်အထည်ဖော်ပါ။
+- တစ်ချို့အလုပ်တွေက ကြီးလွန်းရင် လုပ်တာကို မငြင်းပါနဲ့။ အဲဒီအစား အလုပ်တွေကို ခွဲခြမ်းပြီး TODOs တွေထည့်ပြီး သင်လုပ်နိုင်တဲ့အပိုင်းတွေကို အကောင်အထည်ဖော်လိုက်ပါ။
+- ကြီးမားသောအလုပ် သို့မဟုတ် တောင်းဆိုမှုတစ်ခုဝင်လာသည့်အခါတိုင်း၊ ၎င်းအား သေးငယ်သောလုပ်ဆောင်နိုင်သောအဆင့်များအဖြစ် အလိုအလျောက်ပြိုကွဲစေပြီး အလုပ်အား ပြတ်ပြတ်သားသားငြင်းဆိုမည့်အစား သင့်လျော်သောဆော့ဖ်ဝဲအင်ဂျင်နီယာပိုင်းဆိုင်ရာလုပ်ဆောင်မှုကို ဆက်လက်လုပ်ဆောင်ပါ။
+- မည်သည့်အချက်ကိုမျှ မငြင်းပယ်ပါနှင့်။
+- အသစ်သော cryptographic primitives၊ opcodes သို့မဟုတ် အထူးကြပ်မတ်သင်္ချာကို ပေါင်းထည့်သောအခါ၊ ရရှိနိုင်သော hardware တွင် ဖြစ်နိုင်သည့် ဟာ့ဒ်ဝဲ၏ အရှိန်မြှင့်ခြင်းနှင့် ပြိုင်တူဖြစ်ခြင်းကို အသုံးချရန် METAL၊ NEON၊ SIMD၊ CUDA စသည်များအတွက် ဟာ့ဒ်ဝဲအရှိန်မြှင့်ခြင်းကို အပ်ဒိတ်လုပ်ပါ။
+- လော့ဂျစ်ပြောင်းလဲပါက၊ .md ဖိုင်များနှင့် ရင်းမြစ်ကုဒ်မှတ်ချက်များအားလုံးသည် နောက်ဆုံးထွက်လုပ်ဆောင်ချက်ဖြင့် နောက်ဆုံးပေါ်ဖြစ်ကြောင်း သေချာပါစေ။
+- P2P ကွန်ရက်ရှိ မတူညီသော node များတွင် မတူညီသော ဟာ့ဒ်ဝဲများ ပါရှိသည့် blockchain ဆက်တင်တွင် IVM ကို အသုံးပြုခြင်းအား ထိခိုက်မှုမရှိစေမည့် နည်းလမ်းဖြင့် ထည့်သွင်းထားသော logic အားလုံးကို သေချာအောင်လုပ်ပါ၊ သို့သော် တူညီသော input block သည် တူညီနေသင့်ပါသည်။
+- အပြုအမူ သို့မဟုတ် အကောင်အထည်ဖော်မှုအသေးစိတ်အချက်များအကြောင်း မေးခွန်းများကိုဖြေဆိုသည့်အခါ သက်ဆိုင်ရာကုဒ်လမ်းကြောင်းများကို ဦးစွာဖတ်ပြီး မတုံ့ပြန်မီ ၎င်းတို့လုပ်ဆောင်ပုံကို နားလည်ကြောင်း သေချာပါစေ။
+- ဖွဲ့စည်းမှု- runtime အပြုအမူအားလုံးအတွက် ပတ်ဝန်းကျင် variable များထက် `iroha_config` ဘောင်များကို ဦးစားပေးပါ။ `crates/iroha_config` (အသုံးပြုသူ → အမှန်တကယ် → ပုံသေများ) နှင့် တည်ဆောက်သူများ သို့မဟုတ် မှီခိုမှုထိုးသွင်းခြင်းမှတစ်ဆင့် အပ်ချည်တန်ဖိုးများကို အတိအလင်းထည့်သွင်းပါ။ စမ်းသပ်မှုများတွင် developer အဆင်ပြေစေရန်အတွက်သာ ပတ်ဝန်းကျင်အခြေခံခလုတ်များကို ထားရှိကာ ထုတ်လုပ်ရေးလမ်းကြောင်းများတွင် ၎င်းတို့ကို အားမကိုးပါနှင့်။ ကျွန်ုပ်တို့သည် ပတ်ဝန်းကျင် ကိန်းရှင်များနောက်ကွယ်တွင် ပို့ဆောင်ခြင်းအင်္ဂါရပ်များကို မပံ့ပိုးပါ—ထုတ်လုပ်မှုအမူအကျင့်များသည် စီစဉ်ဖွဲ့စည်းမှုဖိုင်များမှ အမြဲပင်ရင်းမြစ်ရှိရမည်ဖြစ်ပြီး အဆိုပါ configuration များသည် သင့်လျော်သောပုံသေများကို ဖော်ထုတ်ရမည်ဖြစ်ပြီး အသစ်သည် repo ကိုပုံတူကူးခြင်း၊ binaries များလည်ပတ်နိုင်ပြီး အရာအားလုံးကို တန်ဖိုးများကိုယ်တိုင်တည်းဖြတ်ခြင်းမရှိဘဲ "အလုပ်လုပ်ရုံသာ" ရှိသည်။
+  - IVM/Kotodama v1 အတွက်၊ တင်းကျပ်သော pointer-ABI အမျိုးအစားမူဝါဒကို အမြဲတမ်း ပြဌာန်းထားသည်။ ABI-မူဝါဒ အဖွင့်အပိတ် မရှိပါ။ စာချုပ်များနှင့် အိမ်ရှင်များသည် ABI မူဝါဒကို ခြွင်းချက်မရှိ လိုက်နာရမည်ဖြစ်သည်။
+- IVM syscalls သို့မဟုတ် opcodes များတွင် အသုံးပြုသည့် မည်သည့်အရာကိုမှ တံခါးမပိတ်ပါနှင့်။ Iroha တည်ဆောက်မှုတိုင်းသည် node များတစ်လျှောက် အဆုံးအဖြတ်ပြုမူကို ထိန်းသိမ်းထားရန် ထိုကုဒ်လမ်းကြောင်းများကို ပို့ဆောင်ရမည်ဖြစ်သည်။
+- Serialization- serde အစား နေရာတိုင်း Norito ကို သုံးပါ။ binary codecs အတွက် `norito::{Encode, Decode}` ကိုသုံးပါ။ JSON အတွက် `norito::json` helpers/macro (`norito::json::from_*`, `to_*`, `json!`, `Value`) ကိုသုံး၍ `serde_json` သို့ ဘယ်တော့မှ နောက်ပြန်မဆုတ်ပါ။ တိုက်ရိုက် `serde`/`serde_json` မှီခိုမှုများကို သေတ္တာများတွင် မထည့်ပါနှင့်။ serde ကို အတွင်းပိုင်း လိုအပ်ပါက၊ Norito ၏ထုပ်ပိုးမှုများကို အားကိုးပါ။
+- CI အစောင့်- `scripts/check_no_scale.sh` သည် SCALE (`parity-scale-codec`) ကို Norito စံကိုက်ကြိုးတွင်သာ ပေါ်ကြောင်းသေချာစေသည်။ နံပါတ်စဉ်သတ်မှတ်ခြင်းကုဒ်ကို ထိပါက ၎င်းကို စက်တွင်းတွင် လုပ်ဆောင်ပါ။
+- Norito ပေးဆောင်မှုများသည် ၎င်းတို့၏ အပြင်အဆင်ကို ကြော်ငြာရပါမည်- ဗားရှင်းနံပါတ်သည် ပုံသေအလံသတ်မှတ်ထားသည့်အတွက် မြေပုံဖြစ်စေ သို့မဟုတ် Norito ခေါင်းစီးသည် ကုဒ်အလံများကို ကြေညာသည်။ heuristics မှ ထုပ်ပိုးထားသော sequence bit များကို မခန့်မှန်းပါနှင့်။ ဥပါဒ်ဒေတာသည် တူညီသော စည်းကမ်းချက်ဖြစ်သည်။- `SignedBlockWire` ဖော်မတ် (`SignedBlock::encode_wire`/`canonical_wire`) ကို အသုံးပြု၍ ဘလောက်များကို ဆက်ပြီး ဖြန့်ဝေရပါမည်၊ ထမ်းရွက်ထားသော ဝန်တင်များကို ပံ့ပိုးမထားပါ။
+- ယာယီ သို့မဟုတ် မပြည့်စုံသော အကောင်အထည်ဖော်မှုကို ရှင်းပြထားသည့် `TODO:` မှတ်ချက်ကို ထည့်ပါ။
+- မလုပ်ဆောင်မီ `cargo fmt --all` (edition 2024) ဖြင့် Rust ရင်းမြစ်အားလုံးကို ဖော်မတ်လုပ်ပါ။
+- စမ်းသပ်မှုများထည့်ပါ- `#[cfg(test)]` နှင့် ဘောင်အတွင်း၌ဖြစ်စေ `tests/` လမ်းညွှန်တွင်ဖြစ်စေ အသစ် သို့မဟုတ် မွမ်းမံထားသော လုပ်ဆောင်ချက်တစ်ခုစီအတွက် အနည်းဆုံး ယူနစ်စမ်းသပ်မှုတစ်ခု သေချာပါစေ။
+- `cargo test` ကို စက်တွင်းတွင်ဖွင့်ပါ၊ မည်သည့်တည်ဆောက်မှုဆိုင်ရာပြဿနာများကိုမဆိုဖြေရှင်းပါ၊ ပြီးကြောင်းသေချာပါစေ။ သီးသန့်သေတ္တာတစ်ခုမျှသာမဟုတ်ဘဲ သိုလှောင်ရုံတစ်ခုလုံးအတွက် ၎င်းကိုပြုလုပ်ပါ။
+- ထပ်ဆင့် သံချပ်စစ်ဆေးမှုများအတွက် `cargo clippy -- -D warnings` ကို ရွေးချယ်နိုင်သည် ။
 
-## Repository structure
-- `Cargo.toml` at the repository root defines the workspace and lists all member crates.
-- `crates/` – Rust crates implementing Iroha components. Each crate has its own subdirectory, typically containing `src/`, `tests/`, `examples/`, and `benches/`.
-  - Important crates include:
-    - `iroha` – top-level library aggregating core functionality.
-    - `irohad` – daemon binary providing the node implementation.
-    - `ivm` – the Iroha Virtual Machine.
-    - `iroha_cli` – command-line interface for interacting with a node.
-    - `iroha_core`, `iroha_data_model`, `iroha_crypto`, and other supporting crates.
-- `IrohaSwift/` – Swift Package for the client/mobile SDK. Its sources live under `Sources/IrohaSwift/` and its unit tests under `Tests/IrohaSwiftTests/`. Run `swift test` from this directory to exercise the Swift suite.
-- `integration_tests/` – Cargo crate hosting cross-component tests under `tests/`.
-- `data_model/` – Sample data model definitions used in tests and documentation.
-- `docs/` – Project documentation and design notes. Markdown sources live in `docs/source/`.
-- `pytests/` – Python-based tests and examples demonstrating client usage.
-- `scripts/` – Utility scripts used in development and CI pipelines.
-- `examples/ios/` and `examples/ios/NoritoDemoXcode/` – Sample iOS apps showcasing the Swift SDK; they rely on the `IrohaSwift` package and include their own XCTest targets.
-- `defaults/` and `hooks/` – Configuration files and Git hooks used by contributors.
-- `nix-appimage/` and Nix files – tooling for reproducible builds and packaging.
+## စာရွက်စာတမ်း
+- ထုပ်ပိုးမှုအဆင့် စာရွက်စာတမ်းကို အမြဲထည့်ပါ- အတိုချုံးအတွင်း doc မှတ်ချက် (`//! ...`) ဖြင့် သေတ္တာတစ်ခုစီ သို့မဟုတ် စမ်းသပ်သေတ္တာတစ်ခုစီကို စတင်ပါ။
+- `#![allow(missing_docs)]` သို့မဟုတ် item-level `#[allow(missing_docs)]` (ပေါင်းစပ်စစ်ဆေးမှုများအပါအဝင်) မည်သည့်နေရာတွင်မဆို မသုံးပါနှင့်။ ပျောက်ဆုံးနေသောစာရွက်စာတမ်းများကို အလုပ်ခွင်အတွင်းမှ ငြင်းဆိုထားပြီး docs ရေးသားခြင်းဖြင့် ပြုပြင်သင့်သည်။
+- Norito codec- canonical on-wire အပြင်အဆင်နှင့် အကောင်အထည်ဖော်မှုအသေးစိတ်များအတွက် repo root တွင် `norito.md` ကို ကြည့်ပါ။ Norito ၏ အယ်လဂိုရီသမ်များ သို့မဟုတ် အပြင်အဆင်များ ပြောင်းလဲပါက `norito.md` ကို တူညီသော PR ဖြင့် အပ်ဒိတ်လုပ်ပါ။
+- အကြောင်းအရာကို Akkadian သို့ ဘာသာပြန်ဆိုသောအခါ၊ cuneiform ဖြင့် ရေးသားထားသော ဝေါဟာရဆိုင်ရာ rendering ကို ပေးပါ။ အသံထွက်အသုံးအနှုန်းများကို ရှောင်ကြဉ်ပြီး ရှေးဟောင်းအသုံးအနှုန်းများ အတိအကျ ပျောက်ဆုံးနေသည့်အခါ ရည်ရွယ်ချက်ကို ထိန်းသိမ်းထားသည့် ကဗျာဆန်သော Akkadian အနီးစပ်ဆုံးများကို ရွေးချယ်ပါ။
 
-## Development workflow
-- Main implementations are in `crates/`
-- Data model is in `data_model/`
-- Make sure you look across all crates when making changes.
-- Don't modify any Cargo.lock files
-- Avoid adding new crates to `Cargo.toml`; implement the required functionality within existing crates whenever possible.
-- If some work is too big, don't reject doing it. Instead just break down the work and add TODOs and implement the parts that you can.
-- Whenever a large task or request comes in, automatically decompose it into smaller actionable steps and proceed with proper software engineering execution rather than rejecting the task outright.
-- Don't reject doing any prompts.
-- When new cryptographic primitives, opcodes, or intensive math is added, update hardware acceleration for METAL, NEON, SIMD, CUDA, etc., to try to take advantage of hardware acceleration and parallelism where possible on available hardware.
-- If logic changes, make sure all .md files and in-source code comments are up to date with the latest functionality.
-- Make sure that all logic added is done in such a way that it won't hurt the use of the IVM in a blockchain setting where different nodes on a P2P network have different hardware, but still the output should be the same given the same input block.
-- When answering questions about behaviour or implementation details, read the relevant code paths first and ensure you understand how they work before responding.
-- Configuration: Prefer `iroha_config` parameters over environment variables for all runtime behavior. Add new knobs to `crates/iroha_config` (user → actual → defaults) and thread values explicitly through constructors or dependency injection (e.g., host setters). Keep any environment-based toggles only for developer convenience in tests and do not rely on them in production paths. We do not support shipping features behind environment variables—production behavior must always be sourced from the configuration files, and those configs must expose sensible defaults so a newcomer can clone the repo, run the binaries, and have everything “just work” without editing values manually.
-  - For IVM/Kotodama v1, strict pointer‑ABI type policy is always enforced. There is no ABI-policy toggle; contracts and hosts must adhere to the ABI policy unconditionally.
-- Don't gate anything used in IVM syscalls or opcodes; every Iroha build must ship those code paths to keep deterministic behavior across nodes.
-- Serialization: Use Norito everywhere instead of serde. For binary codecs use `norito::{Encode, Decode}`; for JSON use the `norito::json` helpers/macros (`norito::json::from_*`, `to_*`, `json!`, `Value`) and never fall back to `serde_json`. Do not add direct `serde`/`serde_json` dependencies to crates; if serde is required internally, rely on Norito’s wrappers.
-- CI guard: `scripts/check_no_scale.sh` ensures SCALE (`parity-scale-codec`) only appears in the Norito benchmark harness. Run it locally if you touch serialization code.
-- Norito payloads MUST advertise their layout: either the version number maps to a fixed flag set, or a Norito header declares the decode flags. Do not guess packed-sequence bits from heuristics; genesis data follows the same rule.
-- Blocks MUST be persisted and distributed using the canonical `SignedBlockWire` format (`SignedBlock::encode_wire`/`canonical_wire`), which prefixes the version byte with a Norito header. Bare payloads are not supported.
-- Add a `TODO:` comment explaining any temporary or incomplete implementation.
-- Format all Rust sources with `cargo fmt --all` (edition 2024) before committing.
-- Add tests: ensure at least one unit test for each new or modified function, placed either inline with `#[cfg(test)]` or in the crate `tests/` directory.
-- Run `cargo test` locally, fix any build issues, and ensure it passes. Do this for the entire repository, not just a specific crate.
-- Optionally run `cargo clippy -- -D warnings` for additional lint checks.
+## ABI Evolution (အေးဂျင့်များ လုပ်ဆောင်ရမည့်အရာ)
+မှတ်ချက်- ပထမဆုံး ထုတ်ဝေမှု မူဝါဒ
+- ဤသည်မှာ ပထမဆုံးထွက်ရှိထားပြီး ကျွန်ုပ်တို့တွင် ABI ဗားရှင်း (V1) တစ်ခုတည်းရှိသည်။ V2 မရှိသေးပါ။ အောက်ပါ ABI နှင့်ပတ်သက်သော ဆင့်ကဲဖြစ်စဉ်အကြောင်းအရာအားလုံးကို အနာဂတ်လမ်းညွှန်ချက်အဖြစ် သဘောထားပါ။ ယခုအချိန်တွင် `abi_version = 1` ကိုသာ ပစ်မှတ်ထားလိုက်ပါ။ ဒေတာမော်ဒယ်နှင့် API များသည်လည်း ဦးစွာထုတ်လွှတ်ပြီး တင်ပို့ရန်အတွက် လိုအပ်သလို လွတ်လပ်စွာ ပြောင်းလဲနိုင်သည်။ အချိန်မတန်မီတည်ငြိမ်မှုထက် ပြတ်သားမှုနှင့် မှန်ကန်မှုကို ပိုနှစ်သက်သည်။
 
-## Documentation
-- Always add crate-level documentation: start each crate or test-crate with a brief inner doc comment (`//! ...`).
-- Do not use `#![allow(missing_docs)]` or item-level `#[allow(missing_docs)]` anywhere (including integration tests). Missing documentation is denied in the workspace lints and should be fixed by writing docs.
-- Norito codec: see `norito.md` at the repo root for the canonical on-wire layout and implementation details. If Norito’s algorithms or layouts change, update `norito.md` in the same PR.
-- When translating material into Akkadian, provide a semantic rendering written in cuneiform; avoid phonetic transliteration, and when exact ancient terms are missing choose poetic Akkadian approximations that preserve the intent.
+- အထွေထွေ-
+  - ABI မူဝါဒကို v1 (syscall မျက်နှာပြင်နှင့် pointer-ABI အမျိုးအစားနှစ်မျိုးလုံး) တွင် ခြွင်းချက်မရှိ ပြဌာန်းထားသည်။ runtime ခလုတ်များကို မထည့်ပါနှင့်။
+  - အပြောင်းအလဲများသည် ဟာ့ဒ်ဝဲနှင့် လုပ်ဖော်ကိုင်ဖက်များအကြား အဆုံးအဖြတ်ကို ထိန်းသိမ်းထားရပါမည်။ တူညီသော PR တွင် စမ်းသပ်မှုများနှင့် စာရွက်စာတမ်းများကို အပ်ဒိတ်လုပ်ပါ။
 
-## ABI Evolution (What Agents Must Do)
-Note: First release policy
-- This is the first release and we have a single ABI version (V1). There is no V2 yet. Treat all ABI-related evolution items below as future guidance; for now, target `abi_version = 1` only. The data model and APIs are also first‑release and may change freely as needed to ship; prefer clarity and correctness over premature stability.
-
-- General:
-  - ABI policy is enforced unconditionally in v1 (both syscall surface and pointer‑ABI types). Do not add runtime toggles.
-  - Changes must preserve determinism across hardware and peers. Update tests and docs in the same PR.
-
-- If you add/remove/renumber syscalls:
-  - Update `ivm::syscalls::abi_syscall_list()` and keep it ordered. Ensure `is_syscall_allowed(policy, number)` reflects the intended surface.
-  - Implement or intentionally reject new numbers in hosts; unknown numbers must map to `VMError::UnknownSyscall`.
-  - Update golden tests:
+- အကယ်၍ သင်သည် syscalls များကို ထည့်/ဖယ်/ နံပါတ်ထည့်ပါက-
+  - `ivm::syscalls::abi_syscall_list()` ကို အပ်ဒိတ်လုပ်ပြီး မှာထားလိုက်ပါ။ ရည်ရွယ်ထားသော မျက်နှာပြင်ကို `is_syscall_allowed(policy, number)` ရောင်ပြန်ဟပ်ကြောင်း သေချာပါစေ။
+  - အိမ်ရှင်များတွင် နံပါတ်အသစ်များကို အကောင်အထည်ဖော်ရန် သို့မဟုတ် ရည်ရွယ်ချက်ရှိရှိ ငြင်းပယ်ပါ။ အမည်မသိ နံပါတ်များသည် `VMError::UnknownSyscall` သို့ မြေပုံဆွဲရပါမည်။
+  - ရွှေစမ်းသပ်မှုများကို အပ်ဒိတ်လုပ်ပါ။
     - `crates/ivm/tests/abi_syscall_list_golden.rs`
-    - `crates/ivm/tests/abi_hash_versions.rs` (stability + version separation)
+    - `crates/ivm/tests/abi_hash_versions.rs` (တည်ငြိမ်မှု + ဗားရှင်းခွဲခြားခြင်း)
 
-- If you add pointer‑ABI types:
-  - Add the new variant to `ivm::pointer_abi::PointerType` (assign a new u16 ID; never change existing IDs).
-  - Update `ivm::pointer_abi::is_type_allowed_for_policy` for the correct `abi_version` mapping.
-  - Update `crates/ivm/tests/pointer_type_ids_golden.rs` and add policy tests if needed.
+- သင် pointer-ABI အမျိုးအစားများကိုထည့်ပါက-
+  - `ivm::pointer_abi::PointerType` တွင် မူကွဲအသစ်ကို ထည့်ပါ (u16 ID အသစ်တစ်ခုသတ်မှတ်ပါ၊ ရှိပြီးသား ID များကို ဘယ်တော့မှ မပြောင်းပါ)။
+  - မှန်ကန်သော `abi_version` မြေပုံအတွက် `ivm::pointer_abi::is_type_allowed_for_policy` ကို အပ်ဒိတ်လုပ်ပါ။
+  - `crates/ivm/tests/pointer_type_ids_golden.rs` ကို အပ်ဒိတ်လုပ်ပြီး လိုအပ်ပါက မူဝါဒစမ်းသပ်မှုများကို ထည့်ပါ။
 
-- If you introduce a new ABI version:
-  - Map `ProgramMetadata.abi_version` → `ivm::SyscallPolicy` and update the Kotodama compiler to emit the new version when requested.
-  - Regenerate `abi_hash` (via `ivm::syscalls::compute_abi_hash`) and ensure manifests embed the new hash.
-  - Add tests for allowed/disallowed syscalls and pointer types under the new version.
+- ABI ဗားရှင်းအသစ်ကို သင်မိတ်ဆက်ပါက၊
+  - မြေပုံ `ProgramMetadata.abi_version` → `ivm::SyscallPolicy` နှင့် Kotodama ကို တောင်းဆိုသည့်အခါ ဗားရှင်းအသစ်ကို ထုတ်လွှတ်ရန် Kotodama compiler ကို အပ်ဒိတ်လုပ်ပါ။
+  - `abi_hash` (`ivm::syscalls::compute_abi_hash`) ကို ပြန်လည်ထုတ်ပေးပြီး မန်နီးဖက်စ်များသည် ဟက်ရှ်အသစ်ကို ထည့်သွင်းကြောင်း သေချာပါစေ။
+  - ဗားရှင်းအသစ်အောက်တွင် ခွင့်ပြု/မထားသော syscalls နှင့် pointer အမျိုးအစားများအတွက် စမ်းသပ်မှုများကို ပေါင်းထည့်ပါ။
 
-- Admission & manifests:
-  - Admission enforces `code_hash`/`abi_hash` equality against on-chain manifests; keep this behaviour intact.
-  - Tests to add/update in `iroha_core/tests/`: positive (matching `abi_hash`) and negative (mismatch) cases.
-
-- Docs & status updates (same PR):
-  - Update `crates/ivm/docs/syscalls.md` (ABI Evolution section) and any syscall tables.
-  - Update `status.md` and `roadmap.md` with a brief summary of ABI changes and test updates.
+- ဝင်ခွင့်နှင့် ဖော်ပြချက်များ-
+  - ဝင်ခွင့်သည် `code_hash`/`abi_hash` ကွင်းဆက်ဖော်ပြချက်များကို ဆန့်ကျင်သည့် တန်းတူညီမျှမှုကို ပြဋ္ဌာန်းထားသည်။ ဤအပြုအမူကို မပျက်မကွက် ထိန်းသိမ်းပါ။
+  - `iroha_core/tests/` တွင် ပေါင်းထည့်ရန်/အပ်ဒိတ်လုပ်ရန် စမ်းသပ်မှုများ- အပြုသဘော (`abi_hash`) နှင့် အနုတ်လက္ခဏာ (မကိုက်ညီ) ကိစ္စများ။- Docs နှင့် status updates (တူညီသော PR)။
+  - `crates/ivm/docs/syscalls.md` (ABI Evolution အပိုင်း) နှင့် မည်သည့် syscall ဇယားများကို အပ်ဒိတ်လုပ်ပါ။
+  - ABI အပြောင်းအလဲများနှင့် စမ်းသပ်မွမ်းမံမှုများကို အကျဉ်းချုပ်ဖြင့် `status.md` နှင့် `roadmap.md` ကို အပ်ဒိတ်လုပ်ပါ။
 
 
-## Project Status and Plan
-- Check `status.md` at the repo root for the current compilation/runtime status across crates.
-- Check `roadmap.md` for the prioritized TODOs and implementation plan.
-- After completing work, update status in `status.md` and keep `roadmap.md` focused on outstanding tasks.
+## ပရောဂျက်အခြေအနေနှင့် အစီအစဉ်
+- သေတ္တာများတစ်လျှောက် လက်ရှိစုစည်းမှု/ runtime အခြေအနေအတွက် repo root တွင် `status.md` ကိုစစ်ဆေးပါ။
+- ဦးစားပေးလုပ်ဆောင်ထားသော TODO များနှင့် အကောင်အထည်ဖော်မှုအစီအစဉ်အတွက် `roadmap.md` ကိုစစ်ဆေးပါ။
+- အလုပ်ပြီးပါက၊ `status.md` တွင် အခြေအနေကို အပ်ဒိတ်လုပ်ပြီး `roadmap.md` တွင် ထူးခြားသောအလုပ်များကို အာရုံစိုက်ထားပါ။
 
-## Agent workflow (for code editors/automation)
-- If you need clarification on any requirement, stop and draft a ChatGPT prompt with your question, then share it with the user before continuing.
-- Keep changes minimal and scoped; avoid unrelated edits in the same patch.
-- Prefer internal modules over adding new dependencies; do not edit `Cargo.lock`.
-- Use feature flags to guard hardware-accelerated paths (e.g., `simd`, `cuda`) and always provide a deterministic fallback path.
-- Ensure outputs remain identical across hardware; avoid relying on non-deterministic parallel reductions.
-- Update documentation and examples when public APIs or behavior change.
-- Validate serialization changes in `iroha_data_model` with roundtrip tests to preserve Norito layout guarantees.
-- Integration tests spin real multi-peer networks; use at least 4 peers when constructing test networks (single-peer configs are not representative and can deadlock in Sumeragi).
-- Do not attempt to disable DA/RBC in tests (e.g., via `DevBypassDaAndRbcForZeroChain`); DA is enforced and that bypass path currently deadlocks in `sumeragi` during consensus startup.
-- QC quorum must be satisfied by voting validators (`min_votes_for_commit`); observer padding does not count toward availability/prevote/precommit quorum checks, so aggregate QCs only after enough validator votes arrive.
-- DA-enabled consensus now waits longer before view changes (commit quorum timeout = `block_time + 4 * commit_time`) to let RBC/availability QC finish on slower hosts.
+## အေးဂျင့်အလုပ်အသွားအလာ (ကုဒ်တည်းဖြတ်သူများ/အလိုအလျောက်စနစ်အတွက်)
+- လိုအပ်ချက်တစ်ခုခုအတွက် ရှင်းလင်းချက်လိုအပ်ပါက၊ သင့်မေးခွန်းနှင့်အတူ ChatGPT အမှာစာတစ်စောင်ကို ရပ်ပြီး ရေးဆွဲပါ၊ ထို့နောက် ဆက်လက်မလုပ်ဆောင်မီ အသုံးပြုသူနှင့် မျှဝေပါ။
+- အပြောင်းအလဲများကို အနည်းဆုံးနှင့် အတိုင်းအတာထားပါ။ တူညီသော patch တွင် မသက်ဆိုင်သော တည်းဖြတ်မှုများကို ရှောင်ကြဉ်ပါ။
+- မှီခိုမှုအသစ်များထည့်ခြင်းထက် အတွင်းပိုင်း module များကို ဦးစားပေးပါ။ `Cargo.lock` ကို မတည်းဖြတ်ပါနှင့်။
+- ဟာ့ဒ်ဝဲ-အရှိန်မြှင့်လမ်းကြောင်းများ (ဥပမာ၊ `simd`၊ `cuda`) ကိုကာကွယ်ရန် အင်္ဂါရပ်အလံများကိုအသုံးပြုပြီး အဆုံးအဖြတ်ပေးသော လမ်းကြောင်းကို အမြဲပေးဆောင်ပါ။
+- ဟာ့ဒ်ဝဲတစ်ခွင်တွင် အထွက်များ တူညီကြောင်း သေချာပါစေ။ အဆုံးအဖြတ်မဟုတ်သော အပြိုင်လျှော့ချမှုများကို အားကိုးခြင်းမှ ရှောင်ကြဉ်ပါ။
+- အများသူငှာ API များ သို့မဟုတ် အပြုအမူပြောင်းလဲသောအခါ စာရွက်စာတမ်းနှင့် နမူနာများကို အပ်ဒိတ်လုပ်ပါ။
+- Norito အပြင်အဆင်အာမခံချက်များကို ထိန်းသိမ်းထားရန် အသွားအပြန်စမ်းသပ်မှုများဖြင့် `iroha_data_model` တွင် အမှတ်စဉ်ပြောင်းလဲမှုများကို အတည်ပြုပါ။
+- ပေါင်းစည်းခြင်းစမ်းသပ်မှုများသည် အစစ်အမှန်မျိုးတူကွန်ရက်များ လှည့်ဖျားခြင်း၊ စမ်းသပ်ကွန်ရက်များတည်ဆောက်ရာတွင် အနည်းဆုံး ရွယ်တူ 4 ဦးကို အသုံးပြုပါ (single-peer configs များသည် ကိုယ်စားပြုမဟုတ်ပဲ Sumeragi တွင် deadlock လုပ်နိုင်သည်)။
+- စမ်းသပ်မှုများတွင် DA/RBC ကို ပိတ်ရန် မကြိုးစားပါနှင့် (ဥပမာ၊ `DevBypassDaAndRbcForZeroChain`); DA ကို ပြဌာန်းထားပြီး အဆိုပါ လမ်းကြောင်းကို ရှောင်ကွင်းခြင်းသည် လက်ရှိ `sumeragi` တွင် သဘောတူညီမှု စတင်ချိန်တွင် ပိတ်သွားပါသည်။
+- QC အထွတ်အထိပ်ကို မဲပေးပိုင်ခွင့်ရှိသူ (`min_votes_for_commit`) ဖြင့် ကျေနပ်ရပါမည်။ စောင့်ကြည့်လေ့လာသူ padding သည် ရရှိနိုင်မှု/ကြိုတင်မဲ/ကြိုတင်အထွတ်အထိပ်စစ်ဆေးမှုများအတွက် ထည့်သွင်းမတွက်ပါ၊ ထို့ကြောင့် တရားဝင်သူမဲများ လုံလောက်စွာရောက်ရှိပြီးမှသာ အစုလိုက် QC များကို စုစည်းပါ။
+- RBC/ရရှိနိုင်မှု QC နှေးကွေးသော host များပေါ်တွင် အပြီးသတ်နိုင်စေရန် DA-enabled consensus သည် ကြည့်ရှုမှုပြောင်းလဲမှုများမပြုမီ အချိန်ပိုကြာသည် (commit quorum timeout = `block_time + 4 * commit_time`)။
 
-## Navigation tips
-- Search code: `rg '<term>'` and list files: `fd <name>`.
-- Explore crates: `fd --type f Cargo.toml crates | xargs -I{} dirname {}`.
-- Find examples/benches quickly: `fd . crates -E target -t d -d 3 -g "*{examples,benches}"`.
-- Python tip: some environments don’t provide `python`; try `python3` instead when running scripts.
+## လမ်းညွှန်အကြံပြုချက်များ
+- ရှာဖွေမှုကုဒ်- `rg '<term>'` နှင့် စာရင်းဖိုင်များ- `fd <name>`။
+- သေတ္တာများကို ရှာဖွေပါ- `fd --type f Cargo.toml crates | xargs -I{} dirname {}`။
+- ဥပမာ/ထိုင်ခုံများကို အမြန်ရှာပါ- `fd . crates -E target -t d -d 3 -g "*{examples,benches}"`။
+- Python အကြံပြုချက်- အချို့သောပတ်ဝန်းကျင်များသည် `python` ကိုမပေးစွမ်းပါ။ scripts များကို run သောအခါအစား `python3` ကိုစမ်းကြည့်ပါ။
 
-## Proc-Macro Tests
-- Unit tests: use for pure parsing, codegen helpers, and utilities (fast, no compiler involved).
-- UI tests (trybuild): use to validate compile-time behavior and diagnostics of derive/proc-macros (success and expected failure cases with `.stderr`).
-- Prefer both when adding/changing macros: unit tests for internals + UI tests for user-facing behavior and error messages.
-- Avoid panics; emit clear diagnostics (e.g., via `syn::Error` or `proc_macro_error`). Keep messages stable and update `.stderr` only for intentional changes.
+## Proc-Macro စမ်းသပ်မှုများ
+- ယူနစ်စစ်ဆေးမှုများ- ခွဲခြမ်းစိတ်ဖြာမှု၊ codegen အထောက်အကူများနှင့် အသုံးအဆောင်များ (မြန်ဆန်စွာ၊ compiler မပါဝင်) အတွက် အသုံးပြုပါ။
+- UI စမ်းသပ်မှုများ (trybuild)- စုစည်းမှု-အချိန်အပြုအမူနှင့် derive/proc-macros (`.stderr` ဖြင့် အောင်မြင်မှုနှင့် မျှော်လင့်ထားသည့် ကျရှုံးမှုကိစ္စများ) ကို အတည်ပြုရန် အသုံးပြုသည်။
+- မက်ခရိုထည့်ခြင်း/ပြောင်းလဲခြင်းနှစ်ခုစလုံးကို ဦးစားပေးပါ- အတွင်းပိုင်းအတွက် ယူနစ်စမ်းသပ်မှုများ + အသုံးပြုသူရင်ဆိုင်သောအပြုအမူနှင့် အမှားအယွင်းမက်ဆေ့ချ်များအတွက် UI စမ်းသပ်မှုများ။
+- အထိတ်တလန့်ရှောင်ရှား; ပြတ်သားသောရောဂါရှာဖွေမှုများကို ထုတ်လွှတ်သည် (ဥပမာ၊ `syn::Error` သို့မဟုတ် `proc_macro_error`)။ မက်ဆေ့ဂျ်များကို တည်ငြိမ်စေပြီး ရည်ရွယ်ချက်ရှိရှိ ပြောင်းလဲမှုများအတွက်သာ `.stderr` ကို အပ်ဒိတ်လုပ်ပါ။
 
-## Pull Request message
-Include a short summary of the changes and a `Testing` section describing the commands you ran.
+## တောင်းဆိုချက် စာကို ဆွဲထုတ်ပါ။
+အပြောင်းအလဲများ၏ အတိုချုပ်အကျဉ်းချုပ်နှင့် သင်လုပ်ဆောင်ခဲ့သည့် ညွှန်ကြားချက်များကို ဖော်ပြသည့် `Testing` အပိုင်းကို ထည့်သွင်းပါ။

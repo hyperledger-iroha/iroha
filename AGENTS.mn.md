@@ -7,146 +7,140 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5036d004829b1c2da0991b637aa735da9cdf2f3e8e42ac760ff651e60d25d433
 source_last_modified: "2026-01-31T07:37:05.947018+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# AGENTS Instructions
+# AGENTS заавар
 
-These guidelines apply to the entire repository, which is organised as a Cargo workspace.
+Эдгээр удирдамж нь Ачааны ажлын талбар болгон зохион байгуулагдсан бүх агуулахад хамаарна.
 
-## Quickstart
-- Build workspace: `cargo build --workspace`
-- Builds can take about 20 minutes; use a 20-minute timeout for build steps.
-- Test everything: `cargo test --workspace` (note that this run typically takes several hours; plan accordingly)
-- Lint strictly: `cargo clippy --workspace --all-targets -- -D warnings`
-- Format code: `cargo fmt --all` (edition 2024)
-- Test one crate: `cargo test -p <crate>`
-- Run one test: `cargo test -p <crate> <test_name> -- --nocapture`
-- Swift SDK: from the `IrohaSwift` directory run `swift test` to execute the Swift package tests.
-- Android SDK: from `java/iroha_android` run `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test`.
+## Хурдан эхлэл
+- Ажлын талбарыг бий болгох: `cargo build --workspace`
+- Барилга нь 20 минут орчим болно; бүтээх алхмуудад 20 минутын завсарлага ашигла.
+- Бүгдийг туршиж үзээрэй: `cargo test --workspace` (энэ гүйлт нь ихэвчлэн хэдэн цаг зарцуулдаг гэдгийг анхаарна уу; дагуу төлөвлө)
+- Хатуу хөвөн: `cargo clippy --workspace --all-targets -- -D warnings`
+- Формат код: `cargo fmt --all` (2024 оны хэвлэл)
+- Нэг хайрцгийг турших: `cargo test -p <crate>`
+- Нэг туршилтыг явуулна уу: `cargo test -p <crate> <test_name> -- --nocapture`
+- Swift SDK: Swift багцын тестийг гүйцэтгэхийн тулд `IrohaSwift` лавлахаас `swift test`-г ажиллуулна уу.
+- Android SDK: `java/iroha_android`-ээс `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test` ажиллуулна.
 
-## Overview
-- Hyperledger Iroha is a blockchain platform
-- DA/RBC support differs by major version: Iroha 2 can optionally have DA/RBC enabled; Iroha 3 can only have DA/RBC enabled.
-- IVM is the Iroha Virtual Machine (IVM), a virtual machine for the Hyperledger Iroha v2 blockchain
-- Kotodama is a high level smart contract language for the IVM that uses .ko file extension for raw contract code and it compiles to bytecode which uses .to file extension, when saved as a file or on-chain. Typically, .to bytecode is deployed onchain.
-  - Clarification: Kotodama targets the Iroha Virtual Machine (IVM) and produces IVM bytecode (`.to`). It does not target “risc5”/RISC‑V as a standalone architecture. Where RISC‑V–like encodings appear in the repository, they are implementation details of IVM’s instruction formats and must not change observable behavior across hardware.
-- Norito is the data serialization codec for Iroha
-- The entire workspace targets the Rust standard library (`std`). WASM/no-std builds are no longer supported and should not be considered when making changes.
+## Тойм
+- Hyperledger Iroha нь блокчейн платформ юм
+- DA/RBC-ийн дэмжлэг нь үндсэн хувилбараараа ялгаатай: Iroha 2 нь сонголтоор DA/RBC-г идэвхжүүлж болно; Iroha 3 нь зөвхөн DA/RBC идэвхжүүлсэн байж болно.
+- IVM нь Iroha виртуал машин (IVM), Hyperledger Iroha v2 блокчэйнд зориулсан виртуал машин
+- Kotodama нь IVM-д зориулсан өндөр түвшний ухаалаг гэрээний хэл бөгөөд түүхий гэрээний кодын хувьд .ko файлын өргөтгөлийг ашигладаг бөгөөд файл болон сүлжээгээр хадгалагдах үед .to файлын өргөтгөлийг ашигладаг байт кодыг хөрвүүлдэг. Ихэвчлэн .to bytecode нь onchain дээр тавигддаг.
+  - Тодруулга: Kotodama нь Iroha виртуал машиныг (IVM) чиглүүлж, IVM байт код (`.to`) үүсгэдэг. Энэ нь "risc5"/RISC‑V-г бие даасан архитектур болгон онилдоггүй. Хадгалах газарт RISC-V-тэй төстэй кодчилол гарч ирэх тохиолдолд тэдгээр нь IVM-ийн заавар форматын хэрэгжилтийн дэлгэрэнгүй мэдээлэл бөгөөд техник хангамжид ажиглагдахуйц үйлдлийг өөрчлөх ёсгүй.
+- Norito нь Iroha-ийн өгөгдлийн цуваа кодлогч юм
+- Ажлын талбар бүхэлдээ Rust стандарт номын санд (`std`) чиглэгддэг. WASM/no-std бүтээцийг дэмжихээ больсон тул өөрчлөлт хийхдээ анхаарах ёсгүй.## Хадгалах сангийн бүтэц
+- Хадгалах сангийн үндэс дэх `Cargo.toml` нь ажлын талбарыг тодорхойлж, бүх гишүүн хайрцгийг жагсаадаг.
+- `crates/` – Iroha бүрэлдэхүүн хэсгүүдийг ашигладаг зэвтэй хайрцаг. Крат бүр өөрийн гэсэн дэд лавлахтай бөгөөд ихэвчлэн `src/`, `tests/`, `examples/`, `benches/`-г агуулдаг.
+  - Чухал хайрцганд:
+    - `iroha` – үндсэн функцийг нэгтгэсэн дээд түвшний номын сан.
+    - `irohad` – зангилааны хэрэгжилтийг хангадаг дэмон хоёртын хувилбар.
+    - `ivm` – Iroha виртуал машин.
+    - `iroha_cli` – зангилаатай харилцах командын мөрийн интерфейс.
+    - `iroha_core`, `iroha_data_model`, `iroha_crypto` болон бусад туслах хайрцаг.
+- `IrohaSwift/` – Үйлчлүүлэгч/гар утасны SDK-д зориулсан Swift багц. Түүний эх сурвалжууд нь `Sources/IrohaSwift/`, нэгжийн туршилтууд нь `Tests/IrohaSwiftTests/` дор амьдардаг. Swift багцыг ашиглахын тулд энэ лавлахаас `swift test`-г ажиллуул.
+- `integration_tests/` – `tests/`-ийн дагуу хөндлөн бүрэлдэхүүн хэсгүүдийн туршилтуудыг байршуулах ачааны хайрцаг.
+- `data_model/` – Туршилт, баримт бичигт ашигласан өгөгдлийн загвар тодорхойлолт.
+- `docs/` – Төслийн баримт бичиг ба дизайны тэмдэглэл. Markdown эх сурвалжууд `docs/source/`-д амьдардаг.
+- `pytests/` – Python дээр суурилсан тестүүд болон үйлчлүүлэгчийн хэрэглээг харуулсан жишээнүүд.
+- `scripts/` – Хөгжүүлэлт болон CI дамжуулах хоолойд ашигладаг хэрэгслийн скриптүүд.
+- `examples/ios/` болон `examples/ios/NoritoDemoXcode/` – Swift SDK-г харуулсан жишээ iOS програмууд; тэд `IrohaSwift` багцад тулгуурлаж, өөрсдийн XCTest зорилтуудыг багтаасан болно.
+- `defaults/` болон `hooks/` – Оролцогчдын ашигладаг тохиргооны файлууд болон Git дэгээнүүд.
+- `nix-appimage/` болон Nix файлууд – хуулбарлах боломжтой бүтээц, баглаа боодлын хэрэгсэл.## Хөгжлийн ажлын урсгал
+- Үндсэн хэрэгжүүлэлтүүд нь `crates/`
+- Өгөгдлийн загвар нь `data_model/`
+- Өөрчлөлт хийхдээ бүх хайрцгийг харна уу.
+- Cargo.lock файлыг бүү өөрчил
+- `Cargo.toml`-д шинэ хайрцаг нэмэхээс зайлсхийх; боломжтой бол одоо байгаа хайрцагнуудад шаардлагатай функцуудыг хэрэгжүүл.
+- Хэрэв зарим ажил хэтэрхий том байвал үүнийг хийхээс бүү татгалз. Үүний оронд зүгээр л ажлыг задалж, TODO-уудыг нэмж, чадах хэсгүүдээ хэрэгжүүл.
+- Том даалгавар эсвэл хүсэлт ирэх бүрийг автоматаар жижиг үйлдэл болгон задалж, даалгавраас шууд татгалзахын оронд програм хангамжийн инженерчлэлийн зөв гүйцэтгэлийг үргэлжлүүлээрэй.
+- Ямар ч сануулга өгөхөөс бүү татгалз.
+- Шинэ криптографийн командууд, үйлдлийн кодууд эсвэл эрчимтэй математик нэмэгдэхэд METAL, NEON, SIMD, CUDA гэх мэтийн техник хангамжийн хурдатгалыг шинэчилж, боломжтой бол техник хангамжийн хурдатгал болон параллелизмыг ашиглахыг хичээгээрэй.
+- Логик өөрчлөгдвөл бүх .md файлууд болон эх кодын тайлбарууд хамгийн сүүлийн үеийн функцээр шинэчлэгдсэн эсэхийг шалгаарай.
+- P2P сүлжээн дэх өөр өөр зангилаанууд өөр өөр техник хангамжтай байдаг, гэхдээ ижил оролтын блоктой гаралт нь ижил байх ёстой блокчейн тохиргоонд IVM-ийг ашиглахад хор хөнөөл учруулахгүй байхаар нэмсэн бүх логик хийгдсэн эсэхийг шалгаарай.
+- Зан төлөв эсвэл хэрэгжилтийн талаархи асуултуудад хариулахдаа эхлээд холбогдох кодын замыг уншиж, хариулахаасаа өмнө тэдгээр нь хэрхэн ажилладагийг ойлгосон эсэхээ шалгаарай.
+- Тохиргоо: Ажиллах үеийн бүх үйлдлийн хувьд орчны хувьсагчдаас `iroha_config` параметрүүдийг илүүд үз. `crates/iroha_config` (хэрэглэгч → бодит → өгөгдмөл) дээр шинэ товчлууруудыг нэмж, хэлхээний утгыг бүтээгч эсвэл хамаарлын инжээр (жишээ нь, хост тохируулагч) ашиглан тодорхой зааж өгнө үү. Туршилтанд зөвхөн хөгжүүлэгчийн тав тухыг хангах үүднээс хүрээлэн буй орчинд суурилсан унтраалгатай байлгаж, үйлдвэрлэлийн замд тэдгээрт бүү найд. Бид хүрээлэн буй орчны хувьсагчийн цаана байгаа тээвэрлэлтийн онцлогийг дэмждэггүй—үйлдвэрлэлийн үйл ажиллагаа нь үргэлж тохиргооны файлуудаас үүсэлтэй байх ёстой бөгөөд тэдгээр тохиргоонууд нь анхдагч тохиргоог илчлэх ёстой бөгөөд ингэснээр шинээр ирсэн хүн репо-г клончилж, хоёртын файлуудыг ажиллуулж, утгыг гараар засварлахгүйгээр бүх зүйл "зүгээр л ажиллах" боломжтой болно.
+  - IVM/Kotodama v1-ийн хувьд заагч-ABI төрлийн хатуу бодлогыг үргэлж хэрэгжүүлдэг. ABI-бодлогын унтраалга байхгүй; гэрээ болон хостууд ABI бодлогыг болзолгүйгээр дагаж мөрдөх ёстой.
+- IVM системийн дуудлагууд болон үйлдлийн кодуудад ашигласан аливаа зүйлийг бүү хаагаарай; Iroha бүтээх бүр нь зангилаа хоорондын детерминист зан төлөвийг хадгалахын тулд тэдгээр кодын замыг илгээх ёстой.
+- Цувралчлал: Serde-ийн оронд Norito-г хаа сайгүй ашигла. Хоёртын кодлогчийн хувьд `norito::{Encode, Decode}`; JSON-д `norito::json` туслах/макро (`norito::json::from_*`, `to_*`, `json!`, `Value`) ашиглах ба хэзээ ч I18NI00000089 руу буцахгүй. `serde`/`serde_json` шууд хамаарлыг хайрцагт нэмж болохгүй; Хэрэв дотооддоо серд шаардлагатай бол Norito-ийн боодол дээр тулгуурлана уу.
+- CI хамгаалалт: `scripts/check_no_scale.sh` нь SCALE (`parity-scale-codec`) нь зөвхөн Norito жишиг бэхэлгээнд харагдана. Хэрэв та цуваа кодонд хүрвэл үүнийг дотооддоо ажиллуулна уу.
+- Norito даацын ачаалал ЗААВАЛ өөрсдийн байршлыг сурталчлах ёстой: хувилбарын дугаар нь тогтмол тугны багцтай харагдана, эсвэл Norito толгой хэсэг нь код тайлах тугуудыг зарлана. Эвристикийн багцалсан дарааллын битүүдийг тааж болохгүй; генезийн өгөгдөл нь ижил дүрмийг дагаж мөрддөг.- Блокуудыг Norito гарчигтай хувилбарын байт угтвар бүхий каноник `SignedBlockWire` форматыг (`SignedBlock::encode_wire`/`canonical_wire`) ашиглан ХЭРЭГЖҮҮЛЖ, түгээх ёстой. Нүцгэн ачааллыг дэмждэггүй.
+- Түр зуурын эсвэл бүрэн бус хэрэгжилтийг тайлбарласан `TODO:` тайлбарыг нэмнэ үү.
+- Ажиллахаасаа өмнө бүх Rust эх сурвалжийг `cargo fmt --all` (2024 оны хувилбар) ашиглан форматлана уу.
+- Тест нэмэх: `#[cfg(test)]` мөрөнд эсвэл `tests/` лавлахад байрлуулсан шинэ эсвэл өөрчилсөн функц бүрийн хувьд дор хаяж нэг нэгж тестийг баталгаажуулна уу.
+- `cargo test`-г дотооддоо ажиллуулж, угсралтын аливаа асуудлыг засч, дамжуулж байгаа эсэхийг шалгаарай. Үүнийг зөвхөн тусгай хайрцагт бус бүх агуулахын хувьд хий.
+- Нэмэлт хулдаас шалгахын тулд `cargo clippy -- -D warnings` програмыг ажиллуулна уу.
 
-## Repository structure
-- `Cargo.toml` at the repository root defines the workspace and lists all member crates.
-- `crates/` – Rust crates implementing Iroha components. Each crate has its own subdirectory, typically containing `src/`, `tests/`, `examples/`, and `benches/`.
-  - Important crates include:
-    - `iroha` – top-level library aggregating core functionality.
-    - `irohad` – daemon binary providing the node implementation.
-    - `ivm` – the Iroha Virtual Machine.
-    - `iroha_cli` – command-line interface for interacting with a node.
-    - `iroha_core`, `iroha_data_model`, `iroha_crypto`, and other supporting crates.
-- `IrohaSwift/` – Swift Package for the client/mobile SDK. Its sources live under `Sources/IrohaSwift/` and its unit tests under `Tests/IrohaSwiftTests/`. Run `swift test` from this directory to exercise the Swift suite.
-- `integration_tests/` – Cargo crate hosting cross-component tests under `tests/`.
-- `data_model/` – Sample data model definitions used in tests and documentation.
-- `docs/` – Project documentation and design notes. Markdown sources live in `docs/source/`.
-- `pytests/` – Python-based tests and examples demonstrating client usage.
-- `scripts/` – Utility scripts used in development and CI pipelines.
-- `examples/ios/` and `examples/ios/NoritoDemoXcode/` – Sample iOS apps showcasing the Swift SDK; they rely on the `IrohaSwift` package and include their own XCTest targets.
-- `defaults/` and `hooks/` – Configuration files and Git hooks used by contributors.
-- `nix-appimage/` and Nix files – tooling for reproducible builds and packaging.
+## Баримт бичиг
+- Үргэлж хайрцагны түвшний баримт бичгийг нэмж оруулаарай: хайрцаг эсвэл туршилтын хайрцаг бүрийг дотоод баримт бичгийн товч тайлбараар эхлүүлнэ үү (`//! ...`).
+- `#![allow(missing_docs)]` эсвэл `#[allow(missing_docs)]`-г хаана ч бүү ашиглаарай (интеграцийн туршилтыг оруулаад). Ажлын талбарт дутуу баримт бичгийг үгүйсгэсэн бөгөөд үүнийг баримт бичгээр засах хэрэгтэй.
+- Norito кодлогч: репо үндэс дээрх `norito.md`-с утсан дээрх каноник зохион байгуулалт, хэрэгжилтийн дэлгэрэнгүй мэдээллийг харна уу. Хэрэв Norito-ийн алгоритмууд эсвэл байршил өөрчлөгдвөл `norito.md`-г ижил PR-д шинэчилнэ үү.
+- Аккад хэл рүү материалыг орчуулахдаа дөрвөлжин үсгээр бичсэн утгын тайлбарыг өгөх; авианы галиглалаас зайлсхийж, яг эртний нэр томьёо дутуу байвал зорилгыг хадгалсан яруу найргийн аккадын ойролцоо хэллэгийг сонго.
 
-## Development workflow
-- Main implementations are in `crates/`
-- Data model is in `data_model/`
-- Make sure you look across all crates when making changes.
-- Don't modify any Cargo.lock files
-- Avoid adding new crates to `Cargo.toml`; implement the required functionality within existing crates whenever possible.
-- If some work is too big, don't reject doing it. Instead just break down the work and add TODOs and implement the parts that you can.
-- Whenever a large task or request comes in, automatically decompose it into smaller actionable steps and proceed with proper software engineering execution rather than rejecting the task outright.
-- Don't reject doing any prompts.
-- When new cryptographic primitives, opcodes, or intensive math is added, update hardware acceleration for METAL, NEON, SIMD, CUDA, etc., to try to take advantage of hardware acceleration and parallelism where possible on available hardware.
-- If logic changes, make sure all .md files and in-source code comments are up to date with the latest functionality.
-- Make sure that all logic added is done in such a way that it won't hurt the use of the IVM in a blockchain setting where different nodes on a P2P network have different hardware, but still the output should be the same given the same input block.
-- When answering questions about behaviour or implementation details, read the relevant code paths first and ensure you understand how they work before responding.
-- Configuration: Prefer `iroha_config` parameters over environment variables for all runtime behavior. Add new knobs to `crates/iroha_config` (user → actual → defaults) and thread values explicitly through constructors or dependency injection (e.g., host setters). Keep any environment-based toggles only for developer convenience in tests and do not rely on them in production paths. We do not support shipping features behind environment variables—production behavior must always be sourced from the configuration files, and those configs must expose sensible defaults so a newcomer can clone the repo, run the binaries, and have everything “just work” without editing values manually.
-  - For IVM/Kotodama v1, strict pointer‑ABI type policy is always enforced. There is no ABI-policy toggle; contracts and hosts must adhere to the ABI policy unconditionally.
-- Don't gate anything used in IVM syscalls or opcodes; every Iroha build must ship those code paths to keep deterministic behavior across nodes.
-- Serialization: Use Norito everywhere instead of serde. For binary codecs use `norito::{Encode, Decode}`; for JSON use the `norito::json` helpers/macros (`norito::json::from_*`, `to_*`, `json!`, `Value`) and never fall back to `serde_json`. Do not add direct `serde`/`serde_json` dependencies to crates; if serde is required internally, rely on Norito’s wrappers.
-- CI guard: `scripts/check_no_scale.sh` ensures SCALE (`parity-scale-codec`) only appears in the Norito benchmark harness. Run it locally if you touch serialization code.
-- Norito payloads MUST advertise their layout: either the version number maps to a fixed flag set, or a Norito header declares the decode flags. Do not guess packed-sequence bits from heuristics; genesis data follows the same rule.
-- Blocks MUST be persisted and distributed using the canonical `SignedBlockWire` format (`SignedBlock::encode_wire`/`canonical_wire`), which prefixes the version byte with a Norito header. Bare payloads are not supported.
-- Add a `TODO:` comment explaining any temporary or incomplete implementation.
-- Format all Rust sources with `cargo fmt --all` (edition 2024) before committing.
-- Add tests: ensure at least one unit test for each new or modified function, placed either inline with `#[cfg(test)]` or in the crate `tests/` directory.
-- Run `cargo test` locally, fix any build issues, and ensure it passes. Do this for the entire repository, not just a specific crate.
-- Optionally run `cargo clippy -- -D warnings` for additional lint checks.
+## ABI Evolution (агентуудын хийх ёстой зүйл)
+Тайлбар: Анхны хувилбарын бодлого
+- Энэ бол анхны хувилбар бөгөөд бид ганц ABI хувилбартай (V1). Одоогоор V2 байхгүй байна. Доорх ABI-тэй холбоотой хувьслын бүх зүйлийг ирээдүйн удирдамж болгон авч үзэх; Одоогоор зөвхөн `abi_version = 1` зорилтот. Өгөгдлийн загвар болон API-ууд нь мөн анхны хувилбар бөгөөд тээвэрлэхэд шаардлагатай үед чөлөөтэй өөрчлөгдөж болно; эрт тогтвортой байдлаас илүү тодорхой, зөв ​​байдлыг илүүд үздэг.
 
-## Documentation
-- Always add crate-level documentation: start each crate or test-crate with a brief inner doc comment (`//! ...`).
-- Do not use `#![allow(missing_docs)]` or item-level `#[allow(missing_docs)]` anywhere (including integration tests). Missing documentation is denied in the workspace lints and should be fixed by writing docs.
-- Norito codec: see `norito.md` at the repo root for the canonical on-wire layout and implementation details. If Norito’s algorithms or layouts change, update `norito.md` in the same PR.
-- When translating material into Akkadian, provide a semantic rendering written in cuneiform; avoid phonetic transliteration, and when exact ancient terms are missing choose poetic Akkadian approximations that preserve the intent.
+- Ерөнхий:
+  - ABI бодлогыг v1 (системийн дуудлагын гадаргуу болон заагч-ABI төрлийн аль аль нь) дээр болзолгүйгээр хэрэгжүүлдэг. Ажиллах цагийн унтраалга нэмж болохгүй.
+  - Өөрчлөлт нь техник хангамж болон үе тэнгийнхний дунд детерминизмыг хадгалах ёстой. Тест болон баримт бичгийг ижил PR дээр шинэчилнэ үү.
 
-## ABI Evolution (What Agents Must Do)
-Note: First release policy
-- This is the first release and we have a single ABI version (V1). There is no V2 yet. Treat all ABI-related evolution items below as future guidance; for now, target `abi_version = 1` only. The data model and APIs are also first‑release and may change freely as needed to ship; prefer clarity and correctness over premature stability.
-
-- General:
-  - ABI policy is enforced unconditionally in v1 (both syscall surface and pointer‑ABI types). Do not add runtime toggles.
-  - Changes must preserve determinism across hardware and peers. Update tests and docs in the same PR.
-
-- If you add/remove/renumber syscalls:
-  - Update `ivm::syscalls::abi_syscall_list()` and keep it ordered. Ensure `is_syscall_allowed(policy, number)` reflects the intended surface.
-  - Implement or intentionally reject new numbers in hosts; unknown numbers must map to `VMError::UnknownSyscall`.
-  - Update golden tests:
+- Хэрэв та системийн дуудлагыг нэмэх/хасах/дахин дугаарлах бол:
+  - `ivm::syscalls::abi_syscall_list()`-г шинэчилж захиалгаа хадгална уу. `is_syscall_allowed(policy, number)` нь төлөвлөсөн гадаргууг тусгасан эсэхийг шалгаарай.
+  - Хостуудад шинэ дугаар оруулах эсвэл санаатайгаар татгалзах; үл мэдэгдэх тоонууд нь `VMError::UnknownSyscall`-тэй байх ёстой.
+  - Алтан тестүүдийг шинэчлэх:
     - `crates/ivm/tests/abi_syscall_list_golden.rs`
-    - `crates/ivm/tests/abi_hash_versions.rs` (stability + version separation)
+    - `crates/ivm/tests/abi_hash_versions.rs` (тогтвортой байдал + хувилбарыг тусгаарлах)
 
-- If you add pointer‑ABI types:
-  - Add the new variant to `ivm::pointer_abi::PointerType` (assign a new u16 ID; never change existing IDs).
-  - Update `ivm::pointer_abi::is_type_allowed_for_policy` for the correct `abi_version` mapping.
-  - Update `crates/ivm/tests/pointer_type_ids_golden.rs` and add policy tests if needed.
+- Хэрэв та заагч-ABI төрлийг нэмбэл:
+  - `ivm::pointer_abi::PointerType`-д шинэ хувилбар нэмнэ (шинэ u16 ID оноож, одоо байгаа ID-г хэзээ ч өөрчлөхгүй).
+  - `abi_version` зураглалыг зөв хийхийн тулд `ivm::pointer_abi::is_type_allowed_for_policy`-г шинэчил.
+  - `crates/ivm/tests/pointer_type_ids_golden.rs`-г шинэчилж, шаардлагатай бол бодлогын тестийг нэмнэ үү.
 
-- If you introduce a new ABI version:
-  - Map `ProgramMetadata.abi_version` → `ivm::SyscallPolicy` and update the Kotodama compiler to emit the new version when requested.
-  - Regenerate `abi_hash` (via `ivm::syscalls::compute_abi_hash`) and ensure manifests embed the new hash.
-  - Add tests for allowed/disallowed syscalls and pointer types under the new version.
+- Хэрэв та шинэ ABI хувилбарыг танилцуулбал:
+  - `ProgramMetadata.abi_version` → `ivm::SyscallPolicy`-г зураглаж, Kotodama хөрвүүлэгчийг шинэчилж, хүссэн үедээ шинэ хувилбарыг гаргах.
+  - `abi_hash` (`ivm::syscalls::compute_abi_hash`-ээр) сэргээж, шинэ хэш оруулах манифестийг баталгаажуулна уу.
+  - Шинэ хувилбарын дагуу зөвшөөрөгдсөн/зөвшөөрөгдөөгүй систем болон заагч төрлүүдийн тестийг нэмнэ үү.
 
-- Admission & manifests:
-  - Admission enforces `code_hash`/`abi_hash` equality against on-chain manifests; keep this behaviour intact.
-  - Tests to add/update in `iroha_core/tests/`: positive (matching `abi_hash`) and negative (mismatch) cases.
-
-- Docs & status updates (same PR):
-  - Update `crates/ivm/docs/syscalls.md` (ABI Evolution section) and any syscall tables.
-  - Update `status.md` and `roadmap.md` with a brief summary of ABI changes and test updates.
+- Элсэлт ба манифест:
+  - Элсэлт нь гинжин манифестуудын эсрэг `code_hash`/`abi_hash` тэгш байдлыг мөрддөг; энэ зан үйлийг хэвээр үлдээ.
+  - `iroha_core/tests/`-д нэмэх/шинэчлэх туршилтууд: эерэг (`abi_hash` таарч байгаа) ба сөрөг (тохиромжгүй) тохиолдол.- Баримт бичиг, статусын шинэчлэлтүүд (ижил PR):
+  - `crates/ivm/docs/syscalls.md` (ABI Evolution хэсэг) болон системийн дуудлагын хүснэгтүүдийг шинэчилнэ үү.
+  - `status.md` болон `roadmap.md`-г ABI-ийн өөрчлөлт, туршилтын шинэчлэлтүүдийн товч хураангуйгаар шинэчилнэ үү.
 
 
-## Project Status and Plan
-- Check `status.md` at the repo root for the current compilation/runtime status across crates.
-- Check `roadmap.md` for the prioritized TODOs and implementation plan.
-- After completing work, update status in `status.md` and keep `roadmap.md` focused on outstanding tasks.
+## Төслийн төлөв, төлөвлөгөө
+- `status.md` репо үндэс дээр байгаа эмхэтгэл/үйл ажиллагааны цагийн төлөвийг хайрцагт шалгана уу.
+- `roadmap.md`-ээс нэн тэргүүнд хийгдэх TODO болон хэрэгжүүлэх төлөвлөгөөг шалгана уу.
+- Ажлаа дуусгасны дараа `status.md`-ийн статусыг шинэчилж, `roadmap.md`-г онцгой ажлуудад анхаарлаа хандуулаарай.
 
-## Agent workflow (for code editors/automation)
-- If you need clarification on any requirement, stop and draft a ChatGPT prompt with your question, then share it with the user before continuing.
-- Keep changes minimal and scoped; avoid unrelated edits in the same patch.
-- Prefer internal modules over adding new dependencies; do not edit `Cargo.lock`.
-- Use feature flags to guard hardware-accelerated paths (e.g., `simd`, `cuda`) and always provide a deterministic fallback path.
-- Ensure outputs remain identical across hardware; avoid relying on non-deterministic parallel reductions.
-- Update documentation and examples when public APIs or behavior change.
-- Validate serialization changes in `iroha_data_model` with roundtrip tests to preserve Norito layout guarantees.
-- Integration tests spin real multi-peer networks; use at least 4 peers when constructing test networks (single-peer configs are not representative and can deadlock in Sumeragi).
-- Do not attempt to disable DA/RBC in tests (e.g., via `DevBypassDaAndRbcForZeroChain`); DA is enforced and that bypass path currently deadlocks in `sumeragi` during consensus startup.
-- QC quorum must be satisfied by voting validators (`min_votes_for_commit`); observer padding does not count toward availability/prevote/precommit quorum checks, so aggregate QCs only after enough validator votes arrive.
-- DA-enabled consensus now waits longer before view changes (commit quorum timeout = `block_time + 4 * commit_time`) to let RBC/availability QC finish on slower hosts.
+## Агентын ажлын урсгал (код засварлагч/автоматжуулалтын хувьд)
+- Хэрэв танд ямар нэгэн шаардлагын талаар тодруулга авах шаардлагатай бол асуултынхаа хамт ChatGPT сануулгыг зогсоож, дараа нь үргэлжлүүлэхээсээ өмнө хэрэглэгчтэй хуваалцаарай.
+- Өөрчлөлтийг хамгийн бага, хамрах хүрээтэй байлгах; ижил нөхөөсөнд хамааралгүй засвар хийхээс зайлсхий.
+- Шинэ хамаарал нэмэхээс илүү дотоод модулиудыг илүүд үзэх; `Cargo.lock` засварлаж болохгүй.
+- Техник хангамжийн хурдасгасан замуудыг (жишээ нь, `simd`, `cuda`) хамгаалахын тулд онцлог шинж чанаруудын тугуудыг ашиглаж, тодорхойлогч буцах замыг үргэлж хангана.
+- Техник хангамжийн хувьд гаралт ижил хэвээр байгаа эсэхийг баталгаажуулах; детерминистик бус зэрэгцээ бууралтад найдахаас зайлсхийх.
+- Олон нийтийн API эсвэл зан төлөв өөрчлөгдөх үед баримт бичиг, жишээг шинэчлэх.
+- Norito байршлын баталгааг хадгалахын тулд `iroha_data_model` дахь цуваа өөрчлөлтийг хоёр талын туршилтаар баталгаажуулна уу.
+- Интеграцийн тестүүд нь жинхэнэ олон үет сүлжээг эргүүлдэг; Туршилтын сүлжээг байгуулахдаа дор хаяж 4 үе тэнгийнхнийг ашиглах (нэг үе тэнгийн тохиргоо нь төлөөлөх боломжгүй бөгөөд Sumeragi-д түгжрэл үүсгэж болзошгүй).
+- Туршилтанд DA/RBC-г идэвхгүй болгох гэж бүү оролдоорой (жишээ нь, `DevBypassDaAndRbcForZeroChain`-ээр); DA хүчинтэй байгаа бөгөөд энэ тойрч гарах зам нь зөвшилцөлд хүрч эхлэх үед `sumeragi`-д одоогоор мухардмал байна.
+- Саналыг баталгаажуулагч (`min_votes_for_commit`) чанарын хяналтын чуулга хангасан байх ёстой; Ажиглагчийн бөглөх нь чуулгын бэлэн байдлыг шалгах/урьдчилан санал өгөх/урьдчилан гаргахад тооцогдохгүй тул баталгаажуулагчийн санал хангалттай ирсний дараа л QC-г нэгтгэнэ.
+- DA-г идэвхжүүлсэн зөвшилцөл нь удаашралтай хостууд дээр RBC/хүртээмжтэй чанарын хяналтыг дуусгахын тулд харагдацын өөрчлөлтийг хүлээхээс өмнө удаан хүлээх болно (чуулгын хугацаа дуусах = `block_time + 4 * commit_time`).
 
-## Navigation tips
-- Search code: `rg '<term>'` and list files: `fd <name>`.
-- Explore crates: `fd --type f Cargo.toml crates | xargs -I{} dirname {}`.
-- Find examples/benches quickly: `fd . crates -E target -t d -d 3 -g "*{examples,benches}"`.
-- Python tip: some environments don’t provide `python`; try `python3` instead when running scripts.
+## Навигацийн зөвлөмж
+- Хайлтын код: `rg '<term>'` ба жагсаалтын файлууд: `fd <name>`.
+- Хайрцагуудыг судлах: `fd --type f Cargo.toml crates | xargs -I{} dirname {}`.
+- Жишээ / вандан сандалуудыг хурдан ол: `fd . crates -E target -t d -d 3 -g "*{examples,benches}"`.
+- Python зөвлөмж: зарим орчин `python`-г хангадаггүй; скриптүүдийг ажиллуулахдаа оронд нь `python3`-г оролдоно уу.
 
-## Proc-Macro Tests
-- Unit tests: use for pure parsing, codegen helpers, and utilities (fast, no compiler involved).
-- UI tests (trybuild): use to validate compile-time behavior and diagnostics of derive/proc-macros (success and expected failure cases with `.stderr`).
-- Prefer both when adding/changing macros: unit tests for internals + UI tests for user-facing behavior and error messages.
-- Avoid panics; emit clear diagnostics (e.g., via `syn::Error` or `proc_macro_error`). Keep messages stable and update `.stderr` only for intentional changes.
+## Proc-Macro тестүүд
+- Нэгжийн тестүүд: цэвэр задлан шинжлэх, кодгений туслахууд болон хэрэгслүүдэд ашиглах (хурдан, хөрвүүлэгч оролцоогүй).
+- UI тестүүд (trybuild): эмхэтгэх хугацааны төлөвийг баталгаажуулах, derive/proc-makros-ийн оношлогоо (`.stderr`-ийн амжилт ба хүлээгдэж буй бүтэлгүйтэл).
+- Макро нэмэх/өөрчлөхдөө аль алиныг нь илүүд үзээрэй: дотоод системийн нэгжийн тест + хэрэглэгчийн нүүр царай болон алдааны мэдэгдлийн UI тест.
+- үймээн самуунаас зайлсхийх; тодорхой оношийг ялгаруулна (жишээ нь, `syn::Error` эсвэл `proc_macro_error`-ээр). Зурвасуудыг тогтвортой байлгаж, `.stderr`-г зөвхөн санаатайгаар өөрчлөхөд шинэчилнэ үү.
 
-## Pull Request message
-Include a short summary of the changes and a `Testing` section describing the commands you ran.
+## Хүсэлтийг татах мессеж
+Өөрчлөлтүүдийн товч хураангуй болон таны гүйцэтгэсэн тушаалуудыг тайлбарласан `Testing` хэсгийг оруулна уу.

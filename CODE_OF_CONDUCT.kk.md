@@ -7,51 +7,52 @@ generator: scripts/sync_docs_i18n.py
 source_hash: ece3b82ce3096e15d3cc4524fbb6033ab3fa5119da561a1aec40306564ba0193
 source_last_modified: "2025-12-29T18:16:34.771616+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Contributor Covenant Code of Conduct
+# Contributor Covenant мінез-құлық кодексі
 
-## Our Pledge
+## Біздің уәдеміз
 
-In the interest of fostering an open and welcoming environment, we as contributors and maintainers pledge to making participation in our project and our community a harassment-free experience for everyone, regardless of age, body size, disability, ethnicity, gender identity and expression, level of experience, nationality, personal appearance, race, religion, or sexual identity and orientation.
+Ашық және жылы шырайлы ортаны қалыптастыру мүддесі үшін біз үлес қосушылар мен қолдаушылар ретінде жасына, дене өлшеміне, мүгедектігіне, этникалық тегіне, жыныстық сәйкестігі мен көрінісіне, тәжірибе деңгейіне, ұлтына, сыртқы келбетіне, нәсіліне, дініне немесе жыныстық сәйкестік пен бағытқа қарамастан, жобамызға және қоғамдастыққа қатысуды әркім үшін қудалаусыз тәжірибе жасауға уәде береміз.
 
-## Our Standards
+## Біздің стандарттар
 
-Examples of behavior that contributes to creating a positive environment include:
+Жағымды ортаны құруға ықпал ететін мінез-құлық мысалдарына мыналар жатады:
 
-* Using welcoming and inclusive language
-* Being respectful of differing viewpoints and experiences
-* Gracefully accepting constructive criticism
-* Focusing on what is best for the community
-* Showing empathy towards other community members
+* Сәлемдесу және инклюзивті тілді қолдану
+* Әртүрлі көзқарастар мен тәжірибелерге құрметпен қарау
+* Сындарлы сынды сыпайы қабылдау
+* Қоғам үшін ең жақсы нәрсеге назар аудару
+* Басқа қауымдастық мүшелеріне жанашырлық таныту
 
-Examples of unacceptable behavior by participants include:
+Қатысушылардың қолайсыз мінез-құлық мысалдарына мыналар жатады:
 
-* The use of sexualized language or imagery and unwelcome sexual attention or advances
-* Trolling, insulting/derogatory comments, and personal or political attacks
-* Public or private harassment
-* Publishing others' private information, such as a physical or electronic address, without explicit permission
-* Other conduct which could reasonably be considered inappropriate in a professional setting
+* Сексуалдық тіл немесе бейнелеу және жағымсыз сексуалдық назар аудару немесе жетістіктерді пайдалану
+* Троллинг, қорлайтын/кемсітетін пікірлер және жеке немесе саяси шабуылдар
+* Қоғамдық немесе жеке қудалау
+* Басқалардың жеке ақпаратын, мысалы, физикалық немесе электрондық мекенжайды, нақты рұқсатсыз жариялау
+* Кәсіби ортада орынды емес деп санауға болатын басқа әрекеттер
 
-## Our Responsibilities
+## Біздің міндеттеріміз
 
-Project maintainers are responsible for clarifying the standards of acceptable behavior and are expected to take appropriate and fair corrective action in response to any instances of unacceptable behavior.
+Жобаны қолдаушылар қолайлы мінез-құлық стандарттарын түсіндіруге жауапты және кез келген қолайсыз мінез-құлық жағдайларына жауап ретінде тиісті және әділ түзету шараларын қабылдайды деп күтілуде.
 
-Project maintainers have the right and responsibility to remove, edit, or reject comments, commits, code, wiki edits, issues, and other contributions that are not aligned to this Code of Conduct, or to ban temporarily or permanently any contributor for other behaviors that they deem inappropriate, threatening, offensive, or harmful.
+Жобаны жүргізушілер түсініктемелерді, міндеттемелерді, кодтарды, вики өңдеулерін, мәселелерді және осы Тәртіп кодексіне сәйкес келмейтін басқа үлестерді жоюға, өңдеуге немесе қабылдамау немесе орынсыз, қорқытатын, қорлайтын немесе зиянды деп санайтын басқа әрекеттер үшін кез келген қатысушыға уақытша немесе біржола тыйым салуға құқылы және жауапкершілігі бар.
 
-## Scope
+## Ауқым
 
-This Code of Conduct applies both within project spaces and in public spaces when an individual is representing the project or its community. Examples of representing a project or community include using an official project e-mail address, posting via an official social media account, or acting as an appointed representative at an online or offline event. Representation of a project may be further defined and clarified by project maintainers.
+Бұл мінез-құлық кодексі жоба кеңістігінде де, жеке тұлға жобаны немесе оның қоғамдастығын ұсынатын қоғамдық орындарда да қолданылады. Жобаны немесе қауымдастықты ұсыну мысалдарына жобаның ресми электрондық пошта мекенжайын пайдалану, ресми әлеуметтік медиа тіркелгісі арқылы жариялау немесе онлайн немесе офлайн іс-шарада тағайындалған өкіл ретінде әрекет ету жатады. Жобаны ұсынуды жобаны жүргізушілер одан әрі анықтауы және нақтылауы мүмкін.
 
-## Enforcement
+## Орындау
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported by contacting the project team [here](./CONTRIBUTING.md#contact). All complaints will be reviewed and investigated and will result in a response that is deemed necessary and appropriate to the circumstances. The project team is obligated to maintain confidentiality with regard to the reporter of an incident. Further details of specific enforcement policies may be posted separately.
+Қорлау, қорлау немесе басқа да жол берілмейтін мінез-құлық жағдайлары туралы жоба тобына [осы жерде](./CONTRIBUTING.md#contact) хабарласу арқылы хабарлауға болады. Барлық шағымдар қаралады және зерттеледі және қажетті және мән-жайларға сәйкес келетін жауап береді. Жоба командасы оқиға туралы хабарлаушыға қатысты құпиялылықты сақтауға міндетті. Арнайы орындау саясаттары туралы қосымша мәліметтер бөлек жариялануы мүмкін.
 
-Project maintainers who do not follow or enforce the Code of Conduct in good faith may face temporary or permanent repercussions as determined by other members of the project's leadership.
+Мінез-құлық кодексін адал орындамаған немесе орындамаған жобаны жүргізушілер жоба басшылығының басқа мүшелері анықтаған уақытша немесе тұрақты зардаптарға тап болуы мүмкін.
 
-## Attribution
+## Атрибуция
 
-This Code of Conduct is adapted from the [Contributor Covenant][homepage], version 1.4, available at [http://contributor-covenant.org/version/1/4][version]
+Бұл мінез-құлық кодексі [Contributor Covenant][басты бет], 1.4 нұсқасы, [http://contributor-covenant.org/version/1/4][нұсқасы] мекенжайында қолжетімді.
 
 [homepage]: http://contributor-covenant.org
 [version]: http://contributor-covenant.org/version/1/4/

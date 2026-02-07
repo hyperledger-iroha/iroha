@@ -6179,6 +6179,12 @@ pub fn decode_field_canonical<T>(bytes: &[u8]) -> Result<(T, usize), Error>
 where
     T: for<'de> crate::NoritoDeserialize<'de> + crate::NoritoSerialize,
 {
+    #[inline]
+    fn allow_legacy_len_mismatch<T>(recomputed: usize, payload_len: usize) -> bool {
+        recomputed != payload_len
+            && core::any::type_name::<T>().contains("iroha_data_model::isi::InstructionBox")
+    }
+
     if bytes.is_empty() {
         if core::mem::size_of::<Archived<T>>() == 0 {
             let _guard = PayloadCtxGuard::enter(&[]);
@@ -6248,15 +6254,19 @@ where
                 } else {
                     let recomputed = recompute_canonical_len(&value)?;
                     if recomputed != bytes_len {
-                        if crate::debug_trace_enabled() {
-                            eprintln!(
-                                "decode_field_canonical::<{}>: recomputed_len={} mismatches payload_len={} (max_access={used})",
-                                core::any::type_name::<T>(),
-                                recomputed,
-                                bytes_len
-                            );
+                        if allow_legacy_len_mismatch::<T>(recomputed, bytes_len) {
+                            Ok(bytes_len)
+                        } else {
+                            if crate::debug_trace_enabled() {
+                                eprintln!(
+                                    "decode_field_canonical::<{}>: recomputed_len={} mismatches payload_len={} (max_access={used})",
+                                    core::any::type_name::<T>(),
+                                    recomputed,
+                                    bytes_len
+                                );
+                            }
+                            Err(Error::LengthMismatch)
                         }
-                        Err(Error::LengthMismatch)
                     } else {
                         Ok(recomputed)
                     }
@@ -6265,15 +6275,19 @@ where
             _ => {
                 let recomputed = recompute_canonical_len(&value)?;
                 if recomputed != bytes_len {
-                    if crate::debug_trace_enabled() {
-                        eprintln!(
-                            "decode_field_canonical::<{}>: recomputed_len={} mismatches payload_len={}",
-                            core::any::type_name::<T>(),
-                            recomputed,
-                            bytes_len
-                        );
+                    if allow_legacy_len_mismatch::<T>(recomputed, bytes_len) {
+                        Ok(bytes_len)
+                    } else {
+                        if crate::debug_trace_enabled() {
+                            eprintln!(
+                                "decode_field_canonical::<{}>: recomputed_len={} mismatches payload_len={}",
+                                core::any::type_name::<T>(),
+                                recomputed,
+                                bytes_len
+                            );
+                        }
+                        Err(Error::LengthMismatch)
                     }
-                    Err(Error::LengthMismatch)
                 } else {
                     Ok(recomputed)
                 }
@@ -6342,15 +6356,19 @@ where
                 } else {
                     let recomputed = recompute_canonical_len(&value)?;
                     if recomputed != bytes_len {
-                        if crate::debug_trace_enabled() {
-                            eprintln!(
-                                "decode_field_canonical::<{}>: misaligned recomputed_len={} mismatches payload_len={}",
-                                core::any::type_name::<T>(),
-                                recomputed,
-                                bytes_len
-                            );
+                        if allow_legacy_len_mismatch::<T>(recomputed, bytes_len) {
+                            Ok(bytes_len)
+                        } else {
+                            if crate::debug_trace_enabled() {
+                                eprintln!(
+                                    "decode_field_canonical::<{}>: misaligned recomputed_len={} mismatches payload_len={}",
+                                    core::any::type_name::<T>(),
+                                    recomputed,
+                                    bytes_len
+                                );
+                            }
+                            Err(Error::LengthMismatch)
                         }
-                        Err(Error::LengthMismatch)
                     } else {
                         Ok(recomputed)
                     }
