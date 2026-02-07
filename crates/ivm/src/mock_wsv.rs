@@ -2877,8 +2877,7 @@ impl IVMHost for WsvHost {
                 Ok(0)
             }
             crate::syscalls::SYSCALL_DECODE_INT => {
-                // r10 = &NoritoBytes (prefer Norito i64; legacy UTF-8 decimal is also accepted)
-                // -> r10 = parsed i64 value
+                // r10 = &NoritoBytes (Norito-framed i64) -> r10 = parsed i64
                 let addr = vm.register(10);
                 if addr == 0 {
                     vm.set_register(10, 0);
@@ -2895,15 +2894,7 @@ impl IVMHost for WsvHost {
                         type_id: tlv.type_id as u16,
                     });
                 }
-                let val: i64 = if let Ok(value) = decode_from_bytes(tlv.payload) {
-                    value
-                } else if let Ok(raw) = core::str::from_utf8(tlv.payload) {
-                    raw.parse().map_err(|_| VMError::DecodeError)?
-                } else {
-                    let raw: String =
-                        decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
-                    raw.parse().map_err(|_| VMError::DecodeError)?
-                };
+                let val: i64 = decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
                 vm.set_register(10, val as u64);
                 Ok(0)
             }
@@ -6021,6 +6012,65 @@ mod tests_null_decode {
             vm.set_register(11, 0);
             call_syscall(&mut vm, number).expect("syscall should accept null");
             assert_eq!(vm.register(10), 0);
+        }
+    }
+
+    #[test]
+    fn decode_int_accepts_norito_i64() {
+        let caller: AccountId =
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
+                .parse()
+                .unwrap();
+        let payload = norito::to_bytes(&29_i64).expect("encode i64");
+        let host = WsvHost::new(
+            MockWorldStateView::new(),
+            caller,
+            HashMap::new(),
+            HashMap::new(),
+        );
+        let mut vm = IVM::new(u64::MAX);
+        vm.set_host(host);
+        let ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &payload))
+            .expect("alloc tlv");
+        vm.set_register(10, ptr);
+        call_syscall(&mut vm, syscalls::SYSCALL_DECODE_INT).expect("decode int");
+        assert_eq!(vm.register(10) as i64, 29);
+    }
+
+    #[test]
+    fn decode_int_rejects_non_norito_i64_payloads() {
+        let caller: AccountId =
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
+                .parse()
+                .unwrap();
+        let cases = vec![
+            ("utf8-decimal", b"-41".to_vec()),
+            (
+                "norito-string",
+                norito::to_bytes(&"-8".to_string()).expect("encode string"),
+            ),
+        ];
+
+        for (label, payload) in cases {
+            let host = WsvHost::new(
+                MockWorldStateView::new(),
+                caller.clone(),
+                HashMap::new(),
+                HashMap::new(),
+            );
+            let mut vm = IVM::new(u64::MAX);
+            vm.set_host(host);
+            let ptr = vm
+                .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &payload))
+                .expect("alloc tlv");
+            vm.set_register(10, ptr);
+            let err = call_syscall(&mut vm, syscalls::SYSCALL_DECODE_INT)
+                .expect_err("decode_int should reject non-i64 payload");
+            assert!(
+                matches!(err, VMError::DecodeError),
+                "decode_int payload variant {label} should yield DecodeError, got {err:?}"
+            );
         }
     }
 

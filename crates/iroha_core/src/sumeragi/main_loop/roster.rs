@@ -31,7 +31,7 @@ pub(super) fn canonicalize_roster_for_mode(
     consensus_mode: ConsensusMode,
 ) -> Vec<PeerId> {
     match consensus_mode {
-        // Permissioned commit-QC roll-forward keeps active membership ordering stable.
+        // Permissioned commit-QC roll-forward preserves active-membership ordering.
         ConsensusMode::Permissioned => dedup_preserving_order(roster),
         // NPoS roster hashes remain canonicalized for deterministic stake-quorum validation.
         ConsensusMode::Npos => canonicalize_roster(roster),

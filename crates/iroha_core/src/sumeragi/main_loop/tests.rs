@@ -36395,6 +36395,99 @@ async fn qc_signers_for_votes_revalidates_on_roster_hash_mismatch() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn qc_signers_for_votes_uses_mode_aware_membership_hash_for_rotated_views() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let chain = actor.common_config.chain.clone();
+    let height = 1u64;
+    let epoch = actor.epoch_for_height(height);
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    assert_eq!(
+        consensus_mode,
+        ConsensusMode::Permissioned,
+        "test assumes permissioned consensus"
+    );
+
+    let roster: Vec<PeerId> = harness
+        .key_pairs
+        .iter()
+        .map(|keypair| PeerId::new(keypair.public_key().clone()))
+        .collect();
+    let topology = super::network_topology::Topology::new(roster);
+
+    let mut selected: Option<(u64, super::network_topology::Topology)> = None;
+    for candidate_view in 0..32_u64 {
+        let signature_topology =
+            super::topology_for_view(&topology, height, candidate_view, mode_tag, prf_seed);
+        let mode_membership = super::roster::canonicalize_roster_for_mode(
+            signature_topology.as_ref().to_vec(),
+            consensus_mode,
+        );
+        let sorted_membership =
+            super::roster::canonicalize_roster(signature_topology.as_ref().to_vec());
+        if mode_membership != sorted_membership {
+            selected = Some((candidate_view, signature_topology));
+            break;
+        }
+    }
+    let (view, signature_topology) =
+        selected.expect("expected at least one view with rotated membership ordering");
+
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x5A; Hash::LENGTH]));
+    let mut vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view,
+        epoch,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    sign_vote_for_view_with_seed(
+        &mut vote,
+        &chain,
+        &topology,
+        &harness.key_pairs,
+        mode_tag,
+        prf_seed,
+    );
+
+    let key = (vote.phase, vote.height, vote.view, vote.epoch, vote.signer);
+    let roster_hash = HashOf::new(&signature_topology.as_ref().to_vec());
+    let membership_hash = HashOf::new(&super::roster::canonicalize_roster_for_mode(
+        signature_topology.as_ref().to_vec(),
+        consensus_mode,
+    ));
+    actor.vote_log.insert(key, vote.clone());
+    actor.vote_validation_cache.insert(
+        key,
+        super::VoteValidationCacheEntry {
+            roster_hash,
+            membership_hash,
+        },
+    );
+
+    let signers = actor.qc_signers_for_votes(
+        Phase::Commit,
+        block_hash,
+        height,
+        view,
+        epoch,
+        &signature_topology,
+    );
+    assert!(
+        signers.contains(&vote.signer),
+        "mode-aware membership hash should keep cached vote for rotated view"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn qc_signers_for_votes_skips_membership_hash_mismatch() {
     let mut harness = test_actor_harness(3).await;
     let actor = &mut harness.actor;
