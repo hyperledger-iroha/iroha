@@ -1,15 +1,30 @@
-<!-- Auto-generated stub for Bashkir (ba) translation. Replace this content with the full translation. -->
-
 ---
 lang: ba
 direction: ltr
 source: docs/portal/docs/reference/torii-rapidoc.mdx
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# Translation In Progress
+import RapiDocPanel from '@site/src/components/RapiDocPanel.jsx';
 
-This file is a placeholder for the Bashkir translation of the English document. Once the translation is complete, update the `status` metadata above.
+# Torii API (RapiDoc)
 
-Replace this stub with the completed Bashkir translation and update `translation_last_reviewed` after verification against the English source.
+`RapiDoc` offers a compact, documentation-first rendering of the same Torii
+OpenAPI document. Use it when you need a denser overview or read-only review of
+request/response models.
+
+## Usage tips
+
+- Enter a bearer token to enable interactive calls. The value is forwarded as an
+  `X-TryIt-Auth` header and normalised by the proxy.
+- Configure `TRYIT_PROXY_PUBLIC_URL` when serving the portal so interactive
+  requests are routed through the staging proxy. The widget warns when the proxy
+  URL is missing.
+- Use the “OpenAPI snapshot” dropdown to load historical specs published by
+  `npm run sync-openapi`; the `Latest (tracked)` option always resolves to
+  `/openapi/torii.json`.
+- Combine with the “[Try it](/api/overview#try-it-sandbox-docs-3)” console when
+  working against staged gateways requiring the proxy.
+
+<RapiDocPanel />

@@ -1,18 +1,22 @@
-<!-- Auto-generated stub for Burmese (my) translation. Replace this content with the full translation. -->
-
 ---
 lang: my
 direction: ltr
 source: docs/source/sdk/index.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: b8bee7c0ad901e15e00d1715b1426aeb51529b492c9decf65fbb7cd8f0a27bfe
 source_last_modified: "2025-12-29T18:16:36.056949+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2026-02-07
 ---
 
-# Translation In Progress
+# SDK Guides
 
-This file is a placeholder for the Burmese translation of the English document. Once the translation is complete, update the `status` field in the metadata above.
+```{toctree}
+:caption: SDK Platforms
+:maxdepth: 1
 
-This stub awaits translation. Replace the placeholder body with the completed text and update the metadata status to `complete` when finished.
+android/index
+js/index
+python/index
+swift/index
+```

@@ -2814,7 +2814,7 @@ impl Actor {
         epoch: u64,
         topology: &super::network_topology::Topology,
     ) -> Option<crate::sumeragi::consensus::Vote> {
-        let (_, mode_tag, prf_seed) = self.consensus_context_for_height(height);
+        let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
         let signature_topology = topology_for_view(topology, height, view, mode_tag, prf_seed);
         let local_idx = self.local_validator_index_for_topology(&signature_topology)?;
         let key = (
@@ -2824,7 +2824,61 @@ impl Actor {
             epoch,
             local_idx,
         );
-        self.vote_log.get(&key).cloned()
+        if let Some(vote) = self.vote_log.get(&key) {
+            return Some(vote.clone());
+        }
+        let fallback_idx = self.local_validator_index_for_topology(topology)?;
+        if fallback_idx == local_idx {
+            return None;
+        }
+        let fallback_key = (
+            crate::sumeragi::consensus::Phase::Commit,
+            height,
+            view,
+            epoch,
+            fallback_idx,
+        );
+        if let Some(vote) = self.vote_log.get(&fallback_key) {
+            return Some(vote.clone());
+        }
+
+        let canonical_roster =
+            super::roster::canonicalize_roster_for_mode(topology.as_ref().to_vec(), consensus_mode);
+        let canonical_topology = super::network_topology::Topology::new(canonical_roster);
+        let canonical_signature_topology =
+            topology_for_view(&canonical_topology, height, view, mode_tag, prf_seed);
+        let local_peer = self.common_config.peer.id();
+        self.vote_log
+            .values()
+            .find(|vote| {
+                if vote.phase != crate::sumeragi::consensus::Phase::Commit
+                    || vote.height != height
+                    || vote.view != view
+                    || vote.epoch != epoch
+                {
+                    return false;
+                }
+                let Ok(idx) = usize::try_from(vote.signer) else {
+                    return false;
+                };
+                signature_topology
+                    .as_ref()
+                    .get(idx)
+                    .is_some_and(|peer| peer == local_peer)
+                    || topology
+                        .as_ref()
+                        .get(idx)
+                        .is_some_and(|peer| peer == local_peer)
+                    || canonical_signature_topology
+                        .as_ref()
+                        .get(idx)
+                        .is_some_and(|peer| peer == local_peer)
+                    || canonical_topology
+                        .as_ref()
+                        .get(idx)
+                        .is_some_and(|peer| peer == local_peer)
+            })
+            .cloned()
     }
 
     pub(super) fn maybe_broadcast_block_sync_update_for_precommit_vote(
@@ -2885,7 +2939,13 @@ impl Actor {
             if topology_peers.is_empty() {
                 return;
             }
-            if self.prepare_block_sync_update_for_broadcast(&mut update, consensus_mode) {
+            let has_verifiable_roster = self
+                .state
+                .commit_roster_snapshot_for_block(vote.height, vote.block_hash)
+                .is_some();
+            if has_verifiable_roster
+                && self.prepare_block_sync_update_for_broadcast(&mut update, consensus_mode)
+            {
                 self.broadcast_block_sync_update(update, &topology_peers);
                 iroha_logger::info!(
                     height = vote.height,
@@ -2906,7 +2966,7 @@ impl Actor {
                     block = %vote.block_hash,
                     signer = vote.signer,
                     targets = topology_peers.len(),
-                    "sending BlockCreated payload to commit topology (no verifiable roster yet)"
+                    "sending BlockCreated payload to commit topology (no verifiable roster snapshot)"
                 );
             }
         } else {

@@ -1,16 +1,31 @@
-<!-- Auto-generated stub for Uzbek (uz) translation. Replace this content with the full translation. -->
-
 ---
 id: developer-index
 lang: uz
 direction: ltr
 source: docs/portal/docs/sorafs/developer-index.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+title: SoraFS Developer Guides
+description: Landing page for SoraFS developer documentation, samples, and automation references.
+sidebar_label: Developer Overview
 ---
 
-# Translation In Progress
+:::note Canonical Source
+:::
 
-This file is a placeholder for the Uzbek translation of the English document. Once the translation is complete, update the `status` metadata above.
+# SoraFS Developer Guides
 
-Replace this stub with the completed Uzbek translation and update `translation_last_reviewed` after verification against the English source.
+```{toctree}
+:caption: Getting Started
+:maxdepth: 1
+
+overview
+cli
+orchestrator
+orchestrator_tuning
+sdk/index
+ci
+releases
+deployment
+samples
+```

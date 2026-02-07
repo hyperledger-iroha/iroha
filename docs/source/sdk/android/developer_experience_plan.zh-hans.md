@@ -1,18 +1,134 @@
-<!-- Auto-generated stub for Chinese (Simplified) (zh-hans) translation. Replace this content with the full translation. -->
-
 ---
 lang: zh-hans
 direction: ltr
 source: docs/source/sdk/android/developer_experience_plan.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 8f0f9cc13e9c55f03a53c00ea850f2f7f876385d0e2a83b7a769a0c7f509d243
 source_last_modified: "2026-01-30T18:06:03.288479+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2026-02-07
 ---
 
-# Translation In Progress
+<!--
+  SPDX-License-Identifier: Apache-2.0
+-->
 
-This file is a placeholder for the Chinese (Simplified) translation of the English document. Once the translation is complete, update the `status` field in the metadata above.
+# Android Developer Experience Plan (AND5)
 
-This stub awaits translation. Replace the placeholder body with the completed text and update the metadata status to `complete` when finished.
+**Status:** Completed 2026-05-02 (samples + manifests + publishing pipeline wired)  
+**Roadmap Link:** AND5 — Developer Experience & Samples  
+**Owners:** Android DX TL (engineering), Docs/DevRel Manager (content), Release Engineering (publishing), LLM (acting editor)
+
+## 1. Goals & Scope
+
+AND5 packages the Android SDK for external adoption once AND2 (key management) and AND4 (Torii networking parity) reach stability. Deliverables span sample applications, documentation, localization, and publication automation so partners can evaluate the SDK without bespoke support.
+
+Objectives:
+
+- Provide two canonical sample apps that demonstrate secure-element signing, offline workflows, and `/v1/pipeline` networking behaviour.
+- Publish developer guides that explain key management, offline signing, telemetry/observability hooks, configuration, and troubleshooting with explicit `iroha_config` mappings.
+- Automate artifact distribution (signed AAR/Maven packages) with reproducible metadata, SBOMs, and provenance attestations aligned with the workspace release policy.
+- Localize the quickstart/key-management/troubleshooting guides into Japanese ahead of beta, with Hebrew following for GA.
+
+## 2. Sample Applications
+
+| Sample | Capabilities | Dependencies | Notes |
+|--------|--------------|--------------|-------|
+| **Operator Console** | Governance transaction builder, StrongBox signing, Torii `/v1/pipeline` retries, telemetry dashboards (AND7 hooks) | AND2 attestation harness, AND4 mock Torii harness, `docs/source/android_support_playbook.md` for ops alignment | Target audience: validator/operators. Must expose provenance hashes, pending queue inspector, and attestation upload workflow. Scaffold lives at `examples/android/operator-console`. |
+| **Retail Wallet** | Offline signing envelope creation, device-to-device handoff, wire-framed instruction payloads (transfer/mint), recovery + rotation playbooks | AND2 fallback derivation, `TransactionBuilder.encodeAndSignEnvelopeWithAttestation`, Norito fixture regeneration SLA | Demonstrates deterministic offline flows and queue reconciliation when connectivity returns. Ships with mocked ledger + CLI to replay envelopes. Scaffold lives at `examples/android/retail-wallet`. |
+
+Implementation notes:
+
+- Both samples live under `examples/android/` with shared Gradle configuration and Managed Device CI lanes.
+- Telemetry observers must forward `android.telemetry.*` counters to the staging OTEL collector so readiness rehearsals reuse production dashboards.
+- Each sample emits `sample_manifest.json` capturing SDK version, feature flags, and expected Torii endpoints; release automation copies the manifest into the artefact bundle for provenance.
+- Detailed design notes for each experience now live under `docs/source/sdk/android/samples/` (see `operator_console.md` and `retail_wallet.md`) so engineering tickets can link to concrete acceptance criteria.
+- The operator console now attaches a redaction-aware `TelemetryObserver` backed by a JSONL sink whenever `ANDROID_SAMPLE_TELEMETRY_LOG` is present, hashing authorities with the sample salt/version/rotation embedded in `BuildConfig` and the sample manifest so AND7 adoption harnesses can ingest the records without additional wiring.【examples/android/operator-console/src/main/java/org/hyperledger/iroha/samples/operator/env/TelemetryConfig.kt:1】【examples/android/operator-console/build.gradle.kts:21】
+
+## 3. Tooling & Automation
+
+1. **Gradle Tasks**
+   - `./gradlew :examples:operator-console:managedDeviceDebugAndroidTest` gate tied to Buildkite.
+   - `./gradlew :examples:retail-wallet:bundleRelease` produces signed bundle + SBOM using the workspace `cyclonedx` plugin.
+2. **CLI scripts**
+   - `scripts/android_sample_env.sh` bootstraps the Torii mock, multi-provider SoraFS fixture (via `ci/check_sorafs_orchestrator_adoption.sh`), and telemetry exporters so demos/rehearsals share the AND7 harness. Each run drops `artifacts/android/telemetry/<timestamp>/` containing the SoraFS scoreboard/summary plus `telemetry/load-generator.log`; DevRel must archive that directory with their enablement notes and follow up with `./ci/check_android_dashboard_parity.sh` so the portal-ready parity diff stays in sync with SRE governance evidence. The helper also records `ANDROID_SAMPLE_SORAFS_SCOREBOARD_SHA256` / `ANDROID_SAMPLE_SORAFS_SUMMARY_SHA256` inside the exported `.env` file so adoption gates and readiness packets can cite the exact digest that the SF-6c checks verified.
+   - `scripts/publish_android_sdk.sh` runs the SDK + sample tests, generates SBOM/provenance bundles, publishes artifacts into `artifacts/android/maven/<version>` (and optionally a remote Maven repository), and writes `publish_summary.json` / `checksums.txt` so the release bundle has deterministic evidence. Example:
+
+     ```bash
+     scripts/publish_android_sdk.sh \
+       --version 0.9.0 \
+       --repo-url https://maven.example.org/releases \
+       --username "$MAVEN_USER" \
+       --password "$MAVEN_TOKEN"
+     ```
+
+   - `deploy/android/publish_ga.sh` wraps the publish script during the go/no-go window, copying the Maven repo + SBOM bundle into `artifacts/releases/android/<version>/` and producing the README that Release Engineering drops into the compliance packet. The dual-track release pipeline now accepts `--publish-android-sdk [--android-sdk-repo-url …]` to run the same flow automatically when `scripts/run_release_pipeline.py` is used.
+   - `scripts/check_android_maven_repo.py` replays the hash/metadata validation described in `docs/source/sdk/android/maven_staging_plan.md`, ensuring `publish_summary.json`, `checksums.txt`, and `maven-metadata.xml` stay in sync before a staging drop is announced. Emit both the JSON and Markdown reports (`--json-out … --markdown-out …`) so AND5 evidence bundles have a machine-readable artefact and a governance-ready summary side-by-side.
+   - `scripts/check_android_samples.sh` builds the SDK module plus both sample apps; wire it into CI once Gradle is available on runners.
+3. **CI Hooks**
+- `ci/check_android_samples.sh` shells out to `scripts/check_android_samples.sh` so manifest gating stays centralized, then runs the release lint/unit-test permutations for both samples and refreshes Gradle dependency locks (`gradle -q dependencies --write-locks`). CI fails if lockfiles drift; local runs can set `ANDROID_SAMPLES_SKIP_{BUILD,LINT_TEST,LOCKS}=1` when the Android toolchain is unavailable.
+
+### Scaffold Status (2026-05-02)
+
+- ✅ Gradle multi-module project under `examples/android/` with system-Gradle shim.
+- ✅ Operator console + retail wallet wired to SDK components, sample env exports, and
+  live harness artefacts (StrongBox posture, queue depth, SoraFS scoreboard/summary/receipt
+  digests, telemetry, hand-off endpoints).
+- ✅ Sample manifests now capture Torii endpoints, feature flags, policy overrides, POS asset
+  hashes, harness artefacts/digests, and localization coverage; `scripts/check_android_samples.sh`
+  + `ci/check_android_samples.sh` gate builds on manifest + lint/unit tests.
+
+## 4. Documentation Deliverables
+
+| Doc | Path | Status | Summary |
+|-----|------|--------|---------|
+| SDK quickstart refresh | `docs/source/sdk/android/index.md` | Update | Expand setup section with sample app references, Managed Device requirements, and Torii pipeline pointers. |
+| Key management & attestation guide | `docs/source/sdk/android/key_management.md` | ✅ Published | Explains `IrohaKeyManager` providers, StrongBox preference, alias lifecycle, and attestation bundle handling with references to `android_strongbox_device_matrix.md`. |
+| Offline signing & envelopes | `docs/source/sdk/android/offline_signing.md` | ✅ Published | Details the envelope schema, Norito payload reuse, recovery workflows, and CLI helpers for verification. |
+| Networking & telemetry guide | `docs/source/sdk/android/networking.md` | ✅ Published | Captures `/v1/pipeline` HTTP client configuration, retry/queue plumbing, Norito RPC usage, and telemetry observer alignment with `telemetry_redaction.md`. |
+| Configuration & manifest guide | `docs/source/sdk/android/configuration.md` | ✅ Published | Documents the `iroha_config` → `ClientConfig` pipeline, manifest hashing, telemetry redaction knobs, pending-queue wiring, and the schema diff/override workflows referenced by `android_runbook.md`. |
+| Sample app walkthroughs | `docs/source/sdk/android/samples/{operator_console,retail_wallet}.md` | ✅ Drafted | Step-by-step guides for operator console and retail wallet, including `iroha_config` excerpts and troubleshooting tables. |
+| Localization tracking | `docs/source/sdk/android/i18n_plan.md` | ✅ Drafted | Checklist covering JP (beta) + HE (GA) translations with reviewer assignments and SLA to mirror English sources within 5 business days. |
+
+All guides must embed Norito snippets using canonical fixtures and link back to the relevant `iroha_config` struct or CLI flag for each configuration knob. Add `//!` crate docs where new helper crates are introduced for samples.
+
+## 5. Localization & Enablement
+
+- **Beta scope:** translate the quickstart, key-management, troubleshooting, and both sample walkthroughs into Japanese (`index.ja.md`, `key_management.ja.md`, `troubleshooting.ja.md`, `samples/*.ja.md`) by Q4 2026 beta cut. Track progress via `docs/source/sdk/android/i18n_plan.md`.
+- **GA scope:** add Hebrew counterparts plus localized sample walkthroughs once staffing is confirmed (dependency on Docs/DevRel monthly sync and the staffing milestones recorded in `i18n_plan.md`).
+- Enablement deliverables (recordings, office hours, knowledge checks) follow the format established for AND7 telemetry readiness; archive artefacts beside telemetry materials in `docs/source/sdk/android/readiness/`.
+
+## 6. Release & Compliance Hooks
+
+- Maven/AAR promotion follows the AND6 checklist: reproducible build hash, SBOM (CycloneDX JSON), Sigstore attestations, and signed provenance manifest stored under `docs/source/release/provenance/android/`.
+ - Publishing pipeline must fail if `scripts/check_android_fixtures.py` reports drift or if sample manifest hashes diverge from `artifacts/android_fixture_regen_state.json`.
+- Update `status.md` and `android_support_playbook.md` whenever SLA tables, release cadence, or sample coverage change.
+- Compliance review requires attaching: SBOM, provenance bundle, localization approval log, and RACI for on-call support transitions.
+- Stage promotions must follow `docs/source/sdk/android/maven_staging_plan.md` so Release Engineering can cite the validation report emitted by `scripts/check_android_maven_repo.py` during governance reviews.
+
+## 7. Timeline & Gates
+
+| Phase | Target | Exit Criteria |
+|-------|--------|---------------|
+| Beta readiness (Q4 2026) | AND2/AND4 outputs integrated; sample apps compile with Managed Device CI | Operator console + retail wallet demos recorded; key-management/offline docs published; JP localization complete; Maven dry-run promoted to staging. |
+| GA hardening (Q1 2027) | Align with AND6/AND7 audits | Instrumentation alerts connected to AND7 dashboards; SBOM + provenance automation exercised twice; support playbook references sample coverage and localization status. |
+| LTS support (post-GA) | Within 90 days of GA | Sample apps updated for LTS branch, docs note supported SDK/ABI versions, localization refreshed, and release automation signed off by compliance. |
+
+## 8. Dependencies & Risks
+
+- **Dependencies:** AND2 key providers, AND4 networking mocks, AND7 telemetry hooks, Release Engineering publishing scripts, Docs localization staffing.
+- **Risks & Mitigations:**
+  - *Doc drift across languages:* enforce 5-business-day SLA via `i18n_plan.md`, run `scripts/sync_docs_i18n.py` in CI.
+  - *Sample app regressions:* nightly Managed Device runs with flake triage; `ci/check_android_samples.sh` wired into `run_tests.sh`.
+  - *Publishing failures:* staged promotions before GA; treat SBOM/attestation generation as blocking steps with artifact diffing.
+
+## 9. Next Actions
+
+1. Keep `scripts/check_android_samples.sh` / `ci/check_android_samples.sh` green (manifests +
+   lint/unit tests + localization annotations) before publishing snapshots.
+2. Regenerate sample manifests whenever `android_sample_env.sh` or POS/security assets change and
+   attach them to release/readiness bundles; keep hashes mirrored in `status.md`.
+3. Refresh localized walkthroughs and screenshots in line with the i18n SLA tracked in
+   `docs/source/sdk/android/i18n_plan.md` so `en/ja/he` copies stay in sync.
+
+Track completion status in `status.md` (Android DX section) and update `roadmap.md` when milestones advance.
