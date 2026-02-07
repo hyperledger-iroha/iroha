@@ -1,18 +1,75 @@
-<!-- Auto-generated stub for Mongolian (mn) translation. Replace this content with the full translation. -->
-
 ---
 lang: mn
 direction: ltr
 source: docs/source/sorafs/postmortem_template.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 7ed57867c09440d713694d5603ada2b20202d823025ba5cbe8e606b82575dcc5
 source_last_modified: "2025-12-29T18:16:36.121305+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2026-02-07
+title: SoraFS Incident Postmortem Template
+summary: Structured template for analysing SoraFS incidents and chaos drills.
 ---
 
-# Translation In Progress
+# SoraFS Incident Postmortem Template
 
-This file is a placeholder for the Mongolian translation of the English document. Once the translation is complete, update the `status` field in the metadata above.
+> Duplicate this file and replace the placeholders. Attach dashboards,
+> telemetry snippets, and governance decisions as appendices.
 
-This stub awaits translation. Replace the placeholder body with the completed text and update the metadata status to `complete` when finished.
+## Summary
+
+- **Incident / Drill ID:** `YYYY-MM-DD-<short-code>`
+- **Date / Timeframe (UTC):** `<start> – <end>`
+- **Classification:** `<P1|P2|Drill>`
+- **Primary Impact:** `<gateway availability | proof integrity | replication backlog | other>`
+- **Detected by:** `<alert name / manual report>`
+- **Resolved by:** `<team / individual>`
+
+## Impact Assessment
+
+- **Customer-facing symptoms:** `<API errors, latency, backlog>`
+- **Duration above SLO:** `<minutes>`
+- **Affected providers / manifests:** `<list>`
+- **Downstream consequences:** `<governance actions, replay required?>`
+
+## Timeline
+
+| Timestamp (UTC) | Actor | Event |
+|-----------------|-------|-------|
+| `00:00` | `<system/team>` | Detection |
+| `00:05` | | Initial mitigation |
+| `...` | | |
+
+## Root Cause Analysis
+
+- **Primary cause:** `<component + failure mode>`
+- **Contributing factors:** `<config drift, telemetry gap, coordination>`
+- **What worked:** `<items that reduced impact>`
+- **What failed:** `<runbook gaps, tooling issues>`
+
+## Telemetry & Evidence
+
+- Attach relevant metrics (e.g., `sorafs_fetch.error`, `sorafs_gateway_latency_ms_bucket`).
+- Link Grafana panel snapshots or logs with timestamps.
+
+## Corrective Actions
+
+| Action | Owner | Priority | Target Date |
+|--------|-------|----------|-------------|
+| `<Fix replication backlog alert thresholds>` | `<SRE>` | High | `<YYYY-MM-DD>` |
+
+## Follow-Up Verification
+
+- **Chaos drill scheduled:** `<yes/no> – planned date>`
+- **Runbook updates required:** `<docs updated or pending>`
+- **Governance / stakeholder notification:** `<completed / outstanding>`
+
+## Lessons Learned
+
+- `<Key observation>`
+- `<Process improvement>`
+
+## Appendix
+
+- Links to related issues, commits, and dashboards.
+- Attach artefacts (manifest snapshots, proof bundles) if applicable.

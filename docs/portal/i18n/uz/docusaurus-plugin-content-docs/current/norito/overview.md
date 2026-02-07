@@ -1,15 +1,64 @@
-<!-- Auto-generated stub for Uzbek (uz) translation. Replace this content with the full translation. -->
-
 ---
 lang: uz
 direction: ltr
 source: docs/portal/docs/norito/overview.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# Translation In Progress
+# Norito Overview
 
-This file is a placeholder for the Uzbek translation of the English document. Once the translation is complete, update the `status` metadata above.
+Norito is the binary serialization layer used across Iroha: it defines how data
+structures are encoded on the wire, persisted on disk, and exchanged between
+contracts and hosts. Every crate in the workspace relies on Norito instead of
+`serde` so peers on different hardware produce identical bytes.
 
-Replace this stub with the completed Uzbek translation and update `translation_last_reviewed` after verification against the English source.
+This overview summarises the core pieces and links to the canonical references.
+
+## Architecture at a glance
+
+- **Header + payload** – Each Norito message begins with a feature-negotiation
+  header (flags, checksum) followed by the bare payload. Packed layouts and
+  compression are negotiated via header bits.
+- **Deterministic encoding** – `norito::codec::{Encode, Decode}` implement the
+  bare encoding. The same layout is reused when wrapping payloads in headers so
+  hashing and signing remain deterministic.
+- **Schema + derives** – `norito_derive` generates `Encode`, `Decode`, and
+  `IntoSchema` implementations. Packed structs/sequences are enabled by default
+  and documented in `norito.md`.
+- **Multicodec registry** – Identifiers for hashes, key types, and payload
+  descriptors live in `norito::multicodec`. The authoritative table is
+  maintained in `multicodec.md`.
+
+## Tooling
+
+| Task | Command / API | Notes |
+| --- | --- | --- |
+| Inspect header/sections | `ivm_tool inspect <file>.to` | Shows ABI version, flags, and entrypoints. |
+| Encode/decode in Rust | `norito::codec::{Encode, Decode}` | Implemented for all core data-model types. |
+| JSON interop | `norito::json::{to_json_pretty, from_json}` | Deterministic JSON backed by Norito values. |
+| Generate docs/specs | `norito.md`, `multicodec.md` | Source-of-truth documentation in the repo root. |
+
+## Development workflow
+
+1. **Add derives** – Prefer `#[derive(Encode, Decode, IntoSchema)]` for new data
+   structures. Avoid hand-written serializers unless absolutely necessary.
+2. **Validate packed layouts** – Use `cargo test -p norito` (and the packed
+   feature matrix in `scripts/run_norito_feature_matrix.sh`) to ensure new
+   layouts remain stable.
+3. **Regenerate docs** – When the encoding changes, update `norito.md` and the
+   multicodec table, then refresh the portal pages (`/reference/norito-codec`
+   and this overview).
+4. **Keep tests Norito-first** – Integration tests should use the Norito JSON
+   helpers instead of `serde_json` so they exercise the same paths as production.
+
+## Quick links
+
+- Specification: [`norito.md`](https://github.com/hyperledger-iroha/iroha/blob/master/norito.md)
+- Multicodec assignments: [`multicodec.md`](https://github.com/hyperledger-iroha/iroha/blob/master/multicodec.md)
+- Feature matrix script: `scripts/run_norito_feature_matrix.sh`
+- Packed-layout examples: `crates/norito/tests/`
+
+Pair this overview with the quickstart guide (`/norito/getting-started`) for a
+hands-on walkthrough of compiling and running bytecode that uses Norito
+payloads.

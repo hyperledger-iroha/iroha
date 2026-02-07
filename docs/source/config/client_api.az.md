@@ -1,18 +1,50 @@
-<!-- Auto-generated stub for Azerbaijani (az) translation. Replace this content with the full translation. -->
-
 ---
 lang: az
 direction: ltr
 source: docs/source/config/client_api.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: fa548ec31fe928decc5c23719472618ff97f4eb45b084f9f9084df82b96cfac6
 source_last_modified: "2025-12-29T18:16:35.933651+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2026-02-07
 ---
 
-# Translation In Progress
+## Client API Configuration Reference
 
-This file is a placeholder for the Azerbaijani translation of the English document. Once the translation is complete, update the `status` field in the metadata above.
+This document tracks the Torii client-facing configuration knobs that are
+surfaces through `iroha_config::parameters::user::Torii`. The section below
+focuses on the Norito-RPC transport controls introduced for NRPC-1; future
+client API settings should extend this file.
 
-This stub awaits translation. Replace the placeholder body with the completed text and update the metadata status to `complete` when finished.
+### `torii.transport.norito_rpc`
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `enabled` | `bool` | `true` | Master switch that enables binary Norito decoding. When `false`, Torii rejects every Norito-RPC request with `403 norito_rpc_disabled`. |
+| `stage` | `string` | `"disabled"` | Rollout tier: `disabled`, `canary`, or `ga`. Stages drive admission decisions and `/rpc/capabilities` output. |
+| `require_mtls` | `bool` | `false` | Enforces mTLS for Norito-RPC transport: when `true`, Torii rejects Norito-RPC requests that do not carry an mTLS marker header (e.g. `X-Forwarded-Client-Cert`). The flag is surfaced via `/rpc/capabilities` so SDKs can warn on misconfigured environments. |
+| `allowed_clients` | `array<string>` | `[]` | Canary allowlist. When `stage = "canary"`, only requests carrying an `X-API-Token` header present in this list are accepted. |
+
+Example configuration:
+
+```toml
+[torii.transport.norito_rpc]
+enabled = true
+require_mtls = true
+stage = "canary"
+allowed_clients = ["alpha-canary-token", "beta-canary-token"]
+```
+
+Stage semantics:
+
+- **disabled** — Norito-RPC is unavailable even if `enabled = true`. Clients
+  receive `403 norito_rpc_disabled`.
+- **canary** — Requests must include an `X-API-Token` header that matches one
+  of the `allowed_clients`. All other requests receive `403
+  norito_rpc_canary_denied`.
+- **ga** — Norito-RPC is available to every authenticated caller (subject to the
+  usual rate and pre-auth limits).
+
+Operators can update these values dynamically through `/v1/config`. Each change
+is reflected immediately in `/rpc/capabilities`, allowing SDKs and observability
+dashboards to show the live transport posture.

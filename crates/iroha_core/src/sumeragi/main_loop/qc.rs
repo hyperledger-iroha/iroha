@@ -1091,7 +1091,6 @@ impl Actor {
         // Observers still need locally aggregated QCs for block sync, but must not broadcast them.
         let allow_broadcast = !self.is_observer();
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
-        let signature_topology = topology_for_view(topology, height, view, mode_tag, prf_seed);
         let canonical_roster = if matches!(phase, crate::sumeragi::consensus::Phase::NewView) {
             self.roster_for_new_view_with_mode(block_hash, height, view, consensus_mode)
         } else {
@@ -1102,6 +1101,8 @@ impl Actor {
         } else {
             super::network_topology::Topology::new(canonical_roster)
         };
+        let signature_topology =
+            topology_for_view(&canonical_topology, height, view, mode_tag, prf_seed);
         let required = signature_topology.min_votes_for_commit();
         let voting_len = signature_topology.as_ref().len();
         if let Some(existing) = self.qc_cache.get(&(phase, block_hash, height, view, epoch)) {
