@@ -1182,6 +1182,8 @@ pub struct Network {
     pub idle_timeout: Duration,
     /// Delay outbound peer dials after startup.
     pub connect_startup_delay: Duration,
+    /// Timeout applied to an individual outbound dial attempt (TCP/TLS/QUIC/WS).
+    pub dial_timeout: Duration,
     /// Interval between peer gossip batches.
     pub peer_gossip_period: Duration,
     /// Maximum interval between peer gossip batches (idle backoff ceiling).
@@ -1200,6 +1202,10 @@ pub struct Network {
     pub dns_refresh_interval: Option<Duration>,
     /// Optional TTL-based refresh for hostname-based peers.
     pub dns_refresh_ttl: Option<Duration>,
+    /// Optional HTTP CONNECT proxy URL for outbound TCP dials (e.g., `http://user:pass@host:port`).
+    pub p2p_proxy: Option<String>,
+    /// Proxy bypass list (suffix match, similar to `NO_PROXY` semantics).
+    pub p2p_no_proxy: Vec<String>,
     /// Enable QUIC transport (feature-gated).
     pub quic_enabled: bool,
     /// Enable TLS-over-TCP transport for outbound dials (feature-gated).
@@ -4345,6 +4351,24 @@ impl Default for Webhook {
     }
 }
 
+/// Webhook destination security configuration (SSRF guard rails).
+#[derive(Debug, Clone)]
+pub struct WebhookSecurity {
+    /// Master enable switch for webhook destination guard rails.
+    pub enabled: bool,
+    /// CIDR allow-list for webhook destinations (empty => only public IPs are allowed).
+    pub allow_cidrs: Vec<String>,
+}
+
+impl Default for WebhookSecurity {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::torii::webhook_security::ENABLED,
+            allow_cidrs: defaults::torii::webhook_security::allow_cidrs(),
+        }
+    }
+}
+
 /// Push notification delivery configuration (FCM/APNS).
 #[derive(Debug, Clone)]
 pub struct Push {
@@ -4441,6 +4465,8 @@ pub struct Torii {
     pub debug_match_filters: bool,
     /// Operator authentication policy for operator-facing endpoints.
     pub operator_auth: ToriiOperatorAuth,
+    /// Operator request-signature authentication for operator-facing endpoints.
+    pub operator_signatures: ToriiOperatorSignatures,
     /// Maximum concurrent pre-auth connections (global).
     pub preauth_max_connections: Option<NonZeroUsize>,
     /// Maximum concurrent pre-auth connections per IP.
@@ -4540,6 +4566,8 @@ pub struct Torii {
     pub app_api: AppApi,
     /// Webhook delivery/backpressure configuration.
     pub webhook: Webhook,
+    /// Webhook destination security configuration (SSRF guard rails).
+    pub webhook_security: WebhookSecurity,
     /// Push notification delivery configuration.
     pub push: Push,
 }
@@ -4560,6 +4588,41 @@ impl AttachmentSanitizerMode {
         match self {
             Self::InProcess => "in_process",
             Self::Subprocess => "subprocess",
+        }
+    }
+}
+
+/// Operator signature authentication configuration for Torii operator endpoints.
+#[derive(Debug, Clone)]
+pub struct ToriiOperatorSignatures {
+    /// Master enable switch for signature auth on operator endpoints.
+    pub enabled: bool,
+    /// Allow the node identity key (from `[common]`) to sign operator requests.
+    pub allow_node_key: bool,
+    /// Additional allow-listed operator public keys.
+    pub allowed_public_keys: Vec<PublicKey>,
+    /// Maximum allowed clock skew for signed requests.
+    pub max_clock_skew: Duration,
+    /// TTL for nonces retained for replay detection.
+    pub nonce_ttl: Duration,
+    /// Maximum number of nonce entries held for replay detection.
+    pub replay_cache_capacity: NonZeroUsize,
+}
+
+impl Default for ToriiOperatorSignatures {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::torii::operator_signatures::ENABLED,
+            allow_node_key: defaults::torii::operator_signatures::ALLOW_NODE_KEY,
+            allowed_public_keys: defaults::torii::operator_signatures::allowed_public_keys(),
+            max_clock_skew: Duration::from_secs(
+                defaults::torii::operator_signatures::MAX_CLOCK_SKEW_SECS,
+            ),
+            nonce_ttl: Duration::from_secs(defaults::torii::operator_signatures::NONCE_TTL_SECS),
+            replay_cache_capacity: NonZeroUsize::new(
+                defaults::torii::operator_signatures::REPLAY_CACHE_CAPACITY.max(1),
+            )
+            .expect("default operator signature replay cache capacity must be non-zero"),
         }
     }
 }

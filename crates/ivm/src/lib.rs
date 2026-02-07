@@ -483,6 +483,7 @@ pub fn set_gas_to_stack_multiplier(multiplier: u64) {
 /// Hosts should call this early in process startup (before creating VMs) to
 /// avoid oversubscription when multiple thread pools are present. Passing
 /// `None` for a bound keeps the automatic value (number of physical cores).
+/// After resolving "auto" bounds, `min <= max` is enforced by clamping `min` down.
 pub fn set_scheduler_thread_limits(min_threads: Option<usize>, max_threads: Option<usize>) {
     crate::parallel::set_default_scheduler_limits(min_threads, max_threads);
 }

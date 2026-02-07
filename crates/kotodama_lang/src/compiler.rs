@@ -1711,8 +1711,16 @@ impl Compiler {
         }
         // Validate features supported by the current code generator.
         validate_codegen_supported(&typed)?;
+        // First release policy: support only ABI v1.
+        let meta_decl = typed.contract_meta.as_ref();
+        let abi_version = meta_decl
+            .and_then(|m| m.abi_version)
+            .unwrap_or(self.opts.abi_version);
+        if abi_version != 1 {
+            return Err(format!("unsupported abi_version {abi_version}; expected 1"));
+        }
         let ir_prog = ir::lower_with_cap(&typed, self.opts.dynamic_iter_cap as usize)?;
-        let durable_enabled = self.opts.abi_version >= 1;
+        let durable_enabled = abi_version >= 1;
         // Choose entrypoint: prefer `main`, then `hajimari`, else first.
         let entry_name = ir_prog
             .functions
@@ -5894,9 +5902,7 @@ impl Compiler {
                 .and_then(|m| m.max_cycles)
                 .filter(|value| *value != 0)
                 .unwrap_or(self.opts.max_cycles),
-            abi_version: meta_decl
-                .and_then(|m| m.abi_version)
-                .unwrap_or(self.opts.abi_version),
+            abi_version,
         };
         // Build data section from collected keys and pointer literal table.
         use iroha_crypto::Hash as IrohaHash;

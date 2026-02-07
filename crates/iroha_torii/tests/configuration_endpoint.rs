@@ -1,6 +1,8 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Router-level regression tests for `/v1/configuration`.
 
+#[path = "fixtures.rs"]
+mod fixtures;
 #[path = "common/norito_rpc_harness.rs"]
 mod norito_rpc_harness;
 
@@ -36,17 +38,15 @@ async fn configuration_endpoint_includes_transport_summary() {
     let expected_allowlist = cfg.torii.transport.norito_rpc.allowed_clients.len();
     let expected_access_kind = cfg.streaming.soranet.access_kind.as_str();
 
-    let response = harness
-        .app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(iroha_torii_shared::uri::CONFIGURATION)
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let req = fixtures::operator_signed_request(
+        &harness.cfg.common.key_pair,
+        Request::builder()
+            .uri(iroha_torii_shared::uri::CONFIGURATION)
+            .body(axum::body::Body::empty())
+            .unwrap(),
+        &[],
+    );
+    let response = harness.app.clone().oneshot(req).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
     let body = response.into_body().collect().await.unwrap().to_bytes();

@@ -7771,8 +7771,8 @@ mod advert_tests {
         let manifest_digest_hex = hex::encode(manifest_digest);
         let manifest_root_cid_hex = hex::encode(&manifest.root_cid);
         assert_eq!(
-            manifest_id_hex, manifest_root_cid_hex,
-            "manifest id should use manifest CID"
+            manifest_id_hex, manifest_digest_hex,
+            "manifest id should use manifest digest"
         );
         let provider_id_hex = hex::encode(provider_id);
         let trace_id_hex = hex::encode(trace_id);

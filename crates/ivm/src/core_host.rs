@@ -2171,7 +2171,7 @@ mod tests {
     fn decode_int_syscall_sets_register() {
         let mut vm = IVM::new(u64::MAX);
         vm.set_host(CoreHost::new());
-        let payload = norito::to_bytes(&12345_i64).expect("encode i64");
+        let payload = norito::to_bytes(&12345i64).expect("encode i64");
         let tlv = make_tlv(&payload);
         let ptr = vm.alloc_input_tlv(&tlv).expect("alloc tlv");
         let program = assemble_program(&[

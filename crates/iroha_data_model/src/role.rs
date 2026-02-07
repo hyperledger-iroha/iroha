@@ -11,17 +11,6 @@ use crate::{
     permission::{Permission, Permissions},
 };
 
-fn permission_epochs_from_permissions(
-    permissions: &Permissions,
-    default_epoch: u64,
-) -> BTreeMap<Permission, u64> {
-    permissions
-        .iter()
-        .cloned()
-        .map(|perm| (perm, default_epoch))
-        .collect()
-}
-
 #[model]
 mod model {
     use derive_more::{Constructor, Display, FromStr};
@@ -68,6 +57,10 @@ mod model {
         /// Permission tokens.
         pub permissions: Permissions,
         /// Permission grant epochs (block heights), keyed by permission.
+        ///
+        /// This map is populated by the node at execution time (e.g. when a role is
+        /// registered or a permission is granted/revoked). Clients typically
+        /// don't provide it and start with an empty map.
         #[norito(default)]
         pub permission_epochs: BTreeMap<Permission, u64>,
     }
@@ -167,13 +160,11 @@ impl norito::json::JsonDeserialize for NewRole {
             permissions.ok_or_else(|| norito::json::Error::missing_field("permissions"))?;
         let grant_to = grant_to.ok_or_else(|| norito::json::Error::missing_field("grant_to"))?;
 
-        let permission_epochs = permission_epochs_from_permissions(&permissions, 0);
-
         Ok(Self {
             inner: Role {
                 id,
                 permissions,
-                permission_epochs,
+                permission_epochs: BTreeMap::new(),
             },
             grant_to,
         })
@@ -232,12 +223,10 @@ impl norito::json::JsonDeserialize for Role {
         let permissions =
             permissions.ok_or_else(|| norito::json::Error::missing_field("permissions"))?;
 
-        let permission_epochs = permission_epochs_from_permissions(&permissions, 0);
-
         Ok(Self {
             id,
             permissions,
-            permission_epochs,
+            permission_epochs: BTreeMap::new(),
         })
     }
 }
@@ -309,7 +298,11 @@ impl NewRole {
     pub fn add_permission_with_epoch(mut self, perm: impl Into<Permission>, epoch: u64) -> Self {
         let perm = perm.into();
         self.inner.permissions.insert(perm.clone());
-        self.inner.permission_epochs.entry(perm).or_insert(epoch);
+        // `epoch == 0` is treated as the implicit/default value and is omitted
+        // from the sparse `permission_epochs` map to keep payloads compact.
+        if epoch != 0 {
+            self.inner.permission_epochs.entry(perm).or_insert(epoch);
+        }
         self
     }
 }
@@ -343,17 +336,21 @@ mod tests {
             "can_audit".into(),
             Json::new(norito::json!({"level": "basic"})),
         ));
-        let permission_epochs = permission_epochs_from_permissions(&permissions, 0);
         let role = Role {
             id,
             permissions,
-            permission_epochs,
+            // Epoch `0` is the implicit default and omitted from JSON.
+            permission_epochs: BTreeMap::new(),
         };
 
         let json = norito::json::to_json(&role).expect("serialize role");
-        let decoded: Role = norito::json::from_json(&json).expect("deserialize role");
+        let mut decoded: Role = norito::json::from_json(&json).expect("deserialize role");
 
         assert_eq!(decoded, role);
+        assert_eq!(decoded.permissions, role.permissions);
+        assert!(decoded.permission_epochs().is_empty());
+
+        decoded.ensure_permission_epochs(0);
         assert_eq!(decoded.permission_epochs().len(), 1);
         assert_eq!(
             decoded.permission_epoch(decoded.permissions().next().expect("permission")),

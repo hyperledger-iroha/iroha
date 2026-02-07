@@ -6,7 +6,8 @@ use crate::{
         nexus, offline, oracle, repo, runtime_upgrade, settlement, smart_contract_code, social,
         sorafs, space_directory,
         transparent::{
-            AddSignatory, RemoveAssetKeyValue, RemoveSignatory, SetAccountQuorum, SetAssetKeyValue,
+            AddSignatory, InvalidInstruction, RemoveAssetKeyValue, RemoveSignatory,
+            SetAccountQuorum, SetAssetKeyValue,
         },
         verifying_keys, zk,
     },
@@ -103,6 +104,7 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<Upgrade>,
     InstructionRegistry::register::<Log>,
     InstructionRegistry::register::<CustomInstruction>,
+    InstructionRegistry::register::<InvalidInstruction>,
     InstructionRegistry::register::<verifying_keys::RegisterVerifyingKey>,
     InstructionRegistry::register::<verifying_keys::UpdateVerifyingKey>,
     InstructionRegistry::register::<consensus_keys::RegisterConsensusKey>,
@@ -223,6 +225,7 @@ fn with_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistry {
     );
     registry = registry.register_with_id::<Upgrade>(Upgrade::WIRE_ID);
     registry = registry.register_with_id::<CustomInstruction>(CustomInstruction::WIRE_ID);
+    registry = registry.register_with_id::<InvalidInstruction>(InvalidInstruction::WIRE_ID);
     registry = registry.register_with_id::<consensus_keys::RegisterConsensusKey>(
         "consensus::RegisterConsensusKey",
     );

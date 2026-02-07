@@ -1,6 +1,7 @@
 //! Utilities for working with Merkle proofs emitted by the VM.
 
 use iroha_crypto::{CompactMerkleProof, Hash, HashOf};
+use norito::codec::{Decode, Encode};
 use sha2::Digest as _;
 
 use crate::{Memory, Registers};
@@ -106,7 +107,7 @@ pub fn compute_register_leaf_digest(value: u64, tag: bool) -> [u8; 32] {
 /// A compact proof bundle suitable for IPC: includes the compact proof header
 /// (depth, dirs), the sibling list encoded as raw bytes (32‑zero indicates a
 /// missing sibling), and the Merkle root bytes.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct CompactProofBundle {
     /// Number of levels in the proof (≤ 32).
     pub depth: u8,
@@ -151,36 +152,7 @@ impl CompactProofBundle {
     }
 }
 
-// Norito encoding/decoding so bundles can be passed via INPUT/OUTPUT.
-impl norito::core::NoritoSerialize for CompactProofBundle {
-    fn serialize<W: std::io::Write>(&self, mut writer: W) -> Result<(), norito::core::Error> {
-        // Serialize as a tuple (depth, dirs, siblings, root)
-        let tuple = (self.depth, self.dirs, self.siblings.clone(), self.root);
-        norito::core::NoritoSerialize::serialize(&tuple, &mut writer)
-    }
-}
-
-impl<'de> norito::core::NoritoDeserialize<'de> for CompactProofBundle {
-    fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
-        // SAFETY: The archived layout matches the tuple (u8, u32, Vec<[u8;32]>, [u8;32])
-        #[allow(unsafe_code)]
-        let (depth, dirs, siblings, root): (u8, u32, Vec<[u8; 32]>, [u8; 32]) =
-            norito::core::NoritoDeserialize::deserialize(unsafe {
-                &*core::ptr::from_ref(archived).cast::<norito::core::Archived<(
-                    u8,
-                    u32,
-                    Vec<[u8; 32]>,
-                    [u8; 32],
-                )>>()
-            });
-        CompactProofBundle {
-            depth,
-            dirs,
-            siblings,
-            root,
-        }
-    }
-}
+// Norito encoding/decoding derives are used so bundles can be passed via INPUT/OUTPUT.
 
 /// Build a `CompactProofBundle` for a memory address using the in‑process
 /// compact builder.

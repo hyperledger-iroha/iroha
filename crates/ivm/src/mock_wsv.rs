@@ -2752,7 +2752,10 @@ fn parse_permission_value(value: &njson::Value) -> Result<PermissionToken, VMErr
     }
 }
 
-// Parse permission JSON into a PermissionToken.
+/// Parse permission JSON into a PermissionToken.
+///
+/// DevEx: accept the string forms used by `iroha_cli` and unit tests, rather
+/// than requiring a full typed Norito JSON representation for IDs.
 fn parse_permission_json(s: &str) -> Result<PermissionToken, VMError> {
     let value: njson::Value =
         njson::from_slice(s.as_bytes()).map_err(|_| VMError::NoritoInvalid)?;
@@ -3097,11 +3100,19 @@ impl IVMHost for WsvHost {
                         type_id: tlv.type_id as u16,
                     });
                 }
-                if !matches!(tlv.type_id, PointerType::NoritoBytes | PointerType::Json) {
-                    return Err(VMError::NoritoInvalid);
-                }
-                let json: iroha_primitives::json::Json =
-                    decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let json: iroha_primitives::json::Json = match tlv.type_id {
+                    PointerType::NoritoBytes | PointerType::Json => {
+                        decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?
+                    }
+                    // Devex: accept raw JSON bytes too (validated and canonicalised).
+                    PointerType::Blob => {
+                        let raw =
+                            core::str::from_utf8(tlv.payload).map_err(|_| VMError::DecodeError)?;
+                        let value = njson::parse_value(raw).map_err(|_| VMError::DecodeError)?;
+                        iroha_primitives::json::Json::from(value)
+                    }
+                    _ => return Err(VMError::NoritoInvalid),
+                };
                 let body = norito::to_bytes(&json).map_err(|_| VMError::NoritoInvalid)?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
                 out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
@@ -3284,11 +3295,11 @@ impl IVMHost for WsvHost {
                     if let Ok(name) = decode_from_bytes(tlv.payload) {
                         name
                     } else if let Ok(raw) = core::str::from_utf8(tlv.payload) {
-                        Name::from_str(raw).map_err(|_| VMError::NoritoInvalid)?
+                        Name::from_str(raw).map_err(|_| VMError::DecodeError)?
+                    } else if let Ok(raw) = decode_from_bytes::<String>(tlv.payload) {
+                        Name::from_str(&raw).map_err(|_| VMError::DecodeError)?
                     } else {
-                        let raw: String =
-                            decode_from_bytes(tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
-                        Name::from_str(&raw).map_err(|_| VMError::NoritoInvalid)?
+                        return Err(VMError::DecodeError);
                     };
                 let body = norito::to_bytes(&nm).map_err(|_| VMError::NoritoInvalid)?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
@@ -6075,7 +6086,7 @@ mod tests_null_decode {
     }
 
     #[test]
-    fn name_decode_rejects_reserved_chars() {
+    fn name_decode_rejects_non_norito_payload() {
         let caller: AccountId =
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
                 .parse()
@@ -6096,12 +6107,12 @@ mod tests_null_decode {
         vm.set_register(10, ptr);
 
         let err = call_syscall(&mut vm, syscalls::SYSCALL_NAME_DECODE)
-            .expect_err("expected reserved chars to be rejected");
-        assert!(matches!(err, VMError::NoritoInvalid));
+            .expect_err("expected non-Norito payload to be rejected");
+        assert!(matches!(err, VMError::DecodeError));
     }
 
     #[test]
-    fn json_decode_rejects_blob() {
+    fn json_decode_accepts_blob() {
         let caller: AccountId =
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
                 .parse()
@@ -6120,9 +6131,11 @@ mod tests_null_decode {
             .alloc_input_tlv(&make_tlv(PointerType::Blob, json))
             .expect("alloc tlv");
         vm.set_register(10, ptr);
-        let err = call_syscall(&mut vm, syscalls::SYSCALL_JSON_DECODE)
-            .expect_err("blob should be rejected");
-        assert!(matches!(err, VMError::NoritoInvalid));
+        call_syscall(&mut vm, syscalls::SYSCALL_JSON_DECODE).expect("blob should be accepted");
+        let out_ptr = vm.register(10);
+        assert_ne!(out_ptr, 0);
+        let out = vm.memory.validate_tlv(out_ptr).expect("validate tlv");
+        assert_eq!(out.type_id, PointerType::Json);
     }
 
     #[test]

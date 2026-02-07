@@ -78,7 +78,9 @@ impl ProgramMetadata {
         let version_minor = bytes[5];
         let mode = bytes[6];
         let vector_length = bytes[7];
-        let max_cycles = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
+        let max_cycles_bytes: [u8; 8] =
+            bytes[8..16].try_into().map_err(|_| VMError::InvalidMetadata)?;
+        let max_cycles = u64::from_le_bytes(max_cycles_bytes);
 
         // Validate header fields according to the current implementation policy.
         // - Accept version 1.0 headers (first-release layout).
@@ -95,9 +97,12 @@ impl ProgramMetadata {
         if mode & !KNOWN_MODE_BITS != 0 {
             return Err(VMError::InvalidMetadata);
         }
+        // First release policy: only ABI v1 is accepted.
+        if abi_version != 1 {
+            return Err(VMError::InvalidMetadata);
+        }
         // Note: vector_length may be non-zero even if VECTOR flag is off; the
         // host/runtime may clamp or ignore it depending on policy.
-        // ABI version is validated by admission, not by the header parser.
         let mut code_offset = header_len;
         // Optional literal section begins with `LTLB` magic immediately after the header.
         if bytes.len() >= header_len + 4
@@ -109,13 +114,13 @@ impl ProgramMetadata {
             }
             let count_bytes: [u8; 4] = bytes[start + 4..start + 8]
                 .try_into()
-                .expect("slice length");
+                .map_err(|_| VMError::InvalidMetadata)?;
             let post_bytes: [u8; 4] = bytes[start + 8..start + 12]
                 .try_into()
-                .expect("slice length");
+                .map_err(|_| VMError::InvalidMetadata)?;
             let data_bytes: [u8; 4] = bytes[start + 12..start + 16]
                 .try_into()
-                .expect("slice length");
+                .map_err(|_| VMError::InvalidMetadata)?;
             let lit_count = u32::from_le_bytes(count_bytes) as usize;
             let post_pad = u32::from_le_bytes(post_bytes) as usize;
             let data_len = u32::from_le_bytes(data_bytes) as usize;

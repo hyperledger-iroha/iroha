@@ -100,8 +100,11 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             idle_timeout: core::time::Duration::from_secs(5),
             connect_startup_delay:
                 iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
+            dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
             dns_refresh_interval: None,
             dns_refresh_ttl: None,
+            p2p_proxy: None,
+            p2p_no_proxy: Vec::new(),
             quic_enabled: false,
             tls_enabled: false,
             tls_listen_address: None,
@@ -237,6 +240,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             peer_geo: A::ToriiPeerGeo::default(),
             debug_match_filters: false,
             operator_auth: A::ToriiOperatorAuth::default(),
+            operator_signatures: A::ToriiOperatorSignatures::default(),
             preauth_max_connections: None,
             preauth_max_connections_per_ip: None,
             preauth_rate_per_ip_per_sec: None,
@@ -288,6 +292,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             attachments_sanitize_timeout_ms:
                 iroha_config::parameters::defaults::torii::ATTACHMENTS_SANITIZE_TIMEOUT_MS,
             webhook: iroha_config::parameters::actual::Webhook::default(),
+            webhook_security: A::WebhookSecurity::default(),
             push: iroha_config::parameters::actual::Push::default(),
             zk_prover_enabled: false,
             zk_prover_scan_period_secs: 30,

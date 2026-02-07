@@ -50,6 +50,8 @@ pub enum VMError {
     DecodeError,
     InvalidOpcode(u16),
     UnknownSyscall(u32),
+    /// VM was asked to run or execute a host-dependent operation without a host attached.
+    HostUnavailable,
     /// Syscall number is reserved/known but not implemented by the current host build.
     NotImplemented {
         syscall: u32,
@@ -104,6 +106,7 @@ impl fmt::Display for VMError {
             VMError::DecodeError => write!(f, "instruction decode error"),
             VMError::InvalidOpcode(op) => write!(f, "invalid or unknown opcode 0x{op:02x}"),
             VMError::UnknownSyscall(num) => write!(f, "unknown syscall number {num}"),
+            VMError::HostUnavailable => write!(f, "host unavailable"),
             VMError::NotImplemented { syscall } => {
                 write!(f, "syscall 0x{syscall:02x} not implemented by host")
             }

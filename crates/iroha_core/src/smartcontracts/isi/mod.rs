@@ -79,6 +79,7 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<SetParameter>,
     dispatch_instruction::<Upgrade>,
     dispatch_instruction::<Log>,
+    dispatch_instruction::<iroha_data_model::isi::InvalidInstruction>,
     dispatch_instruction::<iroha_data_model::isi::kaigi::CreateKaigi>,
     dispatch_instruction::<iroha_data_model::isi::kaigi::JoinKaigi>,
     dispatch_instruction::<iroha_data_model::isi::kaigi::LeaveKaigi>,
@@ -204,6 +205,21 @@ impl Execute for InstructionBox {
 
         // If we reach here, the instruction type is unknown or unregistered
         Err(Error::from("Unknown instruction type"))
+    }
+}
+
+impl Execute for iroha_data_model::isi::InvalidInstruction {
+    fn execute(
+        self,
+        _authority: &AccountId,
+        _state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        Err(Error::from(format!(
+            "invalid instruction payload: wire_id={} payload_hash={} message={}",
+            self.wire_id,
+            hex::encode(self.payload_hash),
+            self.message
+        )))
     }
 }
 

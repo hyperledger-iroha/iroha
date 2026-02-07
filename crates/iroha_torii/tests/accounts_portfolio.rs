@@ -107,7 +107,12 @@ async fn accounts_portfolio_filters_by_asset_id() {
     let domain_id: DomainId = "portfolio".parse().unwrap();
     let cash_def: AssetDefinitionId = format!("cash#{domain_id}").parse().unwrap();
     let account_id = account_id_from_signatory(domain_id, ACCOUNT_SIGNATORY);
-    let asset_id = AssetId::new(cash_def, account_id).to_string();
+    let asset = AssetId::new(cash_def, account_id);
+    // `AssetId::Display` omits the account domain, but the HTTP API expects the
+    // same literal form as JSON (`ih58@domain`) so it can be parsed unambiguously.
+    let asset_id = format!("{}#{}@{}", asset.definition(), asset.account(), asset.account().domain());
+    let expected_asset_id =
+        json::to_value(&asset).expect("serialize asset id for response comparison");
     let resp = app
         .oneshot(
             Request::builder()
@@ -129,7 +134,7 @@ async fn accounts_portfolio_filters_by_asset_id() {
         .as_array()
         .expect("assets array");
     assert_eq!(assets.len(), 1);
-    assert_eq!(assets[0]["asset_id"].as_str(), Some(asset_id.as_str()));
+    assert_eq!(assets[0]["asset_id"], expected_asset_id);
 }
 
 fn setup_portfolio_app<SeedFn>(seed_fn: SeedFn) -> (Router, UniversalAccountId)
