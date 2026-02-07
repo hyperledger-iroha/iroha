@@ -602,6 +602,7 @@ pub struct BlockHashesBlock<'a> {
     guard: Option<parking_lot::RwLockReadGuard<'a, Vec<HashOf<BlockHeader>>>>,
     visible_len: usize,
     pending: Vec<HashOf<BlockHeader>>,
+    visible: Vec<HashOf<BlockHeader>>,
 }
 
 impl<'a> BlockHashesBlock<'a> {
@@ -612,30 +613,23 @@ impl<'a> BlockHashesBlock<'a> {
         } else {
             guard.len()
         };
+        let visible = guard[..visible_len].to_vec();
         Self {
             inner,
             guard: Some(guard),
             visible_len,
             pending: Vec::new(),
+            visible,
         }
     }
 
     fn as_slice(&self) -> &[HashOf<BlockHeader>] {
-        let guard = self
-            .guard
-            .as_ref()
-            .expect("block hashes view guard missing");
-        &guard[..self.visible_len]
+        &self.visible
     }
 
     /// Begin a transaction-scoped view nested under this block.
     pub(crate) fn transaction(&mut self) -> BlockHashesTransaction<'_> {
-        let visible_len = self.visible_len;
-        let guard = self
-            .guard
-            .as_ref()
-            .expect("block hashes view guard missing");
-        let base = &guard[..visible_len];
+        let base = self.visible.as_slice();
         let baseline_len = self.pending.len();
         BlockHashesTransaction {
             base,
@@ -648,6 +642,7 @@ impl<'a> BlockHashesBlock<'a> {
     /// Stage a new hash to be appended on commit.
     pub(crate) fn push(&mut self, hash: HashOf<BlockHeader>) {
         self.pending.push(hash);
+        self.visible.push(hash);
     }
 
     /// Stage a new hash in tests/benches without exposing internals broadly.

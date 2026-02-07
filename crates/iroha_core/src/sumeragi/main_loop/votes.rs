@@ -481,13 +481,13 @@ impl Actor {
             self.roster_for_vote_with_mode(vote.block_hash, vote.height, vote.view, consensus_mode)
         };
         if topology_peers.is_empty() && matches!(vote.phase, Phase::Commit) {
-            let allow_fallback = vote.height <= committed_height.saturating_add(1)
-                && (self.block_known_locally(vote.block_hash)
-                    || self.runtime_da_enabled()
-                    || self
-                        .pending
-                        .missing_block_requests
-                        .contains_key(&vote.block_hash));
+            let missing_request = self
+                .pending
+                .missing_block_requests
+                .contains_key(&vote.block_hash);
+            let allow_fallback = missing_request
+                || (vote.height <= committed_height.saturating_add(1)
+                    && (self.block_known_locally(vote.block_hash) || self.runtime_da_enabled()));
             if allow_fallback {
                 let committed_epoch = self.epoch_for_height(committed_height);
                 let epoch_matches = matches!(consensus_mode, ConsensusMode::Permissioned)
@@ -1284,9 +1284,6 @@ impl Actor {
         let Some(lock) = self.locked_qc else {
             return false;
         };
-        if !self.block_known_for_lock(lock.subject_block_hash) {
-            return false;
-        }
         if vote.height < lock.height {
             iroha_logger::debug!(
                 height = vote.height,
@@ -1304,6 +1301,9 @@ impl Actor {
                 super::status::ConsensusMessageReason::LockedQc,
             );
             return true;
+        }
+        if !self.block_known_for_lock(lock.subject_block_hash) {
+            return false;
         }
         if vote.height == lock.height {
             if vote.block_hash != lock.subject_block_hash {
@@ -2105,21 +2105,6 @@ impl Actor {
         let target_parent = height.checked_sub(1)?;
         let view = self.state.view();
         let committed_height = u64::try_from(view.height()).unwrap_or(0);
-        // For the active height, prefer the live roster derived from world keys so
-        // membership changes (register/unregister) take effect immediately.
-        let active_roster = if height <= committed_height.saturating_add(1) {
-            let active = self.active_topology_with_genesis_fallback(&view, consensus_mode);
-            if active.is_empty() {
-                None
-            } else {
-                Some(super::roster::canonicalize_roster_for_mode(
-                    active,
-                    consensus_mode,
-                ))
-            }
-        } else {
-            None
-        };
         let hashes = view.block_hashes();
         let pending_hashes = target_parent_hash.and_then(|hash| {
             self.pending_chain_hashes_for_parent(hash, target_parent, committed_height)
@@ -2204,9 +2189,6 @@ impl Actor {
                     return None;
                 }
                 roster = super::roster::canonicalize_roster_for_mode(roster, consensus_mode);
-                if let Some(active) = active_roster.as_ref() {
-                    return Some(active.clone());
-                }
                 return Some(roster);
             }
             current_hash = hash_for_height(current_height)?;
@@ -2225,9 +2207,7 @@ impl Actor {
             return Vec::new();
         }
         let view = self.state.view();
-        let roster = self.active_topology_with_genesis_fallback(&view, consensus_mode);
-        drop(view);
-        roster
+        self.active_topology_with_genesis_fallback(&view, consensus_mode)
     }
 
     // Prefer the cached roster once votes are validated to keep signatures stable across roster changes.
@@ -2295,7 +2275,6 @@ impl Actor {
         }
         let view = self.state.view();
         let active = self.active_topology_with_genesis_fallback(&view, consensus_mode);
-        drop(view);
         if height <= committed_height.saturating_add(1) && !active.is_empty() {
             if let Some(selection) = roster_selection() {
                 if !selection.roster.is_empty() {
@@ -2344,7 +2323,8 @@ impl Actor {
         if height <= committed_height {
             return self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
         }
-        let active = self.effective_commit_topology();
+        let state_view = self.state.view();
+        let active = self.active_topology_with_genesis_fallback(&state_view, consensus_mode);
         if height == committed_height.saturating_add(1) && !active.is_empty() {
             return canonicalize(active);
         }

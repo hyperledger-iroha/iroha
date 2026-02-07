@@ -106,9 +106,142 @@ const languages = [
     ],
     wrapRtl: true,
   },
+  {
+    code: 'my',
+    name: 'Burmese',
+    direction: 'ltr',
+    heading: '# Translation In Progress',
+    body: [
+      'This file is a placeholder for the Burmese translation of the English document. Once the translation is complete, update the `status` metadata above.',
+      'Replace this stub with the completed Burmese translation and update `translation_last_reviewed` after verification against the English source.',
+    ],
+    wrapRtl: false,
+  },
+  {
+    code: 'ka',
+    name: 'Georgian',
+    direction: 'ltr',
+    heading: '# Translation In Progress',
+    body: [
+      'This file is a placeholder for the Georgian translation of the English document. Once the translation is complete, update the `status` metadata above.',
+      'Replace this stub with the completed Georgian translation and update `translation_last_reviewed` after verification against the English source.',
+    ],
+    wrapRtl: false,
+  },
+  {
+    code: 'hy',
+    name: 'Armenian',
+    direction: 'ltr',
+    heading: '# Translation In Progress',
+    body: [
+      'This file is a placeholder for the Armenian translation of the English document. Once the translation is complete, update the `status` metadata above.',
+      'Replace this stub with the completed Armenian translation and update `translation_last_reviewed` after verification against the English source.',
+    ],
+    wrapRtl: false,
+  },
+  {
+    code: 'az',
+    name: 'Azerbaijani',
+    direction: 'ltr',
+    heading: '# Translation In Progress',
+    body: [
+      'This file is a placeholder for the Azerbaijani translation of the English document. Once the translation is complete, update the `status` metadata above.',
+      'Replace this stub with the completed Azerbaijani translation and update `translation_last_reviewed` after verification against the English source.',
+    ],
+    wrapRtl: false,
+  },
+  {
+    code: 'kk',
+    name: 'Kazakh',
+    direction: 'ltr',
+    heading: '# Translation In Progress',
+    body: [
+      'This file is a placeholder for the Kazakh translation of the English document. Once the translation is complete, update the `status` metadata above.',
+      'Replace this stub with the completed Kazakh translation and update `translation_last_reviewed` after verification against the English source.',
+    ],
+    wrapRtl: false,
+  },
+  {
+    code: 'ba',
+    name: 'Bashkir',
+    direction: 'ltr',
+    heading: '# Translation In Progress',
+    body: [
+      'This file is a placeholder for the Bashkir translation of the English document. Once the translation is complete, update the `status` metadata above.',
+      'Replace this stub with the completed Bashkir translation and update `translation_last_reviewed` after verification against the English source.',
+    ],
+    wrapRtl: false,
+  },
+  {
+    code: 'am',
+    name: 'Amharic',
+    direction: 'ltr',
+    heading: '# Translation In Progress',
+    body: [
+      'This file is a placeholder for the Amharic translation of the English document. Once the translation is complete, update the `status` metadata above.',
+      'Replace this stub with the completed Amharic translation and update `translation_last_reviewed` after verification against the English source.',
+    ],
+    wrapRtl: false,
+  },
+  {
+    code: 'dz',
+    name: 'Dzongkha',
+    direction: 'ltr',
+    heading: '# Translation In Progress',
+    body: [
+      'This file is a placeholder for the Dzongkha translation of the English document. Once the translation is complete, update the `status` metadata above.',
+      'Replace this stub with the completed Dzongkha translation and update `translation_last_reviewed` after verification against the English source.',
+    ],
+    wrapRtl: false,
+  },
+  {
+    code: 'uz',
+    name: 'Uzbek',
+    direction: 'ltr',
+    heading: '# Translation In Progress',
+    body: [
+      'This file is a placeholder for the Uzbek translation of the English document. Once the translation is complete, update the `status` metadata above.',
+      'Replace this stub with the completed Uzbek translation and update `translation_last_reviewed` after verification against the English source.',
+    ],
+    wrapRtl: false,
+  },
+  {
+    code: 'mn',
+    name: 'Mongolian',
+    direction: 'ltr',
+    heading: '# Translation In Progress',
+    body: [
+      'This file is a placeholder for the Mongolian translation of the English document. Once the translation is complete, update the `status` metadata above.',
+      'Replace this stub with the completed Mongolian translation and update `translation_last_reviewed` after verification against the English source.',
+    ],
+    wrapRtl: false,
+  },
+  {
+    code: 'zh-hant',
+    name: 'Chinese (Traditional)',
+    direction: 'ltr',
+    heading: '# Translation In Progress',
+    body: [
+      'This file is a placeholder for the Traditional Chinese translation of the English document. Once the translation is complete, update the `status` metadata above.',
+      'Replace this stub with the completed Traditional Chinese translation and update `translation_last_reviewed` after verification against the English source.',
+    ],
+    wrapRtl: false,
+  },
+  {
+    code: 'zh-hans',
+    name: 'Chinese (Simplified)',
+    direction: 'ltr',
+    heading: '# Translation In Progress',
+    body: [
+      'This file is a placeholder for the Simplified Chinese translation of the English document. Once the translation is complete, update the `status` metadata above.',
+      'Replace this stub with the completed Simplified Chinese translation and update `translation_last_reviewed` after verification against the English source.',
+    ],
+    wrapRtl: false,
+  },
 ];
 
 const supportedExtensions = new Set(['.md', '.mdx']);
+const translationLocaleCodes = new Set(languages.map((lang) => lang.code.toLowerCase()));
 
 (async function main() {
   const englishDocs = await collectDocs(docsRoot);
@@ -152,7 +285,7 @@ async function collectDocs(root) {
       if (!supportedExtensions.has(ext)) {
         continue;
       }
-      if (entry.name.includes('.ja.') || entry.name.includes('.he.')) {
+      if (isTranslationFile(entry.name)) {
         continue;
       }
       const relative = path.relative(root, fullPath);
@@ -162,6 +295,15 @@ async function collectDocs(root) {
   }
   await walk(root);
   return results;
+}
+
+function isTranslationFile(fileName) {
+  const nameParts = fileName.toLowerCase().split('.');
+  if (nameParts.length < 3) {
+    return false;
+  }
+  const candidate = nameParts[nameParts.length - 2];
+  return translationLocaleCodes.has(candidate);
 }
 
 function buildLocalePath(relativePath, locale) {

@@ -1,0 +1,16 @@
+#+COMMENT: Auto-generated stub for Amharic (Ethiopian) (am) translation. Replace this content with the full translation.
+
+#+LANGUAGE: am
+#+DIRECTION: ltr
+#+SOURCE: docs/source/lts_selection.org
+#+STATUS: needs-translation
+#+GENERATOR: scripts/sync_docs_i18n.py
+#+SOURCE_HASH: 1535fc970027c05003b4e03135f47b565d1434f8dc3c42946525a1b16252d40d
+#+SOURCE_LAST_MODIFIED: 2026-01-05T09:28:12.022775+00:00
+#+TRANSLATION_LAST_REVIEWED: 
+
+* Translation In Progress
+
+This file is a placeholder for the Amharic (Ethiopian) translation of the English document. After finishing the translation, update `#+STATUS` accordingly.
+
+Please replace this section with the completed translation.

@@ -1,233 +1,158 @@
-<!-- Hebrew translation of README.md (Hyperledger Iroha) -->
-
 ---
 lang: he
 direction: rtl
 source: README.md
 status: complete
 translator: manual
+source_hash: 8f2fe1d4fc449fc895f770195f3d209d5a576dfe78c8fea37c523cc111694c44
+source_last_modified: "2026-02-07T00:00:00+00:00"
+translation_last_reviewed: 2026-02-07
 ---
 
 <div dir="rtl">
 
 # Hyperledger Iroha
 
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![רישיון](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-Hyperledger Iroha היא ספריית בלוקצ'יין פשוטה ויעילה שנבנתה על בסיס **distributed ledger technology (DLT)**. העיצוב שלה מאמץ את גישת ה"קאיזן" היפנית להסרת עומס מיותר (*muri*) כדי לספק מימוש יציב ומחושל.
+Hyperledger Iroha היא פלטפורמת בלוקצ'יין דטרמיניסטית עבור פריסות מורשות וקונסורציומיות. היא מספקת ניהול חשבונות ונכסים, הרשאות on-chain וחוזים חכמים באמצעות Iroha Virtual Machine (IVM).
 
-Iroha מסייעת לכם לנהל חשבונות, נכסים ואחסון נתונים על הרשת באמצעות חוזים חכמים יעילים, תוך שמירה על עמידות בפני תקלות ביזנטיות ותקלות קריסה כאחת.
+> מצב ה-workspace והשינויים האחרונים מתועדים ב-[`status.md`](./status.md).
 
-> _מצב התיעוד:_ קובץ README זה משקף את מצב סביבת העבודה כפי שנרשם ב־`status.md` (עודכן לאחרונה ב־12-02-2026). עיינו בקובץ זה לקבלת פרטים על בריאות הרכיבים, אבני דרך אחרונות ופעולות להמשך.
+## קווי שחרור
 
-לסקירה בעברית, קראו את המסמך הנוכחי. סקירה מקיפה ביפנית זמינה ב־[`README.ja.md`](./README.ja.md). הנחיות על תהליך התרגום ועל כיסוי השפות מצויות ב־[`docs/i18n/README.md`](./docs/i18n/README.md).
+מאגר זה מספק שני מסלולי פריסה מאותה בסיס קוד:
 
-## תכונות
+- **Iroha 2**: רשתות מורשות/קונסורציום בפריסה עצמית.
+- **Iroha 3 (SORA Nexus)**: מסלול מוכוון Nexus המשתמש באותם crates מרכזיים.
 
-Iroha היא ספריית בלוקצ'יין מלאה. ניתן להשתמש בה כדי:
+שני המסלולים חולקים את אותם רכיבי ליבה, כולל סריאליזציית Norito, קונצנזוס Sumeragi ושרשרת הכלים Kotodama -> IVM.
 
-* לבנות נכסים פונג'יביליים ולא־פונג'יביליים באמצעות סכמות Norito דטרמיניסטיות
-* לנהל חשבונות משתמשים עם דומיינים היררכיים, מדיניות חתימות מרובות ומטה־נתונים הניתנים להתאמה
-* להפעיל חוזים חכמים דרך מהדר Kotodama רב־פקודות היעד ל־Iroha Virtual Machine‏ (IVM), או להסתמך על הוראות מובנות (Special Instructions)
-* להפעיל את מסלול הקונצנזוס NPoS Sumeragi עם אקראיות commit/reveal מבוססת VRF, זמינות נתונים מגובהה ב־RBC והוכחות ענישה המונהגות באמצעות ממשל
-* להגן על זרימות חסויות בעזרת תקציר תכונות חסויות על השרשרת, רגיסטרי מפתחות מאמתים ומועדי פג תוקף דטרמיניסטיים להוכחות
-* לפרוס ברשתות מאובטחות או פתוחות עם טלמטריה, CLI וכלי Norito כחלק מהסטנדרט
+## מבנה המאגר
 
-Iroha מציעה גם:
+- [`crates/`](./crates): crates עיקריים ב-Rust (`iroha`, `irohad`, `iroha_cli`, `iroha_core`, `ivm`, `norito` ועוד).
+- [`integration_tests/`](./integration_tests): בדיקות אינטגרציה ורשת חוצות-רכיבים.
+- [`IrohaSwift/`](./IrohaSwift): חבילת SDK ל-Swift.
+- [`java/iroha_android/`](./java/iroha_android): חבילת SDK לאנדרואיד.
+- [`docs/`](./docs): תיעוד למשתמשים, תפעול ומפתחים.
 
-* עמידות בפני תקלות ביזנטיות עד 33% של מאמתים פגומים במסגרת מצת NPoS Sumeragi
-* ביצוע דטרמיניסטי עם מצב־עולם בזיכרון והתמדה מבוססת Norito
-* טלמטריה עשירה, הוכחות ואקראיות מדווחת (ראו [Telemetry](#telemetry))
-* ארכיטקטורה מודולרית עם הפרדה ברורה בין הקרייטים ושימוש חוזר בקודק Norito
-* תכנון מוכוון־אירועים, מוקלד־חוזקה, המשדר מעל SSE/WebSocket לצד הקרנות Norito JSON
-
-## סקירה כללית
-
-- בדקו את [דרישות המערכת](#דרישות-מערכת) ולמדו כיצד [לבנות, לבדוק ולהריץ את Iroha](#בנייה-בדיקה-והרצה-של-iroha)
-- עיינו ב[קרייטים](#אינטגרציה) הכלולים
-- למדו כיצד [להגדיר ולהפעיל את Iroha](#תחזוקה)
-- עברו על [קובץ ה־genesis](./docs/genesis.md) שמאתחל רשת חדשה
-- הבינו את [קיבולות התורים ונתוני המדידה של P2P](./docs/source/p2p.md)
-- עברו על [צינור עיבוד העסקאות מקצה לקצה](./docs/source/pipeline.md) ועל מדדי מצת/זמינות הנתונים המסוכמים ב־[new_pipeline.md](./new_pipeline.md)
-- קראו את [מדריכי הקונצנזוס, האקראיות וההוכחות של Sumeragi](./docs/source/sumeragi.md) יחד עם ממשק ה־API לממשל (`docs/source/governance_api.md`)
-- העמיקו בזרימת Norito ובטלמטריה דרך [docs/source/norito_streaming.md](./docs/source/norito_streaming.md)
-- המשיכו ל[קריאה נוספת](#קריאה-נוספת):
-  - ממשקי ZK לאפליקציות (צרופות ודוחות מוכיחים): `docs/source/zk_app_api.md`
-  - תסריט הבדיקות העשן של CI: `scripts/ci/zk_smoke.sh` (הוראות `register-asset` ו־`shield`)
-
-משאבים קהילתיים:
-- [תרמו](./CONTRIBUTING.md) למאגר
-- [צרו קשר](./CONTRIBUTING.md#contact) לקבלת תמיכה
-
-## דרישות מערכת
-
-דרישות ה־RAM והאחסון תלויות בשאלה האם אתם בונים את הפרויקט או מפעילים רשת, ובגודל הרשת ובנפח העסקאות. הטבלה הבאה מספקת קווים מנחים:
-
-| שימוש              | CPU                | RAM   | אחסון[^1] |
-|--------------------|--------------------|-------|-----------|
-| Build (מינימום)    | CPU דו־ליבתי       | 4GB   | 20GB      |
-| Build (מומלץ)      | AMD Ryzen™ 5 1600  | 16GB  | 40GB      |
-| Deploy (קטן)       | CPU דו־ליבתי       | 8GB+  | 20GB+     |
-| Deploy (גדול)      | AMD Epyc™ 64-core  | 128GB | 128GB+    |
-
-[^1]: כל הפעולות מתבצעות בזיכרון, ולכן Iroha יכולה לפעול תאורטית ללא אחסון מתמשך. עם זאת, לאחר כשל חשמל, סנכרון מחדש של הבלוקים מהרשת עלול להימשך זמן, ולכן מומלץ להקצות נפח אחסון.
-
-שיקולי RAM:
-
-* בממוצע תכננו על 5 KiB לכל חשבון. רשת עם 1,000,000 חשבונות צורכת כ־5 GiB.
-* כל הוראת `Transfer` או `Mint` צורכת בערך 1 KiB.
-* מכיוון שהעסקאות נשמרות בזיכרון, השימוש ב־RAM גדל ליניארית עם קצב העסקאות ומשך הפעילות.
-
-שיקולי CPU:
-
-* קומפילציית Rust מעדיפה מעבדים מרובי ליבות כמו Apple M1™, ‏AMD Ryzen™/Threadripper™/Epyc™ ו־Intel Alder Lake™.
-* במערכות עם זיכרון מוגבל ומספר רב של ליבות, הקומפילציה עלולה להיכשל עם `SIGKILL`. השתמשו ב־`cargo build -j <number>` (החליפו את `<number>` במחצית מכמות ה־RAM שלכם כשהיא מעוגלת מטה) כדי להגביל את המקביליות.
-
-## בנייה, בדיקה והרצה של Iroha
+## התחלה מהירה
 
 ### דרישות מקדימות
 
-* [Rust](https://www.rust-lang.org/learn/get-started) (הכלי היציב; בניות פרופיל דורשות nightly בהתאם ל[מדריך הפרופיל](./CONTRIBUTING.md#profiling))
-* (אופציונלי) [Docker](https://docs.docker.com/get-docker/)
-* (אופציונלי) [Docker Compose](https://docs.docker.com/compose/install/)
-* (אופציונלי) דוגמאות בייטקוד מוכנות של IVM עבור בדיקות התלויות בהן. הסקריפט ההיסטורי `scripts/build_ivm.sh` הוסר.
+- [Rust stable](https://www.rust-lang.org/tools/install)
+- אופציונלי: Docker + Docker Compose להרצות מקומיות מרובות peer
 
-### בניית Iroha
-
-בנו את כל סביבת העבודה עם הכלי היציב:
+### בנייה ובדיקות (workspace)
 
 ```bash
 cargo build --workspace
-```
-
-פקודות עזר אופציונליות:
-
-```bash
-# הפעלת קומפילציה אינקרמנטלית
-CARGO_INCREMENTAL=1 cargo build
-
-# איסוף דיאגנוסטיקה מפורטת ומדדי זמן
-cargo build -vv --timings
-
-# בניית דימוי Docker עדכני
-docker build . -t hyperledger/iroha:dev
-```
-
-אם דילגתם על בניית Docker, הדימוי הזמין האחרון ישמש בעת העלאת נוד בקונטיינר.
-
-### יצירת דוגמאות לקודק מחדש
-
-כאשר סכמת מודל הנתונים משתנה, צרו מחדש את דוגמאות קודק Norito שבהן משתמש `kagami`:
-
-```bash
-cargo run --manifest-path scripts/regenerate_codec_samples/Cargo.toml
-```
-
-התוצרים יישמרו ב־`crates/iroha_kagami/samples/codec/`.
-
-### הפעלת בדיקות UI ידנית
-
-בדיקות UI מאמתות דיאגנוסטיקה בזמן קומפילציה ואינן רצות ב־CI. הריצו אותן מקומית כשאתם מבצעים שינויים שמשפיעים על ההודעות:
-
-```bash
-cargo test -p iroha_data_model --test ui
-```
-
-### בדיקת סביבת העבודה
-
-השתמשו בפקודת הבדיקות של סביבת העבודה כדי להריץ בדיקות יחידה, אינטגרציה ותיעוד:
-
-```bash
 cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all
 ```
 
-### הרצת Iroha
+הערות:
 
-לאחר הבנייה, הפעילו רשת מינימלית:
+- בניית כל ה-workspace עשויה להימשך כ-20 דקות.
+- בדיקות מלאות של ה-workspace עשויות להימשך מספר שעות.
+- ה-workspace מכוון ל-`std` (בניות WASM/no-std אינן נתמכות).
+
+### פקודות בדיקה ממוקדות
 
 ```bash
-docker compose up
+cargo test -p <crate>
+cargo test -p <crate> <test_name> -- --nocapture
 ```
 
-כשמחסנית Docker Compose רצה, התחברו אליה באמצעות [Iroha Client CLI](crates/iroha_cli/README.md):
+### פקודות בדיקה ל-SDK
 
 ```bash
-cargo run --bin iroha -- --config ./defaults/client.toml
+cd IrohaSwift
+swift test
 ```
-
-### ממשק TUI (`iroha_monitor`) — הצמדה או הפעלה קלה
-
-קיים ממשק TUI בסגנון synthwave למעקב אחר מצב הצמתים ומדדי P2P.
-
-- התחברות לצמתים קיימים (מומלץ):
-
-  ```bash
-  # צומת יחיד
-  cargo run -p iroha_monitor -- --attach http://127.0.0.1:8080 --use-alice
-
-  # מספר צמתים
-  cargo run -p iroha_monitor -- --attach http://127.0.0.1:8080 --attach http://127.0.0.1:8081 --use-alice
-  ```
-
-- הפעלה ברירת־מחדל (מייצרת תהליכים משניים):
-
-  ```bash
-  cargo run -p iroha_monitor
-  ```
-
-### Telemetry
-
-טלמטריה מרכזת מדדים ורמות בריאות. השימוש הבסיסי:
 
 ```bash
-curl http://127.0.0.1:8080/status
+cd java/iroha_android
+JAVA_HOME=$(/usr/libexec/java_home -v 21) \
+ANDROID_HOME=~/Library/Android/sdk \
+ANDROID_SDK_ROOT=~/Library/Android/sdk \
+./gradlew test
 ```
 
-ה־API מחזיר Norito bare כברירת מחדל. בקשו JSON בעזרת הכותרת `accept: application/json`. Torii מפעילה כברירת מחדל את הפיצ׳רים `app_api` ו-`transparent_api` ב-`iroha_torii`; `transparent_api` מעביר הלאה את "המבנים השקופים" של מודל הנתונים כך שניתן להקרין את שדות ה-ledger ישירות אל JSON בלי טיפוסי עזר.
+## הפעלת רשת מקומית
 
-### Streaming
+הפעילו את רשת Docker Compose שסופקה:
 
-Iroha מספקת סטרימים של אירועים ושל בלוקים דרך SSE ו־WebSocket. ראו:
+```bash
+docker compose -f defaults/docker-compose.yml up
+```
 
-- `docs/source/norito_streaming.md`
-- `docs/source/telemetry.md`
-- `integration_tests/tests/streaming/mod.rs`
+השתמשו ב-CLI עם תצורת הלקוח ברירת המחדל:
 
-### חותמות זמן
+```bash
+cargo run --bin iroha -- --config ./defaults/client.toml --help
+```
 
-השירות `/status` של Torii מחזיר חותמות זמן עכשוויות, והקרייט `iroha_time` מספק כלי עזר למדידת השהיות ולהערכת סטיות שעון.
+לשלבי פריסה מקומית של הדמון, ראו [`crates/irohad/README.md`](./crates/irohad/README.md).
 
-## אינטגרציה
+## API ונראות תפעולית
 
-Hyperledger Iroha מאורגן כ־Cargo workspace. קרייטים מרכזיים:
+Torii חושף גם API של Norito וגם JSON API. נקודות קצה נפוצות לתפעול:
 
-* `iroha` – הספרייה העליונה המאחדת פונקציונליות ליבה
-* `irohad` – בינארי הדמון שמריץ את הנוד
-* `iroha_core`, ‏`iroha_data_model`, ‏`iroha_crypto` – שכבות עיבוד הליבה
-* `ivm` – Iroha Virtual Machine
-* `iroha_cli` – כלי שורת פקודה ללקוחות
-* `iroha_torii` – שרת ה־API
-* `iroha_config` – ניהול קונפיגורציה
-* `integration_tests` – בדיקות שמכסות זרימות בין רכיבים
+- `GET /status`
+- `GET /metrics`
+- `GET /v1/parameters`
+- `GET /v1/events/sse`
 
-## תחזוקה
+לתיעוד מלא של נקודות הקצה:
 
-- [הגדרה וקונפיגורציה](./docs/source/references/configuration.md) – מקורות קונפיגורציה והיררכיה (משתמש → ברירת מחדל → runtime)
-- [סכמת Genesis](./docs/genesis.md) – מבנה הגדרות רשת ראשוני
-- [שדרוגי Runtime](./docs/source/runtime_upgrades.md) – כיצד לפרוס גרסאות חדשות בבטחה
-- [מדיניות אבטחה](./docs/source/security_hardening_requirements.md) – צ'ק־ליסט לייצור
-- [ניהול מפתחות](./docs/source/kaigi_privacy_design.md) – פרטיות Kaigi וחלוקת סודות
+- [`docs/source/telemetry.md`](./docs/source/telemetry.md)
+- [`docs/portal/docs/reference/README.md`](./docs/portal/docs/reference/README.md)
 
-## קריאה נוספת
+## Crates מרכזיים
 
-- מסמכי Norito ו־זרימת הסטרימינג: `docs/source/norito_streaming.md`, ‏`docs/norito_streaming.md`
-- מדריך RBAC ו־NPoS Sumeragi: `docs/source/rbac.md`, ‏`docs/source/sumeragi.md`
-- ממשקי Torii: `docs/source/torii_contracts_api.md`, ‏`docs/source/torii_query_cursor_modes.md`
-- מסמכי ZK: `docs/source/zk_envelopes.md`, ‏`docs/source/zk1_envelope.md`, ‏`docs/source/zk_app_api.md`
-- נתיב Nexus והסטטוס הכללי: `roadmap.md`, ‏`status.md`
+- [`crates/iroha`](./crates/iroha): ספריית לקוח.
+- [`crates/irohad`](./crates/irohad): בינארים של דמון peer.
+- [`crates/iroha_cli`](./crates/iroha_cli): CLI ייחוס.
+- [`crates/iroha_core`](./crates/iroha_core): מנוע הביצוע וליבת ה-ledger.
+- [`crates/iroha_config`](./crates/iroha_config): מודל תצורה טיפוסי.
+- [`crates/iroha_data_model`](./crates/iroha_data_model): מודל נתונים קנוני.
+- [`crates/iroha_crypto`](./crates/iroha_crypto): פרימיטיבים קריפטוגרפיים.
+- [`crates/norito`](./crates/norito): קודק סריאליזציה דטרמיניסטי.
+- [`crates/ivm`](./crates/ivm): Iroha Virtual Machine.
+- [`crates/iroha_kagami`](./crates/iroha_kagami): כלי מפתחות/genesis/תצורה.
+
+## מפת תיעוד
+
+- אינדקס ראשי: [`docs/README.md`](./docs/README.md)
+- Genesis: [`docs/genesis.md`](./docs/genesis.md)
+- קונצנזוס (Sumeragi): [`docs/source/sumeragi.md`](./docs/source/sumeragi.md)
+- צינור עיבוד עסקאות: [`docs/source/pipeline.md`](./docs/source/pipeline.md)
+- פנימיות P2P: [`docs/source/p2p.md`](./docs/source/p2p.md)
+- IVM syscalls: [`docs/source/ivm_syscalls.md`](./docs/source/ivm_syscalls.md)
+- דקדוק Kotodama: [`docs/source/kotodama_grammar.md`](./docs/source/kotodama_grammar.md)
+- פורמט wire של Norito: [`norito.md`](./norito.md)
+- מעקב עבודה נוכחי: [`status.md`](./status.md), [`roadmap.md`](./roadmap.md)
+
+## תרגומים
+
+סקירה ביפנית: [`README.ja.md`](./README.ja.md)
+
+סקירות נוספות:
+[`README.he.md`](./README.he.md), [`README.es.md`](./README.es.md), [`README.pt.md`](./README.pt.md), [`README.fr.md`](./README.fr.md), [`README.ru.md`](./README.ru.md), [`README.ar.md`](./README.ar.md), [`README.ur.md`](./README.ur.md)
+
+תהליך תרגום: [`docs/i18n/README.md`](./docs/i18n/README.md)
+
+## תרומה ועזרה
+
+- מדריך תרומה: [`CONTRIBUTING.md`](./CONTRIBUTING.md)
+- ערוצי קהילה/תמיכה: [`CONTRIBUTING.md#contact`](./CONTRIBUTING.md#contact)
 
 ## רישיון
 
-Hyperledger Iroha מופצת תחת רישיון Apache 2.0. לפרטים ראו את [LICENSE](./LICENSE).
+Iroha מופץ תחת Apache-2.0. ראו [`LICENSE`](./LICENSE).
+
+התיעוד מופץ תחת CC-BY-4.0: http://creativecommons.org/licenses/by/4.0/
 
 </div>

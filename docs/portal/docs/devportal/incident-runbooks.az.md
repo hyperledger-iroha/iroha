@@ -1,0 +1,18 @@
+<!-- Auto-generated stub for Azerbaijani (az) translation. Replace this content with the full translation. -->
+
+---
+lang: az
+direction: ltr
+source: docs/portal/docs/devportal/incident-runbooks.md
+status: needs-translation
+generator: scripts/sync_docs_i18n.py
+source_hash: 8599dbc1a8e4fe846965eed90af128deb5950f83dc61838fea583b326b92a011
+source_last_modified: "2025-12-29T18:16:35.104300+00:00"
+translation_last_reviewed: null
+---
+
+# Translation In Progress
+
+This file is a placeholder for the Azerbaijani translation of the English document. Once the translation is complete, update the `status` field in the metadata above.
+
+This stub awaits translation. Replace the placeholder body with the completed text and update the metadata status to `complete` when finished.

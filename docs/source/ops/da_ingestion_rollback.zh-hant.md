@@ -1,0 +1,18 @@
+<!-- Auto-generated stub for Chinese (Traditional) (zh-hant) translation. Replace this content with the full translation. -->
+
+---
+lang: zh-hant
+direction: ltr
+source: docs/source/ops/da_ingestion_rollback.md
+status: needs-translation
+generator: scripts/sync_docs_i18n.py
+source_hash: ea1f6dea710b521964cef15054ff78d99633ce3c7075ee71b6730886881564fa
+source_last_modified: "2026-01-22T14:35:37.847519+00:00"
+translation_last_reviewed: null
+---
+
+# Translation In Progress
+
+This file is a placeholder for the Chinese (Traditional) translation of the English document. Once the translation is complete, update the `status` field in the metadata above.
+
+This stub awaits translation. Replace the placeholder body with the completed text and update the metadata status to `complete` when finished.

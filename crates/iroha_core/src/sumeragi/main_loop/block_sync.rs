@@ -351,14 +351,13 @@ impl Actor {
             BlockMessage::BlockSyncUpdate(update)
                 if update.commit_qc.is_none() && update.validator_checkpoint.is_none()
         );
-        let bypass_rosterless_created = allow_hintless_block_sync_bypass
-            && matches!(msg, BlockMessage::BlockCreated(_));
+        let bypass_rosterless_created =
+            allow_hintless_block_sync_bypass && matches!(msg, BlockMessage::BlockCreated(_));
         if matches!(msg, BlockMessage::BlockSyncUpdate(_)) {
             let created = BlockMessage::BlockCreated(super::message::BlockCreated::from(block));
             let created_len =
                 super::consensus_block_wire_len(self.common_config.peer.id(), &created);
-            let send_created_copy =
-                !(allow_hintless_block_sync_bypass && hintless_block_sync);
+            let send_created_copy = !(allow_hintless_block_sync_bypass && hintless_block_sync);
             if send_created_copy && created_len <= self.consensus_payload_frame_cap {
                 for (peer, priority) in peers.iter() {
                     self.send_fetch_pending_block_response(
@@ -406,9 +405,7 @@ impl Actor {
         let block_hash = block.hash();
         let requesters = self.take_pending_fetch_requesters(&block_hash);
         self.send_fetch_pending_block_responses(
-            requesters,
-            block,
-            /*force_bypass_queue*/ false,
+            requesters, block, /*force_bypass_queue*/ false,
             /*allow_highest_qc_bypass*/ false,
             /*allow_hintless_block_sync_bypass*/ false,
         );

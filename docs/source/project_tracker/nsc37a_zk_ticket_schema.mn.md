@@ -1,0 +1,18 @@
+<!-- Auto-generated stub for Mongolian (mn) translation. Replace this content with the full translation. -->
+
+---
+lang: mn
+direction: ltr
+source: docs/source/project_tracker/nsc37a_zk_ticket_schema.md
+status: needs-translation
+generator: scripts/sync_docs_i18n.py
+source_hash: 1544046c586f36acd0f16031fd1f99928ec7425f4fe65e23ab957e647cb6ef02
+source_last_modified: "2026-01-05T09:28:12.036866+00:00"
+translation_last_reviewed: null
+---
+
+# Translation In Progress
+
+This file is a placeholder for the Mongolian translation of the English document. Once the translation is complete, update the `status` field in the metadata above.
+
+This stub awaits translation. Replace the placeholder body with the completed text and update the metadata status to `complete` when finished.

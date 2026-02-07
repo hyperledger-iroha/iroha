@@ -1,0 +1,16 @@
+#+COMMENT: Auto-generated stub for Azerbaijani (az) translation. Replace this content with the full translation.
+
+#+LANGUAGE: az
+#+DIRECTION: ltr
+#+SOURCE: docs/source/release_procedure.org
+#+STATUS: needs-translation
+#+GENERATOR: scripts/sync_docs_i18n.py
+#+SOURCE_HASH: 43acc1425c075edad1d2d45f38eab74d4b9a44bed4df43093919e0aaaca9fd0b
+#+SOURCE_LAST_MODIFIED: 2026-01-05T09:28:12.043872+00:00
+#+TRANSLATION_LAST_REVIEWED: 
+
+* Translation In Progress
+
+This file is a placeholder for the Azerbaijani translation of the English document. After finishing the translation, update `#+STATUS` accordingly.
+
+Please replace this section with the completed translation.
