@@ -116,11 +116,7 @@ impl Topology {
 
     /// Index of proxy tail
     pub fn proxy_tail_index(&self) -> usize {
-        if self.0.len() <= 3 {
-            return self.min_votes_for_commit() - 1;
-        }
-        // NOTE: for larger sets, keep proxy-tail aligned with 2f position.
-        self.max_faults().saturating_mul(2)
+        self.min_votes_for_commit().saturating_sub(1)
     }
 
     /// Deterministic set of collector indices for the current topology.
@@ -457,8 +453,7 @@ impl Topology {
 
     /// Update topology after a block has been committed.
     ///
-    /// Set A is rotated, membership is refreshed, and final ordering is
-    /// canonicalized so all peers derive the same post-commit topology.
+    /// Set A is rotated and membership is refreshed.
     pub fn block_committed(
         &mut self,
         new_peers: impl IntoIterator<Item = PeerId>,
@@ -466,7 +461,6 @@ impl Topology {
     ) {
         self.rotate_set_a();
         self.update_peer_list(new_peers);
-        self.canonicalize_order();
         self.1 = 0;
     }
 
@@ -1498,8 +1492,8 @@ mod tests {
     }
 
     #[test]
-    fn collectors_k3_follow_block_committed_canonical_order() {
-        // After a commit, ordering is canonicalized; no prev-hash rotation is applied.
+    fn collectors_k3_follow_block_committed_rotation() {
+        // After a commit, Set A rotates left by one and collector indices follow that order.
         let peers = test_peers(7);
         let mut topo = Topology::new(peers.clone());
         let idxs_before = topo.collector_indices_k(3);
@@ -1513,11 +1507,14 @@ mod tests {
         topo.block_committed(peers.clone(), prev_hash);
         let idxs_after = topo.collector_indices_k(3);
         let cs_after: Vec<_> = idxs_after.iter().map(|&i| topo.0[i].clone()).collect();
-        assert_eq!(cs_after, cs_before);
+        assert_eq!(
+            cs_after,
+            vec![peers[0].clone(), peers[5].clone(), peers[6].clone()]
+        );
     }
 
     #[test]
-    fn block_committed_canonicalizes_peer_order() {
+    fn block_committed_rotates_set_a_and_preserves_membership_order() {
         let mut peers = test_peers(4);
         peers.reverse();
         let mut topo = Topology::new(peers.clone());
@@ -1525,10 +1522,15 @@ mod tests {
 
         topo.block_committed(peers.clone(), prev_hash);
 
-        let mut expected = peers;
-        expected.sort();
-        expected.dedup();
-        assert_eq!(topo.as_ref(), expected.as_slice());
+        assert_eq!(
+            topo.as_ref(),
+            &[
+                peers[1].clone(),
+                peers[2].clone(),
+                peers[0].clone(),
+                peers[3].clone()
+            ]
+        );
     }
 
     #[test]

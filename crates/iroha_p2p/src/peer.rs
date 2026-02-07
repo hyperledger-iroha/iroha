@@ -2284,14 +2284,9 @@ mod run {
             // Decrypted payload may contain multiple Norito-framed messages.
             let mut offset = 0usize;
             while offset < decrypted_len {
-                let remaining = decrypted
-                    .get(offset..)
-                    .ok_or(Error::Format)?;
-                let frame_len = framed_message_len::<M>(
-                    remaining,
-                    self.framed_schema,
-                    self.framed_padding,
-                )?;
+                let remaining = decrypted.get(offset..).ok_or(Error::Format)?;
+                let frame_len =
+                    framed_message_len::<M>(remaining, self.framed_schema, self.framed_padding)?;
                 let frame = remaining.get(..frame_len).ok_or(Error::Format)?;
                 let decoded = match ncore::decode_from_bytes::<M>(frame) {
                     Ok(value) => value,
@@ -2427,11 +2422,7 @@ mod run {
 
                     let cap = Self::MAX_PLAINTEXT_BYTES_HI.min(max_plaintext);
                     let would_exceed_bytes = !self.plain_high.is_empty()
-                        && self
-                            .plain_high
-                            .len()
-                            .saturating_add(msg_len)
-                            > cap;
+                        && self.plain_high.len().saturating_add(msg_len) > cap;
                     let would_exceed_msgs = self.plain_high_msgs >= Self::MAX_PLAINTEXT_MSGS_HI;
                     if would_exceed_bytes || would_exceed_msgs {
                         self.flush_plain_high()?;
@@ -2449,11 +2440,7 @@ mod run {
                 Priority::Low => {
                     let cap = Self::MAX_PLAINTEXT_BYTES_LO.min(max_plaintext);
                     let would_exceed_bytes = !self.plain_low.is_empty()
-                        && self
-                            .plain_low
-                            .len()
-                            .saturating_add(msg_len)
-                            > cap;
+                        && self.plain_low.len().saturating_add(msg_len) > cap;
                     let would_exceed_msgs = self.plain_low_msgs >= Self::MAX_PLAINTEXT_MSGS_LO;
                     if would_exceed_bytes || would_exceed_msgs {
                         self.flush_plain_low()?;

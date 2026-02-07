@@ -7,72 +7,73 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 71baf5d038cbe6518fd294fcc1b279dff8aaf092e4a83f6159b699a378e51467
 source_last_modified: "2025-12-29T18:16:34.772429+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Contributing Guide
+# Йөкмәткеле ҡулланма
 
-Thank you for taking the time to contribute to Iroha 2!
+Рәхмәт һеҙгә ваҡыт бүлергә, үҙ өлөшөн индереү өсөн I18NT0000000004X 2!
 
-Please read this guide to learn how you can contribute and which guidelines we expect you to follow. This includes the guidelines about code and documentation as well as our conventions regarding git workflow.
+Зинһар, был ҡулланманы уҡып, нисек һеҙ үҙ өлөшөн индерә ала һәм ниндәй йүнәлештәр беҙ һеҙҙең үтәргә көтә. Был үҙ эсенә код һәм документация тураһында йүнәлештәр, шулай уҡ беҙҙең конвенциялар тураһында git эш ағымы.
 
-Reading these guidelines will save you time later.
+Был ҡағиҙәләрҙе уҡыу һеҙгә ваҡыт экономиялай.
 
-## How Can I Contribute?
+## Нисек өлөш индерәм?
 
-There are a lot of ways you could contribute to our project:
+Беҙҙең проектҡа үҙ өлөшөн индерә алырлыҡ ысулдар күп:
 
-- Report [bugs](#reporting-bugs) and [vulnerabilities](#reporting-vulnerabilities)
-- [Suggest improvements](#suggesting-improvements) and implement them
-- [Ask questions](#asking-questions) and engage with the community
+- Отчет [ҡытаҡтары] (I18NU000000043X) һәм [уяулыҡ] (#reporting-vulnerabilities)
+- [Тәҡдимдәр яҡшыртыу](I18NU000000045X) һәм уларҙы тормошҡа ашырыу
+- [Һорауҙар һорау](I18NU000000046X) һәм йәмәғәтселек менән шөғөлләнергә
 
-New to our project? [Make your first contribution](#your-first-code-contribution)!
+Яңы беҙҙең проектҡа? [Һеҙҙең тәүге иғәнәгеҙ төҙөргә](I18NU000000047X)!
 
 ### TL;DR
 
-- Find [ZenHub](https://app.zenhub.com/workspaces/iroha-v2-60ddb820813b9100181fc060/board?repos=181739240).
-- Fork [Iroha](https://github.com/hyperledger-iroha/iroha/tree/main).
-- Fix your issue of choice.
-- Ensure you follow our [style guides](#style-guides) for code and documentation.
-- Write [tests](https://doc.rust-lang.org/cargo/commands/cargo-test.html). Ensure they all pass (`cargo test --workspace`). If you touch the SM cryptography stack, also run `cargo test -p iroha_crypto --features "sm sm_proptest"` to execute the optional fuzz/property harness.
-  - Note: Tests that exercise the IVM executor will automatically synthesize a minimal, deterministic executor bytecode if `defaults/executor.to` is not present. No pre-step is required to run tests. To generate the canonical bytecode for parity, you can run:
-    - `cargo run --manifest-path scripts/generate_executor_to/Cargo.toml`
-    - `cargo run --manifest-path scripts/regenerate_codec_samples/Cargo.toml`
-- If you change derive/proc-macro crates, run the trybuild UI suites via
-  `make check-proc-macro-ui` (or
-  `PROC_MACRO_UI_CRATES="crate1 crate2" make check-proc-macro-ui`) and refresh
-  `.stderr` fixtures when diagnostics change to keep messages stable.
-- Run `make dev-workflow` (wrapper around `scripts/dev_workflow.sh`) to execute fmt/clippy/build/test with `--locked` plus `swift test`; expect `cargo test --workspace` to take hours and use `--skip-tests` only for quick local loops. See `docs/source/dev_workflow.md` for the full runbook.
-- Enforce guardrails with `make check-agents-guardrails` to block `Cargo.lock` edits and new workspace crates, `make check-dependency-discipline` to fail on new dependencies unless explicitly allowed, and `make check-missing-docs` to prevent new `#[allow(missing_docs)]` shims, missing crate-level docs on touched crates, or new public items without doc comments (the guard refreshes `docs/source/agents/missing_docs_inventory.{json,md}` via `scripts/inventory_missing_docs.py`). Add `make check-tests-guard` so changed functions fail unless unit tests reference them (inline `#[cfg(test)]`/`#[test]` blocks or crate `tests/`; existing coverage counts) and `make check-docs-tests-metrics` so roadmap changes are paired with docs, tests, and metrics/dashboards. Keep TODO enforcement via `make check-todo-guard` so TODO markers are not dropped without accompanying docs/tests. `make check-env-config-surface` regenerates the env-toggle inventory and now fails when new **production** env shims appear relative to `AGENTS_BASE_REF`; set `ENV_CONFIG_GUARD_ALLOW=1` only after documenting intentional additions in the migration tracker. `make check-serde-guard` refreshes the serde inventory and fails on stale snapshots or new production `serde`/`serde_json` hits; set `SERDE_GUARD_ALLOW=1` only with an approved migration plan. Keep large deferrals visible via TODO breadcrumbs and follow-up tickets instead of deferring silently. Run `make check-std-only` to catch `no_std`/`wasm32` cfgs and `make check-status-sync` to ensure `roadmap.md` open items remain open-only and that roadmap/status changes land together; set `STATUS_SYNC_ALLOW_UNPAIRED=1` only for rare status-only typo fixes after pinning `AGENTS_BASE_REF`. For a single invocation, use `make agents-preflight` to run all guardrails together.
-- Run local serialization guards before pushing: `make guards`.
-  - This denies direct `serde_json` in production code, disallows new direct serde deps outside allowlist, and prevents ad‑hoc AoS/NCB helpers outside `crates/norito`.
-- Optionally dry-run Norito feature matrix locally: `make norito-matrix` (uses a fast subset).
-  - For full coverage, run `scripts/run_norito_feature_matrix.sh` without `--fast`.
-  - To include a downstream smoke per combo (default crate `iroha_data_model`): `make norito-matrix-downstream` or `scripts/run_norito_feature_matrix.sh --fast --downstream [crate]`.
-- For proc-macro crates, add a `trybuild` UI harness (`tests/ui.rs` + `tests/ui/pass`/`tests/ui/fail`) and commit `.stderr` diagnostics for the failing cases. Keep diagnostics stable and non-panicking; refresh fixtures with `TRYBUILD=overwrite cargo test -p <crate> -F trybuild-tests` and guard them with `cfg(all(feature = "trybuild-tests", not(coverage)))`.
-- Perform pre-commit routine like formatting & artifacts regeneration (see [`pre-commit.sample`](./hooks/pre-commit.sample))
-- With the `upstream` set to track [Hyperledger Iroha repository](https://github.com/hyperledger-iroha/iroha), `git pull -r upstream main`, `git commit -s`, `git push <your-fork>`, and [create a pull request](https://github.com/hyperledger-iroha/iroha/compare) to the `main` branch. Ensure it follows the [pull request guidelines](#pull-request-etiquette).
+- Тап [ЦенХуб](https://app.zenhub.com/workspaces/iroha-v2-60ddb820813b9100181fc060/board?repos=181739240).
+- Форк [Iroha] (https://github.com/hyperledger-iroha/iroha/tree/main).
+- Һайлау мәсьәләһен төҙәтегеҙ.
+- Һеҙҙең беҙҙең [стиль етәкселәр] (I18NU0000000500X) код һәм документация өсөн үтәүегеҙҙе тәьмин итеү.
+- [һынауҙар] (https://doc.rust-lang.org/cargo/commands/cargo-test.html). Улар барыһы ла үткәнен тәьмин итеү (`cargo test --workspace`). Әгәр һеҙ ҡағыла SM криптография стека, шулай уҡ эшләй Iroha башҡарырға опциональ fuzz/мөлкәт жгут.
+  - Иҫкәрмә: I18NT000000033X башҡарыусыһын тормошҡа ашырыу анализдары автоматик рәүештә минималь, детерминистик башҡарыусы байткодты синтезлай, әгәр `defaults/executor.to` булмаһа. Һынауҙар үткәреү өсөн бер ниндәй ҙә алдан аҙым кәрәкмәй. Паритет өсөн канонлы байткод генерациялау өсөн, һеҙ йүгерергә мөмкин:
+    — I18NI000000118X
+    - I18NI000000119X
+- Әгәр һеҙ үҙгәртә алынған/прок-макро йәшник, йүгерергә tribuild UI люкс аша .
+  `make check-proc-macro-ui` (йәки
+  `PROC_MACRO_UI_CRATES="crate1 crate2" make check-proc-macro-ui`) һәм яңыртыу
+  `.stderr` ҡоролмалары диагностика үҙгәргәндә хәбәрҙәрҙе тотороҡло тотоу өсөн.
+- `make dev-workflow` (I18NI000000124X тирәһендә уралған) fmt/клиппи/төҙөү/тест менән I18NI0000000125X менән башҡарыу өсөн. көтөп I18NI000000127X сәғәттәр буйы һәм ҡулланыу I18NI0000000128X тик тиҙ урындағы иллюзиялар өсөн. Ҡарағыҙ `docs/source/dev_workflow.md` өсөн тулы runbook.
+- `make check-agents-guardrails` менән ҡоршауҙарҙы үтәү I18NI000000131X мөхәррирләү һәм яңы эш урыны йәшниктәре, I18NI000000132X яңы бәйлелектәрҙә уңышһыҙлыҡҡа осрау өсөн асыҡтан-асыҡ рөхсәт ителмәһә, һәм Iroha яңы I18NI0000000134X shims, йәшник кимәлендә юҡ. docs ҡағылған йәшниктәр тураһында, йәки яңы йәмәғәт әйберҙәре doc комментарийҙарһыҙ (һаҡсы яңыртыу `docs/source/agents/missing_docs_inventory.{json,md}` аша `scripts/inventory_missing_docs.py`). Өҫтәү I18NI0000000137X шулай үҙгәртелгән функциялар уңышһыҙлыҡҡа осрай, әгәр ҙә берәмек һынауҙары уларҙы һылтанмаға һылтанма яһамаһа, уларҙы (I18NI000000138X/`#[test]` блоктар йәки йәшник `tests/`; метрика/приборҙар таҡтаһы. `make check-todo-guard` аша TODO үтәү тотоу шулай TODO маркерҙары оҙатыусы документтар/тестарһыҙ төшөрөлмәй. I18NI000000143X регенерациялау env-toggle инвентаризация һәм хәҙер уңышһыҙлыҡҡа осрай, ҡасан яңы **производство ** shims `AGENTS_BASE_REF` ҡарағанда күренә; `ENV_CONFIG_GUARD_ALLOW=1`-ны миграция трекерында ниәтләп өҫтәмәләр документлаштырғандан һуң ғына ҡуйған. `make check-serde-guard` серд инвентаризацияһын яңырта һәм иҫке снимоктарҙа йәки яңы етештереүҙә уңышһыҙлыҡҡа осрай I18NI000000147X/`serde_json` хиттары; `SERDE_GUARD_ALLOW=1` раҫланған миграция планы менән генә билдәләне. Ҙур кисть аша күренеп тора, аша күренеп TODO икмәк һәм эҙмә-эҙлекле билеттар урынына өнһөҙ кисектереп. I18NI0000150X Run `no_std`/`wasm32` cfgs һәм `make check-status-sync` тотоу өсөн I18NI00000000154 асыҡ әйберҙәр асыҡ ҡала һәм был юл картаһы/статус үҙгәрештәре бергә төшә; I18NI000000155X тик һирәк осрай торған статус өсөн генә типопыһы төҙәтеүҙәре өсөн генә билдәләнгән. Бер тапҡыр саҡырыу өсөн, ҡулланыу I18NI0000000157X бөтә ҡоршауҙарҙы бергә йөрөтөү өсөн.
+- Урындағы сериализация һаҡсыларын этәрергә тиклем йүгерә: `make guards`.
+  - Был туранан-тура `serde_json` етештереү кодексы буйынса туранан-тура инҡар итә, яңы туранан-тура серҙә дептар сите рөхсәт итеүҙе рөхсәт итмәй, һәм `crates/norito`-тан ситтә AoS/NCB ярҙамсылары рекламаға ҡамасаулай.
+- Ҡоро ҡоролоҡ I18NT000000003X функцияһы матрицаһы урындағы: `make norito-matrix` (тиҙ подмножество ҡуллана).
+  - Тулы ҡаплау өсөн I18NI0000162X `--fast`-һыҙ эшләй.
+  - Бер комбоға аҫҡы төтөн индереү өсөн (`iroha_data_model` Xcate): `make norito-matrix-downstream` йәки `scripts/run_norito_feature_matrix.sh --fast --downstream [crate]`.
+- Прок-макро йәшниктәр өсөн `trybuild` UI йүгәнен (`tests/ui.rs`X + I18NI000000169X/`tests/ui/fail`) өҫтәй һәм етешһеҙлектәре өсөн `.stderr` диагностикаһы эшләй. Диагностиканы тотороҡло һәм паникаға бирмәүҙе дауам итегеҙ; `TRYBUILD=overwrite cargo test -p <crate> -F trybuild-tests` менән яңыртыу ҡоролмалары һәм уларҙы һаҡлау менән `cfg(all(feature = "trybuild-tests", not(coverage)))`.
+- форматлау һәм артефакттар регенерацияһы кеүек алдан йөкләмәләр рутинаһын башҡарыу (ҡара: [I18NI000000174X](./hooks/pre-commit.sample))
+- I18NI000000175X менән күҙәтеү өсөн ҡуйылған [I18NT00000000000000000000000006Х репозиторий] (I18NU00000000053), I18NI00000000176X, I18NI00000000000000177, I18NI0000000178. тартыу запросы](https://github.com/hyperledger-iroha/iroha/compare) I18NI000000179X XX филиалына. Тәьмин итеү, был үтәй [тартыу запрос йүнәлештәре] (#pull-request-etiquette).
 
-### AGENTS workflow quickstart
+### AGENTS эш ағымы тиҙ старт
 
-- Run `make dev-workflow` (wrapper around `scripts/dev_workflow.sh`, documented in `docs/source/dev_workflow.md`). It wraps `cargo fmt --all`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo build/test --workspace --locked` (tests can take several hours), and `swift test`.
-- Use `scripts/dev_workflow.sh --skip-tests` or `--skip-swift` for faster iterations; rerun the full sequence before opening a pull request.
-- Guardrails: avoid touching `Cargo.lock`, adding new workspace members, introducing new dependencies, adding new `#[allow(missing_docs)]` shims, omitting crate-level docs, skipping tests when changing functions, dropping TODO markers without docs/tests, or reintroducing `no_std`/`wasm32` cfgs without approval. Run `make check-agents-guardrails` (or `AGENTS_BASE_REF=origin/main bash ci/check_agents_guardrails.sh`) plus `make check-dependency-discipline`, `make check-missing-docs` (refreshes `docs/source/agents/missing_docs_inventory.{json,md}`), `make check-tests-guard` (fails when production functions change without unit-test evidence—either tests change in the diff or existing tests must reference the function), `make check-docs-tests-metrics` (fails when roadmap changes lack docs/tests/metrics updates), `make check-todo-guard`, `make check-env-config-surface` (fails on stale inventories or new production env toggles; override with `ENV_CONFIG_GUARD_ALLOW=1` only after updating docs), and `make check-serde-guard` (fails on stale serde inventories or new production serde hits; override with `SERDE_GUARD_ALLOW=1` only with an approved migration plan) locally for early signal, `make check-std-only` for the std-only guard, and keep `roadmap.md`/`status.md` in sync with `make check-status-sync` (set `STATUS_SYNC_ALLOW_UNPAIRED=1` only for rare status-only typo fixes after pinning `AGENTS_BASE_REF`). Use `make agents-preflight` if you want a single command to run all guards before opening a PR.
+- Run `make dev-workflow` (`scripts/dev_workflow.sh` тирәһендә урау, `docs/source/dev_workflow.md`-та документлаштырылған). Ул `cargo fmt --all`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, I18NI000000185X уратып ала (һынауҙар бер нисә сәғәт ваҡыт ала), һәм `swift test`.
+- `scripts/dev_workflow.sh --skip-tests` йәки I18NI000000188X тиҙ итерацион өсөн ҡулланыу; переработка тулы эҙмә-эҙлеклелек асыу алдынан тартыу запросы.
+- Гвардия: ҡотолоу өсөн I18NI0000000189X, яңы эш урыны ағзалары өҫтәп, яңы бәйлелек индереү, яңы өҫтәү I18NI000000000190X shims, йәшник кимәлендәге docs, skipping һынауҙар ҡасан үҙгәргән функциялары, ташлау TODO маркерҙары docs/һынау, йәки ҡабаттан индереү `no_std`/`wasm32` cfgs раҫлауһыҙ. Run I18NI0000000193X (йәки I18NI00000000194X) плюс I18NI0000001955X, I18NI000000196X (рефрез I18NI000000000197X), I18NI0000000198X (уңышһыҙлыҡтар етештереү функциялары үҙгәрә, берәмек-һынау дәлилдәре булмаған 18NI0000199X (уңышһыҙлыҡтар ҡасан юл картаһы үҙгәрештәре docs/тест/метрика яңыртыу етешмәй), I18NI0000000200X, I18NI000000201X (уңышһыҙлыҡтар менән һуғартыу йәки яңы етештереү enval env toggles. I18NI0000000202X тик docs яңыртыуҙан һуң ғына), һәм I18NI000000203X (уңышһыҙлыҡтар менән иҫке серҙә запас йәки яңы етештереү серҙә хиттары; `SERDE_GUARD_ALLOW=1` менән генә раҫланған миграция планы) урындағы кимәлдә, `make check-std-only` өсөн std-nor `roadmap.md`/I18NI0000207X I18NI000000208X менән синхронлаштырыуҙа һаҡларға (I18NI000000209X ғына һирәк осрай торған статус өсөн генә типопыс төҙәтеүҙәре өсөн `AGENTS_BASE_REF`-тан һуң ғына). Ҡулланыу I18NI000000211Х, әгәр һеҙ теләйһегеҙ, бер команда бөтә һаҡсыларҙы эшләү өсөн асыу алдынан пиар.
 
-### Reporting Bugs
+### Отчет хаталары
 
-A *bug* is an error, design flaw, failure or fault in Iroha that causes it to produce an incorrect, unexpected, or unintended result or behaviour.
+А *bug* — хата, проект етешһеҙлеге, етешһеҙлек йәки етешһеҙлек I18NT000000007X, был дөрөҫ түгел, көтөлмәгән, йәки уйламаған һөҙөмтә йәки тәртип етештереүгә килтерә.
 
-We track Iroha bugs via [GitHub Issues](https://github.com/hyperledger-iroha/iroha/issues?q=is%3Aopen+is%3Aissue+label%3ABug) labeled with the `Bug` tag.
+Беҙ күҙәтәбеҙ I18NT00000000008X ҡомаҡтар аша [GitHub мәсьәләләре] (I18NU000000056X) I18NI000000212X тег менән маркировкаланған.
 
-When you create a new issue, there is a template for you to fill in. Here's the checklist of what you should do when you are reporting bugs:
-- [ ] Add the `Bug` tag
-- [ ] Explain the issue
-- [ ] Provide a minimum working example
-- [ ] Attach a screenshot
+Яңы мәсьәлә булдырғанда, һеҙҙең өсөн шаблон бар.
+- [ ] I18NI000000213X тегын өҫтәү
+- [ ] Мәсьәләһен аңлатығыҙ.
+- [ ] Минималь эш миҫалы менән тәьмин итеү
+- [ ] Скриншот беркетергә
 
-<details> <summary>Minimum working example</summary>
+<детелдәр> <йәззәмле>Минималь эш миҫалы</йүнәлеш>
 
-For each bug, you should provide a [minimum working example](https://en.wikipedia.org/wiki/Minimal_working_example). For example:
+Һәр хата өсөн, һеҙ тейеш тәьмин итеү [минималь эш миҫалы](https://en.wikipedia.org/wiki/Minimal_working_example). Мәҫәлән:
 
 ```
 # Minting negative Assets with value spec `Numeric`.
@@ -95,339 +96,306 @@ not to be able to mint negative values
 <paste a screenshot>
 ```
 
-</details>
+</деталь>
 
 ---
-**Note:** Issues such as outdated documentation, insufficient documentation, or feature requests should use the `Documentation` or `Enhancement` labels. They are not bugs.
+**Иғтибар:** Иҫке документация кеүек мәсьәләләр, етерлек документация, йәки функциялар запростары ҡулланырға тейеш I18NI000000214X йәки I18NI000000215X ярлыҡтары. Улар ҡомаҡтар түгел.
 
 ---
 
-### Reporting Vulnerabilities
+### Отчет уязвимость
 
-While we are proactive in preventing security problems, it is possible that you might come across a security vulnerability before we do.
+Әммә беҙ әүҙем проблемаларҙы иҫкәртергә хәүефһеҙлек, мөмкин, тип, һеҙ осрауы мөмкин хәүефһеҙлек уязвимость беҙ эшләгәнсе.
 
-- Before the First Major Release (2.0) all vulnerabilities are considered bugs, so feel free to submit them as bugs [following the instructions above](#reporting-bugs).
-- After the First Major Release, use our [bug bounty program](https://hackerone.com/hyperledger) to submit vulnerabilities and get your reward.
+- Беренсе төп релиз алдынан (2.0) бөтә уязвимость хаталар тип иҫәпләнә, шуға күрә уларҙы хаталар булараҡ тапшырырға рөхсәт [өҫтә күрһәтмәләр буйынса](#reporting-bugs).
+- Һуң Беренсе төп сығарыу, беҙҙең ҡулланыу [баг-бунти программаһы](https://hackerone.com/hyperledger) тапшырырға һәм һеҙҙең бүләк алырға.
 
-:exclamation: To minimize the damage caused by an unpatched security vulnerability, you should disclose the vulnerability directly to Hyperledger as soon as possible and **avoid disclosing the same vulnerability publicly** for a reasonable period of time.
+:экскламация: зыянды минималь кимәлгә еткерер өсөн, патчһыҙ хәүефһеҙлек уязвимость, һеҙ туранан-тура асыҡларға тейеш I18NT000000001X мөмкин тиклем тиҙерәк һәм **ҡотолоу өсөн шул уҡ уязвимость асыҡтан-асыҡ ** аҡыллы ваҡыт арауығы.
 
-If you have any questions regarding our handling of security vulnerabilities, please feel free to contact any of the currently active maintainers in Rocket.Chat private messages.
+Әгәр һеҙгә ниндәй ҙә булһа һорауҙарыбыҙға бәйле беҙҙең менән эш итеү хәүефһеҙлек уязвимость, рәхим итеп, иркенләп, ниндәй ҙә булһа әлеге ваҡытта әүҙем хеҙмәтләндергәндәр ракета.Чат шәхси хәбәрҙәр.
 
-### Suggesting Improvements
+### Тәҡдимдәр төҙөкләндереүҙең
 
-Create [an issue](https://github.com/hyperledger-iroha/iroha/issues/new) on GitHub with the appropriate tags (`Optimization`, `Enhancement`) and describe the improvement you are suggesting. You may leave this idea for us or someone else to develop, or you may implement it yourself.
+[Мәсьәлә] (https://github.com/hyperledger-iroha/iroha/issues/new) GitHub-та тейешле билдәләр менән (I18NI000000216X, I18NI0000000217X) һәм һеҙ тәҡдим иткән яҡшыртыуҙы һүрәтләү. Һеҙ был фекерҙе беҙҙең өсөн йәки башҡа кеше өсөн үҫтерергә мөмкин, йәки һеҙ уны үҙегеҙ тормошҡа ашырырға мөмкин.
 
-If you intend to implement the suggestion yourself, do the following:
+Әгәр һеҙ үҙегеҙ тәҡдимде тормошҡа ашырырға ниәтләйһегеҙ икән, түбәндәгеләрҙе эшләгеҙ:
 
-1. Assign the issue you created to yourself **before** you start working on it.
-2. Work on the feature you suggested and follow our [guidelines for code and documentation](#style-guides).
-3. When you are ready to open a pull request, make sure you follow the [pull request guidelines](#pull-request-etiquette) and mark it as implementing the previously created issue:
+1. Һеҙ үҙегеҙгә булдырылған мәсьәләне **** алдынан һеҙ уның өҫтөндә эшләй башлайһығыҙ.
+2. Һеҙ тәҡдим иткән функция өҫтөндә эшләү һәм беҙҙең [код һәм документация өсөн йүнәлештәр] (#style-guides).
+3. Ҡасан һеҙ әҙер асырға тартыу запросы, ышаныслы һеҙ үтәргә [тартыу үтенес йүнәлештәре](I18NU000000062X) һәм уны билдәләү, тип тормошҡа ашырыу өсөн элек булдырылған мәсьәлә:
 
-   ```
-   feat: Description of the feature
+   I18NF000000035X
 
-   Explanation of the feature
+4. Әгәр һеҙҙең үҙгәрештәр API үҙгәрештәр талап итә, I18NI000000218X тег ҡулланыу.
 
-   Closes #1234
-   ```
+   **Иғтибар:** функциялары, улар талап итә, API үҙгәрештәр оҙағыраҡ тормошҡа ашырыу һәм раҫлау өсөн, сөнки улар талап итә I18NT000000000010X китапхана етештереүселәр үҙҙәренең кодын яңыртыу өсөн.### Һорауҙар һорау
 
-4. If your change requires an API change, use the `api-changes` tag.
+Һорау - был ниндәй ҙә булһа фекер алышыу, был хата ла, йәки функция ла, оптимизациялау тураһында ла үтенес.
 
-   **Note:** features that require API changes may take longer to implement and approve as they require Iroha library makers to update their code.
+<детелдәр> <йомлолоҡ> Нисек һорау бирергә? </йомғаҡлау>
 
-### Asking Questions
+Зинһар, һеҙҙең һорауҙарығыҙҙы [беҙҙең тиҙ хәбәрҙәр платформаларының береһе] (#contact) хеҙмәткәрҙәре һәм йәмәғәтселек ағзалары һеҙгә ваҡытында ярҙам итә ала.
 
-A question is any discussion that is neither a bug nor a feature or optimization request.
+Һеҙ, үрҙә телгә алынған йәмәғәтселек өлөшө булараҡ, башҡаларға ла ярҙам итеүҙе уйларға тейеш. Әгәр һеҙ ярҙам итергә ҡарар итһәгеҙ, зинһар, [хөрмәтле рәүештә] (CODE_OF_CONDUCT.mdX).
 
-<details> <summary> How do I ask a question? </summary>
+</деталь>
 
-Please post your questions to [one of our instant messaging platforms](#contact) so that the staff and members of the community could help you in a timely manner.
+## Һеҙҙең беренсе кодекс иғәнә
 
-You, as part of the aforementioned community, should consider helping others too. If you decide to help, please do so in a [respectful manner](CODE_OF_CONDUCT.md).
+.
+2. Ышаныслы, башҡа бер кем дә эшләмәй, һеҙ һайлаған мәсьәләләр буйынса, тикшерергә, тип, ул бер кемгә лә тәғәйенләнмәй.
+3. Башҡалар уның өҫтөндә кемдер эшләгәнен күрһен өсөн, мәсьәләне үҙегеҙгә тәғәйенләгеҙ.
+.
+5. Һеҙ әҙер булғанда, һеҙҙең үҙгәрештәр ҡылырға, уҡыу [тартыу запрос йүнәлештәре](#pull-request-etiquette).
 
-</details>
+## Ҡырҡыу үтенес этикеты
 
-## Your First Code Contribution
+Зинһар, [форт] (I18NU000000068X) һеҙҙең иғәнәгеҙ өсөн [репозитория] (https://github.com/hyperledger-iroha/iroha/tree/main) һәм [функция филиалы булдырыу] (https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-and-deleting-branches-within-your-repository) иғәнәләре өсөн. Ҡасан эшләгән **PRs санкалар**, тикшерергә [был ҡулланма](https://help.github.com/articles/checking-out-pull-requests-locally).
 
-1. Find a beginner-friendly issue among issues with the [good-first-issue](https://github.com/hyperledger-iroha/iroha/labels/good%20first%20issue) label.
-2. Make sure that no one else is working on the issues you have chosen by checking that it is not assigned to anybody.
-3. Assign the issue to yourself so that others can see that someone is working on it.
-4. Read our [Rust Style Guide](#rust-style-guide) before you start writing code.
-5. When you are ready to commit your changes, read the [pull request guidelines](#pull-request-etiquette).
+#### Код иғәнә өҫтөндә эшләү:
+- [Ҡаршы стиль ҡулланмаһы] (I18NU0000072X) һәм [Документация стиле] (I18NU0000073X).
+- Һеҙ яҙған кодтың һынауҙар менән ҡапланғанын тәьмин итеү. Әгәр ҙә һеҙ хатаны төҙәтһәгеҙ, зинһар, хатаны һынауға ҡабатлаусы минималь эш миҫалын әйләндерегеҙ.
+- Ҡасан ҡағыла алынған/прок-макро йәшник, йүгерә I18NI000000219X (йәки
+  фильтр менән I18NI000000220X) шулай tytbuild UI ҡорамалдар
+  синхронлаштырыу һәм диагностикала ҡалыу тотороҡло ҡала.
+- Документ яңы йәмәғәт API-лары (йәшник кимәлендә I18NI000000221X һәм I18NI0000002222X яңы әйберҙәр буйынса), һәм эшләй
+  `make check-missing-docs` X, ҡоршауҙы раҫлау өсөн. Шылтыратыу docs/һынау һеҙ
+  һеҙҙең тартыу запрос тасуирламаһы өҫтәлгән.
 
-## Pull Request Etiquette
+#### Һеҙҙең эшегеҙҙе үҙ өҫтөнә алыу:
+- [Гит стиль ҡулланмаһы] (#git-workflow).
+- Һеҙҙең коммиттарҙы ҡағып [йәки элек](https://www.git-tower.com/learn/git/faq/git-squash/) йәки [берләштереү ваҡытында] (I18NU0000076XX).
+- Әгәр әҙерләү барышында һеҙҙең тартыу запросы һеҙҙең филиалдан сыға, уны урындағы кимәлдә I18NI00000000224X менән тергеҙергә. Йәки, һеҙ ҡулланырға мөмкин асыҡ меню өсөн I18NI0000000225X төймәһе һәм һайлау I18NI000000226XX.
 
-Please [fork](https://docs.github.com/en/get-started/quickstart/fork-a-repo) the [repository](https://github.com/hyperledger-iroha/iroha/tree/main) and [create a feature branch](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-and-deleting-branches-within-your-repository) for your contributions. When working with **PRs from forks**, check [this manual](https://help.github.com/articles/checking-out-pull-requests-locally).
+  Был процесты һәр кем өсөн еңеләйтеү мәнфәғәтендә, тартыу запросы өсөн бер ус коммиттан да күберәк булырға тырышмағыҙ һәм яңынан ҡулланыу функцияһы тармаҡтарынан ҡотолорға тырышығыҙ.
 
-#### Working on code contribution:
-- Follow the [Rust Style Guide](#rust-style-guide) and the [Documentation Style Guide](#documentation-style-guide).
-- Ensure that the code you've written is covered by tests. If you fixed a bug, please turn the minimum working example that reproduces the bug into a test.
-- When touching derive/proc-macro crates, run `make check-proc-macro-ui` (or
-  filter with `PROC_MACRO_UI_CRATES="crate1 crate2"`) so trybuild UI fixtures
-  stay in sync and diagnostics remain stable.
-- Document new public APIs (crate-level `//!` and `///` on new items), and run
-  `make check-missing-docs` to verify the guardrail. Call out the docs/tests you
-  added in your pull request description.
+#### тартыу запросын булдырыу:
+- Ҡулланыу тейешле тартыу запрос тасуирламаһы буйынса йүнәлеш буйынса үтәй [Пул запрос этикет](#pull-request-etiquette) бүлеге. Мөмкин булһа, был ҡағиҙәләрҙән тайпылыуҙан ҡасығыҙ.
+- Өҫтәү тейешле форматланған [тартыу запрос исем](#pull-request-titles).
+- Әгәр һеҙ үҙегеҙҙе тойоп, һеҙҙең код әҙер түгел, берләшергә, әммә һеҙ теләйһегеҙ, уны аша ҡарап хеҙмәтләндергәндәр, проектлау тартыу запросы булдырыу.
 
-#### Committing your work:
-- Follow the [Git Style Guide](#git-workflow).
-- Squash your commits [either before](https://www.git-tower.com/learn/git/faq/git-squash/) or [during the merge](https://rietta.com/blog/github-merge-types/).
-- If during the preparation of your pull request your branch got out of date, rebase it locally with `git pull --rebase upstream main`. Alternatively, you may use the drop-down menu for the `Update branch` button and choose the `Update with rebase` option.
+#### Һеҙҙең эшегеҙҙе берләштереү:
+- тартыу запросы берләшкәнсе бөтә автоматлаштырылған чектарҙы үтергә тейеш. Минимумда кодты форматлаштырырға, бөтә һынауҙарҙы тапшырырға, шулай уҡ I18NI000000000000000000000000000000000027Х линттары булмаған.
+- тартыу запросын әүҙем хеҙмәтләндергәндәрҙән ике раҫлаусы рецензияһыҙ берләштереп булмай.
+- Һәр тартыу запросы автоматик рәүештә код хужаларына хәбәр итәсәк. Хәҙергегә тиклем ағымдағы хеҙмәтләндергәндәр исемлеген табырға мөмкин [МАЙНТАЙНЕРС.мд](MAINTAINERS.md).
 
-  In the interest of making this process easier for everyone, try not to have more than a handful of commits for a pull request, and avoid re-using feature branches.
+#### Обзор этикеты:
+— Үҙ аллы әңгәмәне хәл итмәгеҙ. Рецензент ҡарар ҡабул итһен.
+- таныуҙы тикшерергә комментарийҙар һәм рецензент менән шөғөлләнергә (риҡ, риза түгел, асыҡлыҡ индереү, аңлатыу һ.б.). Комментарийҙарҙы иғтибарһыҙ ҡалдырмағыҙ.
+- Ябай код үҙгәртеү тәҡдимдәре өсөн, әгәр һеҙ уларҙы туранан-тура ҡуллана, һеҙ әңгәмәне хәл итә ала.
+- Яңы үҙгәрештәрҙе этәргәндә элекке йөкләмәләрегеҙҙе өҫтөнә яҙыуҙан һаҡланығыҙ. Ул һуңғы тикшерелгәндән һуң нимә үҙгәргән һәм рецензентты нулдән башлап мәжбүр итә. Комплекттар автоматик рәүештә берләштерер алдынан ҡыҫыла.
 
-#### Creating a pull request:
-- Use an appropriate pull request description by following the guidance in the [Pull Request Etiquette](#pull-request-etiquette) section. Avoid deviating from these guidelines if possible.
-- Add an appropriately formatted [pull request title](#pull-request-titles).
-- If you feel like your code isn't ready to merge, but you want the maintainers to look through it, create a draft pull request.
+### Ҡырҡыу запрос исемдәре
 
-#### Merging your work:
-- A pull request must pass all automated checks before being merged. At a minimum, the code must be formatted, passing all tests, as well as having no outstanding `clippy` lints.
-- A pull request cannot be merged without two approving reviews from the active maintainers.
-- Each pull request will automatically notify the code owners. An up to date list of current maintainers can be found in [MAINTAINERS.md](MAINTAINERS.md).
+Беҙ анализдар бөтә берләштерелгән тартыу запростары генерациялау өсөн үҙгәрештәр журналдары. Беҙ шулай уҡ тикшерергә, тип исем аша конвенция аша *I18NI0000000228X* чек.
 
-#### Review etiquette:
-- Do not resolve a conversation on your own. Let the reviewer make a decision.
-- Acknowledge review comments and engage with the reviewer (agree, disagree, clarify, explain, etc.). Do not ignore comments.
-- For simple code change suggestions, if you apply them directly, you can resolve the conversation.
-- Avoid overwriting your previous commits when pushing new changes. It obfuscates what changed since the last review and forces the reviewer to start from scratch. Commits are squashed before merging automatically.
+*I18NI000000229X* чекты үткәреү өсөн, тартыу запросы исеме түбәндәге ҡағиҙәләрҙе үтәргә тейеш:
 
-### Pull Request Titles
+<деталдәр> <йәззәмле> ентекле титул йүнәлештәрен уҡыу өсөн киңәйтегеҙ</йүнәлеш>
 
-We parse the titles of all the merged pull requests to generate changelogs. We also check that the title follows the convention via the *`check-PR-title`* check.
+1. [Ғәҙәти коммиттар] (https://www.conventionalcommits.org/en/v1.0.0/#commit-message-with-multi-paragraph-body-and-multiple-footers) форматында үтә.
 
-To pass the *`check-PR-title`* check, the pull request title must adhere to the following guidelines:
+2. Әгәр тартыу запросы бер генә коммит булһа, пиар исемендә коммит хәбәр менән бер үк булырға тейеш.
 
-<details> <summary> Expand to read the detailed title guidelines</summary>
+</деталь>
 
-1. Follow the [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/#commit-message-with-multi-paragraph-body-and-multiple-footers) format.
+### Гит эш ағымы
 
-2. If the pull request has a single commit, the PR title should be the same as the commit message.
+- [Форк](https://docs.github.com/en/get-started/quickstart/fork-a-repo) һеҙҙең иғәнәгеҙ өсөн [репозитория] (I18NU0000082X) һәм [функция филиалы] (I18NU000000083X) иғәнәләре өсөн.
+- [Конфигурация пульты](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/configuring-a-remote-repository-for-a-fork) синхронлаштырыу өсөн һеҙҙең вилка менән [I18NT000000002X I18NT000000011X һаҡлағыс] (https://github.com/hyperledger-iroha/iroha/tree/main).
+- [Гит-регистрация эш ағымы] (I18NU000000086XX). Ҡотолоу өсөн ҡулланыу I18NI0000002300. Уның урынына `git pull --rebase` ҡулланыу.
+- Үҫеш процесын еңеләйтеү өсөн бирелгән [git git ҡармаҡтары](./hooks/) ҡулланыу.
 
-</details>
+Был ҡағиҙәләрҙе үтәгеҙ:
 
-### Git Workflow
+- **Һәр коммит** яҙылырға. Әгәр һеҙ юҡ, [DCO](I18NU000000088X) һеҙгә берләштереү рөхсәт итмәйәсәк.
 
-- [Fork](https://docs.github.com/en/get-started/quickstart/fork-a-repo) the [repository](https://github.com/hyperledger-iroha/iroha/tree/main) and [create a feature branch](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-and-deleting-branches-within-your-repository) for your contributions.
-- [Configure the remote](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/configuring-a-remote-repository-for-a-fork) to sync your fork with the [Hyperledger Iroha repository](https://github.com/hyperledger-iroha/iroha/tree/main).
-- Use the [Git Rebase Workflow](https://git-rebase.io/). Avoid using `git pull`. Use `git pull --rebase` instead.
-- Use the provided [git hooks](./hooks/) to ease the development process.
+  Ҡулланыу I18NI000000232X автоматик рәүештә өҫтәү өсөн I18NI000000233X һеҙҙең коммит хәбәренең һуңғы һыҙығы булараҡ. Һеҙҙең исем һәм электрон почта һеҙҙең GitHub иҫәбенә күрһәтелгәнсә булырға тейеш.
 
-Follow these commit guidelines:
+  Беҙ шулай уҡ һеҙгә һеҙҙең менән ҡул ҡуйырға саҡырабыҙ GPG асҡысы ҡулланып I18NI000000234X ([күберәк өйрәнергә] (I18NU0000089X)).
 
-- **Sign-off every commit**. If you don't, [DCO](https://github.com/apps/dco) will not let you merge.
+  Һеҙ ҡулланырға мөмкин [`commit-msg` ҡармаҡ](I18NU0000000000X) автоматик рәүештә ҡул ҡуйыу-һеҙҙең йөкләмәләр.
 
-  Use `git commit -s` to automatically add `Signed-off-by: $NAME <$EMAIL>` as the final line of your commit message. Your name and email should be the same as specified in your GitHub account.
+- Коммит хәбәрҙәр үтәргә тейеш [ғәҙәти коммиттар](I18NU000000091X) һәм шул уҡ исем-шәрифе схемаһы өсөн [тартыу запрос исемдәре] (#pull-request-titles). Был тигәнде аңлата:
+  - **Хәҙерге заман ** («Функция өҫтәү», «функция» түгел) ҡулланыу.
+  - **Императив кәйеф ҡулланыу ** ("Докерға таратыу..." түгел "Деплой докер...")
+- Мәғәнәле ҡылыу тураһында хәбәр яҙығыҙ.
+- Ҡыҫҡа ғына хәбәр тотоп ҡарағыҙ.
+- Әгәр һеҙгә кәрәк булһа, оҙағыраҡ ҡылған хәбәр:
+  - Һеҙҙең 50 символға йәки унан да кәмерәк хәбәрҙәрегеҙҙең тәүге юлын сикләгеҙ.
+  - Һеҙҙең коммит хәбәренең беренсе юлында һеҙ эшләгән эштең резюмеһы булырға тейеш. Әгәр һеҙгә бер нисә һыҙыҡ кәрәк икән, һәр абзац араһында буш һыҙыҡ ҡалдырығыҙ һәм уртаһындағы үҙгәрештәрегеҙҙе һүрәтләгеҙ. Һуңғы юл булырға тейеш, тип өҙөк-өҙөк.
+- Әгәр һеҙ үҙгәртә схема (тикшерергә генерациялау схемаһы менән I18NI0000000236X һәм дифф), һеҙ тейеш, бөтә үҙгәрештәр индереү схемаһы айырым йөкләмә менән хәбәр I18NI000000237X.
+- Бер мәғәнәле үҙгәрешкә бер йөкләмәгә йәбешергә тырышығыҙ.
+  - Әгәр һеҙ бер нисә мәсьәләне бер пиарҙа нығытһағыҙ, уларға айырым коммиттар бирегеҙ.
+  - Алдан әйтелгәнсә, `schema` һәм API-ға үҙгәрештәр һеҙҙең ҡалған эшегеҙҙән айырым тейешле йөкләмәләрҙә башҡарылырға тейеш.
+  - Функциональ өсөн һынауҙар өҫтәп, шул уҡ коммитта шул функциональ.
 
-  We also encourage you to sign your commits with GPG key using `git commit -sS` ([learn more](https://docs.github.com/en/authentication/managing-commit-signature-verification/signing-commits)).
+## Һынауҙар һәм эталондар
 
-  You may use [the `commit-msg` hook](./hooks/) to automatically sign-off your commits.
+- Сығанаҡ-код нигеҙендәге һынауҙарҙы эшләтеү өсөн, I18NT000000012X тамырында [`cargo test`X] (I18NU00000000093X) башҡарыу өсөн. Иғтибар итегеҙ, был оҙайлы процесс.
+- I18NNT00000000000000000000000013X тамырынан ориентирҙарҙы эшләтеү өсөн [`cargo bench`] (https://doc.rust-lang.org/cargo/commands/cargo-bench.html) тамырынан. Ярҙам итеү өсөн отладка ориентиры сығыштар, ҡуйырға I18NI000000241X мөхит үҙгәртеүсән кеүек шулай: `RUSTFLAGS="--cfg debug_assertions" cargo bench`.
+- Әгәр һеҙ айырым компонент өҫтөндә эшләй, тип уйлайым, ҡасан һеҙ эшләйһегеҙ `cargo test` [эш киңлеге](I18NU000000095X), ул тик шул эш урыны өсөн һынауҙар үткәрә, был, ғәҙәттә, бер ниндәй ҙә [интеграция һынауҙары] (I18NU00000000096X).
+- Әгәр һеҙ үҙегеҙҙең үҙгәрештәрҙе минималь селтәрҙә һынап ҡарарға теләһәгеҙ, бирелгән [I18NI0000244X](defaults/docker-compose.yml) 4 I18NT0000000014X тиҫтерҙәре селтәрен булдыра, улар консенсусты һынау һәм активтарҙы таратыу менән бәйле логиканы һынау өсөн ҡулланырға мөмкин. Беҙ кәңәш үҙ-ара эш итеү менән, был селтәр ҡулланып йәки [I18NI0000245X](I18NU000000098X), йәки I18NT000000015X клиент CLI индерелгән.
+- Һынауҙарҙы етешһеҙлектәрҙе бөтөрмәгеҙ. Хатта һынауҙар, улар иғтибарһыҙ ҡалдырыласаҡ беҙҙең торба үткәргес ахыр сиктә.
+- Әгәр мөмкин булһа, рәхим итеп, һеҙҙең кодты үҙгәрткәнсе һәм һеҙҙең үҙгәрештәрҙе эшләгәндән һуң да офадлау, сөнки әһәмиәтле етештереүсәнлек регрессияһы ғәмәлдәге ҡулланыусылар ҡуйыуҙарын өҙөүе мөмкин.
 
-- Commit messages must follow [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/#commit-message-with-multi-paragraph-body-and-multiple-footers) and the same naming schema as for [pull request titles](#pull-request-titles). This means:
-  - **Use present tense** ("Add feature", not "Added feature")
-  - **Use imperative mood** ("Deploy to docker..." not "Deploys to docker...")
-- Write a meaningful commit message.
-- Try keeping a commit message short.
-- If you need to have a longer commit message:
-  - Limit the first line of your commit message to 50 characters or less.
-  - The first line of your commit message should contain the summary of the work you've done. If you need more than one line, leave a blank line between each paragraph and describe your changes in the middle. The last line must be the sign-off.
-- If you modify the Schema (check by generating the schema with `kagami schema` and diff), you should make all changes to the schema in a separate commit with the message `[schema]`.
-- Try to stick to one commit per meaningful change.
-  - If you fixed several issues in one PR, give them separate commits.
-  - As mentioned previously, changes to the `schema` and the API should be done in appropriate commits separate from the rest of your work.
-  - Add tests for functionality in the same commit as that functionality.
+### Сериализация һаҡсыһы тикшерә
 
-## Tests and Benchmarks
+Йүгереп `make guards` XX локаль репозиторий сәйәсәтен раҫлау өсөн:
 
-- To run the source-code based tests, execute [`cargo test`](https://doc.rust-lang.org/cargo/commands/cargo-test.html) in the Iroha root. Note that this is a long process.
-- To run benchmarks, execute [`cargo bench`](https://doc.rust-lang.org/cargo/commands/cargo-bench.html) from the Iroha root. To help debug benchmark outputs, set the `debug_assertions` environment variable like so: `RUSTFLAGS="--cfg debug_assertions" cargo bench`.
-- If you are working on a particular component, be mindful that when you run `cargo test` in a [workspace](https://doc.rust-lang.org/cargo/reference/workspaces.html), it will only run the tests for that workspace, which usually doesn't include any [integration tests](https://www.testingxperts.com/blog/what-is-integration-testing).
-- If you want to test your changes on a minimal network, the provided [`docker-compose.yml`](defaults/docker-compose.yml) creates a network of 4 Iroha peers in docker containers that can be used to test consensus and asset propagation-related logic. We recommend interacting with that network using either [`iroha-python`](https://github.com/hyperledger-iroha/iroha-python), or the included Iroha client CLI.
-- Do not remove failing tests. Even tests that are ignored will be run in our pipeline eventually.
-- If possible, please benchmark your code both before and after making your changes, as a significant performance regression can break existing users' installations.
+- Етештереүҙең сығанаҡтарында `serde_json` туранан-тура Дэни-исемлеге (I18NI000000248X өҫтөнлөк).
+- Тыйыу туранан-тура `serde` X/I18NI000000250X бәйлелек/импорттар рөхсәт исемлегенән ситтә.
+- `crates/norito`-тан ситтә реклама AoS/NCB ярҙамсыларын ҡабаттан индереүҙе иҫкәртергә.
 
-### Serialization guard checks
+### отладка һынауҙары
 
-Run `make guards` to validate repository policies locally:
+<деталдәр> <йомғаҡлау> лог кимәлен үҙгәртергә өйрәнеү йәки журналдар яҙыу JSON.</йомғаҡлау>
 
-- Deny-list direct `serde_json` in production sources (prefer `norito::json`).
-- Forbid direct `serde`/`serde_json` dependencies/imports outside the allowlist.
-- Prevent reintroduction of ad‑hoc AoS/NCB helpers outside `crates/norito`.
+Әгәр һеҙҙең бер һынауҙар етешһеҙлектәр, һеҙ, бәлки, теләйем, тип кәметергә максималь логирование кимәле. Ғәҙәттәгесә, Iroha тик `INFO` кимәлендәге хәбәрҙәрҙе генә журналдар ала, әммә I18NI000000253X һәм I18NI000000254X кимәлендә журналдар етештереү мөмкинлеген һаҡлай. Был параметрҙы үҙгәртергә мөмкин йәки ҡулланып I18NI0000000255X мөхит үҙгәртеүсән өсөн код нигеҙендә һынауҙар, йәки ҡулланыу I18NI0000000256X ос нөктәһе тиҫтерҙәренең береһендә таратыу селтәрендә.`stdout`-та баҫылған журналдар етерлек булһа, һеҙ уны `json`-форматтағы журналдарҙы айырым файлға етештереү өсөн уңайлыраҡ тип һанайһығыҙҙыр һәм уларҙы йәки [төйөн-бунян] (I18NU000000099X) йәки [тут-бунян] (I18NU000000000X) ҡулланып анализлай алаһығыҙ).
 
-### Debugging tests
+I18NI000000259X мөхит үҙгәртеүсеһен тейешле урынға ҡуйырға, журналдарҙы һаҡлау һәм уларҙы анализлау өсөн өҫтәге пакеттар ярҙамында.
 
-<details> <summary> Expand to learn how to change the log level or write logs to a JSON.</summary>
+</деталь>
 
-If one of your tests is failing, you may want to decrease the maximum logging level. By default, Iroha only logs `INFO` level messages, but retains the ability to produce both `DEBUG` and `TRACE` level logs. This setting can be changed either using the `LOG_LEVEL` environment variable for code-based tests, or using the `/configuration` endpoint on one of the peers in a deployed network.
+### tokio консоль ҡулланып отладка
 
-While logs printed in the `stdout` are sufficient, you may find it more convenient to produce `json`-formatted logs into a separate file and parse them using either [node-bunyan](https://www.npmjs.com/package/bunyan) or [rust-bunyan](https://crates.io/crates/bunyan).
+<детелдәр> <йомғаҡлау> Киңәйтеү өсөн өйрәнергә, нисек компиляция I18NT00000000000017X менән токио консоль ярҙам.</йәғни>
 
-Set the `LOG_FILE_PATH` environment variable to an appropriate location to store the logs and parse them using the above packages.
+Ҡайһы берҙә был файҙалы булыуы мөмкин отладка анализлау өсөн токио бурыстарын ҡулланып [токио-консоль](I18NU0000101X).
 
-</details>
+Был осраҡта һеҙ тейеш компиляция I18NT0000000000018X ярҙам менән токио консоле кеүек:
 
-### Debugging using tokio console
+I18NF000000036X
 
-<details> <summary> Expand to learn how to compile Iroha with tokio console support.</summary>
+18NI000000260X конфигурацияһы параметры (йәки тирә-яҡ мөхит үҙгәртеүсеһе) аша конфигурацияланған potokio консоль өсөн порт.
+Токио консоль ҡулланыу лог кимәлендә I18NI000000261X булырға тейеш, конфигурация параметры йәки мөхит үҙгәртеүсән I18NI000000262X аша эшләй ала.
 
-Sometimes it might be helpful for debugging to analyze tokio tasks using [tokio-console](https://github.com/tokio-rs/console).
+I18NT0000000019X менән эшләү миҫалы менән токио консоль ярҙам ҡулланыу I18NI000000263X:
 
-In this case you should compile Iroha with support of tokio console like that:
+I18NF000000037X
 
-```bash
-RUSTFLAGS="--cfg tokio_unstable" cargo build --features tokio-console
-```
+</деталь>
 
-Port for tokio console can by configured through `LOG_TOKIO_CONSOLE_ADDR` configuration parameter (or environment variable).
-Using tokio console require log level to be `TRACE`, can be enabled through configuration parameter or environment variable `LOG_LEVEL`.
+### Профиль
 
-Example of running Iroha with tokio console support using `scripts/test_env.sh`:
+<деталдәр> <йомлолоҡ> I18NT0000000023X профилен өйрәнеү өсөн киңәйтегеҙ. </йомғаҡлау>
 
-```bash
-# 1. Compile Iroha
-RUSTFLAGS="--cfg tokio_unstable" cargo build --features tokio-console
-# 2. Run Iroha with TRACE log level
-LOG_LEVEL=TRACE ./scripts/test_env.sh setup
-# 3. Access Iroha. Peers will be available on ports 5555, 5556, ...
-tokio-console http://127.0.0.1:5555
-```
+Һөҙөмтәлелек оптимизациялау өсөн ул&#8217;ы файҙалы профиль I18NT0000000000024X.
 
-</details>
+Профилләү төҙөү әлеге ваҡытта төнгө инструменттар сылбырын талап итә. Бер әҙерләү өсөн, компиляция I18NT00000000025X менән I18NI0000000264X профиле һәм функцияһы ҡулланып I18NI000000265X:
 
-### Profiling
+I18NF000000038X
 
-<details> <summary> Expand to learn how to profile Iroha. </summary>
+Һуңынан старт I18NT0000000026X һәм беркетергә профиль һеҙ һайлаған I18NT0000000027X pid.
 
-To optimize performance it's useful to profile Iroha.
+Йәки был&#8217;s мөмкин төҙөү өсөн I18NT0000000028X эсендә докер менән профиль ярҙам һәм профиль I18NT0000000029X был ысул.
 
-Profiling builds currently require a nightly toolchain. To prepare one, compile Iroha with the `profiling` profile and feature using `cargo +nightly`:
+I18NF000000039X
 
-```bash
-RUSTFLAGS="-C force-frame-pointers=on" cargo +nightly -Z build-std build --target your-desired-target --profile profiling --features profiling
-```
+Мәҫәлән. перф ҡулланыу (linux ғына бар):
 
-Then start Iroha and attach profiler of your choice to the Iroha pid.
+I18NF000000040X
 
-Alternatively it's possible to build Iroha inside docker with profiler support and profile Iroha this way.
-
-```bash
-docker build -f Dockerfile.glibc --build-arg="PROFILE=profiling" --build-arg='RUSTFLAGS=-C force-frame-pointers=on' --build-arg='FEATURES=profiling' --build-arg='CARGOFLAGS=-Z build-std' -t iroha:profiling .
-```
-
-E.g. using perf (available only on linux):
-
-```bash
-# to capture profile
-sudo perf record -g -p <PID>
-# to analyze profile
-sudo perf report
-```
-
-To be able to observe profile of the executor during Iroha profiling, executor should be compiled without stripping symbols.
-It can be done by running:
+I18NT0000000000X профилдәре ваҡытында башҡарыусы профилен күҙәтә белергә тейеш, башҡарыусы символдарҙы өҙөп ташламайынса төҙөргә тейеш.
+Уны йүгертеп эшләргә мөмкин:
 
 ```bash
 # compile executor without optimizations
 cargo run --bin kagami -- ivm build ./path/to/executor --out-file executor.to
 ```
 
-With profiling feature enabled Iroha exposes endpoint to scrap pprof profiles:
+Профилләү функцияһы менән I18NT0000000031X ҡоролмаһы лом pprof профилдәренә ос нөктәһен фашлай:
 
-```bash
-# profile Iroha for 30 seconds and download the profile data
-curl host:port/debug/pprof/profile?seconds=30 -o profile.pb
-# analyze profile in browser (required installed go)
-go tool pprof -web profile.pb
-```
+I18NF000000042X
 
-</details>
+</деталь>
 
-## Style Guides
+## Стиль етәкселәре
 
-Please follow these guidelines when you make code contributions to our project:
+Зинһар, был ҡағиҙәләрҙе үтәргә, ҡасан һеҙ беҙҙең проектҡа код иғәнә индереү:
 
-### Git Style Guide
+### Гит стиль ҡулланмаһы
 
-:book: [Read git guidelines](#git-workflow)
+:китап: [Уҡыу git йүнәлештәре](I18NU000000102X)
 
-### Rust Style Guide
+### Тут стиле ҡулланмаһы
 
-<details> <summary> :book: Read code guidelines</summary>
+<детелдәр> <йомғаҡ> :бына: Код йүнәлештәрен уҡығыҙ</йүнәлеш>
 
-- Use `cargo fmt --all` (edition 2024) to format code.
+- `cargo fmt --all`X (2024-се баҫма) кодты форматлаштырыу өсөн ҡулланығыҙ.
 
-Code guidelines:
+Код йүнәлештәре:
 
-- Unless otherwise specified, refer to [Rust best practices](https://github.com/mre/idiomatic-rust).
-- Use the `mod.rs` style. [Self-named modules](https://rust-lang.github.io/rust-clippy/master/) will not pass static analysis, except as [`trybuild`](https://crates.io/crates/trybuild) tests.
-- Use a domain-first modules structure.
+- Әгәр ҙә башҡаса күрһәтелмәһә, [Руст иң яҡшы практика] (https://github.com/mre/idiomatic-rust).
+- I18NI000000267X стилен ҡулланығыҙ. [Үҙ-үҙем исемле модулдәр](https://rust-lang.github.io/rust-clippy/master/) статик анализ үтмәйәсәк, [`trybuild`] (https://crates.io/crates/trybuild) һынауҙары ғына түгел.
+- Домен-беренсе модулдәр структураһын ҡулланыу.
 
-  Example: don't do `constants::logger`. Instead, invert the hierarchy, putting the object for which it is used first: `iroha_logger::constants`.
-- Use [`expect`](https://learning-rust.github.io/docs/unwrap-and-expect/) with an explicit error message or proof of infallibility instead of `unwrap`.
-- Never ignore an error. If you can't `panic` and can't recover, it at least needs to be recorded in the log.
-- Prefer to return a `Result` instead of `panic!`.
-- Group related functionality spatially, preferably inside appropriate modules.
+  Миҫал: `constants::logger` XX. Уның урынына, иерархияны кире ҡайтарыу, ул беренсе булып ҡулланылған объектты ҡуйығыҙ: I18NI000000270X.
+- Ҡулланыу [`expect`](https://learning-rust.github.io/docs/unwrap-and-expect/) асыҡ хата тураһында хәбәр йәки I18NI000000272X урынына хаталылыҡ тураһында дәлилдәр менән.
+- Бер ҡасан да хатаны иғтибарға алмай. Әгәр һеҙ `panic` алмай һәм һауыға алмай, ул, исмаһам, логта теркәлергә кәрәк.
+- I18NI0000274X-ны I18NI0000000275X урынына ҡайтарыуға өҫтөнлөк бирә.
+- Төркөм менән бәйле функциональ киңлектә, яҡшыраҡ тейешле модулдәр эсендә.
 
-  For example, instead of having a block with `struct` definitions and then `impl`s for each individual struct, it is better to have the `impl`s related to that `struct` next to it.
-- Declare before implementation: `use` statements and constants at the top, unit tests at the bottom.
-- Try to avoid `use` statements if the imported name is used only once. This makes moving your code into a different file easier.
-- Do not silence `clippy` lints indiscriminately. If you do, explain your reasoning with a comment (or `expect` message).
-- Prefer  `#[outer_attribute]` to `#![inner_attribute]` if either is available.
-- If your function doesn't mutate any of its inputs (and it shouldn't mutate anything else), mark it as `#[must_use]`.
-- Avoid `Box<dyn Error>` if possible (we prefer strong typing).
-- If your function is a getter/setter, mark it `#[inline]`.
-- If your function is a constructor (i.e., it's creating a new value from the input parameters and calls `default()`), mark it `#[inline]`.
-- Avoid tying your code to concrete data structures; `rustc` is smart enough to turn a `Vec<InstructionExpr>` into `impl IntoIterator<Item = InstructionExpr>` and vice versa when it needs to.
+  Мәҫәлән, урынына блок менән I18NI0000000276X аныҡлау һәм һуңынан I18NI000002777Xs һәр айырым структура өсөн, яҡшыраҡ `impl`s менән бәйле, тип I18NI000000279X уның эргәһендә.
+- Ғәмәлгә ашырыу алдынан иғлан итегеҙ: I18NI000000280X операторҙары һәм өҫкө өлөшөндәге константалар, аҫҡы өлөшөндәге берәмек һынауҙары.
+- `use` белдереүҙән ҡотолорға тырышығыҙ, әгәр импортланған исем бер тапҡыр ғына ҡулланыла. Был һеҙҙең кодты икенсе файлға күсерергә мәжбүр итә.
+- `clippy` линттарҙы айырмай тынмағыҙ. Әгәр һеҙ, аңлатып, һеҙҙең фекерләү менән комментарий (йәки `expect` хәбәр).
+- `#[outer_attribute]` I18NI000000285X тиклем, әгәр ҙә бар икән.
+- Әгәр һеҙҙең функция мутацияланмай, уның бер ниндәй ҙә индереүҙәре (һәм ул мутация тейеш түгел, башҡа нәмә), уны билдәләү I18NI000000286X.
+- Мөмкин булһа, `Box<dyn Error>`-тан ҡасығыҙ (беҙ көслө типлаштырыуҙы өҫтөн күрәбеҙ).
+- Әгәр һеҙҙең функцияһы гетер/сетер, уны билдәләү I18NI0000000288X.
+- Әгәр һеҙҙең функция конструктор булып тора (йәғни, ул яңы ҡиммәт булдырыу өсөн индереү параметрҙары һәм шылтыратыуҙар I18NI0000000289X), уны билдәләү I18NI000000000000290X.
+- Һеҙҙең кодты конкрет мәғлүмәт структураларына бәйләүҙән ҡасығыҙ; I18NI000000291X етерлек аҡыллы, I18NI000000292X әйләндерергә `impl IntoIterator<Item = InstructionExpr>` һәм киреһенсә, ҡасан кәрәк.
 
-Naming guidelines:
-- Use only full words in *public* structure, variable, method, trait, constant, and module names. However, abbreviations are allowed if:
-  - The name is local (e.g. closure arguments).
-  - The name is abbreviated by Rust convention (e.g. `len`, `typ`).
-  - The name is an accepted abbreviation (e.g. `tx`, `wsv` etc); see the [project glossary](https://docs.iroha.tech/reference/glossary.html) for canonical abbreviations.
-  - The full name would have been shadowed by a local variable (e.g. `msg <- message`).
-  - The full name would have made the code cumbersome with more than 5-6 words in it (e.g. `WorldStateViewReceiverTrait -> WSVRecvTrait`).
-- If you change naming conventions, make sure that the new name that you've chosen is _much_ clearer than what we had before.
+Исем ҡушыу йүнәлештәре:
+- *йәмәғәт * структураһы, үҙгәртеүсән, ысул, һыҙат, константа һәм модуль исемдәрендә генә тулы һүҙҙәр ҡулланыу. Әммә ҡыҫҡартыуҙар рөхсәт ителә, әгәр:
+  - Исем локаль (мәҫәлән, ябыу аргументтары).
+  - Исем ҡыҫҡартылған Rust конвенцияһы (мәҫәлән, `len`, I18NI000002955X).
+  - Исем ҡабул ителгән ҡыҫҡартыу (мәҫәлән, `tx`X, `wsv` һ.б.); ҡара: канонлы ҡыҫҡартыуҙар өсөн [проект һүҙле] (I18NU000007X).
+  - Тулы исемде локаль үҙгәртеүсе күләгәгә ултыртыр ине (мәҫәлән, `msg <- message`X).
+  - Тулы исем унда 5-6-нан ашыу һүҙ менән кодты үтәр ине (мәҫәлән, I18NI000002999X).
+- Әгәр һеҙ үҙгәртергә исем биреүҙең конвенциялары, ышаныслы, тип яңы исем, тип һеҙ һайлаған _күпме_ асығыраҡ, беҙ элек булған.
 
-Comment guidelines:
-- When writing non-doc comments, instead of describing *what* your function does, try to explain *why* it does something in a particular way. This will save you and the reviewer time.
-- You may leave `TODO` markers in code as long as you reference an issue that you created for it. Not creating an issue means it doesn't get merged.
+Комментарий йүнәлештәре:
+- Док булмаған комментарийҙар яҙғанда, һеҙҙең функцияны *нимә * һүрәтләү урынына, *ни өсөн * был ниндәйҙер ысул менән нимәлер эшләй. Был һеҙҙе һәм рецензент ваҡытын һаҡлап ҡаласаҡ.
+- Һеҙ ҡалдырырға мөмкин I18NI0000000000000 маркерҙары кодта, тик һеҙ һылтанма мәсьәлә, һеҙ уның өсөн булдырылған. Мәсьәлә булдырыу тигәнде аңлата, ул берләшмәй.
 
-We use pinned dependencies. Follow these guidelines for versioning:
+Беҙ пинированный бәйлелектәрҙе ҡулланабыҙ. Был ҡағиҙәләрҙе үтәгеҙ, версиялау өсөн:
 
-- If your work depends on a particular crate, see if it wasn't already installed using [`cargo tree`](https://doc.rust-lang.org/cargo/commands/cargo-tree.html) (use `bat` or `grep`), and try to use that version, instead of the latest version.
-- Use the full version "X.Y.Z" in `Cargo.toml`.
-- Provide version bumps in a separate PR.
+- Әгәр һеҙҙең эшегеҙ айырым йәшниккә бәйле, ҡарағыҙ, әгәр ҙә ул инде ҡуйылған түгел, тип ҡулланып [I18NI0000003001X](I18NU000000108X) (ҡулланыу I18NI0000002X йәки I18NI000000303X), һәм был версияны ҡулланырға тырышыу, һуңғы версия урынына.
+- I18NI0000003004X-тағы «X.Y.Z» тулы версияһын ҡулланығыҙ.
+- Айырым пиарҙа версияларҙы ҡабартыуҙы тәьмин итегеҙ.
 
-</details>
+</деталь>
 
-### Documentation Style Guide
+### Документация стиле ҡулланмаһы
 
-<details> <summary> :book: Read documentation guidelines</summary>
+<детелдәр> <йомғаҡ> :бына: Документация йүнәлештәрен уҡыу</йүнәлеш>
 
 
-- Use the [`Rust Docs`](https://doc.rust-lang.org/cargo/commands/cargo-doc.html) format.
-- Prefer the single-line comment syntax. Use `///` above inline modules and `//!` for file-based modules.
-- If you can link to a structure/module/function's docs, do it.
-- If you can provide an example of usage, do it. This [is also a test](https://doc.rust-lang.org/rustdoc/documentation-tests.html).
-- If a function can error or panic, avoid modal verbs. Example: `Fails if disk IO fails` instead of `Can possibly fail, if disk IO happens to fail`.
-- If a function can error or panic for more than one reason, use a bulleted list of failure conditions, with the appropriate `Error` variants (if any).
-- Functions *do* things. Use imperative mood.
-- Structures *are* things. Get to the point. For example `Log level for reloading from the environment` is better than `This struct encapsulates the idea of logging levels, and is used for reloading from the environment`.
-- Structures have fields, which also *are* things.
-- Modules *contain* things, and we know that. Get to the point. Example: use `Logger-related traits.` instead of `Module which contains logger-related logic`.
+- [`Rust Docs`] (I18NU000000109X) форматында ҡулланыу.
+- Бер һыҙыҡлы комментарий синтаксисын өҫтөн ҡуйығыҙ. Ҡулланыу I18NI0000000306X өҫтөндә руль модулдәре һәм Iroha файл нигеҙендә модулдәр өсөн.
+- Әгәр һеҙ структураға бәйләй ала/модуль/функция&#8217;s doc, уны эшләй.
+- Әгәр ҙә һеҙ ҡулланыу миҫалын бирә алһағыҙ, уны эшләгеҙ. Был [шулай уҡ һынау] (https://doc.rust-lang.org/rustdoc/documentation-tests.html).
+- Әгәр функция хата йәки паника ала, модаль ҡылымдарҙан ҡотолорға. Миҫал: I18NI000008X урынына I18NI00000000309X X.
+- Әгәр функция хата йәки паника бер сәбәптән күберәк, етешһеҙлектәр шарттарының пулялы исемлеген ҡулланығыҙ, тейешле `Error` варианттары менән (әгәр бар икән).
+- Функциялар *эшләй*. Императив кәйеф ҡулланығыҙ.
+- Структуралар ** әйберҙәр. Нөктәгә барып ет. Мәҫәлән, `Log level for reloading from the environment` I18NI000000312X-тан яҡшыраҡ.
+- Структураларҙа баҫыуҙар бар, улар ҙа * бар* әйберҙәр.
+- Модулдәр *составында* әйберҙәр, һәм беҙ быны беләбеҙ. Нөктәгә барып ет. Миҫал: `Logger-related traits.` урынына I18NI000000314X урынына ҡулланыу.
 
 
-</details>
+</деталь>
 
-## Contact
+## Контакт
 
-Our community members are active at:
+Беҙҙең йәмәғәтселек ағзалары әүҙем:
 
-| Service       | Link                                                               |
-|---------------|--------------------------------------------------------------------|
-| StackOverflow | https://stackoverflow.com/questions/tagged/hyperledger-iroha       |
-| Mailing List  | https://lists.lfdecentralizedtrust.org/g/iroha                     |
-| Telegram      | https://t.me/hyperledgeriroha                                      |
-| Discord       | https://discord.com/channels/905194001349627914/905205848547155968 |
+| Хеҙмәт | Һылтанма |
+|--------------|--------------------------------------------------------------------|
+| StackOverflow | https://stackoverflow.com/questions/tagged/hyperledger-iroha |
+| почта исемлеге | https://lists.lfdecentralizedtrust.org/g/iroha |
+| Телеграмма | https://t.me/hyperledgeriroha |
+| Discord | https://discord.com/channels/905194001349627914/905205848547155968 |
 
 ---

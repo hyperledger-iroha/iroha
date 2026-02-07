@@ -6,1861 +6,1817 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 26f5115a14476de15fbc8f26c5a9807954df6884763a818b2bc98ec6cfe1a4cc
 source_last_modified: "2026-01-04T13:46:50.705991+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Changelog
+# יומן שינויים
 
 [Unreleased]: https://github.com/hyperledger-iroha/iroha/compare/v2.0.0-rc.2.0...HEAD
 [2.0.0-rc.2.0]: https://github.com/hyperledger-iroha/iroha/releases/tag/v2.0.0-rc.2.0
 
-All notable changes to this project will be documented in this file.
+כל השינויים הבולטים בפרויקט זה יתועדו בקובץ זה.
 
-## [Unreleased]
-
-- Drop the SCALE shim; `norito::codec` is now implemented with native Norito serialization.
-- Replace `parity_scale_codec` usages with `norito::codec` across crates.
-- Begin migrating tooling to native Norito serialization.
-- Remove remaining `parity-scale-codec` dependency from the workspace in favor of native Norito serialization.
-- Replace residual SCALE trait derivations with native Norito implementations and rename versioned codec module.
-- Merge `iroha_config_base_derive` and `iroha_futures_derive` into `iroha_derive` with feature-gated macros.
-- *(multisig)* Reject direct signatures from multisig authorities with a stable error code/reason, enforce multisig TTL caps across nested relayers, and surface TTL caps in the CLI before submission (SDK parity pending).
-- Move FFI procedural macros into `iroha_ffi` and remove `iroha_ffi_derive` crate.
-- *(schema_gen)* Remove unnecessary `transparent_api` feature from `iroha_data_model` dependency.
-- *(data_model)* Cache the ICU NFC normalizer for `Name` parsing to reduce repeated initialization overhead.
-- 📚 Document JS quickstart, configuration resolver, publishing workflow, and configuration-aware recipe for the Torii client.
-- *(IrohaSwift)* Raise minimum deployment targets to iOS 15 / macOS 12, adopt Swift concurrency across Torii client APIs, and mark public models as `Sendable`.
-- *(IrohaSwift)* Added `ToriiDaProofSummaryArtifact` and `DaProofSummaryArtifactEmitter.emit` so Swift apps can build/emit CLI-compatible DA proof bundles without shelling out to the CLI, complete with docs and regression tests covering both in-memory and on-disk workflows.【F:IrohaSwift/Sources/IrohaSwift/ToriiDaProofSummaryArtifact.swift:1】【F:IrohaSwift/Tests/IrohaSwiftTests/ToriiDaProofSummaryArtifactTests.swift:1】【F:docs/source/sdk/swift/index.md:260】
-- *(data_model/js_host)* Fix Kaigi Option serialization by removing the archived-reuse flag from `KaigiParticipantCommitment`, add native roundtrip tests, and drop the JS decode fallback so Kaigi instructions now Norito round-trip before submission.【F:crates/iroha_data_model/src/kaigi.rs:128】【F:crates/iroha_js_host/src/lib.rs:1379】【F:javascript/iroha_js/test/instructionBuilders.test.js:30】
-- *(javascript)* Allow `ToriiClient` callers to delete default headers (by passing `null`) so `getMetrics` cleanly switches between JSON and Prometheus text Accept headers.【F:javascript/iroha_js/src/toriiClient.js:488】【F:javascript/iroha_js/src/toriiClient.js:761】
-- *(javascript)* Added iterable helpers for NFTs, per-account asset balances, and asset-definition holders (with TypeScript defs, docs, and tests) so Torii pagination now covers the remaining app endpoints.【F:javascript/iroha_js/src/toriiClient.js:105】【F:javascript/iroha_js/index.d.ts:80】【F:javascript/iroha_js/test/toriiClient.test.js:365】【F:javascript/iroha_js/README.md:470】
-- *(javascript)* Added governance instruction/transaction builders plus a governance recipe so JS clients can stage deploy proposals, ballots, enactment, and council persistence end to end.【F:javascript/iroha_js/src/instructionBuilders.js:1012】【F:javascript/iroha_js/src/transaction.js:1082】【F:javascript/iroha_js/recipes/governance.mjs:1】
-- *(javascript)* Added ISO 20022 pacs.008 submit/status helpers and a matching recipe, letting JS callers exercise the Torii ISO bridge without bespoke HTTP plumbing.【F:javascript/iroha_js/src/toriiClient.js:888】【F:javascript/iroha_js/index.d.ts:706】【F:javascript/iroha_js/recipes/iso_bridge.mjs:1】
-- *(javascript)* Added pacs.008/pacs.009 builder helpers plus a config-driven recipe so JS callers can synthesise ISO 20022 payloads with validated BIC/IBAN metadata before hitting the bridge.【F:javascript/iroha_js/src/isoBridge.js:1】【F:javascript/iroha_js/test/isoBridge.test.js:1】【F:javascript/iroha_js/recipes/iso_bridge_builder.mjs:1】【F:javascript/iroha_js/index.d.ts:1】
-- *(javascript)* Completed the DA ingest/fetch/prove loop: `ToriiClient.fetchDaPayloadViaGateway` now auto-derives chunker handles (via the new `deriveDaChunkerHandle` binding), optional proof summaries reuse the native `generateDaProofSummary`, and the README/typings/tests were refreshed so SDK callers can mirror `iroha da get-blob/prove-availability` without bespoke plumbing.【F:javascript/iroha_js/src/toriiClient.js:1123】【F:javascript/iroha_js/src/dataAvailability.js:1】【F:javascript/iroha_js/test/toriiClient.test.js:1454】【F:javascript/iroha_js/index.d.ts:3275】【F:javascript/iroha_js/README.md:760】
-- *(javascript/js_host)* `sorafsGatewayFetch` scoreboard metadata now records the gateway manifest id/CID whenever gateway providers are used so adoption artefacts align with the CLI captures.【F:crates/iroha_js_host/src/lib.rs:3017】【F:docs/source/sorafs_orchestrator_rollout.md:23】
-- *(torii/cli)* Enforce ISO crosswalks: Torii now rejects `pacs.008` submissions with unknown agent BICs and the DvP CLI preview validates `--delivery-instrument-id` via `--iso-reference-crosswalk`.【F:crates/iroha_torii/src/iso20022_bridge.rs:704】【F:crates/iroha_cli/src/main.rs:3892】
-- *(torii)* Add PvP cash ingestion via `POST /v1/iso20022/pacs009`, enforcing `Purp=SECU` and BIC reference-data checks before building transfers.【F:crates/iroha_torii/src/iso20022_bridge.rs:1070】【F:crates/iroha_torii/src/lib.rs:4759】
-- *(tooling)* Added `cargo xtask iso-bridge-lint` (plus `ci/check_iso_reference_data.sh`) to validate ISIN/CUSIP, BIC↔LEI, and MIC snapshots alongside repository fixtures.【F:xtask/src/main.rs:146】【F:ci/check_iso_reference_data.sh:1】
-- *(javascript)* Hardened npm publishing by declaring repository metadata, an explicit files allowlist, provenance-enabled `publishConfig`, a `prepublishOnly` changelog/test guard, and a GitHub Actions workflow that exercises Node 18/20 in CI【F:javascript/iroha_js/package.json:1】【F:javascript/iroha_js/scripts/check-changelog.mjs:1】【F:docs/source/sdk/js/publishing.md:1】【F:.github/workflows/javascript-sdk.yml:1】
-- *(ivm/cuda)* BN254 field add/sub/mul now execute on the new CUDA kernels with host-side batching via `bn254_launch_kernel`, enabling hardware acceleration for Poseidon and ZK gadgets while preserving deterministic fallbacks.【F:crates/ivm/cuda/bn254.cu:1】【F:crates/ivm/src/cuda.rs:66】【F:crates/ivm/src/cuda.rs:1244】
+## [לא פורסם]- זרוק את SCALE shim; `norito::codec` מיושם כעת עם סידור Norito מקורי.
+- החלף את השימושים של `parity_scale_codec` ב-`norito::codec` על פני ארגזים.
+- התחל בהעברת כלים לעיבוד Norito מקורי.
+- הסר את התלות הנותרת של `parity-scale-codec` מסביבת העבודה לטובת סידור Norito מקורי.
+- החלף נגזרות של תכונת SCALE שיורית בהטמעות מקוריות של Norito ושנה את שם מודול ה-codec עם גרסאות.
+- מיזוג `iroha_config_base_derive` ו-`iroha_futures_derive` לתוך `iroha_derive` עם פקודות מאקרו מותאמות לתכונות.
+- *(multisig)* דחה חתימות ישירות מרשויות multisig עם קוד שגיאה/סיבת שגיאה יציבה, אכיפת מכסי TTL של multisig על פני ממסרים מקוננים, ומכסי TTL משטחים ב-CLI לפני ההגשה (שווי SDK בהמתנה).
+- העבר פקודות מאקרו פרוצדורליות של FFI לתוך `iroha_ffi` והסר את ארגז `iroha_ffi_derive`.
+- *(schema_gen)* הסר תכונת `transparent_api` מיותרת מהתלות ב-`iroha_data_model`.
+- *(data_model)* שמור את מנרמל ICU NFC עבור ניתוח `Name` כדי להפחית את תקורה של אתחול חוזר.
+- 📚 התחלה מהירה למסמך JS, פותר תצורה, זרימת עבודה של פרסום ומתכון מודע לתצורה עבור הלקוח Torii.
+- *(IrohaSwift)* העלה את יעדי הפריסה המינימליים ל-iOS 15 / macOS 12, אמצו במקביליות של Swift על פני ממשקי API של לקוח Torii, וסמנו דגמים ציבוריים כ-`Sendable`.
+- *(IrohaSwift)* נוספו `ToriiDaProofSummaryArtifact` ו-`DaProofSummaryArtifactEmitter.emit` כדי שיישומי Swift יוכלו לבנות/לפלוט חבילות הוכחה DA תואמות CLI מבלי להוציא ל-CLI, עם מסמכים ומבחני רגרסיה המכסים הן בזיכרון והן בדיסק זרימות עבודה.【F:IrohaSwift/Sources/IrohaSwift/ToriiDaProofSummaryArtifact.swift:1】】【F:IrohaSwift/Test s/IrohaSwiftTests/ToriiDaProofSummaryArtifactTests.swift:1】】【F:docs/source/sdk/swift/index.md:260】
+- *(data_model/js_host)* תקן סידורי סידורי Kaigi Option על-ידי הסרת דגל השימוש החוזר בארכיון מ-`KaigiParticipantCommitment`, הוסף בדיקות הלוך-חזור מקוריות ושחרר את ה-JS פענוח החלפה, כך שהוראות Kaigi עכשיו Norito הלוך-חזור לפני הגשה.【F:crates/iroha_data_model/src/kaigi.rs:128】【F:crates/iroha_js_host/src/lib.rs:1379】【F:javascript/iroha_js/test/instructionBuilders.test.js:30】
+- *(javascript)* אפשר למתקשרי `ToriiClient` למחוק כותרות ברירת מחדל (על ידי העברת `null`) כך ש-`getMetrics` יעבור בצורה נקייה בין JSON ל-Prometheus טקסט קבל כותרות.【F:javascript/iroha_js/src/toriiClient.js:488】【F:javascript/iroha_js/src/toriiClient.js:761】
+- *(javascript)* נוספו עוזרים ניתנים לחזרה עבור NFTs, יתרות נכסים לכל חשבון ובעלי הגדרות נכסים (עם הגדרות TypeScript, מסמכים ובדיקות) כך שעימוד Torii מכסה כעת את האפליקציה שנותרה נקודות קצה.【F:javascript/iroha_js/src/toriiClient.js:105】【F:javascript/iroha_js/index.d.ts:8 0】【F:javascript/iroha_js/test/toriiClient.test.js:365】【F:javascript/iroha_js/README.md:470】
+- *(javascript)* נוספו הוראות ניהול/בוני עסקאות בתוספת מתכון ממשל כדי שלקוחות JS יוכלו לפרוס הצעות, פתקי הצבעה, חקיקה והתמדה במועצה סוף.【F:javascript/iroha_js/src/instructionBuilders.js:1012】【F:javascript/iroha_js/src/transaction.js:1082】【F:javascript/iroha_js/recipes/governance.mjs:1】
+- *(javascript)* נוספו עוזרי הגשה/סטטוס ISO 20022 pacs.008 ומתכון תואם, המאפשר למתקשרי JS להפעיל את גשר ISO Torii ללא HTTP מותאם אישית אינסטלציה.【F:javascript/iroha_js/src/toriiClient.js:888】【F:javascript/iroha_js/index.d.ts:706】【F:javascript/iroha_js/recipes/iso_bridge.mjs:1】- *(javascript)* נוספו עוזרי בונה pacs.008/pacs.009 בתוספת מתכון מונחה תצורה כך שמתקשרי JS יוכלו לסנתז מטענים של ISO 20022 עם מטא נתונים מאומתים של BIC/IBAN לפני שהם פוגעים ב- גשר.【F:javascript/iroha_js/src/isoBridge.js:1】【F:javascript/iroha_js/test/isoBridge.test.js :1】【F:javascript/iroha_js/recipes/iso_bridge_builder.mjs:1】【F:javascript/iroha_js/index.d.ts:1】
+- *(javascript)* השלים את לולאת ההטמעה/הבאה/הוכחה של DA: `ToriiClient.fetchDaPayloadViaGateway` מפיקה כעת נקודות אחיזה אוטומטיות (באמצעות הכריכה החדשה של `deriveDaChunkerHandle`), סיכומי הוכחה אופציונליים עושים שימוש חוזר ב-`generateDaProofSummary` המקורית, והקריאו SDK-tests/cantypings מראה `iroha da get-blob/prove-availability` ללא התאמה אישית אינסטלציה.【F:javascript/iroha_js/src/toriiClient.js:1123】【F:javascript/iroha_js/src/dataAvailability.js:1】【F:javascrip t/iroha_js/test/toriiClient.test.js:1454】【F:javascript/iroha_js/index.d.ts:3275】【F:javascript/iroha_js/README.md:760】
+- *(javascript/js_host)* מטא-נתונים של לוח התוצאות של `sorafsGatewayFetch` מתעדים כעת את מזהה המניפסט/CID של השער בכל פעם שמשתמשים בספקי שער, כך שחפצי אימוץ מתאימים ל-CLI לכידות.【F:crates/iroha_js_host/src/lib.rs:3017】【F:docs/source/sorafs_orchestrator_rollout.md:23】
+- *(torii/cli)* אכיפת מעברי חצייה ISO: Torii דוחה כעת הגשות `pacs.008` עם BICs לא ידועים של סוכן והתצוגה המקדימה של DvP CLI מאמתת את `--delivery-instrument-id` באמצעות `--iso-reference-crosswalk`.【F:crates/iroha_torii/src/iso20022_bridge.rs:704】【F:crates/iroha_cli/src/main.rs:3892】
+- *(torii)* הוסף צריכת מזומן PvP דרך `POST /v1/iso20022/pacs009`, אכיפת בדיקות `Purp=SECU` ו-BIC של נתוני ייחוס לפני בנייה העברות.【F:crates/iroha_torii/src/iso20022_bridge.rs:1070】【F:crates/iroha_torii/src/lib.rs:4759】
+- *(כלי עבודה)* נוסף `cargo xtask iso-bridge-lint` (בתוספת `ci/check_iso_reference_data.sh`) כדי לאמת תמונות ISIN/CUSIP, BIC↔LEI ו-MIC לצד המאגר מתקנים.【F:xtask/src/main.rs:146】【F:ci/check_iso_reference_data.sh:1】
+- *(javascript)* פרסום npm מוקשה על ידי הכרזה על מטא נתונים של מאגר, רשימת היתרים של קבצים מפורשים, `publishConfig` התומך במקור, יומן שינויים/משמר בדיקה `prepublishOnly` וזרימת עבודה של GitHub Actions שמתרגלת את Node 18/20 CI【F:javascript/iroha_js/package.json:1】【F:javascript/iroha_js/scripts/check-changelog.mjs:1】【F:docs/source/sdk/js/publishing.md:1】【F:.dk/javascript:-slowscript:1
+- *(ivm/cuda)* BN254 field add/sub/mul מופעלת כעת על ליבות ה-CUDA החדשות עם אצווה בצד המארח באמצעות `bn254_launch_kernel`, המאפשרת האצת חומרה עבור גאדג'טים של Poseidon ו-ZK תוך שמירה על דטרמיניזם fallbacks.【F:crates/ivm/cuda/bn254.cu:1】【F:crates/ivm/src/cuda.rs:66】【F:crates/ivm/src/cuda.rs:1244】
 
 ## [2.0.0-rc.2.0] - 2025-05-08
 
-### 🚀 Features
+### 🚀 תכונות
 
-- *(cli)* Add `iroha transaction get` and other important commands (#5289)
-- [**breaking**] Separate fungible and non-fungible assets (#5308)
-- [**breaking**] Finalize non-empty blocks by allowing empty blocks after them (#5320)
-- Expose telemetry types in schema and client (#5387)
-- *(iroha_torii)* Stubs for feature-gated endpoints (#5385)
-- Add commit time metrics (#5380)
+- *(cli)* הוסף `iroha transaction get` ופקודות חשובות אחרות (#5289)
+- [**שבירה**] נכסים ניתנים להפרדה ולא ניתנים להפרדה (#5308)
+- [**שבירה**] סיים בלוקים שאינם ריקים על ידי התרת בלוקים ריקים אחריהם (#5320)
+- חשיפת סוגי טלמטריה בסכימה ובלקוח (#5387)
+- *(iroha_torii)* סטאבים עבור נקודות קצה מוגנות לתכונות (#5385)
+- הוסף מדדי זמן התחייבות (#5380)
 
-### 🐛 Bug Fixes
+### 🐛 תיקוני באגים
 
-- Revise NonZeros (#5278)
-- Typos in documentation files (#5309)
-- *(crypto)* Expose `Signature::payload` getter (#5302) (#5310)
-- *(core)* Add checks for role presence before granting it (#5300)
-- *(core)* Reconnect disconnected peer (#5325)
-- Fix pytests related to store assets and NFT (#5341)
-- *(CI)* Fix python static analysis workflow for poetry v2 (#5374)
-- Expired transaction event appears after commit (#5396)
+- עדכון NonZeros (#5278)
+- שגיאות הקלדה בקבצי תיעוד (#5309)
+- *(קריפטו)* חשוף את `Signature::payload` getter (#5302) (#5310)
+- *(ליבה)* הוסף בדיקות לנוכחות תפקיד לפני הענקתו (#5300)
+- *(ליבה)* חבר מחדש עמית מנותק (#5325)
+- תקן בדיקות pytest הקשורות לנכסי חנות ו-NFT (#5341)
+- *(CI)* תקן זרימת עבודה של ניתוח סטטי של פיתון עבור שירה v2 (#5374)
+- אירוע עסקה שפג תוקפו מופיע לאחר ביצוע (#5396)
 
-### 💼 Other
-
-- Include `rust-toolchain.toml` (#5376)
-- Warn on `unused`, not `deny` (#5377)
+### 💼 אחר- כלול `rust-toolchain.toml` (#5376)
+- אזהרה על `unused`, לא `deny` (#5377)
 
 ### 🚜 Refactor
 
-- Umbrella Iroha CLI (#5282)
-- *(iroha_test_network)* Use pretty format for logs (#5331)
-- [**breaking**] Simplify serialization of `NumericSpec` in `genesis.json` (#5340)
-- Improve logging for failed p2p connection  (#5379)
-- Revert `logger.level`, add `logger.filter`, extend config routes (#5384)
+- מטריה Iroha CLI (#5282)
+- *(iroha_test_network)* השתמש בפורמט יפה עבור יומנים (#5331)
+- [**שבירה**] פשט את הסידרה של `NumericSpec` ב-`genesis.json` (#5340)
+- שפר את רישום הרישום עבור חיבור p2p כושל (#5379)
+- החזר את `logger.level`, הוסף `logger.filter`, הרחבת מסלולי התצורה (#5384)
 
-### 📚 Documentation
+### 📚 תיעוד
 
-- Add `network.public_address` to `peer.template.toml` (#5321)
+- הוסף את `network.public_address` ל-`peer.template.toml` (#5321)
 
-### ⚡ Performance
+### ⚡ ביצועים
 
-- *(kura)* Prevent redundant block writes to disk (#5373)
-- Implemented custom storage for transactions hashes (#5405)
+- *(kura)* מנע כתיבת בלוק מיותר לדיסק (#5373)
+- הטמעת אחסון מותאם אישית עבור hashes של עסקאות (#5405)
 
-### ⚙️ Miscellaneous Tasks
+### ⚙️ משימות שונות
 
-- Fix poetry usage (#5285)
-- Remove redundant consts from `iroha_torii_const` (#5322)
-- Remove unused `AssetEvent::Metadata*` (#5339)
-- Bump Sonarqube Action version (#5337)
-- Remove unused permissions (#5346)
-- Add unzip package to ci-image (#5347)
-- Fix some comments (#5397)
-- Move integrations tests out from `iroha` crate (#5393)
-- Disable defectdojo job (#5406)
-- Add DCO sign-off for missing commits
-- Reorganise workflows (second try) (#5399)
-- Do not run Pull Request CI on push to main (#5415)
+- תקן את השימוש בשירה (#5285)
+- הסר קונסטטים מיותרים מ-`iroha_torii_const` (#5322)
+- הסר `AssetEvent::Metadata*` שאינו בשימוש (#5339)
+- גרסת Bump Sonarqube Action (#5337)
+- הסר הרשאות שאינן בשימוש (#5346)
+- הוסף חבילת unzip ל-ci-image (#5347)
+- תקן כמה הערות (#5397)
+- העבר בדיקות אינטגרציות מתוך ארגז `iroha` (#5393)
+- השבת את עבודת defectdojo (#5406)
+- הוסף אישור DCO עבור התחייבויות חסרות
+- ארגון מחדש של זרימות עבודה (ניסיון שני) (#5399)
+- אל תפעיל Pull Request CI בדחיפה לראשי (#5415)
 
 <!-- generated by git-cliff -->
 
 ## [2.0.0-rc.1.3] - 2025-03-07
 
-### Added
+### נוסף
 
-- finalize non-empty blocks by allowing empty blocks after them (#5320)
+- סיים בלוקים שאינם ריקים על ידי התרת בלוקים ריקים אחריהם (#5320)
 
 ## [2.0.0-rc.1.2] - 2025-02-25
 
-### Fixed
+### תוקן
 
-- re-registered peers are now correctly reflected in the peer list (#5327)
+- עמיתים שנרשמו מחדש משתקפים כעת כהלכה ברשימת העמיתים (#5327)
 
 ## [2.0.0-rc.1.1] - 2025-02-12
 
-### Added
+### נוסף
 
-- add `iroha transaction get` and other important commands (#5289)
+- הוסף `iroha transaction get` ופקודות חשובות אחרות (#5289)
 
 ## [2.0.0-rc.1.0] - 2024-12-06
 
-### Added
+### נוסף
 
-- implement query projections (#5242)
-- use persistent executor (#5082)
-- add listen timeouts to iroha cli (#5241)
-- add /peers API endpoint to torii (#5235)
-- address agnostic p2p (#5176)
-- improve multisig utility and usability (#5027)
-- protect `BasicAuth::password` from being printed (#5195)
-- sort descending in `FindTransactions` query (#5190)
-- introduce block header into every smart contract execution context (#5151)
-- dynamic commit time based on view change index (#4957)
-- define default permission set (#5075)
-- add implementation of Niche for `Option<Box<R>>` (#5094)
-- transaction and block predicates (#5025)
-- report amount of remaining items in query (#5016)
-- bounded discrete time (#4928)
-- add missing mathematical operations to `Numeric` (#4976)
-- validate block sync messages (#4965)
-- query filters (#4833)
+- יישם תחזיות שאילתות (#5242)
+- השתמש בביצוע מתמשך (#5082)
+- הוסף זמני האזנה ל-iroha cli (#5241)
+- הוסף /peers API ל-torii (#5235)
+- כתובת אגנוסטית p2p (#5176)
+- שפר את השירות והשימושיות של multisig (#5027)
+- הגן על `BasicAuth::password` מפני הדפסה (#5195)
+- מיון יורד בשאילתת `FindTransactions` (#5190)
+- הכנס כותרת בלוק לכל הקשר ביצוע חוזה חכם (#5151)
+- זמן התחייבות דינמי מבוסס על אינדקס שינוי צפייה (#4957)
+- הגדר ערכת הרשאות ברירת מחדל (#5075)
+- הוסף יישום של Niche עבור `Option<Box<R>>` (#5094)
+- פרדיקטים לעסקה וחסימה (#5025)
+- דווח על כמות הפריטים הנותרים בשאילתה (#5016)
+- זמן דיסקרטי מוגבל (#4928)
+- הוסף פעולות מתמטיות חסרות ל-`Numeric` (#4976)
+- אימות הודעות סנכרון חסימה (#4965)
+- מסנני שאילתות (#4833)
 
-### Changed
+### השתנה
 
-- simplify peer id parsing (#5228)
-- move transaction error out of block payload (#5118)
-- rename JsonString to Json (#5154)
-- add client entity to smart contracts (#5073)
-- leader as transaction ordering service (#4967)
-- make kura drop old blocks from memory (#5103)
-- use `ConstVec` for instructions in `Executable` (#5096)
-- gossip txs at most once (#5079)
-- reduce memory usage of `CommittedTransaction` (#5089)
-- make query cursor errors more specific (#5086)
-- reorganize crates (#4970)
-- introduce `FindTriggers` query, remove `FindTriggerById` (#5040)
-- dont depend on signatures for update (#5039)
-- change parameters format in genesis.json (#5020)
-- only send current and previous view change proof (#4929)
-- disable sending message when not ready to prevent busy loop (#5032)
-- move total asset quantity to asset definition (#5029)
-- sign only block's header, not the whole payload (#5000)
-- use `HashOf<BlockHeader>` as the type of the block hash (#4998)
-- simplify `/health` and `/api_version` (#4960)
-- rename `configs` to `defaults`, remove `swarm` (#4862)
+- פשט את ניתוח מזהה עמיתים (#5228)
+- העבר שגיאת עסקה מחוץ למטען החסימה (#5118)
+- שנה את שם JsonString ל-Json (#5154)
+- הוסף ישות לקוח לחוזים חכמים (#5073)
+- מוביל כשירות הזמנת עסקאות (#4967)
+- לגרום לקורה להוריד בלוקים ישנים מהזיכרון (#5103)
+- השתמש ב-`ConstVec` להוראות ב-`Executable` (#5096)
+- הודעות רכילות לכל היותר פעם אחת (#5079)
+- צמצם את השימוש בזיכרון של `CommittedTransaction` (#5089)
+- הפוך שגיאות סמן שאילתה לספציפיות יותר (#5086)
+- ארגון מחדש של ארגזים (#4970)
+- הצג את שאילתת `FindTriggers`, הסר את `FindTriggerById` (#5040)
+- אל תסתמך בחתימות לעדכון (#5039)
+- שנה פורמט פרמטרים ב-genesis.json (#5020)
+- שלח רק הוכחה לשינוי תצוגה נוכחית וקודמת (#4929)
+- השבת שליחת הודעה כאשר אינך מוכן כדי למנוע לולאה תפוסה (#5032)
+- העבר את כמות הנכס הכוללת להגדרת הנכס (#5029)
+- חתום רק על הכותרת של הבלוק, לא על כל המטען (#5000)
+- השתמש ב-`HashOf<BlockHeader>` כסוג ה-hash של הבלוק (#4998)
+- פשט את `/health` ואת `/api_version` (#4960)
+- שנה את השם של `configs` ל-`defaults`, הסר את `swarm` (#4862)
 
-### Fixed
+### תוקן- לשטח את התפקיד הפנימי ב-json (#5198)
+- תקן אזהרות `cargo audit` (#5183)
+- הוסף בדיקת טווח לאינדקס החתימה (#5157)
+- תיקון דוגמה של מאקרו של מודל במסמכים (#5149)
+- סגור את ה-ws כראוי בזרם בלוקים/אירועים (#5101)
+- בדיקת עמיתים מהימנים שבור (#5121)
+- בדוק שלגוש הבא יש גובה +1 (#5111)
+- תקן חותמת זמן של בלוק בראשית (#5098)
+- תקן הידור `iroha_genesis` ללא תכונת `transparent_api` (#5056)
+- טיפול נכון ב-`replace_top_block` (#4870)
+- תקן שיבוט של מבצע (#4955)
+- הצג פרטי שגיאה נוספים (#4973)
+- השתמש ב-`GET` עבור זרם בלוקים (#4990)
+- שפר את הטיפול בעסקאות בתור (#4947)
+- למנוע הודעות חסימת חסימה מיותרות (#4909)
+- למנוע מבוי סתום בשליחת הודעה גדולה בו זמנית (#4948)
+- הסר עסקה שפג תוקפן מהמטמון (#4922)
+- תקן את כתובת האתר של torii עם הנתיב (#4903)
 
-- flatten inner role in json (#5198)
-- fix `cargo audit` warnings (#5183)
-- add range check to signature index (#5157)
-- fix model macro example in docs (#5149)
-- close ws properly in blocks/events stream (#5101)
-- broken trusted peers check (#5121)
-- check that next block has height +1 (#5111)
-- fix timestamp of genesis block (#5098)
-- fix `iroha_genesis` compilation without `transparent_api` feature (#5056)
-- correctly handle `replace_top_block` (#4870)
-- fix cloning of executor (#4955)
-- display more error details (#4973)
-- use `GET` for blocks stream (#4990)
-- improve queue transactions handling (#4947)
-- prevent redundant blocksync block messages (#4909)
-- prevent deadlock on simultaneous sending large message (#4948)
-- remove expired transaction from cache (#4922)
-- fix torii url with path (#4903)
+### הוסר
 
-### Removed
+- הסר API מבוסס מודול מהלקוח (#5184)
+- הסר את `riffle_iter` (#5181)
+- הסר תלות שאינה בשימוש (#5173)
+- הסר את הקידומת `max` מ-`blocks_in_memory` (#5145)
+- הסר אומדן קונצנזוס (#5116)
+- הסר את `event_recommendations` מהגוש (#4932)
 
-- remove module-based api from client (#5184)
-- remove `riffle_iter` (#5181)
-- remove unused dependencies (#5173)
-- remove `max` prefix from `blocks_in_memory` (#5145)
-- remove consensus estimation (#5116)
-- remove `event_recommendations` from block (#4932)
-
-### Security
+### אבטחה
 
 ## [2.0.0-pre-rc.22.1] - 2024-07-30
 
-### Fixed
+### תוקן
 
-- added `jq` to the docker image
+- הוסיף את `jq` לתמונת הדוקר
 
 ## [2.0.0-pre-rc.22.0] - 2024-07-25
 
-### Added
+### נוסף
 
-- specify on-chain parameters explicitly in genesis (#4812)
-- allow turbofish with multiple `Instruction`s (#4805)
-- reimplement multisignature transactions (#4788)
-- implement built-in vs custom on-chain parameters (#4731)
-- improve custom instruction usage (#4778)
-- make the metadata dynamic via implementing JsonString (#4732)
-- allow multiple peers submit genesis block (#4775)
-- supply `SignedBlock` instead of `SignedTransaction` to peer (#4739)
-- custom instructions in executor (#4645)
-- extend client cli to request json queries (#4684)
- - add detect support for `norito_decoder` (#4680)
-- generalize permissions schema to executor data model (#4658)
-- added register trigger permissions in the default executor (#4616)
- - support JSON in `norito_cli`
-- introduce p2p idle timeout
+- ציין פרמטרים על השרשרת במפורש בראשית (#4812)
+- אפשר דג טורבו עם `Instruction` מרובים (#4805)
+- יישום מחדש של עסקאות ריבוי חתימות (#4788)
+- הטמעת פרמטרים מובנים לעומת מותאמים אישית על השרשרת (#4731)
+- שפר את השימוש בהוראות מותאמות אישית (#4778)
+- הפוך את המטא נתונים לדינמיים באמצעות הטמעת JsonString (#4732)
+- אפשר למספר עמיתים להגיש בלוק בראשית (#4775)
+- ספק `SignedBlock` במקום `SignedTransaction` לעמית (#4739)
+- הוראות מותאמות אישית ב-executor (#4645)
+- הרחב את ה-cli של הלקוח לבקשת שאילתות json (#4684)
+ - הוסף תמיכה בזיהוי עבור `norito_decoder` (#4680)
+- הכללה של סכימת הרשאות למודל נתוני מבצע (#4658)
+- נוספו הרשאות טריגר רישום במבצע ברירת המחדל (#4616)
+ - תמיכה ב-JSON ב-`norito_cli`
+- הצג פסק זמן סרק של p2p
 
-### Changed
+### השתנה
 
-- replace `lol_alloc` with `dlmalloc` (#4857)
-- rename `type_` to `type` in schema (#4855)
-- replace `Duration` with `u64` in schema (#4841)
-- use `RUST_LOG`-like EnvFilter for logging (#4837)
-- keep voting block when possible (#4828)
-- migrate from warp to axum (#4718)
-- split executor data model (#4791)
-- shallow data model (#4734) (#4792)
-- don't send public key with signature (#4518)
-- rename `--outfile` to `--out-file` (#4679)
-- rename iroha server and client (#4662)
-- rename `PermissionToken` to `Permission` (#4635)
-- reject `BlockMessages` eagerly (#4606)
-- make `SignedBlock` immutable (#4620)
-- rename TransactionValue into CommittedTransaction (#4610)
-- authenticate personal accounts by ID (#4411)
-- use multihash format for private keys (#4541)
- - rename `parity_scale_decoder` to `norito_cli`
-- send blocks to Set B validators
-- make `Role` transparent (#4886)
-- derive block hash from header (#4890)
+- החלף את `lol_alloc` ב-`dlmalloc` (#4857)
+- שנה את שם `type_` ל-`type` בסכימה (#4855)
+- החלף את `Duration` ב-`u64` בסכימה (#4841)
+- השתמש ב-EnvFilter דמוי `RUST_LOG` לרישום (#4837)
+- שמור על חסימת הצבעה כשאפשר (#4828)
+- הגירה מעיוות לאקסום (#4718)
+- מודל נתוני מבצע מפוצל (#4791)
+- מודל נתונים רדוד (#4734) (#4792)
+- אל תשלח מפתח ציבורי עם חתימה (#4518)
+- שנה את שם `--outfile` ל-`--out-file` (#4679)
+- שנה את שם השרת והלקוח של iroha (#4662)
+- שנה את שם `PermissionToken` ל-`Permission` (#4635)
+- דחה את `BlockMessages` בשקיקה (#4606)
+- להפוך את `SignedBlock` לבלתי ניתן לשינוי (#4620)
+- שנה את שם TransactionValue ל-CommittedTransaction (#4610)
+- אימות חשבונות אישיים באמצעות מזהה (#4411)
+- השתמש בפורמט multihash עבור מפתחות פרטיים (#4541)
+ - שנה את שם `parity_scale_decoder` ל-`norito_cli`
+- שלח בלוקים לאימות סט B
+- להפוך את `Role` לשקוף (#4886)
+- הפק את ה-hash של בלוק מהכותרת (#4890)
 
-### Fixed
+### תוקן- בדוק שהרשות היא הבעלים של הדומיין להעברה (#4807)
+- הסר אתחול הכפול של לוגר (#4800)
+- תקן מוסכמות שמות עבור נכסים והרשאות (#4741)
+- שדרוג המבצע בטרנזקציה נפרדת בבלוק בראשית (#4757)
+- ערך ברירת מחדל נכון עבור `JsonString` (#4692)
+- שפר את הודעת השגיאה של הסידריאליזציה (#4659)
+- אל תיבהל אם המפתח הציבורי Ed25519Sha512 שעבר הוא באורך לא חוקי (#4650)
+- השתמש באינדקס שינוי תצוגה תקין בעת טעינת בלוק התחלתית (#4612)
+- אל תפעיל בטרם עת מפעילי זמן לפני חותמת הזמן `start` שלהם (#4333)
+- תמיכה ב-`https` עבור `torii_url` (#4601) (#4617)
+- הסר את serde(flaten) מ-SetKeyValue/RemoveKeyValue (#4547)
+- ערכת ההדק מסודרת כהלכה
+- ביטול `PermissionToken`s שהוסרו ב-`Upgrade<Executor>` (#4503)
+- דווח על מדד שינוי תצוגה נכון עבור הסיבוב הנוכחי
+- הסר טריגרים מתאימים ב-`Unregister<Domain>` (#4461)
+- בדוק את מפתח פאב בראשית בסבב בראשית
+- למנוע רישום בראשית דומיין או חשבון
+- הסר הרשאות מתפקידים בביטול הרישום של הישות
+- מטא נתונים של טריגר נגישים בחוזים חכמים
+- השתמש בנעילת rw כדי למנוע תצוגת מצב לא עקבית (#4867)
+- ידית מזלג רך בתמונת מצב (#4868)
+- תקן את MinSize עבור ChaCha20Poly1305
+- הוסף מגבלות ל-LiveQueryStore כדי למנוע שימוש גבוה בזיכרון (#4893)
 
-- check that authority owns domain to transfer (#4807)
-- remove logger double initialization (#4800)
-- fix naming convention for assets and permissions (#4741)
-- upgrade executor in separate transaction in genesis block (#4757)
-- correct default value for `JsonString` (#4692)
-- improve deserialization error message (#4659)
-- do not panic if the passed Ed25519Sha512 public key is of invalid length (#4650)
-- use proper view change index on init block load (#4612)
-- don't prematurely execute time-triggers before their `start` timestamp (#4333)
-- support `https` for `torii_url` (#4601) (#4617)
-- remove serde(flatten) from SetKeyValue/RemoveKeyValue (#4547)
-- trigger set is correctly serialized
-- revoke removed `PermissionToken`s on `Upgrade<Executor>` (#4503)
-- report correct view change index for current round
-- remove corresponding triggers on `Unregister<Domain>` (#4461)
-- check genesis pub key in genesis round
-- prevent registering genesis Domain or Account
-- remove permissions from roles on entity unregistration
-- trigger metadata is accessible in smart contracts
-- use rw lock to prevent inconsitent state view (#4867)
-- handle soft fork in snapshot (#4868)
-- fix MinSize for ChaCha20Poly1305
-- add limits to LiveQueryStore to prevent high memory usage (#4893)
+### הוסר
 
-### Removed
+- הסר מפתח ציבורי מהמפתח הפרטי ed25519 (#4856)
+- הסר את kura.lock (#4849)
+- החזר את הסיומות `_ms` ו-`_bytes` בתצורה (#4667)
+- הסר את סיומת `_id` ו-`_file` משדות בראשית (#4724)
+- הסר נכסי אינדקס ב-AssetsMap על ידי AssetDefinitionId (#4701)
+- הסר את הדומיין מזהות הטריגר (#4640)
+- הסר חתימה בראשית מ-Iroha (#4673)
+- הסר את `Visit` מאוגד מ-`Validate` (#4642)
+- הסר את `TriggeringEventFilterBox` (#4866)
+- הסר את `garbage` בלחיצת יד p2p (#4889)
+- הסר את `committed_topology` מהגוש (#4880)
 
-- remove public key from ed25519 private key (#4856)
-- remove kura.lock (#4849)
-- revert `_ms` and `_bytes` suffixes in config (#4667)
-- remove `_id` and `_file` suffix from genesis fields (#4724)
-- remove index Assets in AssetsMap by AssetDefinitionId (#4701)
-- remove domain from trigger identity (#4640)
-- remove genesis signing from Iroha (#4673)
-- remove `Visit` bound from `Validate` (#4642)
-- remove `TriggeringEventFilterBox` (#4866)
-- remove `garbage` in p2p handshake (#4889)
-- remove `committed_topology` from block (#4880)
+### אבטחה
 
-### Security
-
-- guard against secrets leakage
+- הישמרו מפני דליפת סודות
 
 ## [2.0.0-pre-rc.21] - 2024-04-19
 
-### Added
+### נוסף
 
-- include trigger id in trigger entrypoint (#4391)
-- expose event set as bitfields in schema (#4381)
-- introduce new `wsv` with granular access (#2664)
-- add event filters for `PermissionTokenSchemaUpdate`, `Configuration` and `Executor` events
-- introduce snapshot "mode" (#4365)
-- allow granting/revoking role's permissions (#4244)
-- introduce arbitrary-precision numeric type for assets (remove all other numeric types) (#3660)
-- different fuel limit for Executor (#3354)
-- integrate pprof profiler (#4250)
-- add asset subcommand in client CLI (#4200)
-- `Register<AssetDefinition>` permissions (#4049)
-- add `chain_id` to prevent replay attacks (#4185)
-- add subcommands to edit domain metadata in client CLI (#4175)
-- implement store set, remove, get operations in Client CLI (#4163)
-- count identical smart contracts for triggers (#4133)
-- add subcommand into client CLI to transfer domains (#3974)
-- support boxed slices in FFI (#4062)
-- git commit SHA to client CLI (#4042)
-- proc macro for default validator boilerplate (#3856)
-- introduced query request builder into Client API (#3124)
-- lazy queries inside smart contracts (#3929)
-- `fetch_size` query parameter (#3900)
-- asset store tranfer instruction (#4258)
-- guard against secrets leakage (#3240)
-- deduplicate triggers with the same source code (#4419)
+- כלול מזהה טריגר בנקודת הכניסה של טריגר (#4391)
+- חשיפת ערכת אירועים כשדות סיביות בסכימה (#4381)
+- הצג את `wsv` חדש עם גישה פרטנית (#2664)
+- הוסף מסנני אירועים לאירועי `PermissionTokenSchemaUpdate`, `Configuration` ו-`Executor`
+- הצג את "מצב" תמונת מצב (#4365)
+- אפשר הענקת/ביטול הרשאות לתפקיד (#4244)
+- הצג סוג מספרי דיוק שרירותי עבור נכסים (הסר את כל סוגי המספרים האחרים) (#3660)
+- מגבלת דלק שונה עבור המבצע (#3354)
+- שלב את pprof profiler (#4250)
+- הוסף פקודה משנה נכס ב-CLI של הלקוח (#4200)
+- הרשאות `Register<AssetDefinition>` (#4049)
+- הוסף `chain_id` כדי למנוע התקפות שידור חוזר (#4185)
+- הוסף פקודות משנה לעריכת מטא נתונים של דומיין ב-CLI של הלקוח (#4175)
+- ליישם סט חנות, להסיר, לקבל פעולות ב-Client CLI (#4163)
+- ספור חוזים חכמים זהים עבור טריגרים (#4133)
+- הוסף פקודה משנה ל-CLI של הלקוח כדי להעביר דומיינים (#3974)
+- תמיכה בפרוסות קופסאות ב-FFI (#4062)
+- git commit SHA ל-CLI של הלקוח (#4042)
+- מאקרו proc עבור לוח המחדל של אימות ברירת המחדל (#3856)
+- הציג את בונה בקשות שאילתות ל-Client API (#3124)
+- שאילתות עצלות בתוך חוזים חכמים (#3929)
+- פרמטר שאילתה `fetch_size` (#3900)
+- הוראה להעברת נכסים בחנות (#4258)
+- שמירה מפני דליפת סודות (#3240)
+- ביטול כפילויות של טריגרים עם אותו קוד מקור (#4419)
 
-### Changed
+### השתנה- שרשרת כלי חלודה חבטה ללילה-2024-04-18
+- שלח בלוקים לאימות סט B (#4387)
+- פיצול אירועי צינור לאירועי בלוק ועסקאות (#4366)
+- שנה את שם מקטע התצורה של `[telemetry.dev]` ל-`[dev_telemetry]` (#4377)
+- הפוך את `Action` ו-`Filter` לא-גנריים (#4375)
+- שפר את API לסינון אירועים עם דפוס בונה (#3068)
+- לאחד ממשקי API של מסנני אירועים שונים, להציג ממשק API של בונה שוטף
+- שנה את שם `FilterBox` ל-`EventFilterBox`
+- שנה את שם `TriggeringFilterBox` ל-`TriggeringEventFilterBox`
+- שפר את שמות המסננים, למשל. `AccountFilter` -> `AccountEventFilter`
+- שכתוב את התצורה בהתאם לתצורת RFC (#4239)
+- הסתר מבנה פנימי של מבני הגירסה מהממשק ה-API הציבורי (#3887)
+- הכנס באופן זמני הזמנה צפויה לאחר יותר מדי שינויים בתצוגה כושלת (#4263)
+- השתמש בסוגי מפתחות בטון ב-`iroha_crypto` (#4181)
+- שינויים בתצוגה מפוצלת מהודעות רגילות (#4115)
+- הפוך את `SignedTransaction` לבלתי ניתן לשינוי (#4162)
+- ייצא `iroha_config` עד `iroha_client` (#4147)
+- ייצא `iroha_crypto` עד `iroha_client` (#4149)
+- ייצא `data_model` עד `iroha_client` (#4081)
+- הסר את התלות `openssl-sys` מ-`iroha_crypto` והכנס קצה אחורי של TLS הניתנים להגדרה ל-`iroha_client` (#3422)
+- החלף את EOF `hyperledger/ursa` לא מתוחזק בפתרון פנימי `iroha_crypto` (#3422)
+- מטב את ביצועי המבצע (#4013)
+- עדכון עמיתים בטופולוגיה (#3995)
 
-- bump rust toolchain to nightly-2024-04-18
-- send blocks to Set B validators (#4387)
-- split pipeline events into block and transaction events (#4366)
-- rename `[telemetry.dev]` config section to `[dev_telemetry]` (#4377)
-- make `Action` and `Filter` non-generic types (#4375)
-- improve event filtering API with builder pattern (#3068)
-- unify various event filter APIs, introduce a fluent builder API
-- rename `FilterBox` into `EventFilterBox`
-- rename `TriggeringFilterBox` into `TriggeringEventFilterBox`
-- improve filter naming, e.g. `AccountFilter` -> `AccountEventFilter`
-- rewrite config according to the configuration RFC (#4239)
-- hide internal structure of the versioned structs from the public API (#3887)
-- temporarily introduce predictable ordering after too many failed view changes (#4263)
-- use concrete key types in `iroha_crypto` (#4181)
-- split view changes from normal messages (#4115)
-- make `SignedTransaction` immutable (#4162)
-- export `iroha_config` through `iroha_client` (#4147)
-- export `iroha_crypto` through `iroha_client` (#4149)
-- export `data_model` through `iroha_client` (#4081)
-- remove `openssl-sys` dependency from `iroha_crypto` and introduce configurable tls backends to `iroha_client` (#3422)
-- replace unmaintained EOF `hyperledger/ursa` with in-house solution `iroha_crypto` (#3422)
-- optimize executor performance (#4013)
-- topology peer update (#3995)
+### תוקן
 
-### Fixed
+- הסר טריגרים מתאימים ב-`Unregister<Domain>` (#4461)
+- הסר הרשאות מתפקידים בעת ביטול הרישום של ישות (#4242)
+- טען שהטרנסקציית בראשית חתומה על ידי מפתח פאב Genesis (#4253)
+- הצג פסק זמן עבור עמיתים שאינם מגיבים ב-p2p (#4267)
+- מניעת רישום דומיין או חשבון Genesis (#4226)
+- `MinSize` עבור `ChaCha20Poly1305` (#4395)
+- הפעל את המסוף כאשר `tokio-console` מופעל (#4377)
+- הפרד כל פריט עם `\n` וצור באופן רקורסיבי ספריות אב עבור יומני קבצים `dev-telemetry`
+- מנע רישום חשבון ללא חתימות (#4212)
+- יצירת צמד מפתחות אינה ניתנת לטעויות (#4283)
+- הפסק את קידוד מפתחות `X25519` בתור `Ed25519` (#4174)
+- בצע אימות חתימה ב-`no_std` (#4270)
+- קריאה לשיטות חסימה בהקשר אסינכרון (#4211)
+- בטל אסימונים משויכים בעת ביטול רישום של ישות (#3962)
+- באג חסימת אסינכרון בעת הפעלת Sumeragi
+- `(get|set)_config` 401 HTTP קבוע (#4177)
+- שם ארכיון `musl` ב-Docker (#4193)
+- הדפסת ניפוי באגים בחוזה חכם (#4178)
+- עדכון טופולוגיה בהפעלה מחדש (#4164)
+- רישום של עמית חדש (#4142)
+- סדר איטרציה צפוי בשרשרת (#4130)
+- ארכיטקט מחדש של לוגר ותצורה דינמית (#4100)
+- טריגר אטומיות (#4106)
+- בעיית הזמנת הודעות בחנות שאילתות (#4057)
+- הגדר `Content-Type: application/x-norito` עבור נקודות קצה אשר משיבות באמצעות Norito
 
-- remove corresponding triggers on `Unregister<Domain>` (#4461)
-- remove permissions from roles on entity unregistration (#4242)
-- assert that genesis tranasction is signed by genesis pub key (#4253)
-- introduce timeout for unresponsive peers in p2p (#4267)
-- prevent registering genesis Domain or Account (#4226)
-- `MinSize` for `ChaCha20Poly1305` (#4395)
-- start console when `tokio-console` is enabled (#4377)
-- separate each item with `\n` and recursively create parent directories for `dev-telemetry` file logs
-- prevent account registration without signatures (#4212)
-- key pair generation is now infallible (#4283)
-- stop encoding `X25519` keys as `Ed25519` (#4174)
-- do signature validation in `no_std` (#4270)
-- calling blocking methods within async context (#4211)
-- revoke associated tokens on entity unregistretration (#3962)
-- async blocking bug when starting Sumeragi
-- fixed `(get|set)_config` 401 HTTP (#4177)
-- `musl` archiver name in Docker (#4193)
-- smart contract debug print (#4178)
-- topology update on restart (#4164)
-- registration of new peer (#4142)
-- on-chain predictable iteration order (#4130)
-- re-architect logger and dynamic configuration (#4100)
-- trigger atomicity (#4106)
-- query store message ordering issue (#4057)
-- set `Content-Type: application/x-norito` for endpoints which reply using Norito
+### הוסר
 
-### Removed
-
-- `logger.tokio_console_address` configuration parameter (#4377)
+- פרמטר תצורה `logger.tokio_console_address` (#4377)
 - `NotificationEvent` (#4377)
 - `Value` enum (#4305)
-- MST aggregation from iroha (#4229)
-- cloning for ISI and query execution in smart contracts (#4182)
-- `bridge` and `dex` features (#4152)
-- flattened events (#3068)
-- expressions (#4089)
-- auto-generated config reference
-- `warp` noise in logs (#4097)
+- צבירת MST מ-iroha (#4229)
+- שיבוט עבור ISI וביצוע שאילתות בחוזים חכמים (#4182)
+- תכונות `bridge` ו-`dex` (#4152)
+- אירועים שטוחים (#3068)
+- ביטויים (#4089)
+- הפניה לתצורה שנוצרה אוטומטית
+- `warp` רעש ביומנים (#4097)
 
-### Security
+### אבטחה
 
-- prevent pub key spoofing in p2p (#4065)
-- ensure the `secp256k1` signatures coming out of OpenSSL are normalized (#4155)
+- למנוע זיוף מפתחות פאב ב-p2p (#4065)
+- ודא שחתימות `secp256k1` שיוצאות מ-OpenSSL מנורמלות (#4155)
 
 ## [2.0.0-pre-rc.20] - 2023-10-17
 
-### Added
+### נוסף- העברת בעלות `Domain`
+- `Domain` הרשאות בעלים
+- הוסף שדה `owned_by` ל-`Domain`
+- ניתוח מסנן כ-JSON5 ב-`iroha_client_cli` (#3923)
+- הוסף תמיכה בשימוש ב-Self type ב-Serde מתויגים חלקית
+- תקן ממשק API של בלוק (#3884)
+- יישם את `Fast` מצב init cura
+- הוסף כותרת כתב ויתור של iroha_swarm
+- תמיכה ראשונית בתמונות WSV
 
-- Transfer `Domain` ownership
-- `Domain` owner permissions
-- Add `owned_by` field to `Domain`
-- parse filter as JSON5 in `iroha_client_cli` (#3923)
-- Add support for usage of Self type in serde partially tagged enums
-- Standardize block API (#3884)
-- Implement `Fast` kura init mode
-- Add iroha_swarm disclaimer header
-- initial support for WSV snapshots
+### תוקן
 
-### Fixed
+- תקן הורדת מבצע ב-update_configs.sh (#3990)
+- rustc תקין ב-devShell
+- תקן כוויות צריבה `Trigger`
+- תיקון העברה `AssetDefinition`
+- תקן את `RemoveKeyValue` עבור `Domain`
+- תקן את השימוש ב-`Span::join`
+- תקן באג אי התאמה בטופולוגיה (#3903)
+- תקן את רף `apply_blocks` ו-`validate_blocks`
+- `mkdir -r` עם נתיב חנות, לא נתיב נעילה (#3908)
+- אל תיכשל אם dir קיים ב-test_env.py
+- תקן מחרוזת אימות/הרשאה (#3876)
+- הודעת שגיאה טובה יותר עבור שגיאת חיפוש שאילתה
+- הוסף מפתח ציבורי לחשבון Genesis ל-dev docker compose
+- השווה מטען אסימון הרשאה כ-JSON (#3855)
+- תקן את `irrefutable_let_patterns` במאקרו `#[model]`
+- אפשר ל-genesis לבצע כל ISI (#3850)
+- תקן אימות בראשית (#3844)
+- תקן טופולוגיה עבור 3 עמיתים או פחות
+- תקן את אופן חישוב ההיסטוגרמה tx_amounts.
+- התקלפות `genesis_transactions_are_validated()`
+- יצירת אימות ברירת מחדל
+- תקן כיבוי חינני של iroha
 
-- Fix executor downloading in update_configs.sh (#3990)
-- proper rustc in devShell
-- Fix burn `Trigger` reprtitions
-- Fix transfer `AssetDefinition`
-- Fix `RemoveKeyValue` for `Domain`
-- Fix the usage of `Span::join`
-- Fix topology mismatch bug (#3903)
-- Fix `apply_blocks` and `validate_blocks` benchmark
-- `mkdir -r` with store path, not lock path (#3908)
-- Don't fail if dir exists in test_env.py
-- Fix authentication/authorization docstring (#3876)
-- Better error message for query find error
-- Add genesis account public key to dev docker compose
-- Compare permission token payload as JSON (#3855)
-- Fix `irrefutable_let_patterns` in the `#[model]` macro
-- Allow genesis to execute any ISI (#3850)
-- Fix genesis validation (#3844)
-- Fix topology for 3 or less peers
-- Correct how tx_amounts histogram is calculated.
-- `genesis_transactions_are_validated()` test flakiness
-- Default validator generation
-- Fix iroha graceful shutdown
-
-### Refactor
-
-- remove unused dependencies (#3992)
-- bump dependencies (#3981)
-- Rename validator to executor (#3976)
-- Remove `IsAssetDefinitionOwner` (#3979)
-- Include smart contract code into the workspace (#3944)
-- Merge API and Telemetry endpoints into a single server
-- move expression len out of public API into core (#3949)
-- Avoid clone in roles lookup
-- Range queries for roles
-- Move account roles to `WSV`
-- Rename ISI from *Box to *Expr (#3930)
-- Remove 'Versioned' prefix from versioned containers (#3913)
-- move `commit_topology` into block payload (#3916)
-- Migrate `telemetry_future` macro to syn 2.0
-- Registered with Identifiable in ISI bounds (#3925)
-- Add basic generics support to `derive(HasOrigin)`
-- Clean up Emitter APIs documentation to make clippy happy
-- Add tests for derive(HasOrigin) macro, reduce repetition in derive(IdEqOrdHash), fix error reporting on stable
-- Improve naming, simplify repeated .filter_maps & get rid of unnecessary .except in derive(Filter)
-- Make PartiallyTaggedSerialize/Deserialize use darling
-- Make derive(IdEqOrdHash) use darling, add tests
-- Make derive(Filter) use darling
-- Update iroha_data_model_derive to use syn 2.0
-- Add signature check condition unit tests
-- Allow only a fixed set of signature verification conditions
-- Generalize ConstBytes into a ConstVec that holds any const sequence
-- Use a more efficient representation for bytes values that are not changing
-- Store finalized wsv in snapshot
-- Add `SnapshotMaker` actor
-- document limitation of parsing derives in proc macros
-- clean up comments
-- extract a common test utility for parsing attributes to lib.rs
-- use parse_display & update Attr -> Attrs naming
-- allow usage of pattern matching in ffi function args
-- reduce repetition in getset attrs parsing
-- rename Emitter::into_token_stream into Emitter::finish_token_stream
-- Use parse_display to parse getset tokens
-- Fix typos and improve error messages
-- iroha_ffi_derive: use darling to parse attributes and use syn 2.0
-- iroha_ffi_derive: replace proc-macro-error with manyhow
-- Simplify kura lock file code
-- make all numeric values serialize as string literals
-- Split off Kagami (#3841)
-- Rewrite `scripts/test-env.sh`
-- Differentiate between smart contract and trigger entrypoints
-- Elide `.cloned()` in `data_model/src/block.rs`
-- update `iroha_schema_derive` to use syn 2.0
+### Refactor- הסר תלות שאינה בשימוש (#3992)
+- תלות ב-bump (#3981)
+- שנה את שם המאמת למבצע (#3976)
+- הסר את `IsAssetDefinitionOwner` (#3979)
+- כלול קוד חוזה חכם בסביבת העבודה (#3944)
+- מיזוג נקודות קצה של API וטלמטריה לשרת אחד
+- העבר את Expression len מתוך API ציבורי לליבה (#3949)
+- הימנע משיבוט בחיפוש תפקידים
+- שאילתות טווח לתפקידים
+- העבר תפקידי חשבון ל-`WSV`
+- שנה את שם ISI מ-*Box ל-*Expr (#3930)
+- הסר את הקידומת 'גרסת' ממכולות עם גרסאות (#3913)
+- העבר את `commit_topology` למטען בלוק (#3916)
+- העבר מאקרו `telemetry_future` ל-syn 2.0
+- רשום עם ניתן לזיהוי בגבולות ISI (#3925)
+- הוסף תמיכה גנרית בסיסית ל-`derive(HasOrigin)`
+- נקה את התיעוד של Emitter APIs כדי לשמח את clippy
+- הוסף בדיקות עבור מאקרו derive(HasOrigin), צמצם את החזרות ב-derive(IdEqOrdHash), תקן דיווח שגיאות על יציב
+- שפר את מתן השמות, פשט את מפות הסינון החוזרות ונשנות והיפטר מ-.למעט ב-deriva(Filter) מיותרים
+- הפוך את PartiallyTaggedSerialize/Deserialize לשימוש יקירי
+- הפוך לנגזר (IdEqOrdHash) להשתמש יקירי, הוסף בדיקות
+- הפוך לנגזר (מסנן) להשתמש יקירי
+- עדכן את iroha_data_model_derive כדי להשתמש ב-syn 2.0
+- הוסף בדיקות תנאי בדיקת חתימה
+- אפשר רק קבוצה קבועה של תנאי אימות חתימה
+- הכללה ConstBytes ל-ConstVec שמכיל כל רצף const
+- השתמש בייצוג יעיל יותר עבור ערכי בתים שאינם משתנים
+- אחסן את ה-wsv הסופי בתמונת מצב
+- הוסף שחקן `SnapshotMaker`
+- מגבלת מסמכים של ניתוח נגזרת בפקודות מאקרו פרוק
+- לנקות הערות
+- לחלץ כלי בדיקה נפוץ לניתוח תכונות ל-lib.rs
+- השתמש ב-parse_display ועדכון Attr -> מתן שמות של Attrs
+- אפשר שימוש בהתאמת דפוסים ב-ffi function args
+- צמצם את החזרות בניתוח getset attrs
+- שנה את שם Emitter::into_token_stream ל-Emitter::finish_token_stream
+- השתמש ב-parse_display כדי לנתח אסימוני getset
+- תקן שגיאות הקלדה ושפר הודעות שגיאה
+- iroha_ffi_derive: השתמש ב-darling כדי לנתח תכונות והשתמש ב-syn 2.0
+- iroha_ffi_derive: החלף proc-macro-error ב-manyhow
+- פשט את קוד קובץ kura lock
+- להפוך את כל הערכים המספריים לסידרה בתור מילוליות של מחרוזת
+- פיצול Kagami (#3841)
+- שכתוב את `scripts/test-env.sh`
+- הבדיל בין חוזה חכם לנקודות כניסה להדק
+- Elide `.cloned()` ב-`data_model/src/block.rs`
+- עדכן את `iroha_schema_derive` כדי להשתמש ב-syn 2.0
 
 ## [2.0.0-pre-rc.19] - 2023-08-14
 
-### Added
+### נוסף- hyperledger#3309 Bump IVM זמן ריצה משופר
+- hyperledger#3383 הטמע מאקרו כדי לנתח כתובות של שקע בזמן הידור
+- hyperledger#2398 הוסף מבחני אינטגרציה עבור מסנני שאילתות
+- כלול את הודעת השגיאה בפועל ב-`InternalError`
+- שימוש ב-`nightly-2023-06-25` בתור שרשרת הכלים המוגדרת כברירת מחדל
+- hyperledger#3692 העברת Validator
+- [התמחות DSL] hyperledger#3688: יישם חשבון בסיסי כמאקרו פרוק
+- hyperledger#3371 אימות מפוצל `entrypoint` כדי להבטיח שמאמתים לא יראו עוד כחוזים חכמים
+- hyperledger#3651 תמונות WSV, המאפשרות להעלות צומת Iroha במהירות לאחר קריסה
+- hyperledger#3752 החלף את `MockValidator` במאמת `Initial` שמקבל את כל העסקאות
+- hyperledger#3276 הוסף הוראה זמנית בשם `Log` שמתעדת מחרוזת שצוינה ביומן הראשי של הצומת Iroha
+- hyperledger#3641 הפוך את מטען אסימון ההרשאה לקריאה אנושית
+- hyperledger#3324 הוסף בדיקות `iroha_client_cli` קשורות ל-`burn` ושיחזור
+- hyperledger#3781 אימות עסקאות בראשית
+- hyperledger#2885 הבדל בין אירועים שניתן ולא ניתן להשתמש בהם עבור טריגרים
+- hyperledger#2245 בנייה מבוססת `Nix` של צומת iroha בינארי כ-`AppImage`
 
-- hyperledger#3309 Bump IVM runtime for improved
-- hyperledger#3383 Implement macro to parse a socket addresses at compile time
-- hyperledger#2398 Add integration tests for query filters
-- Include the actual error message in `InternalError`
-- Usage of `nightly-2023-06-25` as the default tool-chain
-- hyperledger#3692 Validator migration
-- [DSL internship] hyperledger#3688: Implement basic arithmetic as proc macro
-- hyperledger#3371 Split validator `entrypoint` to ensure that validators are no longer viewed as smart-contracts
-- hyperledger#3651 WSV snapshots, which allow to bring up an Iroha node quickly after a crash
-- hyperledger#3752 Replace `MockValidator` with an `Initial` validator that accepts all transactions
-- hyperledger#3276 Add temporary instruction called `Log` that logs a specified string to the main log of the Iroha node
-- hyperledger#3641 Make the permission token payload human-readable
-- hyperledger#3324 Add `iroha_client_cli` related `burn` checks and refactoring
-- hyperledger#3781 Validate genesis transactions
-- hyperledger#2885 Differentiate between events that can and cannot be used for triggers
-- hyperledger#2245 `Nix`-based build of iroha node binary as `AppImage`
+### תוקן
 
-### Fixed
+- hyperledger#3613 רגרסיה שעלולה לאפשר קבלת עסקאות שנחתמו בצורה שגויה
+- דחה מוקדם את טופולוגיית התצורה השגויה
+- hyperledger#3445 תקן רגרסיה וגרם ל-`POST` בנקודת הקצה `/configuration` לעבוד שוב
+- hyperledger#3654 תקן את `iroha2` `glibc` מבוסס `Dockerfiles` לפריסה
+- hyperledger#3451 תיקון `docker` בנוי על מחשבי Mac סיליקון של Apple
+- hyperledger#3741 תקן שגיאת `tempfile` ב-`kagami validator`
+- hyperledger#3758 תקן רגרסיה שבה לא ניתן היה לבנות ארגזים בודדים, אך ניתן לבנות אותם כחלק מסביבת העבודה
+- hyperledger#3777 פרצת תיקון ברישום התפקיד לא מאומתת
+- hyperledger#3805 תיקון Iroha לא נכבה לאחר קבלת `SIGTERM`
 
-- hyperledger#3613 Regression which could allow incorrectly signed transactions to be accepted
-- Reject incorrect Configuration topology early
-- hyperledger#3445 Fix regression and make `POST` on the `/configuration` endpoint work again
-- hyperledger#3654 Fix `iroha2` `glibc`-based `Dockerfiles` to be deployed
-- hyperledger#3451 Fix `docker` build on Apple silicon macs
-- hyperledger#3741 Fix `tempfile` error in `kagami validator`
-- hyperledger#3758 Fix regression where individual crates could not be built, but could be built as part of the workspace
-- hyperledger#3777 Patch loophole in role registration not being validated
-- hyperledger#3805 Fix Iroha not shutting down after receiving `SIGTERM`
+### אחר
 
-### Other
-
-- hyperledger#3648 Include `docker-compose.*.yml` check in the CI processes
-- Move instruction `len()` from `iroha_data_model` into `iroha_core`
-- hyperledger#3672 Replace `HashMap` with `FxHashMap` in derive macros
-- hyperledger#3374 Unify error's doc-comments and `fmt::Display` implementation
-- hyperledger#3289 Use Rust 1.70 workspace inheritance throughout project
-- hyperledger#3654 Add `Dockerfiles` to build iroha2 on `GNU libc <https://www.gnu.org/software/libc/>`_
-- Introduce `syn` 2.0, `manyhow` and `darling` for proc-macros
+- hyperledger#3648 כלול בדיקת `docker-compose.*.yml` בתהליכי ה-CI
+- העבר הוראות `len()` מ-`iroha_data_model` ל-`iroha_core`
+- hyperledger#3672 החלף את `HashMap` ב-`FxHashMap` בפקודות מאקרו נגזרות
+- hyperledger#3374 Unify doc-comments של שגיאה ויישום `fmt::Display`
+- hyperledger#3289 השתמש בירושה של חלל העבודה Rust 1.70 לאורך כל הפרויקט
+- hyperledger#3654 הוסף `Dockerfiles` לבניית iroha2 על `GNU libc <https://www.gnu.org/software/libc/>`_
+- הצג את `syn` 2.0, `manyhow` ו-`darling` עבור proc-macros
 - hyperledger#3802 Unicode `kagami crypto` seed
 
 ## [2.0.0-pre-rc.18]
 
-### Added
+### נוסף
 
-- hyperledger#3468: Server-side cursor, which allows for lazily evaluated re-entrant pagination which should have major positive performance implications for query latency
-- hyperledger#3624: General purpose permission tokens; specifically
-  - Permissions tokens can have any structure
-  - Token structure is self-described in the `iroha_schema` and serialised as a JSON string
-  - Token value is `Norito`-encoded
-  - as a consequence of this change permission token naming convention was moved from `snake_case` to `UpeerCamelCase`
-- hyperledger#3615 Preserve wsv after validation
+- hyperledger#3468: סמן בצד השרת, המאפשר הערכה בעצלתיים של עימוד של נכנסים מחדש, שאמורות להיות לו השלכות ביצועים חיוביות משמעותיות על זמן האחזור של השאילתה
+- hyperledger#3624: אסימוני הרשאה לשימוש כללי; ספציפית
+  - לאסימוני הרשאות יכולים להיות כל מבנה
+  - מבנה האסימון מתואר בעצמו ב-`iroha_schema` ומסודר כמחרוזת JSON
+  - ערך האסימון מקודד `Norito`
+  - כתוצאה משינוי זה הועברה מוסכמות שמות אסימון הרשאות מ-`snake_case` ל-`UpeerCamelCase`
+- hyperledger#3615 שימור wsv לאחר אימות
 
-### Fixed
-
-- hyperledger#3627 Transaction atomicity now enforced via cloning of the `WorlStateView`
-- hyperledger#3195 Extend panic behaviour for when receiving a rejected genesis transaction
-- hyperledger#3042 Fix bad request message
-- hyperledger#3352 Split up control flow and data message into separate channels
-- hyperledger#3543 Improve precision of metrics
+### תוקן- hyperledger#3627 אטומיות עסקה נאכפת כעת באמצעות שיבוט של `WorlStateView`
+- hyperledger#3195 הרחב את התנהגות הפאניקה בעת קבלת עסקת בראשית שנדחתה
+- hyperledger#3042 תקן הודעת בקשה שגויה
+- hyperledger#3352 פיצול זרימת בקרה והודעת נתונים לערוצים נפרדים
+- hyperledger#3543 שפר את הדיוק של מדדים
 
 ## 2.0.0-pre-rc.17
 
-### Added
+### נוסף
 
-- hyperledger#3330 Extend `NumericValue` deserialisation
-- hyperledger#2622 `u128`/`i128` support in FFI
-- hyperledger#3088 Introduce queue throttling, to prevent DoS
-- hyperledger#2373 `kagami swarm file` and `kagami swarm dir` command variants for generating `docker-compose` files
-- hyperledger#3597 Permission Token Analysis (Iroha side)
-- hyperledger#3353 Remove `eyre` from `block.rs` by enumerating error conditions and using strongly-typed errors
-- hyperledger#3318 Interleave rejected and accepted transactions in blocks to preserve transaction processing order
+- hyperledger#3330 הארכת דה-סידריאליזציה של `NumericValue`
+- hyperledger#2622 תמיכה ב-`u128`/`i128` ב-FFI
+- hyperledger#3088 הכנס החמצת תור, כדי למנוע DoS
+- Hyperledger#2373 גרסאות הפקודות `kagami swarm file` ו-`kagami swarm dir` להפקת קבצי `docker-compose`
+- hyperledger#3597 ניתוח אסימון ההרשאה (צד Iroha)
+- hyperledger#3353 הסר את `eyre` מ-`block.rs` על ידי ספירת תנאי שגיאה ושימוש בשגיאות עם הקלדה חזקה
+- hyperledger#3318 שלב עסקאות שנדחו וקבלו בבלוקים כדי לשמור על סדר עיבוד העסקאות
 
-### Fixed
+### תוקן
 
-- hyperledger#3075 Panic on invalid transaction in the `genesis.json` to prevent invalid transactions from being processed
-- hyperledger#3461 Proper handling of default values in default config
-- hyperledger#3548 Fix `IntoSchema` transparent attribute
-- hyperledger#3552 Fix validator path schema representation
-- hyperledger#3546 Fix for time triggers getting stuck
-- hyperledger#3162 Forbid 0 height in block streaming requests
-- Configuration macro initial test
-- hyperledger#3592 Fix for  config files being updated on `release`
-- hyperledger#3246 Don't involve `Set B validators <https://github.com/hyperledger-iroha/iroha/blob/main/docs/source/iroha_2_whitepaper.md#2-system-architecture>`_ without `fault <https://en.wikipedia.org/wiki/Byzantine_fault>`_
-- hyperledger#3570 Correctly display client-side string query errors
-- hyperledger#3596 `iroha_client_cli` shows blocks/events
-- hyperledger#3473 Make `kagami validator` work from outside the  iroha repository root directory
+- hyperledger#3075 פאניקה על עסקה לא חוקית ב-`genesis.json` כדי למנוע עיבוד של עסקאות לא חוקיות
+- hyperledger#3461 טיפול נכון בערכי ברירת המחדל בתצורת ברירת המחדל
+- hyperledger#3548 תקן תכונה שקופה של `IntoSchema`
+- hyperledger#3552 תקן ייצוג סכימת נתיב המאמת
+- hyperledger#3546 תיקון לטריגרים של זמן נתקעים
+- hyperledger#3162 אסרו 0 גובה בבקשות סטרימינג בלוק
+- בדיקה ראשונית של תצורת מאקרו
+- hyperledger#3592 תיקון עבור קבצי תצורה המתעדכנים ב-`release`
+- hyperledger#3246 אל תערב את `Set B validators <https://github.com/hyperledger-iroha/iroha/blob/main/docs/source/iroha_2_whitepaper.md#2-system-architecture>`_ ללא `fault <https://en.wikipedia.org/wiki/Byzantine_fault>`_
+- hyperledger#3570 הצג נכון שגיאות שאילתת מחרוזת בצד הלקוח
+- hyperledger#3596 `iroha_client_cli` מציג בלוקים/אירועים
+- hyperledger#3473 לגרום ל-`kagami validator` לעבוד מחוץ לספריית השורש של מאגר iroha
 
-### Other
+### אחר
 
-- hyperledger#3063 Map transaction `hash` to block height in `wsv`
-- strongly-typed `HashOf<T>` in `Value`
+- hyperledger#3063 מפה עסקה `hash` לגובה החסימה ב-`wsv`
+- מוקלד חזק `HashOf<T>` ב-`Value`
 
 ## [2.0.0-pre-rc.16]
 
-### Added
+### נוסף
 
-- hyperledger#2373 `kagami swarm` sub-command for generating `docker-compose.yml`
-- hyperledger#3525 Standardize transaction API
-- hyperledger#3376 Add Iroha Client CLI `pytest <https://docs.pytest.org/en/7.4.x/>`_ automation framework
-- hyperledger#3516 Retain original blob hash in `LoadedExecutable`
+- פקודה hyperledger#2373 `kagami swarm` להפקת `docker-compose.yml`
+- hyperledger#3525 תקן את ה-API של עסקאות
+- hyperledger#3376 הוסף Iroha לקוח CLI `pytest <https://docs.pytest.org/en/7.4.x/>`_ מסגרת אוטומציה
+- hyperledger#3516 שמור את ה-Bob Hash המקורי ב-`LoadedExecutable`
 
-### Fixed
+### תוקן
 
-- hyperledger#3462 Add `burn` asset command to `client_cli`
-- hyperledger#3233 Refactor error types
-- hyperledger#3330 Fix regression, by manually implementing `serde::de::Deserialize` for `partially-tagged <https://serde.rs/enum-representations.html>`_ `enums`
-- hyperledger#3487 Return missing types into the schema
-- hyperledger#3444 Return discriminant into schema
-- hyperledger#3496 Fix `SocketAddr` field parsing
-- hyperledger#3498 Fix soft-fork detection
-- hyperledger#3396 Store block in `kura` before emitting a block committed event
+- hyperledger#3462 הוסף פקודת נכס `burn` ל-`client_cli`
+- hyperledger#3233 סוגי שגיאות Refactor
+- hyperledger#3330 תקן רגרסיה, על ידי יישום ידני של `serde::de::Deserialize` עבור `partially-tagged <https://serde.rs/enum-representations.html>`_ `enums`
+- hyperledger#3487 החזר סוגים חסרים לתוך הסכימה
+- hyperledger#3444 החזר מבחן לסכימה
+- hyperledger#3496 תקן ניתוח שדה `SocketAddr`
+- hyperledger#3498 תקן זיהוי soft-fork
+- hyperledger#3396 אחסן חסימה ב-`kura` לפני פליטת אירוע מחויב לחסימה
 
-### Other
+### אחר
 
-- hyperledger#2817 Remove interior mutability from `WorldStateView`
+- hyperledger#2817 הסר שינוי פנימי מ-`WorldStateView`
 - hyperledger#3363 Genesis API refactor
-- Refactor existing and supplement with new tests for topology
-- Switch from `Codecov <https://about.codecov.io/>`_ to `Coveralls <https://coveralls.io/>`_  for test coverage
-- hyperledger#3533 Rename `Bool` to `bool` in schema
+- Refactor קיים והשלמה עם בדיקות חדשות לטופולוגיה
+- עבור מ-`Codecov <https://about.codecov.io/>`_ ל-`Coveralls <https://coveralls.io/>`_ לכיסוי בדיקה
+- hyperledger#3533 שנה את השם של `Bool` ל-`bool` בסכימה
 
 ## [2.0.0-pre-rc.15]
 
-### Added
+### נוסף- hyperledger#3231 מאמת מונוליטי
+- hyperledger#3015 תמיכה באופטימיזציה של נישה ב-FFI
+- hyperledger#2547 הוסף לוגו ל-`AssetDefinition`
+- hyperledger#3274 הוסף ל-`kagami` פקודה משנה שיוצרת דוגמאות (מועברת בחזרה ל-LTS)
+- hyperledger#3415 `Nix <https://nixos.wiki/wiki/Flakes>`_ פתית
+- hyperledger#3412 העבר את רכילות העסקה לשחקן נפרד
+- hyperledger#3435 הצג את המבקר `Expression`
+- hyperledger#3168 ספק אימות בראשית כקובץ נפרד
+- hyperledger#3454 הפוך את LTS לברירת המחדל עבור רוב הפעולות והתיעוד של Docker
+- hyperledger#3090 הפצת פרמטרים בשרשרת מבלוקצ'יין ל-`sumeragi`
 
-- hyperledger#3231 Monolithic validator
-- hyperledger#3015 Support for niche optimization in FFI
-- hyperledger#2547 Add logo to `AssetDefinition`
-- hyperledger#3274 Add to `kagami` a sub-command that generates examples (backported into LTS)
-- hyperledger#3415 `Nix <https://nixos.wiki/wiki/Flakes>`_ flake
-- hyperledger#3412 Move transaction gossiping to a separate actor
-- hyperledger#3435 Introduce `Expression` visitor
-- hyperledger#3168 Provide genesis validator as a separate file
-- hyperledger#3454 Make LTS the default for most Docker operations and documentation
-- hyperledger#3090 Propagate on-chain parameters from blockchain to `sumeragi`
+### תוקן
 
-### Fixed
+- hyperledger#3330 תקן דה-סריאליזציה של enum לא מתויג עם עלי `u128` (מובאים בחזרה ל-RC14)
+- hyperledger#2581 הפחתת רעש ביומנים
+- hyperledger#3360 תקן את רף `tx/s`
+- hyperledger#3393 ניתוק לולאת מבוי סתום לתקשורת ב-`actors`
+- hyperledger#3402 תיקון `nightly` build
+- hyperledger#3411 לטפל כראוי בחיבור בו-זמני של עמיתים
+- hyperledger#3440 הוצא משימוש המרות נכסים במהלך ההעברה, במקום זאת טופלו על ידי חוזים חכמים
+- hyperledger#3408: תקן את בדיקת `public_keys_cannot_be_burned_to_nothing`
 
-- hyperledger#3330 Fix untagged enum de-serialization with `u128` leaves (backported into RC14)
-- hyperledger#2581 reduced noise in logs
-- hyperledger#3360 Fix `tx/s` benchmark
-- hyperledger#3393 Break communication deadlock loop in `actors`
-- hyperledger#3402 Fix `nightly` build
-- hyperledger#3411 Properly handle peers simultaneous connection
-- hyperledger#3440 Deprecate asset conversions during transfer, instead handled by smart-contracts
-- hyperledger#3408: Fix `public_keys_cannot_be_burned_to_nothing` test
+### אחר
 
-### Other
-
-- hyperledger#3362 Migrate to `tokio` actors
-- hyperledger#3349 Remove `EvaluateOnHost` from smart contracts
-- hyperledger#1786 Add `iroha`-native types for socket addresses
-- Disable IVM cache
-- Re-enable IVM cache
-- Rename permission validator into validator
-- hyperledger#3388 Make `model!` a module-level attribute macro
-- hyperledger#3370 Serialize `hash` as hexadecimal string
-- Move `maximum_transactions_in_block` from `queue` to `sumeragi` configuration
-- Deprecate and remove `AssetDefinitionEntry` type
-- Rename `configs/client_cli` into `configs/client`
-- Update `MAINTAINERS.md`
+- hyperledger#3362 העבר לשחקנים `tokio`
+- hyperledger#3349 הסר את `EvaluateOnHost` מחוזים חכמים
+- hyperledger#1786 הוסף `iroha` סוגים מקוריים עבור כתובות socket
+- השבת מטמון IVM
+- הפעל מחדש את המטמון IVM
+- שנה את שם מאמת ההרשאות למאמת
+- hyperledger#3388 הפוך את `model!` למאקרו של תכונה ברמת המודול
+- hyperledger#3370 סידורי `hash` כמחרוזת הקסדצימלית
+- העבר את `maximum_transactions_in_block` מתצורת `queue` ל-`sumeragi`
+- הוצא משימוש והסר סוג `AssetDefinitionEntry`
+- שנה את שם `configs/client_cli` ל-`configs/client`
+- עדכון `MAINTAINERS.md`
 
 ## [2.0.0-pre-rc.14]
 
-### Added
+### נוסף
 
-- hyperledger#3127 data model `structs` opaque by default
-- hyperledger#3122 use `Algorithm` for storing digest function (community contributor)
-- hyperledger#3153 `iroha_client_cli` output is machine readable
-- hyperledger#3105 Implement `Transfer` for  `AssetDefinition`
-- hyperledger#3010 `Transaction` expire pipeline event added
+- דגם נתונים hyperledger#3127 `structs` אטום כברירת מחדל
+- hyperledger#3122 השתמש ב-`Algorithm` לאחסון פונקציית עיכול (תורם קהילה)
+- hyperledger#3153 פלט `iroha_client_cli` ניתן לקריאה במכונה
+- hyperledger#3105 יישם `Transfer` עבור `AssetDefinition`
+- hyperledger#3010 `Transaction` התווסף אירוע תפוגת צינור
 
-### Fixed
+### תוקן
 
-- hyperledger#3113 revision of unstable network tests
-- hyperledger#3129 Fix `Parameter` de/serialisation
-- hyperledger#3141 Manually implement `IntoSchema` for `Hash`
-- hyperledger#3155 Fix panic hook in tests, preventing deadlock
-- hyperledger#3166 Don't view change on idle, improving performance
-- hyperledger#2123 Return to PublicKey de/serialization from multihash
-- hyperledger#3132 Add NewParameter validator
-- hyperledger#3249 Split block hashes into partial and complete versions
-- hyperledger#3031 Fix the UI/UX of missing configuration parameters
-- hyperledger#3247 Removed fault injection from `sumeragi`.
+- גרסה hyperledger#3113 של בדיקות רשת לא יציבות
+- hyperledger#3129 תיקון `Parameter` de/serialisation
+- hyperledger#3141 יישום ידני של `IntoSchema` עבור `Hash`
+- hyperledger#3155 תקן וו פאניקה בבדיקות, מניעת מבוי סתום
+- hyperledger#3166 אל תראה שינוי במצב לא פעיל, שיפור הביצועים
+- hyperledger#2123 חזרה ל-PublicKey de/serialization מ-multihash
+- hyperledger#3132 הוסף NewParameter validator
+- hyperledger#3249 פיצול גיבוב של בלוק לגרסאות חלקיות ושלמות
+- hyperledger#3031 תקן את UI/UX של פרמטרי תצורה חסרים
+- hyperledger#3247 הוסרה הזרקת תקלה מ-`sumeragi`.
 
-### Other
+### אחר
 
-- Add missing `#[cfg(debug_assertions)]` to fix spurious failures
-- hyperledger#2133 Rewrite topology to be closer the whitepaper
-- Remove `iroha_client` dependency on `iroha_core`
-- hyperledger#2943 Derive `HasOrigin`
-- hyperledger#3232 Share workspace metadata
-- hyperledger#3254 Refactor `commit_block()` and `replace_top_block()`
-- Use stable default allocator handler
-- hyperledger#3183 Rename the `docker-compose.yml` files
-- Improved the `Multihash` display format
-- hyperledger#3268 Globally unique item identifiers
-- New PR template
+- הוסף `#[cfg(debug_assertions)]` חסר כדי לתקן כשלים מזויפים
+- hyperledger#2133 שכתוב את הטופולוגיה כדי להיות קרובה יותר לספר הלבן
+- הסר את התלות של `iroha_client` ב-`iroha_core`
+- hyperledger#2943 גזר את `HasOrigin`
+- hyperledger#3232 שתף מטא נתונים של סביבת עבודה
+- hyperledger#3254 Refactor `commit_block()` ו-`replace_top_block()`
+- השתמש במטפל ברירת מחדל יציב של מקצין
+- hyperledger#3183 שנה את שם הקבצים `docker-compose.yml`
+- שיפר את פורמט התצוגה `Multihash`
+- hyperledger#3268 מזהי פריט ייחודיים בעולם
+- תבנית יחסי ציבור חדשה
 
 ## [2.0.0-pre-rc.13]
 
-### Added
-
-- hyperledger#2399 Config parameters as ISI.
-- hyperledger#3119 Add `dropped_messages` metric.
-- hyperledger#3094 Generate network with `n` peers.
-- hyperledger#3082 Provide full data in `Created` event.
-- hyperledger#3021 Opaque pointer import.
-- hyperledger#2794 Reject Fieldless enums with explicit discriminants in FFI.
-- hyperledger#2922 Add `Grant<Role>` to default genesis.
-- hyperledger#2922 Omit `inner` field in `NewRole` json deserialization.
-- hyperledger#2922 Omit `object(_id)` in json deserialization.
-- hyperledger#2922 Omit `Id` in json deserialisation.
-- hyperledger#2922 Omit `Identifiable` in json deserialization.
-- hyperledger#2963 Add `queue_size` to the metrics.
-- hyperledger#3027 implement lockfile for Kura.
-- hyperledger#2813 Kagami generate default peer config.
-- hyperledger#3019 Support JSON5.
-- hyperledger#2231 Generate FFI wrapper API.
-- hyperledger#2999 Accumulate block signatures.
-- hyperledger#2995 Soft fork detection.
-- hyperledger#2905 Extend arithmetic operations to support `NumericValue`
-- hyperledger#2868 Emit iroha version and commit hash in logs.
-- hyperledger#2096 Query for total amount of asset.
-- hyperledger#2899 Add multi-instructions subcommand into 'client_cli'
-- hyperledger#2247 Remove websocket communication noise.
-- hyperledger#2889 Add block streaming support into `iroha_client`
-- hyperledger#2280 Produce permission events when role is granted/revoked.
-- hyperledger#2797 Enrich events.
-- hyperledger#2725 Reintroduce timeout into `submit_transaction_blocking`
-- hyperledger#2712 Config proptests.
-- hyperledger#2491 Enum support in FFi.
-- hyperledger#2775 Generate different keys in synthetic genesis.
-- hyperledger#2627 Config finalisation, proxy entrypoint, kagami docgen.
-- hyperledger#2765 Generate synthetic genesis in `kagami`
-- hyperledger#2698 Fix unclear error message in `iroha_client`
-- hyperledger#2689 Add permission token definition parameters.
-- hyperledger#2502 Store GIT hash of build.
-- hyperledger#2672 Add `ipv4Addr`,  `ipv6Addr` variant and predicates.
-- hyperledger#2626 Implement `Combine` derive, split `config` macros.
-- hyperledger#2586 `Builder` and `LoadFromEnv` for proxy structs.
-- hyperledger#2611 Derive `TryFromReprC` and `IntoFfi` for generic opaque structs.
-- hyperledger#2587 Split `Configurable` into two traits. #2587: Split `Configurable` into two traits
-- hyperledger#2488 Add support for trait impls in `ffi_export`
-- hyperledger#2553 Add sorting to asset queries.
-- hyperledger#2407 Parametrise triggers.
-- hyperledger#2536 Introduce `ffi_import` for FFI clients.
-- hyperledger#2338 Add `cargo-all-features` instrumentation.
-- hyperledger#2564 Kagami tool algorithm options.
-- hyperledger#2490 Implement ffi_export for freestanding functions.
-- hyperledger#1891 Validate trigger execution.
-- hyperledger#1988 Derive macros for Identifiable, Eq, Hash, Ord.
+### נוסף- hyperledger#2399 פרמטרי תצורה כ-ISI.
+- hyperledger#3119 הוסף מדד `dropped_messages`.
+- hyperledger#3094 צור רשת עם עמיתים `n`.
+- hyperledger#3082 ספק נתונים מלאים באירוע `Created`.
+- hyperledger#3021 ייבוא ​​מצביע אטום.
+- hyperledger#2794 דחה רשימות חסרות שדה עם אפליה מפורשת ב-FFI.
+- hyperledger#2922 הוסף את `Grant<Role>` ליצירת ברירת המחדל.
+- hyperledger#2922 השמט את השדה `inner` ב-`NewRole` דה-סריליזציה של json.
+- hyperledger#2922 השמט את `object(_id)` ב-Deserialization של json.
+- hyperledger#2922 השמט את `Id` ב-deserialization של json.
+- hyperledger#2922 השמט את `Identifiable` ב-Deserialization של json.
+- hyperledger#2963 הוסף את `queue_size` למדדים.
+- hyperledger#3027 ליישם קובץ נעילה עבור Kura.
+- hyperledger#2813 Kagami ליצור תצורת עמיתים כברירת מחדל.
+- hyperledger#3019 תמיכה ב-JSON5.
+- hyperledger#2231 צור FFI Wrapper API.
+- hyperledger#2999 צבור חתימות בלוק.
+- hyperledger#2995 זיהוי מזלג רך.
+- hyperledger#2905 הרחבת פעולות אריתמטיות לתמיכה ב-`NumericValue`
+- hyperledger#2868 שלח גרסת iroha וביצוע hash ביומנים.
+- hyperledger#2096 שאילתה עבור הסכום הכולל של הנכס.
+- hyperledger#2899 הוסף תת-פקודה מרובת הוראות לתוך 'client_cli'
+- hyperledger#2247 הסר רעשי תקשורת ב-websocket.
+- hyperledger#2889 הוסף תמיכה בזרימה בלוק לתוך `iroha_client`
+- hyperledger#2280 הפקת אירועי הרשאה כאשר התפקיד מוענק/מבוטל.
+- hyperledger#2797 העשרה אירועים.
+- hyperledger#2725 הכנס מחדש פסק זמן ל-`submit_transaction_blocking`
+- hyperledger#2712 בדיקות תצורה.
+- hyperledger#2491 תמיכה ב-Enum ב-FFi.
+- hyperledger#2775 צור מפתחות שונים בראשית סינתטית.
+- hyperledger#2627 סיום תצורה, נקודת כניסת פרוקסי, קאגמי docgen.
+- hyperledger#2765 צור בראשית סינתטית ב-`kagami`
+- hyperledger#2698 תקן הודעת שגיאה לא ברורה ב-`iroha_client`
+- hyperledger#2689 הוסף פרמטרים של הגדרת אסימון הרשאה.
+- hyperledger#2502 אחסן GIT hash של build.
+- hyperledger#2672 הוסף וריאנט ופרדיקטים `ipv4Addr`, `ipv6Addr`.
+- hyperledger#2626 יישם פקודות מאקרו `Combine`, מפוצלות `config`.
+- hyperledger#2586 `Builder` ו-`LoadFromEnv` עבור מבני proxy.
+- hyperledger#2611 נגזר `TryFromReprC` ו-`IntoFfi` עבור מבנים אטומים גנריים.
+- hyperledger#2587 פיצול `Configurable` לשתי תכונות. #2587: פיצול `Configurable` לשתי תכונות
+- hyperledger#2488 הוסף תמיכה עבור impls תכונה ב-`ffi_export`
+- hyperledger#2553 הוסף מיון לשאילתות נכסים.
+- hyperledger#2407 מפעילים פרמטרים.
+- hyperledger#2536 הצג את `ffi_import` עבור לקוחות FFI.
+- hyperledger#2338 הוסף מכשור `cargo-all-features`.
+- hyperledger#2564 אפשרויות אלגוריתם כלי Kagami.
+- hyperledger#2490 יישם ffi_export עבור פונקציות עצמאיות.
+- hyperledger#1891 אימות ביצוע טריגר.
+- hyperledger#1988 הפקת פקודות מאקרו עבור Identifiable, Eq, Hash, Ord.
 - hyperledger#2434 FFI bindgen library.
-- hyperledger#2073 Prefer ConstString over String for types in blockchain.
-- hyperledger#1889 Add domain-scoped triggers.
-- hyperledger#2098 Block header queries. #2098: add block header queries
-- hyperledger#2467 Add account grant subcommand into iroha_client_cli.
-- hyperledger#2301 Add transaction's block hash when querying it.
- - hyperledger#2454 Add a build script to the Norito decoder tool.
-- hyperledger#2061 Derive macro for filters.
-- hyperledger#2228 Add Unauthorized variant to smartcontracts query error.
-- hyperledger#2395 Add panic if genesis cannot be applied.
-- hyperledger#2000 Disallow empty names. #2000: Disallow empty names
- - hyperledger#2127 Add sanity check to ensure that all data decoded by the Norito codec is consumed.
-- hyperledger#2360 Make `genesis.json` optional again.
-- hyperledger#2053 Add tests to all remaining queries in private blockchain.
-- hyperledger#2381 Unify `Role` registration.
-- hyperledger#2053 Add tests to the asset-related queries in private blockchain.
-- hyperledger#2053 Add tests to 'private_blockchain'
-- hyperledger#2302 Add 'FindTriggersByDomainId' stub-query.
-- hyperledger#1998 Add filters to queries.
-- hyperledger#2276 Include current Block hash into BlockHeaderValue.
-- hyperledger#2161 Handle id and shared FFI fns.
-- add handle id and implement FFI equivalents of shared traits (Clone, Eq, Ord)
-- hyperledger#1638 `configuration` return doc sub-tree.
-- hyperledger#2132 Add `endpointN` proc macro.
-- hyperledger#2257 Revoke<Role> emits RoleRevoked event.
-- hyperledger#2125 Add FindAssetDefinitionById query.
-- hyperledger#1926 Add signal handling and graceful shutdown.
-- hyperledger#2161 generate FFI functions for `data_model`
-- hyperledger#1149 Block file count does not exceed 1000000 per directory.
-- hyperledger#1413 Add API version endpoint.
-- hyperledger#2103 support querying for blocks and transactions. Add `FindAllTransactions` query
-- hyperledger#2186 Add transfer ISI for `BigQuantity` and `Fixed`.
-- hyperledger#2056 Add a derive proc macro crate for `AssetValueType` `enum`.
-- hyperledger#2100 Add query to find all accounts with asset.
-- hyperledger#2179 Optimise trigger execution.
-- hyperledger#1883 Remove embedded configuration files.
-- hyperledger#2105 handle query errors in client.
-- hyperledger#2050 Add role-related queries.
-- hyperledger#1572 Specialized permission tokens.
-- hyperledger#2121 Check keypair is valid when constructed.
- - hyperledger#2003 Introduce Norito Decoder tool.
-- hyperledger#1952 Add a TPS benchmark as a standard for optimizations.
-- hyperledger#2040 Add integration test with transaction execution limit.
-- hyperledger#1890 Introduce integration tests based on Orillion use-cases.
-- hyperledger#2048 Add toolchain file.
-- hyperledger#2100 Add query to find all accounts with asset.
-- hyperledger#2179 Optimise trigger execution.
-- hyperledger#1883 Remove embedded configuration files.
-- hyperledger#2004 Forbid `isize` and `usize` from becoming `IntoSchema`.
-- hyperledger#2105 handle query errors in client.
-- hyperledger#2050 Add role-related queries.
-- hyperledger#1572 Specialized permission tokens.
-- hyperledger#2121 Check keypair is valid when constructed.
- - hyperledger#2003 Introduce Norito Decoder tool.
-- hyperledger#1952 Add a TPS benchmark as a standard for optimizations.
-- hyperledger#2040 Add integration test with transaction execution  limit.
-- hyperledger#1890 Introduce integration tests based on Orillion use-  cases.
-- hyperledger#2048 Add toolchain file.
-- hyperledger#2037 Introduce Pre-commit Triggers.
-- hyperledger#1621 Introduce By Call Triggers.
-- hyperledger#1970 Add optional schema endpoint.
-- hyperledger#1620 Introduce time based triggers.
-- hyperledger#1918 Implement basic authentication for `client`
-- hyperledger#1726 Implement a release PR workflow.
-- hyperledger#1815 Make query responses more type-structured.
-- hyperledger#1928 implement changelog generation using `gitchangelog`
-- hyperledger#1902 Bare metal 4-peer setup script.
+- hyperledger#2073 העדיפו ConstString על פני מחרוזת עבור סוגים בבלוקצ'יין.
+- hyperledger#1889 הוסף טריגרים בהיקף של דומיין.
+- hyperledger#2098 שאילתות כותרת חסום. #2098: הוסף שאילתות כותרות בלוק
+- hyperledger#2467 הוסף תת-פקודה להענקת חשבון לתוך iroha_client_cli.
+- hyperledger#2301 הוסף את ה-hash החסימה של העסקה בעת שאילתה.
+ - hyperledger#2454 הוסף סקריפט בנייה לכלי המפענח Norito.
+- hyperledger#2061 הפקת מאקרו עבור מסננים.- hyperledger#2228 הוסף גרסה לא מורשית לשגיאת שאילתת חוזים חכמים.
+- hyperledger#2395 הוסף פאניקה אם לא ניתן להחיל בראשית.
+- hyperledger#2000 אסור לאפשר שמות ריקים. #2000: אל תאפשר שמות ריקים
+ - hyperledger#2127 הוסף בדיקת שפיות כדי להבטיח שכל הנתונים שפוענחו על ידי ה-Codec Norito נצרכים.
+- hyperledger#2360 הפוך את `genesis.json` לאופציונלי שוב.
+- hyperledger#2053 הוסף בדיקות לכל השאילתות הנותרות בבלוקצ'יין פרטי.
+- hyperledger#2381 Unify `Role` רישום.
+- hyperledger#2053 הוסף בדיקות לשאילתות הקשורות לנכסים בבלוקצ'יין פרטי.
+- hyperledger#2053 הוסף בדיקות ל-'private_blockchain'
+- hyperledger#2302 הוסף שאילתת בדל 'FindTriggersByDomainId'.
+- hyperledger#1998 הוסף מסננים לשאילתות.
+- hyperledger#2276 כלול hash בלוק נוכחי לתוך BlockHeaderValue.
+- hyperledger#2161 מזהה טיפול ו-FNS משותפים.
+- הוסף מזהה ידית והטמיע מקבילות FFI של תכונות משותפות (Clone, Eq, Ord)
+- hyperledger#1638 `configuration` החזרת עץ משנה של מסמך.
+- hyperledger#2132 הוסף מאקרו `endpointN` proc.
+- hyperledger#2257 Revoke<Role> פולט אירוע RoleRevoked.
+- hyperledger#2125 הוסף שאילתת FindAssetDefinitionById.
+- hyperledger#1926 הוסף טיפול באותות וכיבוי חינני.
+- hyperledger#2161 ליצור פונקציות FFI עבור `data_model`
+- hyperledger#1149 ספירת קבצי החסימה אינה עולה על 1000000 לכל ספרייה.
+- hyperledger#1413 הוסף נקודת קצה של גרסת API.
+- hyperledger#2103 תומך בשאילתות עבור בלוקים ועסקאות. הוסף שאילתה `FindAllTransactions`
+- hyperledger#2186 הוסף העברה ISI עבור `BigQuantity` ו-`Fixed`.
+- hyperledger#2056 הוסף ארגז מאקרו לנגזר פרוק עבור `AssetValueType` `enum`.
+- hyperledger#2100 הוסף שאילתה כדי למצוא את כל החשבונות עם נכס.
+- hyperledger#2179 ייעול ביצוע טריגר.
+- hyperledger#1883 הסר קובצי תצורה מוטבעים.
+- hyperledger#2105 מטפל בשגיאות שאילתה בלקוח.
+- hyperledger#2050 הוסף שאילתות הקשורות לתפקידים.
+- hyperledger#1572 אסימוני הרשאה מיוחדים.
+- hyperledger#2121 בדוק שצמד המפתחות תקף כאשר הוא נבנה.
+ - hyperledger#2003 הצג את כלי המפענח Norito.
+- hyperledger#1952 הוסף רף TPS כסטנדרט עבור אופטימיזציות.
+- hyperledger#2040 הוסף מבחן אינטגרציה עם מגבלת ביצוע עסקאות.
+- hyperledger#1890 הצג מבחני אינטגרציה המבוססים על מקרי שימוש של Orillion.
+- hyperledger#2048 הוסף קובץ Toolchain.
+- hyperledger#2100 הוסף שאילתה כדי למצוא את כל החשבונות עם נכס.
+- hyperledger#2179 ייעול ביצוע טריגר.
+- hyperledger#1883 הסר קובצי תצורה מוטבעים.
+- hyperledger#2004 לאסור על `isize` ו-`usize` להפוך ל-`IntoSchema`.
+- hyperledger#2105 מטפל בשגיאות שאילתה בלקוח.
+- hyperledger#2050 הוסף שאילתות הקשורות לתפקידים.
+- hyperledger#1572 אסימוני הרשאה מיוחדים.
+- hyperledger#2121 בדוק שצמד המפתחות תקף כאשר הוא נבנה.
+ - hyperledger#2003 הצג את כלי המפענח Norito.
+- hyperledger#1952 הוסף רף TPS כסטנדרט עבור אופטימיזציות.
+- hyperledger#2040 הוסף מבחן אינטגרציה עם מגבלת ביצוע עסקאות.
+- hyperledger#1890 הצג מבחני אינטגרציה המבוססים על מקרי שימוש של Orillion.
+- hyperledger#2048 הוסף קובץ Toolchain.
+- hyperledger#2037 הצג טריגרים מראש.
+- hyperledger#1621 הצג באמצעות הפעלת שיחות.
+- hyperledger#1970 הוסף נקודת קצה סכימה אופציונלית.
+- hyperledger#1620 הצג טריגרים מבוססי זמן.
+- hyperledger#1918 יישם אימות בסיסי עבור `client`
+- hyperledger#1726 יישם זרימת עבודה של שחרור יחסי ציבור.
+- hyperledger#1815 הפוך את תגובות השאילתה למבנה טיפוסי יותר.- hyperledger#1928 יישם יצירת יומן שינויים באמצעות `gitchangelog`
+- hyperledger#1902 סקריפט התקנה של 4 עמיתים מתכת חשופה.
 
-  Added a version of setup_test_env.sh that does not require docker-compose and uses the debug build of Iroha.
-- hyperledger#1619 Introduce event-based triggers.
-- hyperledger#1195 Close a websocket connection cleanly.
-- hyperledger#1606 Add ipfs link to domain logo in Domain structure.
-- hyperledger#1754 Add Kura inspector CLI.
-- hyperledger#1790 Improve performance by using stack-based vectors.
-- hyperledger#1805 Optional terminal colors for panic errors.
-- hyperledger#1749 `no_std` in `data_model`
-- hyperledger#1179 Add revoke-permission-or-role instruction.
-- hyperledger#1782 make iroha_crypto no_std compatible.
-- hyperledger#1172 Implement instruction events.
-- hyperledger#1734 Validate `Name` to exclude whitespaces.
-- hyperledger#1144 Add metadata nesting.
-- #1210 Block streaming (server side).
-- hyperledger#1331 Implement more `Prometheus` metrics.
-- hyperledger#1689 Fix feature dependencies. #1261: Add cargo bloat.
-- hyperledger#1675 use type instead of wrapper struct for versioned items.
-- hyperledger#1643 Wait for peers to commit genesis in tests.
+  נוספה גרסה של setup_test_env.sh שאינה דורשת docker-compose ומשתמשת ב-bug build של Iroha.
+- hyperledger#1619 הצג טריגרים מבוססי אירועים.
+- hyperledger#1195 סגור חיבור websocket בצורה נקייה.
+- hyperledger#1606 הוסף קישור ipfs ללוגו הדומיין במבנה הדומיין.
+- hyperledger#1754 הוסף את מפקח Kura CLI.
+- hyperledger#1790 שפר את הביצועים באמצעות וקטורים מבוססי מחסנית.
+- hyperledger#1805 צבעי קצה אופציונליים לשגיאות פאניקה.
+- hyperledger#1749 `no_std` ב-`data_model`
+- hyperledger#1179 הוסף הוראת ביטול-הרשאה או תפקיד.
+- hyperledger#1782 להפוך את iroha_crypto no_std לתואם.
+- hyperledger#1172 יישום אירועי הוראות.
+- hyperledger#1734 אמת את `Name` כדי לא לכלול רווחים לבנים.
+- hyperledger#1144 הוסף קינון של מטא נתונים.
+- #1210 חסימת סטרימינג (צד השרת).
+- hyperledger#1331 יישם עוד מדדי `Prometheus`.
+- hyperledger#1689 תקן תלות בתכונות. #1261: הוסף נפיחות מטען.
+- hyperledger#1675 השתמש בסוג במקום במבנה עטיפה עבור פריטים בגרסה.
+- hyperledger#1643 המתן עד שעמיתים יבצעו בראשית במבחנים.
 - hyperledger#1678 `try_allocate`
-- hyperledger#1216 Add Prometheus endpoint. #1216: initial implementation of metrics endpoint.
-- hyperledger#1238 Run-time log-level updates. Created basic `connection` entrypoint-based reloading.
-- hyperledger#1652 PR Title Formatting.
-- Add the number of connected peers to `Status`
+- hyperledger#1216 הוסף נקודת קצה Prometheus. #1216: יישום ראשוני של נקודת קצה מדדים.
+- hyperledger#1238 עדכונים ברמת יומן ריצה בזמן ריצה. יצרה טעינה מחדש מבוססת נקודות כניסה בסיסית `connection`.
+- hyperledger#1652 עיצוב כותרת PR.
+- הוסף את מספר העמיתים המחוברים ל-`Status`
 
-  - Revert "Delete things related to the number of connected peers"
+  - חזור ל"מחק דברים הקשורים למספר העמיתים המחוברים"
 
-  This reverts commit b228b41dab3c035ce9973b6aa3b35d443c082544.
-  - Clarify `Peer` has true public key only after handshake
-  - `DisconnectPeer` without tests
-  - Implement unregister peer execution
-  - Add (un)register peer subcommand to `client_cli`
-  - Refuse reconnections from an unregistered peer by its address
+  זה מחזיר את commit b228b41dab3c035ce9973b6aa3b35d443c082544.
+  - ל-Clarify `Peer` יש מפתח ציבורי אמיתי רק לאחר לחיצת יד
+  - `DisconnectPeer` ללא בדיקות
+  - ליישם ביצוע ביטול רישום עמיתים
+  - הוסף (בטל) פקודת משנה ל-`client_cli`
+  - סרב לחיבורים חוזרים מעמית לא רשום לפי כתובתו
 
-  After your peer unregisters and disconnects another peer,
-  your network will hear reconnection requests from the peer.
-  All you can know at first is the address whose port number is arbitrary.
-  So remember the unregistered peer by the part other than the port number
-  and refuse reconnection from there
-- Add `/status` endpoint to a specific port.
+  לאחר שהחבר שלך מבטל את הרישום ומנתק עמית אחר,
+  הרשת שלך תשמע בקשות חיבור מחדש מהעמית.
+  כל מה שאתה יכול לדעת בהתחלה הוא הכתובת שמספר היציאה שלה הוא שרירותי.
+  אז זכור את העמית הלא רשום לפי החלק שאינו מספר היציאה
+  ומסרבים להתחבר מחדש משם
+- הוסף נקודת קצה `/status` ליציאה ספציפית.
 
-### Fixes
-
-- hyperledger#3129 Fix `Parameter` de/serialization.
-- hyperledger#3109 Prevent `sumeragi` sleep after role agnostic message.
-- hyperledger#3046 Ensure Iroha can start gracefully on empty
+### תיקונים- hyperledger#3129 תקן את `Parameter` de/serialization.
+- hyperledger#3109 מנע `sumeragi` שינה לאחר הודעה אגנוסטית לתפקיד.
+- hyperledger#3046 ודא ש-Iroha יכול להתחיל בחן על ריק
   `./storage`
-- hyperledger#2599 Remove nursery lints.
-- hyperledger#3087 Collect votes from Set B validators after view change.
-- hyperledger#3056 Fix `tps-dev` benchmark hanging.
-- hyperledger#1170 Implement cloning-wsv-style soft-fork handling.
-- hyperledger#2456 Make genesis block unlimited.
-- hyperledger#3038 Re-enable multisigs.
-- hyperledger#2894 Fix `LOG_FILE_PATH` env variable deserialization.
-- hyperledger#2803 Return correct status code for signature errors.
-- hyperledger#2963 `Queue` remove transactions correctly.
+- hyperledger#2599 הסר מוך לחדר הילדים.
+- hyperledger#3087 אסוף הצבעות ממאמתי סט B לאחר שינוי תצוגה.
+- hyperledger#3056 תקן תליית `tps-dev` benchmark.
+- hyperledger#1170 יישם טיפול soft-fork בסגנון שיבוט-wsv.
+- hyperledger#2456 הפוך את בלוק בראשית ללא הגבלה.
+- hyperledger#3038 הפעל מחדש multisigs.
+- hyperledger#2894 תקן את `LOG_FILE_PATH` דה-סריאליזציה של משתנה env.
+- hyperledger#2803 החזר קוד סטטוס נכון עבור שגיאות חתימה.
+- hyperledger#2963 `Queue` הסר עסקאות בצורה נכונה.
 - hyperledger#0000 Vergen breaking CI.
-- hyperledger#2165 Remove toolchain fidget.
-- hyperledger#2506 Fix the block validation.
-- hyperledger#3013 Properly chain burn validators.
-- hyperledger#2998 Delete unused Chain code.
-- hyperledger#2816 Move responsibility of access to blocks to kura.
-- hyperledger#2384 Replace decode with decode_all.
-- hyperledger#1967 Replace ValueName with Name.
-- hyperledger#2980 Fix block value ffi type.
-- hyperledger#2858 Introduce parking_lot::Mutex instead of std.
-- hyperledger#2850 Fix deserialization/decoding of `Fixed`
-- hyperledger#2923 Return `FindError` when `AssetDefinition` does not
-  exist.
-- hyperledger#0000 Fix `panic_on_invalid_genesis.sh`
-- hyperledger#2880 Close websocket connection properly.
-- hyperledger#2880 Fix block streaming.
-- hyperledger#2804 `iroha_client_cli` submit transaction blocking.
-- hyperledger#2819 Move non-essential members out of WSV.
-- Fix expression serialization recursion bug.
-- hyperledger#2834 Improve shorthand syntax.
-- hyperledger#2379 Add ability to dump new Kura blocks to blocks.txt.
-- hyperledger#2758 Add Sorting structure to the schema.
+- hyperledger#2165 הסר את פידג'ט שרשרת הכלים.
+- hyperledger#2506 תקן את אימות החסימה.
+- hyperledger#3013 מאמתים כראוי צריבת שרשרת.
+- hyperledger#2998 מחק קוד שרשרת שאינו בשימוש.
+- hyperledger#2816 העבר את אחריות הגישה לבלוקים לקורה.
+- hyperledger#2384 החלף פענוח ב-decode_all.
+- hyperledger#1967 החלף ValueName בשם.
+- hyperledger#2980 תקן ערך בלוק מסוג ffi.
+- hyperledger#2858 הצג חנייה_מגרש::Mutex במקום std.
+- hyperledger#2850 תקן דה-סידריאליזציה/פענוח של `Fixed`
+- hyperledger#2923 החזר `FindError` כאשר `AssetDefinition` לא
+  קיימים.
+- hyperledger#0000 תיקון `panic_on_invalid_genesis.sh`
+- hyperledger#2880 סגור חיבור websocket כראוי.
+- hyperledger#2880 תקן זרימת בלוק.
+- hyperledger#2804 `iroha_client_cli` שלח חסימת עסקאות.
+- hyperledger#2819 העבר חברים לא חיוניים מתוך WSV.
+- תקן באג הרקורסיה בהמשכת ביטויים.
+- hyperledger#2834 שפר את תחביר הקיצור.
+- hyperledger#2379 הוסף יכולת לזרוק בלוקי Kura חדשים ל-blocks.txt.
+- hyperledger#2758 הוסף מבנה מיון לסכימה.
 - CI.
-- hyperledger#2548 Warn on large genesis file.
-- hyperledger#2638 Update `whitepaper` and propagate changes.
-- hyperledger#2678 Fix tests on staging branch.
-- hyperledger#2678 Fix tests abort on Kura force shutdown.
-- hyperledger#2607 Refactor of sumeragi code for more simplicity and
-  robustness fixes.
-- hyperledger#2561 Reintroduce viewchanges to consensus.
-- hyperledger#2560 Add back in block_sync and peer disconnecting.
-- hyperledger#2559 Add sumeragi thread shutdown.
-- hyperledger#2558 Validate genesis before updating the wsv from kura.
-- hyperledger#2465 Reimplement sumeragi node as singlethreaded state
-  machine.
-- hyperledger#2449 Initial implementation of Sumeragi Restructuring.
-- hyperledger#2802 Fix env loading for configuration.
-- hyperledger#2787 Notify every listener to shutdown on panic.
-- hyperledger#2764 Remove limit on max message size.
-- #2571: Better Kura Inspector UX.
-- hyperledger#2703 Fix Orillion dev env bugs.
-- Fix typo in a doc comment in schema/src.
-- hyperledger#2716 Make Duration in Uptime public.
-- hyperledger#2700 Export `KURA_BLOCK_STORE_PATH` in docker images.
-- hyperledger#0 Remove `/iroha/rust-toolchain.toml` from the builder
-  image.
-- hyperledger#0 Fix `docker-compose-single.yml`
-- hyperledger#2554 Raise error if `secp256k1` seed shorter than 32
-  bytes.
-- hyperledger#0 Modify `test_env.sh` to allocate storage for each peer.
-- hyperledger#2457 Forcibly shut down kura in tests.
-- hyperledger#2623 Fix doctest for VariantCount.
-- Update an expected error in ui_fail tests.
-- Fix incorrect doc comment in permission validators.
-- hyperledger#2422 Hide private keys in configuration endpoint response.
-- hyperledger#2492: Fix not all triggers being executed that match an event.
-- hyperledger#2504 Fix failing tps benchmark.
-- hyperledger#2477 Fix bug when permissions from roles weren't counted.
-- hyperledger#2416 Fix lints on macOS arm.
-- hyperledger#2457 Fix tests flakiness related to shut down on panic.
-  #2457: Add shut down on panic configuration
-- hyperledger#2473 parse rustc --version instead of RUSTUP_TOOLCHAIN.
-- hyperledger#1480 Shut down on panic. #1480: Add panic hook to exit program on panic
-- hyperledger#2376 Simplified Kura, no async, two files.
-- hyperledger#0000 Docker build failure.
-- hyperledger#1649 remove `spawn` from `do_send`
-- hyperledger#2128 Fix `MerkleTree` construction and iteration.
-- hyperledger#2137 Prepare tests for multiprocess context.
-- hyperledger#2227 Implement Register and Unregister for Asset.
-- hyperledger#2081 Fix role granting bug.
-- hyperledger#2358 Add release with debug profile.
-- hyperledger#2294 Add flamegraph generation to oneshot.rs.
-- hyperledger#2202 Fix total field in query response.
-- hyperledger#2081 Fix the test case to grant the role.
-- hyperledger#2017 Fix role unregistration.
-- hyperledger#2303 Fix docker-compose' peers doesn't get gracefully shut down.
-- hyperledger#2295 Fix unregister trigger bug.
-- hyperledger#2282 improve FFI derives from getset implementation.
-- hyperledger#1149 Remove nocheckin code.
-- hyperledger#2232 Make Iroha print meaningful message when genesis has too many isi.
-- hyperledger#2170 Fix build in docker container on M1 machines.
-- hyperledger#2215 Make nightly-2022-04-20 optional for `cargo build`
-- hyperledger#1990 Enable peer startup via env vars in the absence of config.json.
-- hyperledger#2081 Fix role registration.
-- hyperledger#1640 Generate config.json and genesis.json.
-- hyperledger#1716 Fix consensus failure with f=0 cases.
-- hyperledger#1845 Non-mintable assets can be minted once only.
-- hyperledger#2005 Fix `Client::listen_for_events()` not closing WebSocket stream.
-- hyperledger#1623 Create a RawGenesisBlockBuilder.
-- hyperledger#1917 Add easy_from_str_impl macro.
-- hyperledger#1990 Enable peer startup via env vars in the absence of config.json.
-- hyperledger#2081 Fix role registration.
-- hyperledger#1640 Generate config.json and genesis.json.
-- hyperledger#1716 Fix consensus failure with f=0 cases.
-- hyperledger#1845 Non-mintable assets can be minted once only.
-- hyperledger#2005 Fix `Client::listen_for_events()` not closing WebSocket stream.
-- hyperledger#1623 Create a RawGenesisBlockBuilder.
-- hyperledger#1917 Add easy_from_str_impl macro.
-- hyperledger#1922 Move crypto_cli into tools.
-- hyperledger#1969 Make the `roles` feature part of the default feature set.
-- hyperledger#2013 Hotfix CLI args.
-- hyperledger#1897 Remove usize/isize from serialization.
-- hyperledger#1955 Fix possibility to pass `:` inside `web_login`
-- hyperledger#1943 Add query errors to the schema.
-- hyperledger#1939 Proper features for `iroha_config_derive`.
-- hyperledger#1908 fix zero value handling for telemetry analysis script.
-- hyperledger#0000 Make implicitly ignored doc-test explicitly ignored.
-- hyperledger#1848 Prevent public keys from being burned to nothing.
-- hyperledger#1811 added tests and checks to dedup trusted peer keys.
-- hyperledger#1821 add IntoSchema for MerkleTree and VersionedValidBlock, fix HashOf and SignatureOf schemas.
-- hyperledger#1819 Remove traceback from error report in validation.
-- hyperledger#1774 log exact reason for validation failures.
-- hyperledger#1714 Compare PeerId only by key.
-- hyperledger#1788 Reduce memory footprint of `Value`.
-- hyperledger#1804 fix schema generation for HashOf, SignatureOf, add test to ensure no schemas are missing.
-- hyperledger#1802 Logging readability improvements.
-  - events log moved to trace level
-  - ctx removed from log capture
-  - terminal colors are made optional (for better log output to files)
-- hyperledger#1783 Fixed torii benchmark.
-- hyperledger#1772 Fix after #1764.
-- hyperledger#1755 Minor fixes for #1743, #1725.
-  - Fix JSONs according to #1743 `Domain` struct change
-- hyperledger#1751 Consensus fixes. #1715: Consensus fixes to handle high load (#1746)
-  - View change handling fixes
-  - View change proofs made independent of particular transaction hashes
-  - Reduced message passing
-  - Collect view change votes instead of sending messages right away (improves network resilience)
-  - Fully use Actor framework in Sumeragi (schedule messages to self instead of task spawns)
-  - Improves fault injection for tests with Sumeragi
-  - Brings testing code closer to production code
-  - Removes overcomplicated wrappers
-  - Allows Sumeragi use actor Context in test code
-- hyperledger#1734 Update genesis to fit the new Domain validation.
-- hyperledger#1742 Concrete errors returned in `core` instructions.
-- hyperledger#1404 Verify fixed.
-- hyperledger#1636 Remove `trusted_peers.json` and `structopt`
-  #1636: Remove `trusted_peers.json`.
-- hyperledger#1706 Update `max_faults` with Topology update.
-- hyperledger#1698 Fixed public keys, documentation and error messages.
-- Minting issues (1593 and 1405) issue 1405
+- hyperledger#2548 אזהרה על קובץ בראשית גדול.
+- hyperledger#2638 עדכן את `whitepaper` והפצת שינויים.
+- hyperledger#2678 תקן בדיקות ב-Staging branch.
+- hyperledger#2678 תיקון בדיקות מבטל את כיבוי כוח Kura.
+- hyperledger#2607 Refactor של קוד sumeragi ליותר פשטות ו
+  תיקוני חוסן.
+- hyperledger#2561 הכנס מחדש את שינויי התצוגה לקונצנזוס.
+- hyperledger#2560 הוסף חזרה ב-block_sync וניתוק עמיתים.
+- hyperledger#2559 הוסף כיבוי שרשור של sumeragi.
+- hyperledger#2558 אמת את הבראשית לפני עדכון ה-wsv מ-kura.
+- hyperledger#2465 יישם מחדש את צומת sumeragi כמצב יחיד
+  מכונה.
+- hyperledger#2449 יישום ראשוני של Sumeragi Restructuring.
+- hyperledger#2802 תקן את טעינת ה-env עבור תצורה.
+- hyperledger#2787 הודע לכל מאזין לכיבוי בגלל פאניקה.
+- hyperledger#2764 הסר מגבלה על גודל הודעה מרבי.
+- #2571: עדיף Kura Inspector UX.
+- hyperledger#2703 תקן באגים של Orillion dev env.
+- תקן שגיאת הקלדה בהערת מסמך ב-schema/src.
+- hyperledger#2716 הפוך את משך זמן פעולה לציבורי.
+- hyperledger#2700 ייצוא `KURA_BLOCK_STORE_PATH` בתמונות docker.
+- hyperledger#0 הסר את `/iroha/rust-toolchain.toml` מהבונה
+  תמונה.
+- hyperledger#0 תיקון `docker-compose-single.yml`
+- hyperledger#2554 העלה שגיאה אם `secp256k1` seed קצר מ-32
+  בתים.
+- hyperledger#0 שנה את `test_env.sh` כדי להקצות אחסון לכל עמית.
+- hyperledger#2457 סגור בכוח את הקורה בבדיקות.
+- hyperledger#2623 תקן doctest עבור VariantCount.
+- עדכן שגיאה צפויה בבדיקות ui_fail.
+- תקן הערת מסמך שגויה במאמתי הרשאות.- hyperledger#2422 הסתר מפתחות פרטיים בתגובת נקודת הקצה לתצורה.
+- hyperledger#2492: תקן לא את כל הטריגרים שמתבצעים התואמים אירוע.
+- hyperledger#2504 תקן רף כושל של tps benchmark.
+- hyperledger#2477 תקן באג כאשר הרשאות מתפקידים לא נספרו.
+- hyperledger#2416 תקן מוך בזרוע macOS.
+- hyperledger#2457 תקן בדיקות מתקלפות הקשורות לכיבוי בגלל פאניקה.
+  #2457: הוסף כיבוי בתצורת פאניקה
+- hyperledger#2473 לנתח rustc --גרסה במקום RUSTUP_TOOLCHAIN.
+- hyperledger#1480 כבה בגלל פאניקה. #1480: הוסף וו פאניקה כדי לצאת מהתוכנית בבהלה
+- hyperledger#2376 Kura מפושט, ללא אסינכרון, שני קבצים.
+- hyperledger#0000 Docker כישלון בנייה.
+- hyperledger#1649 הסר את `spawn` מ-`do_send`
+- hyperledger#2128 תקן את הבנייה והאיטרציה של `MerkleTree`.
+- hyperledger#2137 הכן בדיקות להקשר מרובה תהליכים.
+- hyperledger#2227 יישם רישום ובטל רישום עבור נכס.
+- hyperledger#2081 תקן באג הענקת תפקידים.
+- hyperledger#2358 הוסף גרסה עם פרופיל ניפוי באגים.
+- hyperledger#2294 הוסף יצירת פלמגרף ל-oneshot.rs.
+- hyperledger#2202 תקן את השדה הכולל בתגובת השאילתה.
+- hyperledger#2081 תקן את מקרה המבחן כדי להעניק את התפקיד.
+- hyperledger#2017 תקן את ביטול הרישום של תפקידים.
+- hyperledger#2303 תיקון docker-compose' עמיתים לא נסגר בחן.
+- hyperledger#2295 תקן באג ההפעלה של ביטול הרישום.
+- hyperledger#2282 לשפר את ה-FFI נובע מיישום getset.
+- hyperledger#1149 הסר קוד nocheckin.
+- hyperledger#2232 הפוך את Iroha להדפיס הודעה משמעותית כאשר בראשית יש יותר מדי isi.
+- hyperledger#2170 תקן את ה-build in docker container במכונות M1.
+- hyperledger#2215 הפוך לילי-2022-04-20 לאופציונלי עבור `cargo build`
+- hyperledger#1990 אפשר אתחול עמית באמצעות env vars בהעדר config.json.
+- hyperledger#2081 תקן רישום תפקידים.
+- hyperledger#1640 צור config.json ו-genesis.json.
+- hyperledger#1716 תקן כשלון קונצנזוס עם מקרים f=0.
+- hyperledger#1845 ניתן להטביע נכסים שאינם ניתנים להטבעה פעם אחת בלבד.
+- hyperledger#2005 תיקון `Client::listen_for_events()` לא סוגר את זרם WebSocket.
+- hyperledger#1623 צור RawGenesisBlockBuilder.
+- hyperledger#1917 הוסף מאקרו easy_from_str_impl.
+- hyperledger#1990 אפשר אתחול עמית באמצעות env vars בהעדר config.json.
+- hyperledger#2081 תקן רישום תפקידים.
+- hyperledger#1640 צור config.json ו-genesis.json.
+- hyperledger#1716 תקן כשלון קונצנזוס עם מקרים f=0.
+- hyperledger#1845 ניתן להטביע נכסים שאינם ניתנים להטבעה פעם אחת בלבד.
+- hyperledger#2005 תיקון `Client::listen_for_events()` לא סוגר את זרם WebSocket.
+- hyperledger#1623 צור RawGenesisBlockBuilder.
+- hyperledger#1917 הוסף מאקרו easy_from_str_impl.
+- hyperledger#1922 העבר את crypto_cli לכלים.
+- hyperledger#1969 הפוך את התכונה `roles` לחלק מערך התכונות המוגדר כברירת מחדל.
+- hyperledger#2013 תיקון חם CLI args.
+- hyperledger#1897 הסר usize/isize מהסידרה.
+- hyperledger#1955 תקן אפשרות להעביר את `:` בתוך `web_login`
+- hyperledger#1943 הוסף שגיאות שאילתה לסכימה.
+- hyperledger#1939 תכונות מתאימות עבור `iroha_config_derive`.
+- hyperledger#1908 תיקון טיפול בערך אפס עבור סקריפט ניתוח טלמטריה.
+- hyperledger#0000 הפוך את doc-test להתעלמות מפורשות.
+- hyperledger#1848 מנע צריבה של מפתחות ציבוריים לכלום.
+- hyperledger#1811 הוסיף בדיקות ובדיקות לביטול מפתחות עמיתים מהימנים.
+- hyperledger#1821 הוסף IntoSchema עבור MerkleTree ו-VersionedValidBlock, תקן סכימות HashOf ו-SignatureOf.- hyperledger#1819 הסר עקבות מדוח שגיאה באימות.
+- hyperledger#1774 יומן סיבה מדויקת לכשלי אימות.
+- hyperledger#1714 השווה PeerId רק לפי מפתח.
+- hyperledger#1788 צמצם את טביעת הזיכרון של `Value`.
+- hyperledger#1804 תיקון סכימה עבור HashOf, SignatureOf, הוסף בדיקה כדי לוודא שלא חסרות סכמות.
+- hyperledger#1802 שיפורים בקריאות ביומן.
+  - יומן אירועים הועבר לרמת מעקב
+  - ctx הוסר מלכידת יומן
+  - צבעי הטרמינל נעשים אופציונליים (לצורך פלט יומן טוב יותר לקבצים)
+- hyperledger#1783 מדד torii קבוע.
+- hyperledger#1772 תיקון לאחר #1764.
+- hyperledger#1755 תיקונים קלים עבור #1743, #1725.
+  - תקן JSONs לפי #1743 `Domain` שינוי מבנה
+- hyperledger#1751 תיקוני קונצנזוס. #1715: תיקוני קונצנזוס לטיפול בעומס גבוה (#1746)
+  - הצג תיקוני טיפול בשינויים
+  - הצג הוכחות לשינוי שנעשו ללא תלות ב-hash של עסקאות מסוימות
+  - העברת הודעות מופחתת
+  - אסוף הצבעות לשינוי צפייה במקום לשלוח הודעות מיד (משפר את עמידות הרשת)
+  - שימוש מלא ב-Actor Framework ב-Sumeragi (תזמן הודעות לעצמי במקום התחלת משימות)
+  - משפר את הזרקת תקלות לבדיקות עם Sumeragi
+  - מקרב את קוד הבדיקה לקוד הייצור
+  - מסיר עטיפות מסובכות מדי
+  - מאפשר ל-Sumeragi להשתמש בהקשר של שחקן בקוד הבדיקה
+- hyperledger#1734 עדכן את genesis כך שיתאים לאימות הדומיין החדש.
+- hyperledger#1742 שגיאות קונקרטיות שהוחזרו בהוראות `core`.
+- hyperledger#1404 אימות תוקן.
+- hyperledger#1636 הסר את `trusted_peers.json` ו-`structopt`
+  #1636: הסר את `trusted_peers.json`.
+- hyperledger#1706 עדכון `max_faults` עם עדכון טופולוגיה.
+- hyperledger#1698 תיקנו מפתחות ציבוריים, תיעוד והודעות שגיאה.
+- גליונות טביעה (1593 ו-1405) גיליון 1405
 
-### Refactor
-
-- Extract functions from sumeragi main loop.
-- Refactor `ProofChain` to newtype.
-- Remove `Mutex` from `Metrics`
-- Remove adt_const_generics nightly feature.
-- hyperledger#3039 Introduce waiting buffer for the multisigs.
-- Simplify sumeragi.
-- hyperledger#3053 Fix clippy lints.
-- hyperledger#2506 Add more tests on block validation.
-- Remove `BlockStoreTrait` in Kura.
-- Update lints for `nightly-2022-12-22`
-- hyperledger#3022 Remove `Option` in `transaction_cache`
-- hyperledger#3008 Add niche value into `Hash`
-- Update lints to 1.65.
-- Add small tests to boost coverage.
-- Remove dead code from `FaultInjection`
-- Call p2p less often from sumeragi.
-- hyperledger#2675 Validate item names/ids without allocating Vec.
-- hyperledger#2974 Prevent block spoofing without full revalidation.
-- more efficient `NonEmpty` in combinators.
-- hyperledger#2955 Remove Block from BlockSigned message.
-- hyperledger#1868 Prevent validated transactions from being sent
-  between peers.
-- hyperledger#2458 Implement generic combinator API.
-- Add storage folder into gitignore.
-- hyperledger#2909 Hardcode ports for nextest.
-- hyperledger#2747 Change `LoadFromEnv` API.
-- Improve error messages on configuration failure.
-- Add extra examples to `genesis.json`
-- Remove unused dependencies before `rc9` release.
-- Finalise linting on new Sumeragi.
-- Extract subprocedures in the main loop.
-- hyperledger#2774 Change `kagami` genesis generation mode from flag to
-  subcommand.
-- hyperledger#2478 Add `SignedTransaction`
-- hyperledger#2649 Remove `byteorder` crate from `Kura`
-- Rename `DEFAULT_BLOCK_STORE_PATH` from `./blocks` to `./storage`
-- hyperledger#2650 Add `ThreadHandler` to shutdown iroha submodules.
-- hyperledger#2482 Store `Account` permission tokens in `Wsv`
-- Add new lints to 1.62.
-- Improve `p2p` error messages.
-- hyperledger#2001 `EvaluatesTo` static type checking.
-- hyperledger#2052 Make permission tokens registrable with definition.
-  #2052: Implement PermissionTokenDefinition
-- Ensure all feature combinations work.
-- hyperledger#2468 Remove debug supertrait from permission validators.
-- hyperledger#2419 Remove explicit `drop`s.
-- hyperledger#2253 Add `Registrable` trait to `data_model`
-- Implement `Origin` instead of `Identifiable` for the data events.
-- hyperledger#2369 Refactor permission validators.
-- hyperledger#2307 Make `events_sender` in `WorldStateView` non-optional.
-- hyperledger#1985 Reduce size of `Name` struct.
-- Add more `const fn`.
-- Make integration tests use `default_permissions()`
-- add permission token wrappers in private_blockchain.
-- hyperledger#2292 Remove `WorldTrait`, remove generics from `IsAllowedBoxed`
-- hyperledger#2204 Make Asset-related operations generic.
-- hyperledger#2233 Replace `impl` with `derive` for `Display` and `Debug`.
-- Identifiable structure improvements.
-- hyperledger#2323 Enhance kura init error message.
-- hyperledger#2238 Add peer builder for tests.
-- hyperledger#2011 More descriptive config params.
-- hyperledger#1896 Simplify `produce_event` implementation.
-- Refactor around `QueryError`.
-- Move `TriggerSet` to `data_model`.
-- hyperledger#2145 refactor client's `WebSocket` side, extract pure data logic.
-- remove `ValueMarker` trait.
-- hyperledger#2149 Expose `Mintable` and `MintabilityError` in `prelude`
-- hyperledger#2144 redesign client's http workflow, expose internal api.
-- Move to `clap`.
-- Create `iroha_gen` binary, consolidating docs, schema_bin.
-- hyperledger#2109 Make `integration::events::pipeline` test stable.
-- hyperledger#1982 encapsulate access to `iroha_crypto` structures.
-- Add `AssetDefinition` builder.
-- Remove unnecessary `&mut` from the API.
-- encapsulate access to data model structures.
-- hyperledger#2144 redesign client's http workflow, expose internal api.
-- Move to `clap`.
-- Create `iroha_gen` binary, consolidating docs, schema_bin.
-- hyperledger#2109 Make `integration::events::pipeline` test stable.
-- hyperledger#1982 encapsulate access to `iroha_crypto` structures.
-- Add `AssetDefinition` builder.
-- Remove unnecessary `&mut` from the API.
-- encapsulate access to data model structures.
-- Core, `sumeragi`, instance functions, `torii`
-- hyperledger#1903 move event emission to `modify_*` methods.
-- Split `data_model` lib.rs file.
-- Add wsv reference to queue.
-- hyperledger#1210 Split event stream.
-  - Move transaction-related functionality to data_model/transaction module
-- hyperledger#1725 Remove global state in Torii.
-  - Implement `add_state macro_rules` and remove `ToriiState`
-- Fix linter error.
-- hyperledger#1661 `Cargo.toml` cleanup.
-  - Sort out cargo dependencies
-- hyperledger#1650 tidy up `data_model`
-  - Move World to wsv, fix roles feature, derive IntoSchema for CommittedBlock
-- Organisation of `json` files and readme. Update Readme to conform to template.
-- 1529: structured logging.
-  - Refactor log messages
+### Refactor- חלץ פונקציות מהלולאה הראשית של sumeragi.
+- Refactor `ProofChain` לסוג חדש.
+- הסר את `Mutex` מ-`Metrics`
+- הסר את התכונה הלילית של adt_const_generics.
+- hyperledger#3039 הצג מאגר המתנה עבור ה-multisigs.
+- פשט sumeragi.
+- hyperledger#3053 תקן מוך קליפי.
+- hyperledger#2506 הוסף בדיקות נוספות על אימות בלוקים.
+- הסר את `BlockStoreTrait` ב-Kura.
+- עדכון מוך עבור `nightly-2022-12-22`
+- hyperledger#3022 הסר `Option` ב-`transaction_cache`
+- hyperledger#3008 הוסף ערך נישה ל-`Hash`
+- עדכן את המוך ל-1.65.
+- הוסף בדיקות קטנות כדי להגביר את הכיסוי.
+- הסר קוד מת מ-`FaultInjection`
+- התקשר ל-p2p בתדירות נמוכה יותר מ-sumeragi.
+- hyperledger#2675 אמת שמות/מזהים של פריטים מבלי להקצות Vec.
+- hyperledger#2974 מנע זיוף בלוקים ללא אימות מלא.
+- יעיל יותר `NonEmpty` בקומבינטורים.
+- hyperledger#2955 הסר חסימה מהודעה בלוק חתום.
+- hyperledger#1868 מנע שליחת עסקאות מאומתות
+  בין עמיתים.
+- hyperledger#2458 הטמעת API של קומבינטור גנרי.
+- הוסף תיקיית אחסון לתוך gitignore.
+- hyperledger#2909 יציאות קוד קשיח עבור הבאות.
+- hyperledger#2747 שנה את `LoadFromEnv` API.
+- שפר את הודעות השגיאה על כשל בתצורה.
+- הוסף דוגמאות נוספות ל-`genesis.json`
+- הסר תלות שאינה בשימוש לפני שחרור `rc9`.
+- סיום מוך ב-Sumeragi החדש.
+- חלץ נהלי משנה בלולאה הראשית.
+- hyperledger#2774 שנה את `kagami` מצב יצירת בראשית מדגל ל
+  פקודה משנה.
+- hyperledger#2478 הוסף `SignedTransaction`
+- hyperledger#2649 הסר את ארגז `byteorder` מ-`Kura`
+- שנה את שם `DEFAULT_BLOCK_STORE_PATH` מ-`./blocks` ל-`./storage`
+- hyperledger#2650 הוסף את `ThreadHandler` לכיבוי תת-מודולי iroha.
+- hyperledger#2482 אחסן אסימוני הרשאות `Account` ב-`Wsv`
+- הוסף מוך חדש ל-1.62.
+- שפר את הודעות השגיאה של `p2p`.
+- hyperledger#2001 `EvaluatesTo` בדיקת סוג סטטי.
+- hyperledger#2052 הפוך אסימוני הרשאות לרישום עם הגדרה.
+  #2052: יישם PermissionTokenDefinition
+- ודא שכל שילובי התכונות עובדים.
+- hyperledger#2468 הסר על תכונת ניפוי באגים ממאמתי ההרשאות.
+- hyperledger#2419 הסר `drop`s מפורש.
+- hyperledger#2253 הוסף תכונה `Registrable` ל-`data_model`
+- יישם `Origin` במקום `Identifiable` עבור אירועי הנתונים.
+- hyperledger#2369 מאמת הרשאות Refactor.
+- hyperledger#2307 הפוך את `events_sender` ב-`WorldStateView` ללא אופציונלי.
+- hyperledger#1985 הקטנת גודל של מבנה `Name`.
+- הוסף עוד `const fn`.
+- בצע בדיקות אינטגרציה באמצעות `default_permissions()`
+- הוסף עטיפות של אסימוני הרשאה ב-private_blockchain.
+- hyperledger#2292 הסר `WorldTrait`, הסר כללי מ-`IsAllowedBoxed`
+- hyperledger#2204 הפוך פעולות הקשורות לנכסים לגנריות.
+- hyperledger#2233 החלף את `impl` ב-`derive` עבור `Display` ו-`Debug`.
+- שיפורי מבנה שניתן לזהות.
+- hyperledger#2323 הודעת שגיאה של שיפור kura init.
+- hyperledger#2238 הוסף בונה עמיתים לבדיקות.
+- hyperledger#2011 פרמטרי תצורה תיאוריים נוספים.
+- hyperledger#1896 פשט את יישום `produce_event`.
+- Refactor סביב `QueryError`.
+- העבר את `TriggerSet` ל-`data_model`.
+- צד `WebSocket` של לקוח hyperledger#2145 refactor, חילוץ לוגיקה נתונים טהורה.
+- הסר תכונה `ValueMarker`.
+- hyperledger#2149 חשוף את `Mintable` ו-`MintabilityError` ב-`prelude`
+- hyperledger#2144 עצב מחדש את זרימת העבודה http של הלקוח, חשוף ממשק API פנימי.- העבר ל-`clap`.
+- צור `iroha_gen` בינארי, איחוד מסמכים, schema_bin.
+- hyperledger#2109 הפוך את מבחן `integration::events::pipeline` ליציב.
+- hyperledger#1982 מקיף גישה למבני `iroha_crypto`.
+- הוסף את בונה `AssetDefinition`.
+- הסר את `&mut` המיותר מהממשק ה-API.
+- להטמיע גישה למבני מודל נתונים.
+- hyperledger#2144 עצב מחדש את זרימת העבודה http של הלקוח, חשוף ממשק API פנימי.
+- העבר ל-`clap`.
+- צור `iroha_gen` בינארי, איחוד מסמכים, schema_bin.
+- hyperledger#2109 הפוך את מבחן `integration::events::pipeline` ליציב.
+- hyperledger#1982 עוטף גישה למבני `iroha_crypto`.
+- הוסף את בונה `AssetDefinition`.
+- הסר את `&mut` המיותר מהממשק ה-API.
+- להטמיע גישה למבני מודל נתונים.
+- Core, `sumeragi`, פונקציות מופע, `torii`
+- hyperledger#1903 העבר פליטת אירועים לשיטות `modify_*`.
+- פיצול קובץ `data_model` lib.rs.
+- הוסף הפניה ל-wsv לתור.
+- hyperledger#1210 פיצול זרם אירועים.
+  - העבר פונקציונליות הקשורה לעסקה למודול data_model/transaction
+- hyperledger#1725 הסר מצב גלובלי ב-Torii.
+  - יישם את `add_state macro_rules` והסר את `ToriiState`
+- תקן שגיאת linter.
+- hyperledger#1661 `Cargo.toml` ניקוי.
+  - למיין את התלות במטען
+- hyperledger#1650 לסדר את `data_model`
+  - העבר את העולם ל-wsv, תקן תפקידים, הפק את IntoSchema עבור CommittedBlock
+- ארגון קבצי `json` ו-readme. עדכן את Readme כדי להתאים לתבנית.
+- 1529: רישום מובנה.
+  - הודעות יומן Refactor
 - `iroha_p2p`
-  - Add p2p privatisation.
+  - הוסף הפרטת p2p.
 
-### Documentation
+### תיעוד
 
-- Update Iroha Client CLI readme.
-- Update tutorial snippets.
-- Add 'sort_by_metadata_key' into API spec.
-- Update links to documentation.
-- Extend tutorial with asset-related docs.
-- Remove outdated doc files.
-- Review punctuation.
-- Move some docs to the tutorial repository.
-- Flakyness report for staging branch.
-- Generate changelog for pre-rc.7.
-- Flakyness report for Jul 30.
-- Bump versions.
-- Update test flakyness.
-- hyperledger#2499 Fix client_cli error messages.
-- hyperledger#2344 Generate CHANGELOG for 2.0.0-pre-rc.5-lts.
-- Add links to the tutorial.
-- Update information on git hooks.
-- flakyness test writeup.
-- hyperledger#2193 Update Iroha client documentation.
-- hyperledger#2193 Update Iroha CLI documentation.
-- hyperledger#2193 Update README for macro crate.
- - hyperledger#2193 Update Norito Decoder Tool documentation.
-- hyperledger#2193 Update Kagami documentation.
-- hyperledger#2193 Update benchmarks documentation.
-- hyperledger#2192 Review contributing guidelines.
-- Fix broken in-code references.
-- hyperledger#1280 Document Iroha metrics.
-- hyperledger#2119 Add guidance on how to hot reload Iroha in a Docker container.
-- hyperledger#2181 Review README.
-- hyperledger#2113 Document features in Cargo.toml files.
-- hyperledger#2177 Clean up gitchangelog output.
-- hyperledger#1991 Add readme to Kura inspector.
-- hyperledger#2119 Add guidance on how to hot reload Iroha in a Docker container.
-- hyperledger#2181 Review README.
-- hyperledger#2113 Document features in Cargo.toml files.
-- hyperledger#2177 Clean up gitchangelog output.
-- hyperledger#1991 Add readme to Kura inspector.
-- generate latest changelog.
-- Generate changelog.
-- Update outdated README files.
-- Added missing docs to `api_spec.md`.
+- עדכון Iroha Client CLI readme.
+- עדכון קטעי הדרכה.
+- הוסף 'סort_by_metadata_key' למפרט API.
+- עדכון קישורים לתיעוד.
+- הרחב את המדריך עם מסמכים הקשורים לנכסים.
+- הסר קובצי מסמך מיושנים.
+- סקירת סימני פיסוק.
+- העבר כמה מסמכים למאגר ההדרכה.
+- דוח התקלפות לסניף הבמה.
+- צור יומן שינויים עבור pre-rc.7.
+- דוח רעידות ל-30 ביולי.
+- גרסאות Bump.
+- עדכן את התקלפות הבדיקה.
+- hyperledger#2499 תקן הודעות שגיאה client_cli.
+- hyperledger#2344 צור CHANGELOG עבור 2.0.0-pre-rc.5-lts.
+- הוסף קישורים להדרכה.
+- עדכן מידע על git hooks.
+- כתיבת מבחן התקלפות.
+- hyperledger#2193 עדכון תיעוד לקוח Iroha.
+- hyperledger#2193 עדכון תיעוד Iroha CLI.
+- hyperledger#2193 עדכן README עבור ארגז מאקרו.
+ - hyperledger#2193 עדכון תיעוד כלי המפענח של Norito.
+- hyperledger#2193 עדכון תיעוד Kagami.
+- hyperledger#2193 עדכן תיעוד של נקודות מידה.
+- hyperledger#2192 עיין בהנחיות התורמות.
+- תקן הפניות שבורות בקוד.
+- hyperledger#1280 מדדי Iroha של מסמך.
+- hyperledger#2119 הוסף הנחיות כיצד לטעון מחדש את Iroha במיכל Docker.
+- hyperledger#2181 סקירת README.
+- hyperledger#2113 תכונות מסמך בקבצי Cargo.toml.
+- hyperledger#2177 נקה פלט gitchangelog.
+- hyperledger#1991 הוסף את ה-readme למפקח Kura.
+- hyperledger#2119 הוסף הנחיות כיצד לטעון מחדש את Iroha במיכל Docker.
+- hyperledger#2181 סקירת README.
+- hyperledger#2113 תכונות מסמך בקבצי Cargo.toml.
+- hyperledger#2177 נקה פלט gitchangelog.
+- hyperledger#1991 הוסף את ה-readme למפקח Kura.
+- צור יומן שינויים אחרונים.
+- יצירת יומן שינויים.
+- עדכן קבצי README מיושנים.
+- הוספת מסמכים חסרים ל-`api_spec.md`.
 
-### CI/CD changes
+### שינויים ב-CI/CD- הוסף עוד חמישה רצים שמתארחים בעצמם.
+- הוסף תג תמונה רגיל עבור הרישום Soramitsu.
+- דרך לעקיפת הבעיה עבור libgit2-sys 0.5.0. חזור ל-0.4.4.
+- נסה להשתמש בתמונה מבוססת קשת.
+- עדכן זרימות עבודה כדי לעבוד על מיכל חדש ללילה בלבד.
+- הסר נקודות כניסה בינאריות מהכיסוי.
+- החלף מבחני פיתוח לרצים באירוח עצמי של Equinix.
+- hyperledger#2865 הסר את השימוש בקובץ tmp מ-`scripts/check.sh`
+- hyperledger#2781 הוסף קיזוז כיסוי.
+- השבת מבחני אינטגרציה איטיים.
+- החלף את תמונת הבסיס ב-docker cache.
+- hyperledger#2781 הוסף תכונת אב של codecov commit.
+- העבר עבודות ל-github runners.
+- hyperledger#2778 בדיקת תצורת לקוח.
+- hyperledger#2732 הוסף תנאים לעדכון תמונות מבוססות iroha2 והוספה
+  תוויות יחסי ציבור.
+- תקן בניית תמונה לילית.
+- תקן שגיאת `buildx` עם `docker/build-push-action`
+- עזרה ראשונה לא מתפקד `tj-actions/changed-files`
+- אפשר פרסום רציף של תמונות, אחרי #2662.
+- הוסף רישום נמל.
+- תווית אוטומטית `api-changes` ו-`config-changes`
+- בצע hash בתמונה, קובץ כלים שוב, בידוד ממשק משתמש,
+  מעקב אחר סכימה.
+- הפוך את זרימות העבודה של פרסום לרצף ומשלים ל-#2427.
+- hyperledger#2309: הפעל מחדש בדיקות doc ב-CI.
+- hyperledger#2165 הסר את התקנת codecov.
+- העבר למיכל חדש כדי למנוע התנגשויות עם המשתמשים הנוכחיים.
+ - hyperledger#2158 שדרוג `parity_scale_codec` ותלויות אחרות. (Codec Norito)
+- תקן את המבנה.
+- hyperledger#2461 שפר את iroha2 CI.
+- עדכון `syn`.
+- העבר את הכיסוי לזרימת עבודה חדשה.
+- גרסה הפוכה לכניסה לדוקר.
+- הסר את מפרט הגרסה של `archlinux:base-devel`
+- עדכן שימוש חוזר בדוחות Dockerfiles ודוחות Codecov ובמקבילות.
+- יצירת יומן שינויים.
+- הוסף קובץ `cargo deny`.
+- הוסף ענף `iroha2-lts` עם זרימת עבודה שהועתקה מ-`iroha2`
+- hyperledger#2393 חבט בגרסה של תמונת הבסיס Docker.
+- hyperledger#1658 הוסף בדיקת תיעוד.
+- בליטת גרסה של ארגזים והסר תלות שאינה בשימוש.
+- הסר דיווחי כיסוי מיותרים.
+- hyperledger#2222 פיצול בדיקות לפי האם זה כולל כיסוי או לא.
+- hyperledger#2153 תיקון מס' 2154.
+- גרסה לחבוט בכל הארגזים.
+- תקן את צינור הפריסה.
+- hyperledger#2153 תקן כיסוי.
+- הוסף בדיקת בראשית ועדכן תיעוד.
+- בליטת חלודה, עובש ולילה ל-1.60, 1.2.0 ו-1.62 בהתאמה.
+- load-rs טריגרים.
+- hyperledger#2153 תיקון מס' 2154.
+- גרסה לחבוט בכל הארגזים.
+- תקן את צינור הפריסה.
+- hyperledger#2153 תקן כיסוי.
+- הוסף בדיקת בראשית ועדכן תיעוד.
+- בליטת חלודה, עובש ולילה ל-1.60, 1.2.0 ו-1.62 בהתאמה.
+- load-rs טריגרים.
+- load-rs:שחרר טריגרים של זרימת עבודה.
+- תקן את זרימת העבודה בדחיפה.
+- הוסף טלמטריה לתכונות ברירת המחדל.
+- הוסף תג מתאים כדי לדחוף את זרימת העבודה הראשית.
+- לתקן מבחנים כושלים.
+- hyperledger#1657 עדכן את התמונה לחלודה 1.57. #1630: חזור לרצים שמתארחים בעצמם.
+- שיפורי CI.
+- החלפת כיסוי לשימוש `lld`.
+- תיקון תלות CI.
+- שיפורים בפילוח CI.
+- משתמש בגרסת Rust קבועה ב-CI.
+- תקן את Docker פרסום ו- iroha2-dev push CI. העבר את הסיקור והספסל ליחסי ציבור
+- הסר את בדיקת Iroha מלאה מיותרת ב-CI docker.
 
-- Add five more self-hosted runners.
-- Add regular image tag for Soramitsu registry.
-- Workaround for libgit2-sys 0.5.0. Revert to 0.4.4.
-- Attempt to use arch-based image.
-- Update workflows to work on new nightly-only-container.
-- Remove binary entrypoints from coverage.
-- Switch dev tests to Equinix self-hosted runners.
-- hyperledger#2865 Remove usage of tmp file from `scripts/check.sh`
-- hyperledger#2781 Add coverage offsets.
-- Disable slow integration tests.
-- Replace base image with docker cache.
-- hyperledger#2781 Add codecov commit parent feature.
-- Move jobs to github runners.
-- hyperledger#2778 Client config check.
-- hyperledger#2732 Add a conditions to update iroha2-base images and add
-  PR labels.
-- Fix nightly image build.
-- Fix `buildx` error with `docker/build-push-action`
-- First-aids for non-functioning `tj-actions/changed-files`
-- Enable sequential publish of images, after #2662.
-- Add harbor registry.
-- Auto-label `api-changes` and `config-changes`
-- Commit hash in image, toolchain file again, UI isolation,
-  schema tracking.
-- Make publishing workflows sequential, and complements to #2427.
-- hyperledger#2309: Re-enable doc tests in CI.
-- hyperledger#2165 Remove codecov install.
-- Move to new container to prevent conflicts with current users.
- - hyperledger#2158 Upgrade `parity_scale_codec` and other dependencies. (Norito codec)
-- Fix build.
-- hyperledger#2461 Improve iroha2 CI.
-- Update `syn`.
-- move coverage to a new workflow.
-- reverse docker login ver.
-- Remove the version specification of `archlinux:base-devel`
-- Update Dockerfiles & Codecov reports reuse & Concurrency.
-- Generate changelog.
-- Add `cargo deny` file.
-- Add `iroha2-lts` branch with workflow copied from `iroha2`
-- hyperledger#2393 Bump the version of the Docker base image.
-- hyperledger#1658 Add documentation check.
-- Version bump of crates and remove unused dependencies.
-- Remove unnecessary coverage reporting.
-- hyperledger#2222 Split tests by whether it involves coverage or not.
-- hyperledger#2153 Fix #2154.
-- Version bump all of the crates.
-- Fix deploy pipeline.
-- hyperledger#2153 Fix coverage.
-- Add genesis check and update documentation.
-- Bump rust, mold and nightly to 1.60, 1.2.0 and 1.62 respectively.
-- load-rs triggers.
-- hyperledger#2153 Fix #2154.
-- Version bump all of the crates.
-- Fix deploy pipeline.
-- hyperledger#2153 Fix coverage.
-- Add genesis check and update documentation.
-- Bump rust, mold and nightly to 1.60, 1.2.0 and 1.62respectively.
-- load-rs triggers.
-- load-rs:release workflow triggers.
-- Fix push workflow.
-- Add telemetry to default features.
-- add proper tag to push workflow on main.
-- fix failing tests.
-- hyperledger#1657 Update image to rust 1.57. #1630: Move back to self-hosted runners.
-- CI improvements.
-- Switched coverage to use `lld`.
-- CI Dependency Fix.
-- CI segmentation improvements.
-- Uses a fixed Rust version in CI.
-- Fix Docker publish and iroha2-dev push CI. Move coverage and bench into PR
-- Remove unnecessary full Iroha build in CI docker test.
+  המבנה Iroha הפך לחסר תועלת מכיוון שהוא נעשה כעת בתמונת docker עצמה. אז ה-CI בונה רק את ה-cli של הלקוח המשמש בבדיקות.
+- הוסף תמיכה בסניף iroha2 בצנרת CI.
+  - בדיקות ארוכות רצו רק ב-PR לתוך iroha2
+  - פרסם תמונות Docker רק מ-iroha2
+- מטמוני CI נוספים.
 
-  The Iroha build became useless as it is now done in docker image itself. So the CI only builds the client cli which is used in tests.
-- Add support for iroha2 branch in CI pipeline.
-  - long tests only ran on PR into iroha2
-  - publish docker images only from iroha2
-- Additional CI caches.
-
-### Web-Assembly
+### חיבור אינטרנט
 
 
-### Version bumps
+### בליטות בגרסה- גרסה ל-pre-rc.13.
+- גרסה ל-pre-rc.11.
+- גרסה ל-RC.9.
+- גרסה ל-RC.8.
+- עדכן גרסאות ל-RC7.
+- הכנות לפני שחרור.
+- עדכן את Mould 1.0.
+- תלות בבליטה.
+- עדכון api_spec.md: תקן גופי בקשה/תגובה.
+- עדכון גרסת חלודה ל-1.56.0.
+- עדכן את המדריך התורם.
+- עדכן את README.md ואת `iroha/config.json` כדי להתאים לפורמט API וכתובת URL חדשים.
+- עדכן יעד פרסום Docker ל-Hyperledger/iroha2 #1453.
+- מעדכן את זרימת העבודה כך שתתאים לראשי.
+- עדכן את מפרט ה-API ותקן את נקודת הקצה הבריאותית.
+- עדכון חלודה ל-1.54.
+- Docs(iroha_crypto): עדכן `Signature` מסמכים ויישור ארג'ים של `verify`
+- חבטה בגרסת Ursa מ-0.3.5 ל-0.3.6.
+- עדכן זרימות עבודה לרצים חדשים.
+- עדכן dockerfile עבור אחסון במטמון ובניית ci מהירות יותר.
+- עדכון גרסת libssl.
+- עדכן dockerfiles ו-async-std.
+- תקן clippy מעודכן.
+- עדכון מבנה הנכס.
+  - תמיכה בהוראות ערך מפתח בנכס
+  - סוגי נכסים כרשיון
+  - פגיעות הצפה בתיקון ISI של נכסים
+- מדריך תורם עדכונים.
+- עדכון לא מעודכן lib.
+- עדכן נייר לבן ותקן בעיות מוך.
+- עדכן את cucumber_rust lib.
+- עדכוני README ליצירת מפתחות.
+- עדכן את זרימות העבודה של Github Actions.
+- עדכן את זרימות העבודה של Github Actions.
+- עדכון requirements.txt.
+- עדכון common.yaml.
+- עדכוני מסמכים מאת שרה.
+- עדכון לוגיקה של הוראות.
+- עדכן נייר לבן.
+- עדכון תיאור פונקציות הרשת.
+- עדכן נייר לבן על סמך הערות.
+- הפרדת עדכון WSV והגירה ל-Scale.
+- עדכן את gitignore.
+- עדכן מעט את התיאור של הקורה ב-WP.
+- עדכן את תיאור הקורה בנייר לבן.
 
-- Version to pre-rc.13.
-- Version to pre-rc.11.
-- Version to RC.9.
-- Version to RC.8.
-- Update versions to RC7.
-- Pre-release preparations.
-- Update Mold 1.0.
-- Bump dependencies.
-- Update api_spec.md: fix request/response bodies.
-- Update rust version to 1.56.0.
-- Update contributing guide.
-- Update README.md and `iroha/config.json` to match new API and URL  format.
-- Update docker publish target to hyperledger/iroha2 #1453.
-- Updates workflow so that it matches main.
-- Update api spec and fix health endpoint.
-- Rust update to 1.54.
-- Docs(iroha_crypto): update `Signature` docs and align args of `verify`
-- Ursa version bump from 0.3.5 to 0.3.6.
-- Update workflows to new runners.
-- Update dockerfile for caching and faster ci builds.
-- Update libssl version.
-- Update dockerfiles and async-std.
-- Fix updated clippy.
-- Updates asset structure.
-  - Support for key-value instructions in asset
-  - Asset types as an enum
-  - Overflow vulnerability in asset ISI fix
-- Updates contributing guide.
-- Update out of date lib.
-- Update whitepaper and fix linting issues.
-- Update the cucumber_rust lib.
-- README updates for key generation.
-- Update Github Actions workflows.
-- Update Github Actions workflows.
-- Update requirements.txt.
-- Update common.yaml.
-- Docs updates from Sara.
-- Update instruction logic.
-- Update whitepaper.
-- Updates network functions description.
-- Update whitepaper based on comments.
-- Separation of WSV update and migration to Scale.
-- Update gitignore.
-- Update slightly description of kura in WP.
-- Update description about kura in whitepaper.
+### סכימה
 
-### Schema
+- hyperledger#2114 תמיכה באוספים ממוינים בסכמות.
+- hyperledger#2108 הוסף עימוד.
+- hyperledger#2114 תמיכה באוספים ממוינים בסכמות.
+- hyperledger#2108 הוסף עימוד.
+- הפוך את הסכימה, הגרסה והמאקרו no_std לתואמים.
+- תקן חתימות בסכימה.
+- ייצוג שונה של `FixedPoint` בסכימה.
+- נוסף `RawGenesisBlock` לבדיקת סכימה פנימית.
+- שינו מודלים של אובייקטים ליצירת סכימה IR-115.
 
-- hyperledger#2114 Sorted collections support in schemas.
-- hyperledger#2108 Add pagination.
-- hyperledger#2114 Sorted collections support in schemas.
-- hyperledger#2108 Add pagination.
-- Make schema, version and macro no_std compatible.
-- Fix signatures in schema.
-- Altered  representation of `FixedPoint` in schema.
-- Added `RawGenesisBlock` to schema introspection.
-- Changed object-models to create schema IR-115.
+### מבחנים
 
-### Tests
+- hyperledger#2544 בדיקות הדרכה.
+- hyperledger#2272 הוסף בדיקות עבור שאילתת 'FindAssetDefinitionById'.
+- הוסף מבחני אינטגרציה של `roles`.
+- תקן את פורמט מבחני ה-UI, העבר את בדיקות ה-Ui לגזירת ארגזים.
+- תקן בדיקות מדומה (באג לא מסודר עתידי).
+- הסירו את ארגז ה-DSL והעבירו את הבדיקות ל-`data_model`
+- ודא שבדיקות רשת לא יציבות עוברות קוד חוקי.
+- נוספו בדיקות ל-iroha_p2p.
+- לוכד יומנים בבדיקות אלא אם הבדיקה נכשלת.
+- הוסף סקר לבדיקות ותקן בדיקות שבר לעתים נדירות.
+- בודק התקנה מקבילה.
+- הסר שורש מבדיקות iroha init ו- iroha_client.
+- תקן אזהרות דגימות של בדיקות ומוסיף בדיקות ל-ci.
+- תקן שגיאות אימות `tx` במהלך בדיקות השוואת ביצועים.
+- hyperledger#860: Iroha שאילתות ובדיקות.
+- מדריך ISI מותאם אישית Iroha ובדיקות מלפפון.
+- הוסף בדיקות עבור לקוח ללא תקן.
+- שינויים ברישום גשר ובדיקות.
+- בדיקות קונצנזוס עם דוגמת רשת.
+- שימוש ב-temp dir לביצוע בדיקות.
+- ספסלים בודקים מקרים חיוביים.
+- פונקציונליות ראשונית של עץ Merkle עם בדיקות.
+- בדיקות קבועות ואתחול World State View.
 
-- hyperledger#2544 Tutorial doctests.
-- hyperledger#2272 Add tests for 'FindAssetDefinitionById' query.
-- Add `roles` integration tests.
-- Standardise ui tests format, move derive ui tests to derive crates.
-- Fix mock tests (futures unordered bug).
-- Removed the DSL crate & moved tests to `data_model`
-- Ensure that unstable network tests pass for valid code.
-- Added tests to iroha_p2p.
-- Captures logs in tests unless test fails.
-- Add polling for tests and fix rarely breaking tests.
-- Tests parallel setup.
-- Remove root from iroha init and iroha_client tests.
-- Fix tests clippy warnings and adds checks to ci.
-- Fix `tx` validation errors during benchmark tests.
-- hyperledger#860: Iroha Queries and tests.
-- Iroha custom ISI guide and Cucumber tests.
-- Add tests for no-std client.
-- Bridge registration changes & tests.
-- Consensus tests with network mock.
-- Usage of temp dir for tests execution.
-- Benches tests positive cases.
-- Initial Merkle Tree functionality with tests.
-- Fixed tests and World State View initialization.
-
-### Other
-
-- Move parametrization into traits and remove FFI IR types.
-- Add support for unions, introduce `non_robust_ref_mut` * implement conststring FFI conversion.
-- Improve IdOrdEqHash.
-- Remove FilterOpt::BySome from (de-)serialization.
-- Make Not transparent.
-- Make ContextValue transparent.
-- Make Expression::Raw tag optional.
-- Add transparency for some instructions.
-- Improve (de-)serialization of RoleId.
-- Improve (de-)serialization of validator::Id.
-- Improve (de-)serialization of PermissionTokenId.
-- Improve (de-)serialization of TriggerId.
-- Improve (de-)serialization of Asset(-Definition) Ids.
-- Improve (de-)serialization of AccountId.
-- Improve (de-)serialization of Ipfs and DomainId.
-- Remove logger config from client config.
-- Add support for transparent structs in FFI.
-- Refactor &Option<T> to Option<&T>
-- Fix clippy warnings.
-- Add more details in `Find` error description.
-- Fix `PartialOrd` and `Ord` implementations.
-- Use `rustfmt` instead of `cargo fmt`
-- Remove `roles` feature.
-- Use `rustfmt` instead of `cargo fmt`
-- Share workdir as a volume with dev docker instances.
-- Remove Diff associated type in Execute.
-- Use custom encoding instead of multival return.
-- Remove serde_json as iroha_crypto dependency.
-- Allow only known fields in version attribute.
-- Clarify different ports for endpoints.
-- Remove `Io` derive.
-- Initial documentation of key_pairs.
-- Move back to self-hosted runners.
-- Fix new clippy lints in the code.
-- Remove i1i1 from maintainers.
-- Add actor doc and minor fixes.
-- Poll instead of pushing latest blocks.
-- Transaction status events tested for each of 7 peers.
-- `FuturesUnordered` instead of `join_all`
-- Switch to GitHub Runners.
-- Use VersionedQueryResult vs QueryResult for /query endpoint.
-- Reconnect telemetry.
-- Fix dependabot config.
-- Add commit-msg git hook to include signoff.
-- Fix the push pipeline.
-- Upgrade dependabot.
-- Detect future timestamp on queue push.
-- hyperledger#1197: Kura handles errors.
-- Add Unregister peer instruction.
-- Add optional nonce to distinguish transactions. Close #1493.
-- Removed unnecessary `sudo`.
-- Metadata for domains.
-- Fix the random bounces in `create-docker` workflow.
-- Added `buildx` as suggested by the failing pipeline.
-- hyperledger#1454: Fix query error response with specific status code and hints.
-- hyperledger#1533: Find transaction by hash.
-- Fix `configure` endpoint.
-- Add boolean-based asset mintability check.
-- Addition of typed crypto primitives and migration to type-safe cryptography.
-- Logging improvements.
-- hyperledger#1458: Add actor channel size to config as `mailbox`.
-- hyperledger#1451: Add warning about misconfiguration if `faulty_peers = 0` and `trusted peers count > 1`
-- Add handler for getting specific block hash.
-- Added new query FindTransactionByHash.
-- hyperledger#1185: Change crates name and path.
-- Fix logs and general improvements.
-- hyperledger#1150: Group 1000 blocks into each file
-- Queue stress test.
-- Log level fix.
-- Add header specification to client library.
-- Queue panic failure fix.
-- Fixup queue.
-- Fixup dockerfile release build.
-- Https client fixup.
+### אחר- העבר פרמטריזציה לתכונות והסר סוגי FFI IR.
+- הוסף תמיכה באיגודים, הצג את `non_robust_ref_mut` * הטמעת המרת FFI של conststring.
+- שפר את IdOrdEqHash.
+- הסר את FilterOpt::BySome מ-(דה-)סריאליזציה.
+- הפוך לא שקוף.
+- הפוך את ContextValue לשקוף.
+- הפוך את Expression::Raw tag לאופציונלי.
+- הוסף שקיפות לכמה הוראות.
+- שפר (דה-)סריאליזציה של RoleId.
+- שפר (דה-)סריאליזציה של validator::Id.
+- שפר (דה-)סריאליזציה של PermissionTokenId.
+- שפר (דה-)סריאליזציה של TriggerId.
+- שפר (דה-)סריאליזציה של מזהי נכסים (-הגדרה).
+- שפר (דה-)סריאליזציה של AccountId.
+- שפר (דה-)סריאליזציה של Ipfs ו-DomainId.
+- הסר את תצורת לוגר מתצורת הלקוח.
+- הוסף תמיכה למבנים שקופים ב-FFI.
+- שחזר &אפשרות<T> לאפשרות<&T>
+- תקן אזהרות קפיציות.
+- הוסף פרטים נוספים בתיאור השגיאה `Find`.
+- תקן יישומי `PartialOrd` ו-`Ord`.
+- השתמש ב-`rustfmt` במקום ב-`cargo fmt`
+- הסר את תכונת `roles`.
+- השתמש ב-`rustfmt` במקום ב-`cargo fmt`
+- שתף את workdir כאמצעי אחסון עם מופעי dev docker.
+- הסר את הסוג המשויך ל-Diff ב-Execute.
+- השתמש בקידוד מותאם אישית במקום החזר מרובה.
+- הסר את serde_json כתלות ב-iroha_crypto.
+- אפשר רק שדות ידועים בתכונת הגרסה.
+- הבהרת יציאות שונות עבור נקודות קצה.
+- הסר את נגזרת `Io`.
+- תיעוד ראשוני של זוגות_מפתחות.
+- חזור לרצים שמתארחים בעצמם.
+- תקן מוכים חדשים בקוד.
+- הסר את i1i1 מהתחזוקה.
+- הוסף מסמך שחקן ותיקונים קלים.
+- סקר במקום לדחוף את הבלוקים האחרונים.
+- אירועי סטטוס עסקה נבדקו עבור כל אחד מ-7 עמיתים.
+- `FuturesUnordered` במקום `join_all`
+- עבור ל-GitHub Runners.
+- השתמש ב-VersionedQueryResult לעומת QueryResult עבור נקודת הקצה /query.
+- חבר מחדש את הטלמטריה.
+- תקן את תצורת dependabot.
+- הוסף commit-msg git hook כדי לכלול חתימה.
+- תקן את צינור הדחיפה.
+- שדרוג תלוי בוט.
+- זיהוי חותמת זמן עתידית בדחיפה בתור.
+- hyperledger#1197: Kura מטפל בשגיאות.
+- הוסף הוראת ביטול רישום של עמיתים.
+- הוסף אי-הודעה אופציונלית כדי להבחין בין עסקאות. סגור מס' 1493.
+- הוסר `sudo` המיותר.
+- מטא נתונים עבור דומיינים.
+- תקן את ההקפצות האקראיות בזרימת העבודה `create-docker`.
+- נוסף `buildx` כפי שהוצע על ידי הצינור הכושל.
+- hyperledger#1454: תקן תגובת שגיאת שאילתה עם קוד סטטוס ספציפי ורמזים.
+- hyperledger#1533: מצא עסקה לפי hash.
+- תקן את נקודת הקצה `configure`.
+- הוסף בדיקת יציבות נכסים מבוססי בוליאנית.
+- הוספת פרימיטיבים קריפטו מוקלדים והגירה להצפנה בטוחה לסוגים.
+- שיפורים ברישום.
+- hyperledger#1458: הוסף גודל ערוץ שחקן להגדרה כ-`mailbox`.
+- hyperledger#1451: הוסף אזהרה לגבי תצורה שגויה אם `faulty_peers = 0` ו-`trusted peers count > 1`
+- הוסף מטפל לקבלת hash בלוק ספציפי.
+- נוספה שאילתה חדשה FindTransactionByHash.
+- hyperledger#1185: שנה את השם והנתיב של ארגזים.
+- תקן יומנים ושיפורים כלליים.
+- hyperledger#1150: קבץ 1000 בלוקים בכל קובץ
+- מבחן מאמץ בתור.
+- תיקון רמת יומן.
+- הוסף מפרט כותרות לספריית הלקוח.
+- תיקון כשל בפאניקה בתור.
+- תור לתיקון.
+- תיקון בניית שחרור dockerfile.
+- תיקון לקוח Https.
 - Speedup ci.
-- 1. Removed all ursa dependences, except for iroha_crypto.
-- Fix overflow when subtracting durations.
-- Make fields public in client.
-- Push Iroha2 to Dockerhub as nightly.
-- Fix http status codes.
-- Replace iroha_error with thiserror, eyre and color-eyre.
-- Substitute queue with crossbeam one.
-- Remove some useless lint allowences.
-- Introduces metadata for asset definitions.
-- Removal of arguments from test_network crate.
-- Remove unnecessary dependencies.
-- Fix iroha_client_cli::events.
-- hyperledger#1382: Remove old network implementation.
-- hyperledger#1169: Added precision for assets.
-- Improvements in peer start up:
-  - Allows loading genesis public key only from env
-  - config, genesis and trusted_peers path can now be specified in cli params
-- hyperledger#1134: Integration of Iroha P2P.
-- Change query endpoint to POST instead of GET.
-- Execute on_start in actor synchronously.
-- Migrate to warp.
-- Rework commit with broker bug fixes.
-- Revert "Introduces multiple broker fixes" commit(9c148c33826067585b5868d297dcdd17c0efe246)
-- Introduces multiple broker fixes:
-  - Unsubscribe from broker on actor stop
-  - Support multiple subscriptions from the same actor type (previously a TODO)
-  - Fix a bug where broker always put self as an actor id.
-- Broker bug (test showcase).
-- Add derives for data model.
-- Remove rwlock from torii.
-- OOB Query Permission Checks.
-- hyperledger#1272: Implementation of peer counts,
-- Recursive check for query permissions inside of instructions.
-- Schedule stop actors.
-- hyperledger#1165: Implementation of peer counts.
-- Check query permissions by account in torii endpoint.
-- Removed exposing CPU and memory usage in system metrics.
- - Replace JSON with Norito for WS messages.
-- Store proof of view changes.
-- hyperledger#1168: Added logging if transaction does not passed signature check condition.
-- Fixed small issues, added connection listen code.
-- Introduce network topology builder.
-- Implement P2P network for Iroha.
-- Adds block size metric.
-- PermissionValidator trait renamed to IsAllowed. and corresponding other name changes
-- API spec web socket corrections.
-- Removes unnecessary dependencies from docker image.
-- Fmt uses Crate import_granularity.
-- Introduces Generic Permission Validator.
-- Migrate to actor framework.
-- Change broker design and add some functionality to actors.
-- Configures codecov status checks.
-- Uses source based coverage with grcov.
-- Fixed multiple build-args format and redeclared ARG for intermediate build containers.
-- Introduces SubscriptionAccepted message.
-- Remove zero-value assets from accounts after operating upon.
-- Fixed docker build arguments format.
-- Fixed error message if child block not found.
-- Added vendored OpenSSL to build, fixes pkg-config dependency.
-- Fix repository name for dockerhub and coverage diff.
-- Added clear error text and filename if TrustedPeers could not be loaded.
-- Changed text entities to links in docs.
-- Fix wrong username secret in Docker publish.
-- Fix small typo in whitepaper.
-- Allows mod.rs usage for better file structure.
-- Move main.rs into separate crate and make permissions for public blockchain.
-- Add querying inside client cli.
-- Migrate from clap to structopts for cli.
-- Limit telemetry to unstable network test.
-- Move traits to smartcontracts module.
+- 1. הסירו את כל התלות ב-ursa, למעט iroha_crypto.
+- תקן הצפה בעת הפחתת משכי זמן.
+- הפוך שדות לציבוריים בלקוח.
+- דחף את Iroha2 ל- Dockerhub כל לילה.
+- תקן קודי מצב http.
+- החלף iroha_error בשגיאה זו, eyre ו-color-eyre.
+- תור מחליף עם קרן צולבת אחת.- הסר כמה קצבאות מוך חסרות תועלת.
+- מציג מטא נתונים עבור הגדרות נכסים.
+- הסרת ארגומנטים מארגז test_network.
+- הסר תלות מיותרת.
+- תקן iroha_client_cli::events.
+- hyperledger#1382: הסר יישום רשת ישן.
+- hyperledger#1169: דיוק נוסף עבור נכסים.
+- שיפורים בהפעלת עמיתים:
+  - מאפשר טעינת מפתח ציבורי Genesis רק מ-env
+  - כעת ניתן לציין config, genesis ו-trusted_peers נתיב בפרמטרים של cli
+- hyperledger#1134: אינטגרציה של Iroha P2P.
+- שנה את נקודת הקצה של השאילתה ל-POST במקום ל-GET.
+- בצע את on_start בשחקן באופן סינכרוני.
+- נדידה לעיוות.
+- עבד מחדש את ההתחייבות עם תיקוני באגים של ברוקר.
+- חזור ל"מציג מספר תיקוני מתווך" commit(9c148c33826067585b5868d297dcdd17c0efe246)
+- מציג תיקוני מתווך מרובים:
+  - בטל את המנוי מהברוקר בעצירת השחקן
+  - תמיכה במספר מנויים מאותו סוג שחקן (בעבר TODO)
+  - תקן באג שבו הברוקר תמיד שם את עצמי כמזהה שחקן.
+- באג ברוקר (חלון ראווה לבדיקה).
+- הוסף נגזרות למודל נתונים.
+- הסר את rwlock מ-torii.
+- בדיקות הרשאות שאילתות OOB.
+- hyperledger#1272: יישום ספירת עמיתים,
+- בדיקה רקורסיבית של הרשאות שאילתה בתוך ההוראות.
+- תזמן שחקני עצירה.
+- hyperledger#1165: יישום ספירת עמיתים.
+- בדוק הרשאות שאילתה לפי חשבון בנקודת הקצה torii.
+- הוסר חשיפת שימוש במעבד וזיכרון במדדי מערכת.
+ - החלף את JSON ב-Norito עבור הודעות WS.
+- אחסן הוכחות לשינויים בתצוגה.
+- hyperledger#1168: רישום רישום נוסף אם העסקה לא עברה את תנאי בדיקת החתימה.
+- תיקנו בעיות קטנות, הוספת קוד האזנה לחיבור.
+- הצג את בונה טופולוגיית הרשת.
+- הטמעת רשת P2P עבור Iroha.
+- מוסיף מדד גודל בלוק.
+- שם תכונת PermissionValidator שונה ל-IsAllowed. ושינויי שמות נוספים בהתאם
+- תיקוני שקע אינטרנט במפרט API.
+- מסיר תלות מיותרת מתמונת docker.
+- Fmt משתמש ב-Crate import_granularity.
+- מציגה את אימות ההרשאות הגנרי.
+- הגירה למסגרת השחקנים.
+- שנה את עיצוב הברוקר והוסף קצת פונקציונליות לשחקנים.
+- מגדיר בדיקות סטטוס Codecov.
+- משתמש בכיסוי מבוסס מקור עם grcov.
+- תוקן פורמט Build-Args מרובים ו-ARG הוכרז מחדש עבור מיכלי בנייה ביניים.
+- מציג את הודעת SubscriptionAccepted.
+- הסר נכסים בשווי אפס מהחשבונות לאחר הפעלתם.
+- פורמט ארגומנטים של בניית docker תוקן.
+- תוקנה הודעת שגיאה אם ​​חסימת הילד לא נמצאה.
+- הוסף OpenSSL מוכר לבנייה, מתקן את התלות ב-pkg-config.
+- תקן את שם המאגר עבור dockerhub ו-Diff Diff.
+- נוספו טקסט שגיאה ברור ושם קובץ אם לא ניתן היה לטעון TrustedPeers.
+- ישויות טקסט שינו לקישורים במסמכים.
+- תקן סוד שם משתמש שגוי בפרסום Docker.
+- תקן שגיאות הקלדה קטנות בנייר לבן.
+- מאפשר שימוש ב-mod.rs למבנה קבצים טוב יותר.
+- העבר את ה-main.rs לתוך ארגז נפרד ועשה הרשאות לבלוקצ'יין ציבורי.
+- הוסף שאילתות בתוך לקוח קלי.
+- נדדו ממחיאות כפיים ל-structopts עבור cli.
+- הגבל את הטלמטריה לבדיקת רשת לא יציבה.
+- העבר תכונות למודול חוזים חכמים.
 - Sed -i "s/world_state_view/wsv/g"
-- Move smart contracts into separate module.
-- Iroha network content length bugfix.
-- Adds task local storage for actor id. Useful for deadlock detection.
-- Add deadlock detection test to CI
-- Add Introspect macro.
-- Disambiguates workflow names also formatting corrections
-- Change of query api.
-- Migration from async-std to tokio.
-- Add analyze of telemetry to ci.
-- Add futures telemetry for iroha.
-- Add iroha futures to every async function.
-- Add iroha futures for observability of number of polls.
-- Manual deploy and configuration added to README.
-- Reporter fixup.
-- Add derive Message macro.
-- Add simple actor framework.
-- Add dependabot configuration.
-- Add nice panic and error reporters.
-- Rust version migration to 1.52.1 and corresponding fixes.
-- Spawn blocking CPU intensive tasks in separate threads.
-- Use unique_port and cargo-lints from crates.io.
-- Fix for lockfree WSV:
-  - removes unnecessary Dashmaps and locks in API
-  - fixes bug with excessive number of blocks created (rejected transactions were not recorded)
-  - Displays full error cause for errors
-- Add telemetry subscriber.
-- Queries for roles and permissions.
-- Move blocks from kura to wsv.
-- Change to lock-free data structures inside wsv.
-- Network timeout fix.
-- Fixup health endpoint.
-- Introduces Roles.
-- Add push docker images from dev branch.
-- Add more agressive linting and remove panics from code.
-- Rework of Execute trait for instructions.
-- Remove old code from iroha_config.
-- IR-1060 Adds Grant checks for all the existing permissions.
-- Fix ulimit and timeout for iroha_network.
-- Ci timeout test fix.
-- Remove all assets when their definition was removed.
-- Fix wsv panic at adding asset.
-- Remove Arc and Rwlock for channels.
-- Iroha network fixup.
-- Permission Validators use references in checks.
-- Grant Instruction.
-- Added configuration for string length limits and validation of id's for NewAccount, Domain and AssetDefinition IR-1036.
-- Substitute log with tracing lib.
-- Add ci check for docs and deny dbg macro.
-- Introduces grantable permissions.
-- Add iroha_config crate.
-- Add @alerdenisov as a code owner to approve all incoming merge requests.
-- Fix of transaction size check during consensus.
-- Revert upgrading of async-std.
-- Replace some consts with power of 2 IR-1035.
-- Add query to retrieve transaction history IR-1024.
-- Add validation of permissions for store and restructure of permission validators.
-- Add NewAccount for account registration.
-- Add types for asset definition.
-- Introduces configurable metadata limits.
-- Introduces transaction metadata.
-- Add expressions inside queries.
-- Add lints.toml and fix warnings.
-- Separate trusted_peers from config.json.
-- Fix typo in URL to Iroha 2 community in Telegram.
-- Fix clippy warnings.
-- Introduces key-value metadata support for Account.
-- Add versioning of blocks.
-- Fixup ci linting repetitions.
-- Add mul,div,mod,raise_to expressions.
-- Add into_v* for versioning.
-- Substitute Error::msg with error macro.
-- Rewrite iroha_http_server and rework torii errors.
- - Upgrades Norito version to 2.
-- Whitepaper versioning description.
-- Infallable pagination. Fix the cases when pagination may unnecessary through errors, not returns empty collections instead.
-- Add derive(Error) for enums.
-- Fix nightly version.
-- Add iroha_error crate.
-- Versioned messages.
-- Introduces container versioning primitives.
-- Fix benchmarks.
-- Add pagination.
-- Add varint encoding decoding.
-- Change query timestamp to u128.
-- Add RejectionReason enum for pipeline events.
-- Removes outdated lines from genesis files. The destination was removed from register ISI in previous commits.
-- Simplifies register and unregister ISIs.
-- Fix commit timeout not being sent in 4 peer network.
-- Topology shuffle at change view.
-- Add other containers for FromVariant derive macro.
-- Add MST support for client cli.
-- Add FromVariant macro and cleanup codebase.
-- Add i1i1 to code owners.
-- Gossip transactions.
-- Add length for instructions and expressions.
-- Add docs to block time and commit time parameters.
-- Replaced Verify and Accept traits with TryFrom.
-- Introduce waiting only for the minimum number of peers.
-- Add github action to test api with iroha2-java.
-- Add genesis for docker-compose-single.yml.
-- Default signature check condition for account.
-- Add test for account with multiple signatories.
-- Add client API support for MST.
-- Build in docker.
-- Add genesis to docker compose.
-- Introduce Conditional MST.
-- Add wait_for_active_peers impl.
-- Add test for isahc client in iroha_http_server.
-- Client API spec.
-- Query execution in Expressions.
-- Integrates expressions and ISIs.
-- Expressions for ISI.
-- Fix account config benchmarks.
-- Add account config for client.
-- Fix `submit_blocking`.
-- Pipeline events are sent.
-- Iroha client web socket connection.
-- Events separation for pipeline and data events.
-- Integration test for permissions.
-- Add permission checks for burn and mint.
-- Unregister ISI permission.
-- Fix benchmarks for world struct PR.
-- Introduce World struct.
-- Implement the genesis block loading component.
-- Introduce genesis account.
-- Introduce permissions validator builder.
-- Add labels to Iroha2 PRs with Github Actions.
-- Introduce Permissions Framework.
-- Queue tx tx number limit and Iroha initialization fixes.
-- Wrap Hash in a struct.
-- Improve log level:
-  - Add info level logs to consensus.
-  - Mark network communication logs as trace level.
-  - Remove block vector from WSV as it is a duplication and it showed all the blockchain in logs.
-  - Set info log level as default.
-- Remove mutable WSV references for validation.
-- Heim version increment.
-- Add default trusted peers to the config.
-- Client API migration to http.
-- Add transfer isi to CLI.
-- Configuration of Iroha Peer related Instructions.
-- Implementation of missing ISI execute methods and test.
-- Url query params parsing
-- Add `HttpResponse::ok()`, `HttpResponse::upgrade_required(..)`
-- Replacement of old Instruction and Query models with Iroha DSL approach.
-- Add BLS signatures support.
-- Introduce http server crate.
-- Patched libssl.so.1.0.0 with symlink.
-- Verifies account signature for transaction.
-- Refactor transaction stages.
-- Initial domains improvements.
-- Implement DSL prototype.
-- Improve Torii Benchmarks: disable logging in benchmarks, add success ratio assert.
-- Improve test coverage pipeline: replaces `tarpaulin` with `grcov`, publish test coverage report to `codecov.io`.
-- Fix RTD theme.
-- Delivery artifacts for iroha subprojects.
-- Introduce `SignedQueryRequest`.
-- Fix a bug with signature verification.
-- Rollback transactions support.
-- Print generated key-pair as json.
-- Support `Secp256k1` key-pair.
-- Initial support for different crypto algorithms.
-- DEX Features.
-- Replace hardcoded config path with cli param.
-- Bench master workflow fix.
-- Docker event connection test.
-- Iroha Monitor Guide and CLI.
-- Events cli improvements.
-- Events filter.
-- Event connections.
-- Fix in master workflow.
-- Rtd for iroha2.
-- Merkle tree root hash for block transactions.
-- Publication to docker hub.
-- CLI functionality for Maintenance Connect.
-- CLI functionality for Maintenance Connect.
-- Eprintln to log macro.
-- Log improvements.
-- IR-802 Subscription to blocks statuses changes.
-- Events sending of transactions and blocks.
-- Moves Sumeragi message handling into message impl.
-- General Connect Mechanism.
-- Extract Iroha domain entities for no-std client.
-- Transactions TTL.
-- Max transactions per block configuration.
-- Store invalidated blocks hashes.
-- Synchronize blocks in batches.
-- Configuration of connect functionality.
-- Connect to Iroha functionality.
-- Block validation corrections.
-- Block synchronization: diagrams.
-- Connect to Iroha functionality.
-- Bridge: remove clients.
-- Block synchronization.
+- העבר חוזים חכמים למודול נפרד.
+- תיקון באגים באורך תוכן רשת Iroha.
+- מוסיף אחסון מקומי למשימה עבור מזהה שחקן. שימושי לזיהוי מבוי סתום.
+- הוסף בדיקת זיהוי מבוי סתום ל-CI
+- הוסף מאקרו Introspect.
+- מבלבל שמות של זרימת עבודה גם תיקוני עיצוב
+- שינוי ממשק ה-API של השאילתה.
+- הגירה מ-async-std לטוקיו.
+- הוסף ניתוח של טלמטריה ל-ci.- הוסף טלמטריה עתידית עבור iroha.
+- הוסף עתידי iroha לכל פונקציית אסינכרון.
+- הוסף עתידי iroha לצפייה במספר הסקרים.
+- פריסה ותצורה ידנית נוספה ל-README.
+- תיקון כתב.
+- הוסף מאקרו של נגזרת הודעה.
+- הוסף מסגרת שחקן פשוטה.
+- הוסף תצורת dependabot.
+- הוסף כתבי פאניקה וטעויות נחמדים.
+- העברת גרסת חלודה ל-1.52.1 ותיקונים מתאימים.
+- משימות אינטנסיביות של מעבד חוסם השרצים בשרשורים נפרדים.
+- השתמש ב- unique_port וב-cargo-lints מ-crates.io.
+- תיקון עבור WSV ללא נעילה:
+  - מסיר Dashmaps ומנעולים מיותרים ב-API
+  - מתקן באג עם מספר מוגזם של בלוקים שנוצרו (עסקאות שנדחו לא נרשמו)
+  - מציג את סיבת השגיאה המלאה לשגיאות
+- הוסף מנוי טלמטריה.
+- שאילתות לתפקידים והרשאות.
+- העבר בלוקים מקורה ל-wsv.
+- שנה למבני נתונים ללא נעילה בתוך wsv.
+- תיקון פסק זמן ברשת.
+- תיקון נקודת קצה בריאותית.
+- מציג תפקידים.
+- הוסף תמונות דחיפה מסניף dev.
+- הוסף מוך אגרסיבי יותר והסר פאניקות מהקוד.
+- עיבוד מחדש של תכונת הביצוע לקבלת הוראות.
+- הסר קוד ישן מ- iroha_config.
+- IR-1060 מוסיף בדיקות הענק עבור כל ההרשאות הקיימות.
+- תקן ulimit וזמן קצוב עבור iroha_network.
+- תיקון בדיקת פסק זמן Ci.
+- הסר את כל הנכסים כשההגדרה שלהם הוסרה.
+- תקן פאניקה של wsv בהוספת נכס.
+- הסר את Arc ו-Rwlock עבור ערוצים.
+- תיקון רשת Iroha.
+- מאמתי הרשאות משתמשים בהפניות בהמחאות.
+- הוראת מענק.
+- נוספה תצורה עבור מגבלות אורך מחרוזת ואימות של מזהים עבור NewAccount, Domain ו-AssetDefinition IR-1036.
+- החלף יומן עם מעקב lib.
+- הוסף ci check for docs והכחיש מאקרו dbg.
+- מציג הרשאות שניתנות להענקה.
+- הוסף ארגז iroha_config.
+- הוסף את @alerdenisov כבעל קוד כדי לאשר את כל בקשות המיזוג הנכנסות.
+- תיקון בדיקת גודל העסקה במהלך קונצנזוס.
+- החזר שדרוג של async-std.
+- החלף כמה קונסטסטים בעוצמה של 2 IR-1035.
+- הוסף שאילתה כדי לאחזר היסטוריית עסקאות IR-1024.
+- הוסף אימות הרשאות לאחסון ומבנה מחדש של מאמתי הרשאות.
+- הוסף חשבון חדש לרישום חשבון.
+- הוסף סוגים להגדרת הנכס.
+- מציג מגבלות מטא נתונים הניתנות להגדרה.
+- מציג מטא נתונים של עסקאות.
+- הוסף ביטויים בתוך שאילתות.
+- הוסף lints.toml ותקן אזהרות.
+- הפרד Trusted_peers מ-config.json.
+- תקן שגיאת הקלדה ב-URL לקהילת Iroha 2 בטלגרם.
+- תקן אזהרות קפיציות.
+- מציג תמיכה במטא נתונים של ערך מפתח עבור חשבון.
+- הוסף ניהול גרסאות של בלוקים.
+- Fixup ci linting חזרות.
+- הוסף ביטויים mul,div,mod,raise_to.
+- הוסף into_v* לניהול גרסאות.
+- החלף את Error::msg במאקרו שגיאה.
+- כתוב מחדש iroha_http_server ועבד מחדש שגיאות Torii.
+ - משדרג את גרסת Norito ל-2.
+- תיאור גירסת נייר לבן.
+- עימוד בלתי ניתן לטעות. תקן את המקרים שבהם עימוד עשוי להיות מיותר באמצעות שגיאות, ולא מחזיר אוספים ריקים במקום זאת.
+- הוסף נגזר (שגיאה) עבור enums.
+- תקן גרסה לילית.
+- הוסף ארגז iroha_error.
+- הודעות מנוסחות.
+- מציג פרימיטיבים לגירסת מיכל.
+- תקן אמות מידה.
+- הוסף עימוד.
+- הוסף פענוח קידוד varint.
+- שנה חותמת זמן של שאילתה ל-u128.
+- הוסף את Enum RejectionReason עבור אירועי צינור.
+- מסיר שורות מיושנות מקבצי בראשית. היעד הוסר מרישום ISI בהתחייבויות קודמות.
+- מפשט את הרישום והביטול של ISIs.
+- תקן פסק זמן להתחייבות שלא נשלח ברשת 4 עמיתים.
+- ערבוב טופולוגי בעת שינוי תצוגת.- הוסף מיכלים אחרים עבור מאקרו נגזר FromVariant.
+- הוסף תמיכת MST עבור לקוח קלי.
+- הוסף מאקרו FromVariant ובסיס קוד ניקוי.
+- הוסף i1i1 לבעלי קוד.
+- עסקאות רכילות.
+- הוסף אורך להוראות וביטויים.
+- הוסף מסמכים לחסימת זמן ופרמטרי זמן.
+- החליף את תכונות אימות וקבל ב-TryFrom.
+- הציגו המתנה רק למספר המינימלי של עמיתים.
+- הוסף פעולת github לבדיקת API עם iroha2-java.
+- הוסף בראשית עבור docker-compose-single.yml.
+- מצב ברירת המחדל של בדיקת חתימה לחשבון.
+- הוסף בדיקה לחשבון עם מספר חותמים.
+- הוסף תמיכת לקוח API עבור MST.
+- בניית docker.
+- הוסף בראשית ל-docker compose.
+- הצג MST מותנה.
+- הוסף wait_for_active_peers impl.
+- הוסף בדיקה עבור לקוח isahc בשרת iroha_http_.
+- מפרט API של הלקוח.
+- ביצוע שאילתה בביטויים.
+- משלב ביטויים ו-ISIs.
+- ביטויים עבור ISI.
+- תקן את מדדי תצורת החשבון.
+- הוסף תצורת חשבון עבור הלקוח.
+- תקן את `submit_blocking`.
+- נשלחים אירועי צנרת.
+- חיבור שקע אינטרנט של לקוח Iroha.
+- הפרדת אירועים לאירועי צינור ונתונים.
+- בדיקת אינטגרציה להרשאות.
+- הוסף בדיקות הרשאה עבור צריבה ונענע.
+- בטל את הרישום של הרשאת ISI.
+- תקן אמות מידה עבור יחסי ציבור במבנה העולמי.
+- הצג את מבנה העולם.
+- הטמעת רכיב טעינת בלוק בראשית.
+- הצג חשבון בראשית.
+- הצג את בונה מאמת ההרשאות.
+- הוסף תוויות ל-Iroha2 PRs עם Github Actions.
+- הצג את מסגרת ההרשאות.
+- מגבלת מספר tx tx בתור ותיקוני אתחול Iroha.
+- לעטוף Hash במבנה.
+- שפר את רמת היומן:
+  - הוסף יומני רמת מידע לקונצנזוס.
+  - סמן יומני תקשורת ברשת כרמת עקבות.
+  - הסר וקטור בלוק מ-WSV מכיוון שהוא שכפול והוא הראה את כל הבלוקצ'יין ביומנים.
+  - הגדר את רמת יומן המידע כברירת מחדל.
+- הסר הפניות WSV הניתנות לשינוי לצורך אימות.
+- תוספת גרסת Heim.
+- הוסף ברירת מחדל עמיתים מהימנים לתצורה.
+- הגירה של לקוח API ל-http.
+- הוסף transfer isi ל-CLI.
+- תצורה של הוראות הקשורות לעמיתים Iroha.
+- הטמעת שיטות ביצוע ובדיקה חסרות של ISI.
+- ניתוח פרמטרים של שאילתת כתובת אתר
+- הוסף `HttpResponse::ok()`, `HttpResponse::upgrade_required(..)`
+- החלפת דגמי הוראה ושאילתות ישנים בגישת Iroha DSL.
+- הוסף תמיכה בחתימות BLS.
+- הצג את ארגז השרת http.
+- libssl.so.1.0.0 תוקן עם סימלינק.
+- מאמת את חתימת החשבון לעסקה.
+- שלבי עסקת Refactor.
+- שיפורים ראשוניים בדומיינים.
+- הטמעת אב טיפוס DSL.
+- שפר את מדדי Torii: השבת מדדי כניסה לחשבון, הוסף קביעת יחס הצלחה.
+- שפר את צינור כיסוי הבדיקה: מחליף את `tarpaulin` ב-`grcov`, פרסם את דוח כיסוי הבדיקה ל-`codecov.io`.
+- תקן נושא RTD.
+- משלוח חפצים עבור תת-פרויקטים של iroha.
+- הצג את `SignedQueryRequest`.
+- תקן באג עם אימות חתימה.
+- תמיכה בעסקאות חזרה.
+- צמד מפתחות שנוצר בהדפסה כ-json.
+- תמיכה בזוג מפתחות `Secp256k1`.
+- תמיכה ראשונית באלגוריתמי קריפטו שונים.
+- תכונות DEX.
+- החלף נתיב תצורה מקודד ב-cli param.
+- תיקון זרימת עבודה מאסטר של ספסל.
+- בדיקת חיבור אירוע Docker.
+- מדריך צג Iroha ו-CLI.
+- שיפורים cli אירועים.
+- מסנן אירועים.
+- חיבורים לאירועים.
+- תקן בזרימת העבודה הראשית.
+- Rtd עבור iroha2.
+- Hash שורש עץ מרקל לעסקאות בלוק.
+- פרסום ל- docker hub.
+- פונקציונליות CLI עבור Maintenance Connect.
+- פונקציונליות CLI עבור Maintenance Connect.
+- Eprintln לתיעוד מאקרו.- שיפורים ביומן.
+- IR-802 מנוי לחסימת שינויים בסטטוסים.
+- שליחת אירועים של עסקאות וחסימות.
+- מעביר את הטיפול בהודעות Sumeragi לתוך ההודעה impl.
+- מנגנון חיבור כללי.
+- חלץ ישויות תחום Iroha עבור לקוח ללא סטד.
+- עסקאות TTL.
+- מקסימום עסקאות לכל תצורת בלוק.
+- אחסן גיבוב של בלוקים לא חוקיים.
+- סנכרון בלוקים בקבוצות.
+- תצורה של פונקציונליות החיבור.
+- התחבר לפונקציונליות Iroha.
+- תיקוני אימות חסימה.
+- סנכרון בלוקים: דיאגרמות.
+- התחבר לפונקציונליות Iroha.
+- גשר: הסר לקוחות.
+- חסימת סנכרון.
 - AddPeer ISI.
-- Commands to Instructions renaming.
-- Simple metrics endpoint.
-- Bridge: get registered bridges and external assets.
-- Docker compose test in pipeline.
-- Not enough votes Sumeragi test.
-- Block chaining.
-- Bridge: manual external transfers handling.
-- Simple Maintenance endpoint.
-- Migration to serde-json.
-- Demint ISI.
-- Add bridge clients, AddSignatory ISI, and CanAddSignatory permission.
-- Sumeragi: peers in set b related TODO fixes.
-- Validates the block before signing in Sumeragi.
-- Bridge external assets.
-- Signature validation in Sumeragi messages.
-- Binary asset-store.
-- Replace PublicKey alias with type.
-- Prepare crates for publishing.
-- Minimum votes logic inside NetworkTopology.
-- TransactionReceipt validation refactoring.
-- OnWorldStateViewChange trigger change: IrohaQuery instead of Instruction.
-- Separate construction from initialization in NetworkTopology.
-- Add Iroha Special Instructions related to Iroha events.
-- Block creation timeout handling.
-- Glossary and How-to add Iroha Module docs.
-- Replace hardcoded bridge model with origin Iroha model.
-- Introduce NetworkTopology struct.
-- Add Permission entity with transformation from Instructions.
-- Sumeragi Messages in the message module.
-- Genesis Block functionality for Kura.
-- Add README files for Iroha crates.
-- Bridge and RegisterBridge ISI.
-- Initial work with Iroha changes listeners.
-- Injection of Permission checks into OOB ISI.
-- Docker multiple peers fix.
-- Peer to peer docker example.
-- Transaction Receipt handling.
-- Iroha Permissions.
-- Module for Dex and crates for Bridges.
-- Fix integration test with asset creation with several peers.
-- Re-implement of Asset model into EC-S-.
-- Commit timeout handling.
-- Block header.
-- ISI related methods for domain entities.
-- Kura Mode enumeration and Trusted Peers configuration.
-- Documentation linting rule.
-- Add CommittedBlock.
-- Decoupling kura from `sumeragi`.
-- Check that transactions are not empty before block creation.
-- Re-implement Iroha Special Instructions.
-- Benchmarks for transactions and blocks transitions.
-- Transactions lifecycle and states reworked.
-- Blocks lifecycle and states.
-- Fix validation bug, `sumeragi` loop cycle synced with block_build_time_ms configuration parameter.
-- Encapsulation of Sumeragi algorithm inside `sumeragi` module.
-- Mocking module for Iroha Network crate implemented via channels.
-- Migration to async-std API.
-- Network mock feature.
-- Asynchronous related code clean up.
-- Performance optimizations in transaction processing loop.
-- Generation of key pairs was extracted from Iroha start.
-- Docker packaging of Iroha executable.
-- Introduce Sumeragi basic scenario.
-- Iroha CLI client.
-- Drop of iroha after bench group execution.
-- Integrate `sumeragi`.
-- Change `sort_peers` implementation to rand shuffle seeded with previous block hash.
-- Remove Message wrapper in peer module.
-- Encapsulate network-related information inside `torii::uri` and `iroha_network`.
-- Add Peer instruction implemented instead of hardcode handling.
-- Peers communication via trusted peers list.
-- Encapsulation of network requests handling inside Torii.
-- Encapsulation of crypto logic inside crypto module.
-- Block sign with timestamp and previous block hash as payload.
-- Crypto functions placed on top of the module and work with ursa signer encapsulated into Signature.
-- Sumeragi initial.
-- Validation of transaction instructions on world state view clone before commit to store.
-- Verify signatures on transaction acceptance.
-- Fix bug in Request deserialization.
-- Implementation of Iroha signature.
-- Blockchain entity was removed to clean up codebase.
-- Changes in Transactions API: better creation and work with requests.
-- Fix the bug that would create blocks with empty vector of transaction
-- Forward pending transactions.
- - Fix bug with missing byte in u128 Norito encoded TCP packet.
-- Attribute macros for methods tracing.
-- P2p module.
-- Usage of iroha_network in torii and client.
-- Add new ISI info.
-- Specific type alias for network state.
-- Box<dyn Error> replaced with String.
-- Network listen stateful.
-- Initial validation logic for transactions.
-- Iroha_network crate.
-- Derive macro for Io, IntoContract and IntoQuery traits.
-- Queries implementation for Iroha-client.
-- Transformation of Commands into ISI contracts.
-- Add proposed design for conditional multisig.
-- Migration to Cargo workspaces.
-- Modules migration.
-- External configuration via environment variables.
-- Get and Put requests handling for Torii.
-- Github ci correction.
-- Cargo-make cleans up blocks after test.
-- Introduce `test_helper_fns` module with a function to cleanup directory with blocks.
-- Implement validation via merkle tree.
-- Remove unused derive.
-- Propagate async/await and fix unawaited `wsv::put`.
-- Use join from `futures` crate.
-- Implement parallel store execution: writing to disk and updating WSV are happening in parallel.
-- Use references instead of ownership for (de)serialization.
-- Code ejection from  files.
-- Use ursa::blake2.
-- Rule about mod.rs in Contributing guide.
-- Hash 32 bytes.
-- Blake2 hash.
-- Disk accepts references to block.
-- Refactoring of commands module and Initial Merkle Tree.
-- Refactored modules structure.
-- Correct formatting.
-- Add doc comments to read_all.
-- Implement `read_all`, reorganize storage tests, and turn tests with async functions into async tests.
-- Remove unnecessary mutable capture.
-- Review issue, fix clippy.
-- Remove dash.
-- Add format check.
-- Add token.
-- Create rust.yml for github actions.
-- Introduce disk storage prototype.
-- Transfer asset test and functionality.
-- Add default initializer to structs.
-- Change name of MSTCache struct.
-- Add forgotten borrow.
-- Initial outline of iroha2 code.
-- Initial Kura API.
-- Add some basic files and also release the first draft of the whitepaper outlining the vision for iroha v2.
-- Basic iroha v2 branch.
+- שינוי שם פקודות להוראות.
+- נקודת קצה של מדדים פשוטים.
+- גשר: קבל גשרים רשומים ונכסים חיצוניים.
+- בדיקת חיבור Docker בצנרת.
+- אין מספיק קולות מבחן Sumeragi.
+- שרשור בלוקים.
+- גשר: טיפול ידני בהעברות חיצוניות.
+- נקודת קצה תחזוקה פשוטה.
+- הגירה ל-serde-json.
+- דמינט ISI.
+- הוסף הרשאות גשר, AddSignatory ISI ו-CanAddSignatory.
+- Sumeragi: עמיתים בתיקוני TODO הקשורים לסט b.
+- מאמת את החסימה לפני הכניסה ל-Sumeragi.
+- לגשר על נכסים חיצוניים.
+- אימות חתימה בהודעות Sumeragi.
+- חנות נכסים בינארית.
+- החלף את כינוי PublicKey בסוג.
+- הכנת ארגזים לפרסום.
+- הגיון מינימום הצבעות בתוך NetworkTopology.
+- Refactoring של אימות TransactionReceipt.
+- שינוי טריגר OnWorldStateViewChange: IrohaQuery במקום Instruction.
+- הפרד בנייה מאתחול ב-NetworkTopology.
+- הוסף Iroha הוראות מיוחדות הקשורות לאירועי Iroha.
+- טיפול בפסק זמן ליצירת בלוק.
+- מילון מונחים וכיצד להוסיף מסמכי Iroha.
+- החלף את דגם הגשר המקודד במקור בדגם Iroha.
+- הצג את מבנה NetworkTopology.
+- הוסף ישות הרשאה עם טרנספורמציה מהוראות.
+- Sumeragi הודעות במודול ההודעות.
+- פונקציונליות בלוק בראשית עבור Kura.
+- הוסף קבצי README עבור ארגזים Iroha.
+- Bridge ו-RegisterBridge ISI.
+- עבודה ראשונית עם Iroha משנה את המאזינים.
+- הזרקת בדיקות הרשאה לתוך OOB ISI.
+- Docker תיקון מספר עמיתים.
+- דוגמה לעמית לעמית.
+- טיפול בקבלות עסקה.
+- הרשאות Iroha.
+- מודול לדקס וארגזים לגשרים.
+- תקן מבחן אינטגרציה עם יצירת נכסים עם מספר עמיתים.
+- יישום מחדש של מודל הנכסים ב-EC-S-.
+- טיפול בזמן קצוב.
+- כותרת חסום.
+- שיטות הקשורות ל-ISI עבור ישויות תחום.
+- ספירת מצב Kura ותצורת עמיתים מהימנים.
+- כלל מוך תיעוד.
+- הוסף CommittedBlock.
+- ניתוק הקורה מ-`sumeragi`.
+- בדוק שהעסקאות אינן ריקות לפני יצירת הבלוק.
+- יישום מחדש של Iroha הוראות מיוחדות.
+- בנצ'מרקים לעסקאות וחוסמות מעברים.
+- מחזור החיים והמצבים של העסקאות עובדו מחדש.
+- חוסם מחזור חיים ומצבים.
+- תקן באג אימות, מחזור לולאה `sumeragi` מסונכרן עם פרמטר התצורה block_build_time_ms.
+- עטיפה של אלגוריתם Sumeragi בתוך מודול `sumeragi`.
+- מודול לעג עבור ארגז רשת Iroha מיושם באמצעות ערוצים.
+- הגירה ל-async-std API.
+- תכונת מדומה ברשת.
+- ניקוי קוד קשור אסינכרוני.
+- מיטוב ביצועים בלולאת עיבוד עסקאות.
+- יצירת זוגות מפתח חולצה מההתחלה Iroha.
+- אריזה Docker של קובץ הפעלה Iroha.- הצג את התרחיש הבסיסי של Sumeragi.
+- לקוח Iroha CLI.
+- טיפת iroha לאחר ביצוע קבוצתי בספסל.
+- שלב את `sumeragi`.
+- שנה את היישום של `sort_peers` ל-rand shuffle עם זרעון של בלוק קודם.
+- הסר את מעטפת ההודעה במודול עמיתים.
+- עטפו מידע הקשור לרשת בתוך `torii::uri` ו-`iroha_network`.
+- הוסף הוראת עמית המיושמת במקום טיפול בקוד קשיח.
+- תקשורת עמיתים באמצעות רשימת עמיתים מהימנים.
+- עטיפה של טיפול בבקשות רשת בתוך Torii.
+- אנקפסולציה של לוגיקה קריפטו בתוך מודול קריפטו.
+- סימן חסום עם חותמת זמן ו-hash בלוק קודם כמטען.
+- פונקציות קריפטו ממוקמות על גבי המודול ועובדות עם חתם ursa המובלע בחתימה.
+- Sumeragi ראשוני.
+- אימות הוראות עסקה על שיבוט תצוגת מצב עולמי לפני התחייבות לחנות.
+- אימות חתימות על קבלת העסקה.
+- תקן באג ב-Request deserialization.
+- יישום חתימת Iroha.
+- ישות Blockchain הוסרה כדי לנקות את בסיס הקוד.
+- שינויים ב-Transactions API: יצירה טובה יותר ועבודה עם בקשות.
+- תקן את הבאג שייצור בלוקים עם וקטור ריק של עסקה
+- העברה של עסקאות ממתינות.
+ - תקן באג עם בתים חסר בחבילת TCP מקודדת u128 Norito.
+- תכונה מאקרו עבור מעקב אחר שיטות.
+- מודול P2p.
+- שימוש ב-iroha_network ב-torii ובלקוח.
+- הוסף מידע ISI חדש.
+- כינוי מסוג ספציפי למצב רשת.
+- Box<dyn Error> הוחלף במחרוזת.
+- האזנה ממלכתית ברשת.
+- היגיון אימות ראשוני לעסקאות.
+- ארגז רשת Iroha.
+- הפקת מאקרו עבור תכונות Io, IntoContract ו-IntoQuery.
+- הטמעת שאילתות עבור Iroha-client.
+- הפיכת פקודות לחוזי ISI.
+- הוסף עיצוב מוצע עבור multisig מותנה.
+- הגירה לשטחי עבודה של Cargo.
+- הגירת מודולים.
+- תצורה חיצונית באמצעות משתני סביבה.
+- טיפול בבקשות קבל ושם עבור Torii.
+- תיקון Github ci.
+- Cargo-make מנקה בלוקים לאחר בדיקה.
+- הצג מודול `test_helper_fns` עם פונקציה לניקוי ספרייה עם בלוקים.
+- יישום אימות באמצעות עץ merkle.
+- הסר נגזרת שאינה בשימוש.
+- הפצת אסינכרון/המתנה ותקן את `wsv::put` ללא ציפייה.
+- השתמש בהצטרפות מארג `futures`.
+- הטמעת ביצוע מאגר מקביל: כתיבה לדיסק ועדכון WSV מתרחשים במקביל.
+- השתמש בהפניות במקום בעלות לצורך (דה) סדרה.
+- פליטת קוד מקבצים.
+- השתמש ב-ursa::blake2.
+- חוק לגבי mod.rs במדריך התורמים.
+- Hash 32 בתים.
+- Hash של בלייק2.
+- דיסק מקבל הפניות לחסימה.
+- Refactoring של מודול פקודות ועץ Merkle Initial.
+- מבנה מודולים משוחזרים.
+- עיצוב נכון.
+- הוסף הערות למסמך ל-read_all.
+- יישם את `read_all`, ארגן מחדש בדיקות אחסון והפוך בדיקות עם פונקציות אסינכרון לבדיקות אסינכרון.
+- הסר לכידה ניתנת לשינוי מיותר.
+- בדוק את הבעיה, תקן את clippy.
+- הסר מקף.
+- הוסף בדיקת פורמט.
+- הוסף אסימון.
+- צור rust.yml עבור פעולות github.
+- הצג אב טיפוס לאחסון דיסק.
+- בדיקת ופונקציונליות של העברת נכסים.
+- הוסף אתחול ברירת המחדל למבנים.
+- שנה את השם של מבנה MSTCache.
+- הוסף שאלה שנשכחה.
+- מתאר ראשוני של קוד iroha2.
+- API ראשוני של Kura.
+- הוסף כמה קבצים בסיסיים ושחרר גם את הטיוטה הראשונה של הספר הלבן המתאר את החזון עבור iroha v2.
+- סניף iroha v2 בסיסי.
 
 ## [1.5.0] - 2022-04-08
 
-### CI/CD changes
-- Remove Jenkinsfile and JenkinsCI.
+### שינויים ב-CI/CD
+- הסר את Jenkinsfile ואת JenkinsCI.
 
-### Added
+### נוסף- הוסף יישום אחסון RocksDB עבור Burrow.
+- הצג אופטימיזציה של תנועה עם Bloom-filter
+- עדכן את רשת המודולים של `MST` כך שתהיה ממוקמת במודול `OS` ב-`batches_cache`.
+- הצע אופטימיזציה לתנועה.
 
-- Add RocksDB storage implementation for Burrow.
-- Introduce traffic optimization with Bloom-filter
-- Update `MST` module network to be located in `OS` module in `batches_cache`.
-- Propose traffic optimization.
+### תיעוד
 
-### Documentation
+- תקן את המבנה. הוסף הבדלי DB, שיטות הגירה, נקודת קצה בריאותית, מידע על כלי iroha-swarm.
 
-- Fix build. Add DB differences, migration practice, healthcheck endpoint, information about iroha-swarm tool.
+### אחר
 
-### Other
-
-- Requirement fix for doc build.
-- Trim release documentation to spotlight the remaining critical follow-up item.
-- Fix 'check if docker image exists' /build all skip_testing.
+- תיקון דרישה עבור בניית מסמך.
+- חתוך את תיעוד השחרור כדי להדגיש את פריט המעקב הקריטי שנותר.
+- תקן 'בדוק אם תמונת docker קיימת' /בנה את כל skip_testing.
 - /build all skip_testing.
-- /build skip_testing; And more docs.
-- Add `.github/_README.md`.
-- Remove `.packer`.
-- Remove changes on test parameter.
-- Use new parameter to skip test stage.
-- Add to workflow.
-- Remove repository dispatch.
-- Add repository dispatch.
-- Add parameter for testers.
-- Remove `proposal_delay` timeout.
+- /build skip_testing; ועוד מסמכים.
+- הוסף `.github/_README.md`.
+- הסר את `.packer`.
+- הסר שינויים בפרמטר הבדיקה.
+- השתמש בפרמטר חדש כדי לדלג על שלב הבדיקה.
+- הוסף לזרימת העבודה.
+- הסר את שליחת המאגר.
+- הוסף שיגור מאגר.
+- הוסף פרמטר לבודקים.
+- הסר פסק זמן של `proposal_delay`.
 
-## [1.4.0] - 2022-01-31
+## [1.4.0] - 31-01-2022
 
-### Added
+### נוסף
 
-- Add syncing node state
-- Adds metrics for RocksDB
-- Add healthcheck interfaces via http and metrics.
+- הוסף מצב צומת סנכרון
+- מוסיף מדדים עבור RocksDB
+- הוסף ממשקי בדיקת בריאות באמצעות http ומדדים.
 
-### Fixes
+### תיקונים
 
-- Fix column families in Iroha v1.4-rc.2
-- Add 10-bit bloom filter in Iroha v1.4-rc.1
+- תקן משפחות עמודות ב-Iroha v1.4-rc.2
+- הוסף מסנן פריחה של 10 סיביות ב-Iroha v1.4-rc.1
 
-### Documentation
+### תיעוד
 
-- Add zip and pkg-config to list of build deps.
-- Update readme: fix broken links to build status, build guide, and so on.
-- Fix Config and Docker Metrics.
+- הוסף zip ו-pkg-config לרשימת הגדרות הבנייה.
+- עדכן את ה-readme: תקן קישורים שבורים כדי לבנות סטטוס, מדריך לבנות וכן הלאה.
+- תקן מדדי Config ו-Docker.
 
-### Other
+### אחר
 
-- Update GHA docker tag.
-- Fix Iroha 1 compile errors when compiling with g++11.
-- Replace `max_rounds_delay` with `proposal_creation_timeout`.
-- Update sample config file to remove old DB connection params.
+- עדכון תג GHA docker.
+- תקן שגיאות קומפילציה של Iroha 1 בעת קומפילציה עם g++11.
+- החלף את `max_rounds_delay` ב-`proposal_creation_timeout`.
+- עדכן קובץ תצורה לדוגמה כדי להסיר פרמטרים ישנים של חיבור DB.

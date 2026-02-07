@@ -7,51 +7,52 @@ generator: scripts/sync_docs_i18n.py
 source_hash: ece3b82ce3096e15d3cc4524fbb6033ab3fa5119da561a1aec40306564ba0193
 source_last_modified: "2025-12-29T18:16:34.771616+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Contributor Covenant Code of Conduct
+# ཕན་འདེབས་པའི་ཆིངས་ཡིག་ཨང་རྟགས།
 
-## Our Pledge
+## ང་ཚོའི་ཁས་བླངས།
 
-In the interest of fostering an open and welcoming environment, we as contributors and maintainers pledge to making participation in our project and our community a harassment-free experience for everyone, regardless of age, body size, disability, ethnicity, gender identity and expression, level of experience, nationality, personal appearance, race, religion, or sexual identity and orientation.
+འདི་ཡང་ མཐའ་འཁོར་གནས་སྟངས་ལུ་བལྟ་སྟེ་ ང་བཅས་རའི་ལས་འགུལ་དང་ མི་སྡེ་ནང་ལུ་ ལོ་ཚད་དང་གཟུགས་ཀྱི་སྦོམ་ཆུང་ དབང་པོ་སྐྱོན་ཅན་ ཕོ་མོའི་ངོ་རྟགས་དང་ ཕོ་མོའི་དབྱེ་བ་དང་ བརྡ་སྟོན་དང་ བརྡ་སྟོན་དང་ བརྡ་སྟོན་དང་ བརྡ་སྟོན་དང་ བརྡ་སྟོན་དང་ ཉམས་མྱོང་གི་གནས་ཚད་ ཉམས་མྱོང་དང་ ཆོས་ལུགས་དང་ འདོད་སྤྱོད་ཀྱི་ངོ་རྟགས་དང་ གཞི་གནས་ཚུ་ ག་ར་ལུ་ དཀའ་ངལ་མེད་པའི་ཉམས་མྱོང་ཚུ་ འབད་ཚུགས་པའི་ ཁས་བླངས་འབདཝ་ཨིན།
 
-## Our Standards
+## ང་ཚོའི་ཚད་གཞི།
 
-Examples of behavior that contributes to creating a positive environment include:
+མཐའ་འཁོར་ལེགས་ཤོམ་བཟོ་ནི་ལུ་ ཕན་གྲོགས་འབད་མི་ སྤྱོད་ལམ་གྱི་དཔེ་ཚུ་ཡང་ འདི་ཚུ་ཨིན།
 
-* Using welcoming and inclusive language
-* Being respectful of differing viewpoints and experiences
-* Gracefully accepting constructive criticism
-* Focusing on what is best for the community
-* Showing empathy towards other community members
+* ཕེབས་བསུ་དང་ བཅའ་མར་གཏོགས་པའི་སྐད་ཡིག་ལག་ལེན་འཐབ་ནི།
+* མཐོང་ཚུལ་དང་ཉམས་མྱོང་སོ་སོ་ལུ་གུས་ཞབས་འབད་ནི།
+* ཕན་ཐོག་ཅན་གྱི་སྐྱོན་བརྗོད་པ་ལེགས་ཤོམ།
+* མི་སྡེ་ལུ་ག་ཅི་དྲགཔ་ཨིན་ན་ གཙོ་བོར་བཏོན་ནི།
+* མི་སྡེ་འཐུས་མི་གཞན་ཚུ་ལུ་ སྙིང་རྗེ་སྟོན་ནི།
 
-Examples of unacceptable behavior by participants include:
+བཅའ་མར་གཏོགས་མི་ཚུ་གིས་ ངོས་ལེན་མ་འབད་བའི་ སྤྱོད་ལམ་གྱི་དཔེ་ཚུ་ཡང་ འདི་ཚུ་ཨིན།
 
-* The use of sexualized language or imagery and unwelcome sexual attention or advances
-* Trolling, insulting/derogatory comments, and personal or political attacks
-* Public or private harassment
-* Publishing others' private information, such as a physical or electronic address, without explicit permission
-* Other conduct which could reasonably be considered inappropriate in a professional setting
+* འདོད་སྤྱོད་ཀྱི་སྐད་ཡིག་ཡང་ན་གཟུགས་བརྙན་དང་འདོད་སྤྱོད་ཀྱི་དོ་སྣང་ཡང་ན་གོང་འཕེལ།
+* མཚོན་ཆ་བརྙས་བཅོས་/བཤུབ་པའི་བསམ་འཆར་དང་ མི་སྒེར་ཡང་ན་སྲིད་དོན་གྱི་གནོདཔ་བཀལ་ནི།
+* སྤྱི་ ཡང་ན་སྒེར་གྱི་གནོད་འཚེ་།
+* གཞན་གྱི་སྒེར་གྱི་བརྡ་དོན་ཚུ་ དཔེར་ན་ དངོས་གཟུགས་ཡང་ན་ གློག་རིག་ཁ་བྱང་ གསལ་ཏོག་ཏོ་མེད་པའི་ གནང་བ་མེད་པར་ དཔར་བསྐྲུན་འབད་ནི།
+* གཞན་ཡང་ ཁྱད་རིག་ཅན་གྱི་སྒྲིག་སྟངས་ནང་ འོས་འབབ་མེདཔ་སྦེ་ བརྩི་ཚུགས་པའི་ སྤྱོད་ལམ་ཚུ་ཨིན།
 
-## Our Responsibilities
+## ང་ཚོའི་འགན་འཁྲི།
 
-Project maintainers are responsible for clarifying the standards of acceptable behavior and are expected to take appropriate and fair corrective action in response to any instances of unacceptable behavior.
+ལས་འགུལ་རྒྱུན་སྐྱོང་པ་ཚུ་གིས་ ངོས་ལེན་ཅན་གྱི་སྤྱོད་ལམ་གྱི་གནས་ཚད་ཚུ་ གསལ་ཏོག་ཏོ་བཟོ་ནི་དང་ ངོས་ལེན་འབད་མ་ཚུགས་པའི་ སྤྱོད་ལམ་ག་ཅི་བཟུམ་ཅིག་ལུ་ ལན་རྐྱབ་ནིའི་དོན་ལུ་ འོས་འབབ་དང་ དྲང་བདེན་གྱི་ བྱ་སྤྱོད་ཚུ་ འབད་ནི་གི་རེ་བ་ཡོདཔ་ཨིན།
 
-Project maintainers have the right and responsibility to remove, edit, or reject comments, commits, code, wiki edits, issues, and other contributions that are not aligned to this Code of Conduct, or to ban temporarily or permanently any contributor for other behaviors that they deem inappropriate, threatening, offensive, or harmful.
+ལས་འགུལ་རྒྱུན་སྐྱོང་པ་ཚུ་ལུ་ བསམ་བརྗོད་དང་ ཁས་བླངས་ གསང་ཡིག་ གསང་ཨང་ ཝི་ཀི་ཞུན་དག་ གནད་དོན་ཚུ་དང་ གཞན་མི་ཕན་འདེབས་ཚུ་ གནས་སྐབས་དང་ ཡང་ན་ གཏན་འཇགས་སྦེ་ གཏན་འཇགས་སྦེ་ གཞན་མི་སྤྱོད་ལམ་ཚུ་གི་དོན་ལུ་ ཕན་འདེབས་འབད་བཅུག་ནི་གི་ དབང་ཆ་དང་འགན་ཁུར་ཡོདཔ་ཨིན།
 
-## Scope
+## གོ་སྐབས
 
-This Code of Conduct applies both within project spaces and in public spaces when an individual is representing the project or its community. Examples of representing a project or community include using an official project e-mail address, posting via an official social media account, or acting as an appointed representative at an online or offline event. Representation of a project may be further defined and clarified by project maintainers.
+མི་ངོ་ཅིག་གིས་ ལས་འགུལ་དང་ ཡང་ན་ མི་སྡེ་གི་ངོ་ཚབ་འབད་བའི་སྐབས་ ལས་འགུལ་གྱི་ས་སྟོང་དང་ མི་མང་གི་ས་སྒོ་ཚུ་ནང་ བྱ་སྤྱོད་ཀྱི་བཅའ་ཁྲིམས་འདི་ ལག་ལེན་འཐབ་ཨིན། ལས་འགུལ་དང་མི་སྡེ་གི་ངོ་ཚབ་འབད་ནི་གི་དཔེ་ཚུ་ཡང་ གཞུང་འབྲེལ་གྱི་ གློག་འཕྲིན་ཁ་བྱང་ལག་ལེན་འཐབ་ནི་དང་ གཞུང་འབྲེལ་གྱི་ མི་སྡེ་བརྡ་བརྒྱུད་ཀྱི་རྩིས་ཁྲ་བརྒྱུད་དེ་ བཀོད་ནི་ ཡང་ན་ ཡོངས་འབྲེལ་དང་ ཡང་ན་ ཡོངས་འབྲེལ་མིན་པའི་ལས་རིམ་ནང་ ངོ་ཚབ་སྦེ་ བསྐོ་བཞག་འབད་མི་ ངོ་ཚབ་སྦེ་ འབད་ནི་ཚུ་ཨིན། ལས་འགུལ་གྱི་ངོ་ཚབ་འདི་ ལས་འགུལ་བདག་འཛིན་འཐབ་མི་ཚུ་གིས་ ཧེང་སྐལ་རང་ ངེས་ཚིག་བཀོད་ནི་དང་ གསལ་ཏོག་ཏོ་བཟོ་ཚུགས།
 
-## Enforcement
+## སྲུང་སྐྱོབ།
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported by contacting the project team [here](./CONTRIBUTING.md#contact). All complaints will be reviewed and investigated and will result in a response that is deemed necessary and appropriate to the circumstances. The project team is obligated to maintain confidentiality with regard to the reporter of an incident. Further details of specific enforcement policies may be posted separately.
+ལོག་སྤྱོད་དང་ གནོད་སྐྱོན་ ཡང་ན་ དེ་མིན་ ངོས་ལེན་མ་འབད་བའི་ སྤྱོད་ལམ་ཚུ་ ལས་འགུལ་སྡེ་ཚན་ [Ire](I18NU0000002X) དང་འབྲེལ་བ་འཐབ་སྟེ་ སྙན་ཞུ་འབད་ཚུགས། ཉོགས་བཤད་ཚུ་ག་ར་ བསྐྱར་ཞིབ་འབད་དེ་ ཞིབ་དཔྱད་འབད་དེ་ དགོས་མཁོ་དང་ གནས་སྟངས་ལུ་འོས་འབབ་ཡོད་པའི་ ལན་འདེབས་ཅིག་ འབྱུང་ནི་ཨིན་པས། ལས་འགུལ་སྡེ་ཚན་གྱིས་ བྱུང་རྐྱེན་ཅིག་གི་ གསར་འགོད་པ་ལུ་ གསང་བ་བཞག་དགོཔ་ཨིན་པས། དམིགས་བསལ་བསྟར་སྤྱོད་སྲིད་བྱུས་ཚུ་གི་སྐོར་ལས་ ཁ་གསལ་སྦེ་ སོ་སོ་སྦེ་ བཀོད་ཆོག།
 
-Project maintainers who do not follow or enforce the Code of Conduct in good faith may face temporary or permanent repercussions as determined by other members of the project's leadership.
+ལས་འགུལ་གྱི་ སྒྲིག་གཞི་འདི་ ཡིད་ཆེས་ལེགས་ཤོམ་ཡོད་པའི་ སྤྱོད་ལམ་གྱི་བཅའ་ཁྲིམས་ བསྟར་སྤྱོད་མ་འབད་མི་དང་ བསྟར་སྤྱོད་མ་འབད་མི་ཚུ་གིས་ ལས་འགུལ་གྱི་ འགོ་ཁྲིད་ཀྱི་འཐུས་མི་གཞན་ཚུ་གིས་ ཐག་བཅད་མི་དང་འཁྲིལ་ཏེ་ གནས་སྐབས་དང་ གཏན་འཇགས་ཀྱི་ འབྲས་བུ་ཚུ་ ཐོན་འོང་།
 
-## Attribution
+## ཁྱད་ཆོས།
 
-This Code of Conduct is adapted from the [Contributor Covenant][homepage], version 1.4, available at [http://contributor-covenant.org/version/1/4][version]
+འདི་གི་ལམ་ལུགས་འདི་ [ཕན་འདེབས་འབད་མི་ཆིངས་ཡིག་][homepage] ཐོན་རིམ་༡.༤ ལས་ བསྒྱུར་བཅོས་འབད་ཡོདཔ་ཨིན།
 
 [homepage]: http://contributor-covenant.org
 [version]: http://contributor-covenant.org/version/1/4/

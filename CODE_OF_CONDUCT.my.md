@@ -7,51 +7,52 @@ generator: scripts/sync_docs_i18n.py
 source_hash: ece3b82ce3096e15d3cc4524fbb6033ab3fa5119da561a1aec40306564ba0193
 source_last_modified: "2025-12-29T18:16:34.771616+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Contributor Covenant Code of Conduct
+# ပါဝင်ဆောင်ရွက်သူ ပဋိညာဉ် ကျင့်ထုံး
 
-## Our Pledge
+##ကျွန်ုပ်တို့၏ကတိစကား
 
-In the interest of fostering an open and welcoming environment, we as contributors and maintainers pledge to making participation in our project and our community a harassment-free experience for everyone, regardless of age, body size, disability, ethnicity, gender identity and expression, level of experience, nationality, personal appearance, race, religion, or sexual identity and orientation.
+ပွင့်လင်းပြီး ကြိုဆိုသောပတ်ဝန်းကျင်ကို မွေးမြူရန် အကျိုးစီးပွားအတွက် ပံ့ပိုးကူညီသူများနှင့် ထိန်းသိမ်းသူများအနေဖြင့် ကျွန်ုပ်တို့၏ပရောဂျက်နှင့် ကျွန်ုပ်တို့၏အသိုင်းအဝိုင်းတွင် အသက်အရွယ်၊ ခန္ဓာကိုယ်အရွယ်အစား၊ မသန်စွမ်းမှု၊ လူမျိုး၊ ကျားမခွဲခြားမှုနှင့် ထုတ်ဖော်ပြောဆိုမှု၊ အတွေ့အကြုံအဆင့်၊ နိုင်ငံသား၊ ပုဂ္ဂိုလ်ရေးအသွင်အပြင်၊ လူမျိုး၊ ဘာသာ၊ သို့မဟုတ် လိင်ပိုင်းဆိုင်ရာ အထောက်အထားနှင့် တိမ်းညွှတ်မှုတို့ကို မခွဲခြားဘဲ လူတိုင်းအတွက် အနှောင့်အယှက်ကင်းသည့် အတွေ့အကြုံတစ်ခုဖြစ်စေရန် ကျွန်ုပ်တို့ကတိပြုပါသည်။
 
-## Our Standards
+## ကျွန်ုပ်တို့၏စံနှုန်းများ
 
-Examples of behavior that contributes to creating a positive environment include:
+အပြုသဘောဆောင်တဲ့ ပတ်ဝန်းကျင်ကို ဖန်တီးရာမှာ အထောက်အကူဖြစ်စေတဲ့ အပြုအမူ ဥပမာများ ပါဝင်သည်-
 
-* Using welcoming and inclusive language
-* Being respectful of differing viewpoints and experiences
-* Gracefully accepting constructive criticism
-* Focusing on what is best for the community
-* Showing empathy towards other community members
+* ကြိုဆိုခြင်းနှင့် ပါဝင်သောဘာသာစကားကို အသုံးပြုခြင်း။
+* မတူညီသော အမြင်များနှင့် အတွေ့အကြုံများကို လေးစားမှုရှိခြင်း။
+* အပြုသဘောဆောင်တဲ့ ဝေဖန်မှုတွေကို ကျေကျေနပ်နပ် လက်ခံပါ။
+* ရပ်ရွာအတွက် အကောင်းဆုံးအရာကို အာရုံစိုက်ပါ။
+* အခြားအသိုင်းအဝိုင်းအဖွဲ့ဝင်များအပေါ် စာနာမှုပြသခြင်း။
 
-Examples of unacceptable behavior by participants include:
+ပါဝင်သူများ၏ လက်မခံနိုင်သော အပြုအမူ ဥပမာများ ပါဝင်သည်။
 
-* The use of sexualized language or imagery and unwelcome sexual attention or advances
-* Trolling, insulting/derogatory comments, and personal or political attacks
-* Public or private harassment
-* Publishing others' private information, such as a physical or electronic address, without explicit permission
-* Other conduct which could reasonably be considered inappropriate in a professional setting
+* လိင်ပိုင်းဆိုင်ရာဘာသာစကား သို့မဟုတ် ရုပ်ပုံများကို အသုံးပြုခြင်းနှင့် မနှစ်သက်သော လိင်ပိုင်းဆိုင်ရာ အာရုံစိုက်မှု သို့မဟုတ် တိုးတက်မှုများ
+* လိမ်လည်လှည့်ဖြားခြင်း၊ စော်ကားခြင်း/ပျက်ပြားသောမှတ်ချက်များနှင့် ပုဂ္ဂိုလ်ရေး သို့မဟုတ် နိုင်ငံရေးတိုက်ခိုက်မှုများ
+* အများပိုင် သို့မဟုတ် ပုဂ္ဂလိက နှောင့်ယှက်ခြင်း။
+* ရုပ်ပိုင်းဆိုင်ရာ သို့မဟုတ် အီလက်ထရွန်နစ်လိပ်စာကဲ့သို့ အခြားသူများ၏ ကိုယ်ရေးကိုယ်တာအချက်အလက်များကို တိကျပြတ်သားစွာ ခွင့်ပြုချက်မရှိဘဲ ထုတ်ဝေခြင်း။
+* ပရော်ဖက်ရှင်နယ်အဆင့်တွင် ကျိုးကြောင်းဆီလျော်စွာ မသင့်လျော်ဟု ယူဆနိုင်သော အခြားအပြုအမူ
 
-## Our Responsibilities
+##ကျွန်ုပ်တို့၏တာဝန်များ
 
-Project maintainers are responsible for clarifying the standards of acceptable behavior and are expected to take appropriate and fair corrective action in response to any instances of unacceptable behavior.
+ပရောဂျက်ထိန်းသိမ်းသူများသည် လက်ခံနိုင်သောအပြုအမူဆိုင်ရာ စံနှုန်းများကို ရှင်းလင်းတင်ပြရန် တာဝန်ရှိပြီး လက်မခံနိုင်သော အပြုအမူမှန်သမျှကို တုံ့ပြန်ရန်အတွက် သင့်လျော်ပြီး တရားမျှတသော တည့်မတ်သည့် လုပ်ဆောင်ချက်ကို လုပ်ဆောင်ရန် မျှော်လင့်ပါသည်။
 
-Project maintainers have the right and responsibility to remove, edit, or reject comments, commits, code, wiki edits, issues, and other contributions that are not aligned to this Code of Conduct, or to ban temporarily or permanently any contributor for other behaviors that they deem inappropriate, threatening, offensive, or harmful.
+ပရောဂျက်ထိန်းသိမ်းသူများသည် ဤကျင့်ထုံးဥပဒေနှင့် မကိုက်ညီသော မှတ်ချက်များ၊ ကုဒ်များ၊ ကုဒ်များ၊ ဝီကီတည်းဖြတ်မှုများ၊ ပြဿနာများနှင့် အခြားပံ့ပိုးမှုများကို ဖယ်ရှားရန်၊ တည်းဖြတ်ရန် သို့မဟုတ် ငြင်းပယ်ရန် တာဝန်ရှိပြီး ၎င်းတို့တွင် မသင့်လျော်သော၊ ခြိမ်းခြောက်ခြင်း၊ စော်ကားခြင်း သို့မဟုတ် အန္တရာယ်ရှိသော အခြားအပြုအမူများအတွက် ပံ့ပိုးကူညီသူအား ယာယီ သို့မဟုတ် အပြီးအပိုင် ပိတ်ပင်ရန် တာဝန်ရှိပါသည်။
 
-## Scope
+## နယ်ပယ်
 
-This Code of Conduct applies both within project spaces and in public spaces when an individual is representing the project or its community. Examples of representing a project or community include using an official project e-mail address, posting via an official social media account, or acting as an appointed representative at an online or offline event. Representation of a project may be further defined and clarified by project maintainers.
+လူတစ်ဦးတစ်ယောက်သည် ပရောဂျက် သို့မဟုတ် ၎င်း၏အသိုင်းအဝိုင်းကို ကိုယ်စားပြုနေသည့်အခါ ဤကျင့်ထုံးဥပဒေသည် ပရောဂျက်နေရာများအတွင်းနှင့် အများပြည်သူဆိုင်ရာနေရာများတွင် နှစ်မျိုးလုံးအကျုံးဝင်ပါသည်။ ပရောဂျက် သို့မဟုတ် အသိုင်းအဝိုင်းကို ကိုယ်စားပြုခြင်း၏ ဥပမာများတွင် တရားဝင် ပရောဂျက်အီးမေးလ်လိပ်စာကို အသုံးပြုခြင်း၊ တရားဝင် လူမှုမီဒီယာအကောင့်တစ်ခုမှတစ်ဆင့် ပို့စ်တင်ခြင်း သို့မဟုတ် အွန်လိုင်း သို့မဟုတ် အော့ဖ်လိုင်းဖြစ်ရပ်တစ်ခုတွင် ခန့်အပ်ထားသည့် ကိုယ်စားလှယ်အဖြစ် ဆောင်ရွက်ခြင်းတို့ ပါဝင်သည်။ ပရောဂျက်တစ်ခု၏ ကိုယ်စားပြုမှုကို ပရောဂျက်ထိန်းသိမ်းသူများမှ ထပ်မံသတ်မှတ်ပြီး ရှင်းလင်းနိုင်ပါသည်။
 
-## Enforcement
+## ပြဋ္ဌာန်းခြင်း။
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported by contacting the project team [here](./CONTRIBUTING.md#contact). All complaints will be reviewed and investigated and will result in a response that is deemed necessary and appropriate to the circumstances. The project team is obligated to maintain confidentiality with regard to the reporter of an incident. Further details of specific enforcement policies may be posted separately.
+ရိုင်းစိုင်းသော၊ နှောင့်ယှက်ခြင်း သို့မဟုတ် အခြားလက်မခံနိုင်သော အပြုအမူများအဖြစ် ပရောဂျက်အဖွဲ့သို့ ဆက်သွယ်ခြင်းဖြင့် [ဤနေရာ](./CONTRIBUTING.md#contact) သို့ အစီရင်ခံနိုင်ပါသည်။ တိုင်ကြားချက်အားလုံးကို ပြန်လည်သုံးသပ်ပြီး စုံစမ်းစစ်ဆေးမည်ဖြစ်ပြီး အခြေအနေများနှင့် လိုအပ်သည်ဟု ယူဆကာ တုံ့ပြန်မှုတစ်ခု ထွက်ပေါ်လာမည်ဖြစ်သည်။ ပရောဂျက်အဖွဲ့သည် အဖြစ်အပျက်တစ်ခု၏ သတင်းထောက်နှင့် ပတ်သက်၍ လျှို့ဝှက်ထားရန် တာဝန်ရှိသည်။ သီးခြားပြဋ္ဌာန်းထားသော မူဝါဒများ၏ နောက်ထပ်အသေးစိတ်အချက်အလက်များကို သီးခြားစီတင်နိုင်ပါသည်။
 
-Project maintainers who do not follow or enforce the Code of Conduct in good faith may face temporary or permanent repercussions as determined by other members of the project's leadership.
+အကျင့်စာရိတ္တကို သစ္စာရှိရှိ လိုက်နာခြင်း သို့မဟုတ် လိုက်နာခြင်းမရှိသော ပရောဂျက်ထိန်းသိမ်းသူများသည် ပရောဂျက်၏ခေါင်းဆောင်မှု၏အခြားအဖွဲ့ဝင်များမှ ဆုံးဖြတ်ထားသည့်အတိုင်း ယာယီ သို့မဟုတ် အမြဲတမ်းဂယက်ရိုက်ခြင်းကို ကြုံတွေ့ရနိုင်သည်။
 
-## Attribution
+## ထည့်တွက်ပါ။
 
-This Code of Conduct is adapted from the [Contributor Covenant][homepage], version 1.4, available at [http://contributor-covenant.org/version/1/4][version]
+ဤကျင့်ဝတ်ကျင့်ထုံးကို [http://contributor-covenant.org/version/1/4][ဗားရှင်း] တွင်ရရှိနိုင်သော ဗားရှင်း 1.4၊ [Contributor Covenant][ပင်မစာမျက်နှာ] မှ ဆီလျော်အောင် ဘာသာပြန်ထားပါသည်။
 
 [homepage]: http://contributor-covenant.org
 [version]: http://contributor-covenant.org/version/1/4/
