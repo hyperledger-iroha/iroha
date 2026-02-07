@@ -7,27 +7,28 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 6561551b6f00fb37b8e41fc5ade61206d7bd9323ab8e089f3dd5d5cfdfc0fd53
 source_last_modified: "2025-12-29T18:16:35.975661+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Light Client Data Availability Sampling
+# Жеңіл Клиент деректерінің қолжетімділігі үлгісі
 
-The Light Client Sampling API allows authenticated operators to retrieve
-Merkle-authenticated RBC chunk samples for an in-flight block. Light clients
-can issue random sampling requests, verify the returned proofs against the
-advertised chunk root, and build confidence that data is available without
-fetching the entire payload.
+Light Client Sampling API аутентификацияланған операторларға шығарып алуға мүмкіндік береді
+Ұшу кезіндегі блокқа арналған Merkle аутентификацияланған қызыл қан клеткаларының үлгілері. Жеңіл клиенттер
+кездейсоқ іріктеу сұрауларын бере алады, қайтарылған дәлелдемелерді тексере алады
+жарнамаланған кесінді түбірі және деректер онсыз қолжетімді болатынына сенімділік
+бүкіл пайдалы жүктемені алу.
 
-## Endpoint
+## Соңғы нүкте
 
 ```
 POST /v1/sumeragi/rbc/sample
 ```
 
-The endpoint requires an `X-API-Token` header matching one of the configured
-Torii API tokens. Requests are additionally rate-limited and subject to a daily
-per-caller byte budget; exceeding either returns HTTP 429.
+Соңғы нүкте конфигурацияланғандардың біріне сәйкес келетін `X-API-Token` тақырыбын қажет етеді.
+Torii API токендері. Сұраныстар қосымша мөлшерлемемен шектеледі және күнделікті болады
+қоңырау шалушы байт бюджеті; біреуінен асып кету HTTP 429 қайтарады.
 
-### Request Body
+### Сұраныс органы
 
 ```json
 {
@@ -39,12 +40,12 @@ per-caller byte budget; exceeding either returns HTTP 429.
 }
 ```
 
-* `block_hash` – target block hash in hex.
-* `height`, `view` – identifying tuple for the RBC session.
-* `count` – desired number of samples (defaults to 1, capped by configuration).
-* `seed` – optional deterministic RNG seed for reproducible sampling.
+* `block_hash` – он алтылықтағы мақсатты блок хэші.
+* `height`, `view` – RBC сеансы үшін сәйкестендіргіш кортеж.
+* `count` – үлгілердің қажетті саны (әдепкі бойынша 1, конфигурациямен шектелген).
+* `seed` – қайталанатын сынама алу үшін қосымша детерминирленген RNG тұқымы.
 
-### Response Body
+### Жауап беру органы
 
 ```json
 {
@@ -69,29 +70,29 @@ per-caller byte budget; exceeding either returns HTTP 429.
 }
 ```
 
-Each sample entry contains the chunk index, payload bytes (hex), SHA-256 leaf
-digest, and a Merkle inclusion proof (with optional siblings encoded as hex
-strings). Clients can verify proofs using the `chunk_root` field.
+Әрбір үлгі жазбасы бөлік индексін, пайдалы жүк байттарын (он алтылық), SHA-256 парағын қамтиды
+дайджест және Merkle қосу дәлелі (он алтылық ретінде кодталған қосымша бауырлары бар
+жолдар). Клиенттер дәлелдемелерді `chunk_root` өрісін пайдаланып тексере алады.
 
-## Limits and Budgets
+## Лимиттер мен бюджеттер
 
-* **Max samples per request** – configurable via `torii.rbc_sampling.max_samples_per_request`.
-* **Max bytes per request** – enforced using `torii.rbc_sampling.max_bytes_per_request`.
-* **Daily byte budget** – tracked per caller through `torii.rbc_sampling.daily_byte_budget`.
-* **Rate limiting** – enforced using a dedicated token bucket (`torii.rbc_sampling.rate_per_minute`).
+* **Сұраныс бойынша максималды үлгілер** – `torii.rbc_sampling.max_samples_per_request` арқылы конфигурациялауға болады.
+* **Сұраныс үшін максималды байт** – `torii.rbc_sampling.max_bytes_per_request` арқылы күшіне енеді.
+* **Күнделікті байт бюджет** – `torii.rbc_sampling.daily_byte_budget` арқылы бір қоңырау шалушы бақыланады.
+* **Тарифті шектеу** – арнайы белгі шелегі (`torii.rbc_sampling.rate_per_minute`) арқылы күшіне енеді.
 
-Requests exceeding any limit return HTTP 429 (CapacityLimit). When the chunk
-store is unavailable or the session is missing payload bytes the endpoint
-returns HTTP 404.
+Кез келген шектен асатын сұраулар HTTP 429 (CapacityLimit) қайтарады. Кесек болғанда
+дүкен қолжетімсіз немесе сеанста соңғы нүкте пайдалы жүк байттары жоқ
+HTTP 404 қайтарады.
 
-## SDK Integration
+## SDK интеграциясы
 
 ### JavaScript
 
-`@iroha/iroha-js` exposes the `ToriiClient.sampleRbcChunks` helper so data
-availability verifiers can call the endpoint without rolling their own fetch
-logic. The helper validates the hex payloads, normalises integers, and returns
-typed objects that mirror the response schema above:
+`@iroha/iroha-js` деректер үшін `ToriiClient.sampleRbcChunks` көмекшісін көрсетеді
+қол жетімділікті тексерушілер соңғы нүктеге өздерінің алуды жылжытпай қоңырау шала алады
+логика. Көмекші он алтылық пайдалы жүктемелерді тексереді, бүтін сандарды қалыпқа келтіреді және қайтарады
+жоғарыдағы жауап схемасын көрсететін терілген нысандар:
 
 ```js
 import { ToriiClient } from "@iroha/iroha-js";
@@ -117,8 +118,8 @@ for (const { digestHex, proof } of sample.samples) {
 }
 ```
 
-The helper throws when the server returns malformed data, helping JS-04 parity
-tests detect regressions alongside the Rust and Python SDKs. Rust
-(`iroha_client::ToriiClient::sample_rbc_chunks`) and Python
-(`IrohaToriiClient.sample_rbc_chunks`) ship equivalent helpers; use whichever
-matches your sampling harness.
+Көмекші сервер JS-04 паритетіне көмектесе отырып, қате пішінделген деректерді қайтарғанда шығарады
+сынақтар Rust және Python SDK-мен қатар регрессияларды анықтайды. Тот
+(`iroha_client::ToriiClient::sample_rbc_chunks`) және Python
+(`IrohaToriiClient.sample_rbc_chunks`) кеменің эквивалентті көмекшілері; қайсысы болса да пайдаланыңыз
+сынама алу жиегіңізге сәйкес келеді.

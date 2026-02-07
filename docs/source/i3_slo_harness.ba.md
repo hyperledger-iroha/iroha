@@ -7,35 +7,36 @@ generator: scripts/sync_docs_i18n.py
 source_hash: df3e3ac15baf47a6c53001acabcac7987a2386c2b772b1d8625eb60598f95a60
 source_last_modified: "2025-12-29T18:16:35.966039+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% Iroha 3 SLO Harness
+% Iroha 3 СЛО Харнесс
 
-The Iroha 3 release line carries explicit SLOs for the critical Nexus paths:
+Iroha 3 релиз линияһы асыҡ SLOs өсөн тәнҡитле Nexus юлдары:
 
-- finality slot duration (NX‑18 cadence)
-- proof verification (commit certs, JDG attestations, bridge proofs)
-- proof endpoint handling (Axum path proxy via verification latency)
-- fee and staking paths (payer/sponsor and bond/slash flows)
+- финал слот оҙайлылығы (NX‐18 каденция)
+- иҫбатлаусы тикшерелеү (сертелдәргә, JDG аттестациялары, күпер иҫбатлауҙары)
+- иҫбатлаусы ос нөктәһе менән эш итеү (Аксум юл прокси аша тикшерелгән латентлыҡ)
+- түләү һәм ставкалар юлдары (түләүсе/бағыусы һәм облигациялар/слеш ағымы)
 
-## Budgets
+## Бюджеттар
 
-Budgets live in `benchmarks/i3/slo_budgets.json` and map directly to the bench
-scenarios in the I3 suite. Objectives are per‑call p99 targets:
+Бюджеттар йәшәй `benchmarks/i3/slo_budgets.json` һәм карта туранан-тура эскәмйәгә .
+сценарийҙары I3 люкс. Маҡсаттар p99 маҡсаттары буйынса шылтырата:
 
-- Fee/staking: 50 ms per call (`fee_payer`, `fee_sponsor`, `staking_bond`, `staking_slash`)
-- Commit cert / JDG / bridge verify: 80 ms (`commit_cert_verify`, `jdg_attestation_verify`,
+- Түләү/стажировка: 50мс шылтыратыу өсөн (`fee_payer`, `fee_sponsor`, `staking_bond`, `staking_slash`)
+- Серҙе / JDG / күпер тикшерергә: 80мс (`commit_cert_verify`, `jdg_attestation_verify`,
   `bridge_proof_verify`)
-- Commit cert assembly: 80 ms (`commit_cert_assembly`)
-- Access scheduler: 50 ms (`access_scheduler`)
-- Proof endpoint proxy: 120 ms (`torii_proof_endpoint`)
+- Серт йыйыуҙы йөкмәтә: 80мс (`commit_cert_assembly`)
+- 50 мс (`access_scheduler`) инеүҙе планлаштырыусы.
+- Дәлил ос нөктәһе прокси: 120мс (`torii_proof_endpoint`)
 
-Burn-rate hints (`burn_rate_fast`/`burn_rate_slow`) encode the 14.4/6.0
-multi-window ratios for paging vs. ticket alerts.
+14.4/6.0
+күп тәҙрә нисбәте өсөн пейджинг ҡаршы билет иҫкәртмәләр.
 
-## Harness
+## Ханес
 
-Run the harness via `cargo xtask i3-slo-harness`:
+Йүгерергә йүгән аша `cargo xtask i3-slo-harness`:
 
 ```bash
 cargo xtask i3-slo-harness \
@@ -44,30 +45,30 @@ cargo xtask i3-slo-harness \
   --out-dir artifacts/i3_slo/latest
 ```
 
-Outputs:
+Сығыштар:
 
-- `bench_report.json|csv|md` — raw I3 bench suite results (git hash + scenarios)
-- `slo_report.json|md` — SLO evaluation with pass/fail/budget-ratio per target
+- `bench_report.json|csv|md` — сеймал I3 эскәмйә люкс һөҙөмтәләре (аллы хеш + сценарийҙар)
+- `slo_report.json|md` — SLO баһалау менән үткәреү/уңышһыҙлыҡ/бюджет-никаза
 
-The harness consumes the budgets file and enforces `benchmarks/i3/slo_thresholds.json`
-during the bench run to fail fast when a target regresses.
+Йүгән бюджеттар файлын ҡуллана һәм `benchmarks/i3/slo_thresholds.json` .
+эскәмйә ваҡытында тиҙ уңышһыҙлыҡҡа осрай, ҡасан маҡсатлы регрессия.
 
-## Telemetry and dashboards
+## Телеметрия һәм приборҙар таҡтаһы
 
-- Finality: `histogram_quantile(0.99, rate(iroha_slot_duration_ms_bucket[5m]))`
-- Proof verification: `histogram_quantile(0.99, sum by (le) (rate(zk_verify_latency_ms_bucket{status="Verified"}[5m])))`
+- Финал: `histogram_quantile(0.99, rate(iroha_slot_duration_ms_bucket[5m]))`
+- Дәлил тикшерергә: `histogram_quantile(0.99, sum by (le) (rate(zk_verify_latency_ms_bucket{status="Verified"}[5m])))`
 
-Grafana starter panels live in `dashboards/grafana/i3_slo.json`. Prometheus
-burn-rate alerts are provided in `dashboards/alerts/i3_slo_burn.yml` with the
-budgets above baked in (finality 2s, proof verify 80 ms, proof endpoint proxy
-120 ms).
+Grafana стартер панелдәре йәшәй `dashboards/grafana/i3_slo.json`. Prometheus
+яндырыу тиҙлеге тураһында иҫкәртмәләр `dashboards/alerts/i3_slo_burn.yml` менән тәьмин ителә.
+бюджеттар өҫтөндә бешерелгән (финал 2s, иҫбатлау раҫлау 80мс, дәлилдәр осло прокси
+120мс).
 
-## Operational notes
+## Оператив иҫкәрмәләр
 
-- Run the harness in nightlies; publish `artifacts/i3_slo/<stamp>/slo_report.md`
-  alongside the bench artefacts for governance evidence.
-- If a budget fails, use the bench markdown to identify the scenario, then drill
-  into the matching Grafana panel/alert to correlate with live metrics.
-- Proof endpoint SLOs use the verification latency as a proxy to avoid per-route
-  cardinality blowup; the benchmark target (120 ms) matches the retention/DoS
-  guardrails on the proof API.
+- Төндә йүгәнде йүгертегеҙ; `fee_payer` баҫтырыу
+  идара итеү дәлилдәре өсөн эскәмйә артефакттары менән бер рәттән.
+- Әгәр бюджет уңышһыҙлыҡҡа осраһа, сценарийҙы билдәләү өсөн эскәмйә маркировкаһын ҡулланығыҙ, тимәк, быраулау
+  тура килгән Grafana панелендә/иҫкәртмә тере метрика менән корреляция.
+- Дәлил ос нөктәһе SLOs тикшерелгән латентлыҡты ҡулланыу өсөн прокси ҡотолоу өсөн пер-ауытыу .
+  кардиналитет шартлатыу; ориентир маҡсаты (120мс) тап килә тотоу/DoS
+  ҡоршауҙар API иҫбатлау.

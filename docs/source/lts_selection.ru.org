@@ -5,193 +5,192 @@
 #+GENERATOR: scripts/sync_docs_i18n.py
 #+SOURCE_HASH: 1535fc970027c05003b4e03135f47b565d1434f8dc3c42946525a1b16252d40d
 #+SOURCE_LAST_MODIFIED: 2026-01-04T16:47:58+00:00
-#+TRANSLATION_LAST_REVIEWED: 2026-01-30
+#+TRANSLATION_LAST_REVIEWED: 2026-02-07
 
 #+TITLE: On selecting versions as LTS candidates
 #+AUTHOR: Aleksandr Petrosyan
 #+DATE: 12-08-2023
-* About
+#+TRANSLATOR: machine-google-reviewed
 
-In the interest of preserving the engineering resources, it is in our
-interests to limit the scope of post-release support. If one has
-several versions of Iroha running in parallel, they might need to
-replicate the support work as many times as there are parallel
-versions.
+#+TITLE: On selecting versions as LTS candidates
+#+AUTHOR: Aleksandr Petrosyan
+#+DATE: 12-08-2023
+* О
 
-Instead of attempting to support multiple versions badly, we try to
-cater to 80% of use cases with 20% of the effort and reach a
-compromise between supporting every released version equally and only
-supporting the latest stable version.
+В интересах сохранения инженерных ресурсов в наших интересах
+интересы ограничить объем поддержки после выпуска. Если у кого-то есть
+несколько версий Iroha, работающих параллельно, возможно, им потребуется
+повторить работу по поддержке столько раз, сколько существует параллельных
+версии.
 
-Specifically, we support the latest =stable= release. Often this
-release is either not as well-tested, well-documented, or
-well-supported by the SDKs, in addition to often changing in terms of
-thus have a monthly release cadence and one release per year is chosen
-to be the target of long-term support and development.
+Вместо того, чтобы плохо поддерживать несколько версий, мы пытаемся
+удовлетворить 80% случаев использования, затрачивая 20% усилий, и достичь
+компромисс между поддержкой всех выпущенных версий в равной степени и только
+поддержка последней стабильной версии.
 
-* LTS selection criteria
+В частности, мы поддерживаем последнюю версию =stable=. Часто это
+релиз либо не так хорошо протестирован, хорошо документирован, либо
+хорошо поддерживается SDK, а также часто меняется с точки зрения
+таким образом, у вас есть ежемесячная периодичность выпусков и выбирается один выпуск в год.
+быть целью долгосрочной поддержки и развития.
 
-The following is a non-exhaustive list of recommended considerations
-for selecting a particular version as an LTS candidate
+* Критерии выбора LTS
 
-1. The release should be /unlikely/ to contain major /known/ issues which
-   would preclude it from being useful.
+Ниже приводится неисчерпывающий список рекомендуемых рекомендаций.
+для выбора конкретной версии в качестве кандидата LTS
 
-   More specifically, the release should have a good coverage of a
-   basic use-case, for example, (Pre-)RC-6[fn:1] was the last release which
-   contained the old consensus engine. Given that the actor-based
-   consensus had a maximum stable throughput of 10 TPS, (Pre-)RC-6 was
-   not labelled as an LTS, despite being used as one.
+1. Релиз должен /маловероятно/ содержать серьезные /известные/ проблемы, которые
+   лишило бы его возможности быть полезным.
 
-   RC-9 contained all the necessary features for running an Iroha node
-   on the new consensus, some changes to the structure of the
-   configuration and a few fixes to the =p2p= subsystem. It could have
-   filled all the possible niches of any projects based on Iroha, and
-   as such it was labelled as an LTS release despite being less-well
-   tested.
+   В частности, релиз должен хорошо освещать
+   базовый вариант использования, например (Pre-)RC-6[fn:1] был последним выпуском, который
+   содержал старый механизм консенсуса. Учитывая, что актерский подход
+   консенсус имел максимальную стабильную пропускную способность 10 TPS, (Pre-)RC-6 был
+   не помечен как LTS, несмотря на то, что используется как таковой.
 
-   Releases RC8, RC12, RC13 and RC17 were disqualified based on this
-   criterion.
+   RC-9 содержал все необходимые функции для запуска узла Iroha.
+   о новом консенсусе, некоторые изменения в структуре
+   конфигурации и несколько исправлений в подсистеме =p2p=. Это могло бы иметь
+   заполнил все возможные ниши любых проектов на базе Iroha, и
+   как таковой он был помечен как релиз LTS, несмотря на то, что он был менее успешным.
+   протестировано.
 
-2. If there is a large feature that entails an API breakage, the
-   release that has the most stable version of the "old way of doing
-   things" should be prioritised as an LTS candidate.
+   Релизы RC8, RC12, RC13 и RC17 были дисквалифицированы на этом основании.
+   критерий.
 
-   For example, RC12 and RC13, were the last versions of Iroha that
-   still used a hard-coded permission validator. Them being labelled
-   as an LTS candidate was precluded by the major known issues,
-   particularly with stability, poor coverage, and because releasing
-   an LTS after RC9 would have split the development resources off
-   from fixing the issue of rigid un-modifiable permission validators.
+2. Если есть крупная функция, которая влечет за собой поломку API,
+   релиз, который имеет наиболее стабильную версию «старого способа работы»
+   вещи» должны быть приоритетными в качестве кандидата LTS.
 
-   RC14 and RC15 on the other hand, were in the process of a slow
-   migration of features. As such, the latter versions would be
-   considered direct upgrades over the previous one, having more
-   optimisations and better feature coverage.
+   Например, RC12 и RC13 были последними версиями Iroha, которые
+   все еще использовал жестко закодированный валидатор разрешений. Их маркируют
+   поскольку кандидату LTS препятствовали основные известные проблемы,
+   особенно со стабильностью, плохим покрытием и тем, что выпуск
+   LTS после RC9 разделил бы ресурсы разработки
+   от решения проблемы жестких неизменяемых валидаторов разрешений.
 
-3. The release must be feature complete for a use-case.
+   С другой стороны, RC14 и RC15 находились в процессе медленного
+   миграция функций. Таким образом, последние версии будут
+   считается прямой модернизацией по сравнению с предыдущим, имея больше
+   оптимизация и лучший охват функций.
 
-   This is different to point 1, because while RC10 and RC13 were free
-   from major problems, they did not offer sufficiently full coverage
-   of the features required for the major project stakeholders.
+3. Релиз должен быть полнофункциональным для конкретного варианта использования.Это отличается от пункта 1, поскольку RC10 и RC13 были бесплатными.
+   от серьезных проблем, они не предлагали достаточно полного охвата
+   функций, необходимых для основных заинтересованных сторон проекта.
 
-4. The release must be supported by all SDKs.
+4. Релиз должен поддерживаться всеми SDK.
 
-   While the support in Iroha Python is largely confined to LTS
-   candidates, creating a catch 22 situation, it is an exception. The
-   two other major SDKs, namely Kotlin, and TypeScript must support
-   the LTS candidate. If the SDK cannot be made to support the
-   candidate, the candidate release is disqualified.
+   Хотя поддержка Python в Iroha в основном ограничивается LTS.
+   Кандидаты, создающие ситуацию «уловка 22», являются исключением.
+   два других основных SDK, а именно Kotlin и TypeScript, должны поддерживать
+   кандидат ЛТС. Если SDK невозможно заставить поддерживать
+   кандидат, освобождение кандидата дисквалифицируется.
 
-5. The release must be well-tested.
+5. Релиз должен быть хорошо протестирован.
 
-   This point supplements point 1, in that lack of known features
-   coupled with bad test coverage does not, in fact, mean freedom from
-   major problems.
+   Этот пункт дополняет пункт 1, поскольку отсутствуют известные особенности
+   в сочетании с плохим покрытием тестирования на самом деле не означает свободу от
+   основные проблемы.
 
-   This generally applies to all releases after RC6 and until RC17, as
-   the development team was told of a way of restructuring the
-   integration tests, but the process only ended with RC17 and the
-   introduction of the =pytest= framework.
+   Обычно это относится ко всем выпускам после RC6 и до RC17, поскольку
+   команде разработчиков рассказали о способе реструктуризации
+   интеграционные тесты, но процесс завершился только с RC17 и
+   введение платформы =pytest=.
 
-   While passing integration tests is necessary it is not sufficient,
-   the following minimal testing is required to qualify a release as
-   an LTS candidate
+   Прохождение интеграционных тестов необходимо, но недостаточно.
+   следующее минимальное тестирование требуется, чтобы квалифицировать выпуск как
+   кандидат LTS
 
-   1. Unit and Integration testing. One must take care to run all
-      integration tests, including the long and flaky ones. If tests
-      are unusually flaky that is indicative of a problem, and the
-      release should be disqualified (see [[../../flakyness.org]]).
+   1. Модульное и интеграционное тестирование. Нужно позаботиться о том, чтобы запустить все
+      интеграционные тесты, в том числе длинные и нестабильные. Если тесты
+      необычно шелушатся, что указывает на проблему, и
+      выпуск должен быть дисквалифицирован (см. [[../../flakyness.org]]).
 
-   2. =pytest= tests, which technically qualify as integration
-      tests.
+   2. Тесты =pytest=, которые технически квалифицируются как интеграционные.
+      тесты.
 
-   3. Longevity testing. The candidate must be tested for at least two
-      weeks to qualify. If the candidate is accepted as an LTS, the
-      longevity testing should be conducted for at least four weeks.
+   3. Испытание на долговечность. Кандидат должен пройти тестирование как минимум на два
+      недели, чтобы пройти квалификацию. Если кандидат принят в качестве LTS,
+      Тестирование на долговечность должно проводиться в течение как минимум четырех недель.
 
-   4. Load testing. The LTS candidate must satisfy all of the criteria
-      set out by the QA team as operational and developmental
-      requirements under load (also known as extra-functional, and
-      mistakenly as non-functional). Failure to produce blocks in a
-      timely fashion is an automatic disqualification. Other
-      disqualifying criteria are left up to the discretion of the QA
-      team.
+   4. Нагрузочное тестирование. Кандидат LTS должен соответствовать всем критериям
+      определены командой QA как эксплуатационные и развивающие
+      требования под нагрузкой (также известные как экстрафункциональные и
+      ошибочно считают нефункциональным). Неспособность производить блоки в
+      своевременная мода - автоматическая дисквалификация. Другое
+      критерии дисквалификации оставлены на усмотрение QA
+      команда.
 
-   5. It must be deployed as a =development= container in at least one
-      project for at least two weeks, with no major problems. RC9 did
-      not pass this test and would have been disqualified with the
-      updated criteria listed in the present document.
+   5. Он должен быть развернут как контейнер =development= хотя бы в одном
+      проект в течение как минимум двух недель, без каких-либо серьезных проблем. RC9 сделал
+      не пройти этот тест и быть дисквалифицирован с
+      обновленные критерии, перечисленные в настоящем документе.
 
-6. The release must be well-documented.
+6. Релиз должен быть хорошо задокументирован.
 
-   It should not contain multiple new features that lack
-   documentation. Any shortfall in terms of documentation coverage
-   must be fixable within the time-frame of at most the release window
-   for the candidate. Failure to do so is an automatic disqualification.
+   Он не должен содержать множество новых функций, которых не хватает.
+   документация. Любая нехватка документации
+   должно быть исправлено в течение периода времени, не превышающего окна выпуска
+   для кандидата. Несоблюдение этого требования является автоматической дисквалификацией.
 
-In addition to the regular release procedure outlined in
-[[release_procedure.org]], the LTS must adhere to the following additional
-steps.
+В дополнение к обычной процедуре выпуска, описанной в
+[[release_procedure.org]], LTS должен соответствовать следующим дополнительным
+шаги.В дополнение к выпуску обычного релиза, отдельный пиар с
+заголовок =[release]: <semver> LTS=, где =<semver>= — семантический
+должна быть создана версия кода из ветки разработки.
+следует избегать регулярного контрольного списка и вместо этого необходимо использовать запрос на включение
+рассматриваться тем же персоналом, который рассмотрел и утвердил
+Выпуск =stable=. Необходимо не более двух проверок, чтобы гарантировать, что все
+изменения будут происходить в правильном порядке и что нет
+недокументированные проблемы проскользнули.
 
-In /addition/ to performing a regular release, a separate PR with the
-title =[release]: <semver> LTS= where =<semver>= is the semantic
-version of the code from the development branch must be created. The
-regular checklist must be eschewed, and instead the Pull Request must
-be reviewed by the same personnel that reviewed and approved the
-=stable= release. At most two reviews are needed, to ensure that all
-the changes will take place in the correct order and that no
-undocumented issues slipped through.
+После выпуска LTS-релиза CI создаст Docker-контейнер.
+с выпуском LTS на платформе Alpine Linux и в Ubuntu Linux,
+используя собственную версию =glibc=. CI также должен производить
+все поддерживаемые пакеты и опубликуйте их в соответствующих
+репозитории. Это означает, например, что пакет AUR обновлен.
+после того, как запрос на включение будет объединен и создаст правильный пакет.
+Страница выпуска GitHub должна быть заполнена отдельным выпуском под названием
+LTS и содержащий один файл =AppImage=. Эти выпуски должны
+поставляются в виде отдельных пакетов, которые помечены как не подлежащие установке рядом с
+стабильная версия.
 
-Once the LTS release is made, the CI will produce a docker container
-with the LTS release on the Alpine Linux platform and on Ubuntu Linux,
-using the platform-native version of =glibc=. The CI must also produce
-all of the supported packages, and publish them to their respective
-repositories. This means, for example, that the AUR package is updated
-after the pull request is merged and produces the correct package. The
-GitHub release page must be populated with a separate release entitled
-LTS and containing the single-file =AppImage=. These releases must
-come as separate packages that are marked as not installable alongside the
-stable version.
+* Политика обратного переноса
 
-* Back-porting policy
+Как правило, обратный порт в LTS не рекомендуется. Следующие
+Причины обратного переноса считаются приемлемыми:
+1. Дополнение, не привязанное к API Iroha, например, генерал
+   вспомогательный инструмент и/или документация.
+2. Исправление серьезной уязвимости безопасности.
+3. Исправление серьезной ошибки.
+4. Исправление серьезной ошибки в проектировании, препятствующей использованию, при условии, что
+   ключевые заинтересованные стороны/пользователи текущего LTS устно
+   подтверждено, что резервный порт является предпочтительным решением.
 
-Generally, back-porting into the LTS is discouraged. The following
-back-porting reasons are considered acceptable:
-1. Addition that is not tied to the Iroha API, like e.g. a general
-   helper tool and/or documentation.
-2. Fixing a major security vulnerability.
-3. Fixing a major bug.
-4. Fixing a major design oversight that precludes usage, provided that
-   the key stakeholders/users of the current LTS have verbally
-   certified that a backport is a preferable solution.
+Бэк-порты должны быть анонсированы по тем же каналам, что и релиз.
+сам. Требуемые изменения должны быть помечены как перенесенные как в
+вышестоящая версия, в которой они были исправлены, и версия, в которую
+они были перенесены обратно.
 
-Back-ports must be announced through the same channels, as the release
-itself. Required changes must be labelled as backported in both the
-upstream release in which they were fixed and the version into which
-they have been back-ported.
+В объявлении должно быть пояснение
+1. Почему был выбран бэкпорт (причины см. выше)
+2. Каким должно быть влияние бэкпорта
+3. Каков текущий статус функционального, интеграционного и
+   испытания на нагрузку/долговечность.
 
-The announcement must explain
-1. Why the backport was chosen (see above reasons)
-2. What the impact of the backport must be
-3. What is the current status of functional, integration and
-   load/longevity testing.
+* Применимость
 
-* Applicability
+Политика долгосрочного/стабильного выпуска должна быть пересмотрена, как только
+Анонсирована полнофункциональная версия Iroha (v2.0.0). Учитывая не более
+активная разработка, основная команда разработчиков может (и должна) иметь возможность
+чтобы больше сосредоточиться на поддержке расходящихся версий.
 
-The LTS/stable release policy should be revised as soon as the first
-feature-complete version of Iroha is announced (v2.0.0). Given no more
-active development, the core development team can (and should) be able
-to focus more on the support of the diverging versions.
-
-* Footnotes
-
-[fn:1] The naming convention was stabilised long before any plan to
-release a version of Iroha was made.  As such calling any version of
-Iroha a release candidate has some implications.  Calling them pre
-release candidates is a similar type of misnomer, but less egregious,
-because rather than a misapplication of an existing term, this is an
-invention of a term that /could/ have subtle differences from a
-release candidate.  In reality these should have been called
-*development snapshots*.  But in order not to break continuity too
-much with the existing SDKs a compromise was chosen.
+* Сноски[фн:1] Соглашение об именах было стабилизировано задолго до появления каких-либо планов
+выпущена версия Iroha.  Таким образом, вызов любой версии
+Iroha кандидат на выпуск имеет некоторые последствия.  Позвонив им заранее
+Кандидаты на выпуск — это похожее неправильное употребление термина, но менее вопиющее.
+потому что это не неправильное применение существующего термина, а
+изобретение термина, который /могло/ иметь тонкие отличия от
+кандидат на освобождение.  На самом деле их следовало бы назвать
+*снимки разработки*.  Но чтобы не нарушать преемственность тоже
+с существующими SDK был выбран компромисс.

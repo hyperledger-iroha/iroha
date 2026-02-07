@@ -7,33 +7,34 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 459e8ed4612da7cfa68053e4e299b2f68e7620d4f3b98a8a721ebf8327829ea1
 source_last_modified: "2026-01-08T21:57:18.412403+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# JDG Attestations: Guard, Rotation, and Retention
+# JDG ատեստավորումներ. պահակ, ռոտացիա և պահպանում
 
-This note documents the v1 JDG attestation guard that now ships in `iroha_core`.
+Այս նշումը վավերացնում է v1 JDG ատեստավորման պահակը, որն այժմ առաքվում է `iroha_core`-ով:
 
-- **Committee manifests:** Norito-encoded `JdgCommitteeManifest` bundles carry per-dataspace rotation
-  schedules (`committee_id`, ordered members, threshold, `activation_height`, `retire_height`).
-  Manifests are loaded with `JdgCommitteeSchedule::from_path` and enforce strictly increasing
-  activation heights with an optional grace overlap (`grace_blocks`) between retiring/activating
-  committees.
-- **Attestation guard:** `JdgAttestationGuard` enforces dataspace binding, expiry, stale bounds,
-  committee id/threshold matching, signer membership, supported signature schemes, and optional
-  SDN validation via `JdgSdnEnforcer`. Size caps, max lag, and allowed signature schemes are
-  constructor parameters; `validate(attestation, dataspace, current_height)` returns the active
-  committee or a structured error.
-  - `scheme_id = 1` (`simple_threshold`): per-signer signatures, optional signer bitmap.
-  - `scheme_id = 2` (`bls_normal_aggregate`): single pre-aggregated BLS-normal signature over the
-    attestation hash; signer bitmap optional, defaults to all signers in the attestation. BLS
-    aggregate validation requires a valid PoP per committee member in the manifest; missing or
-    invalid PoPs reject the attestation.
-  Configure the allow-list via `governance.jdg_signature_schemes`.
-- **Retention store:** `JdgAttestationStore` tracks attestations per dataspace with a configurable
-  per-dataspace cap, pruning oldest entries on insert. Call `for_dataspace` or
-  `for_dataspace_and_epoch` to retrieve audit/replay bundles.
-- **Tests:** Unit coverage now exercises valid committee selection, unknown signer rejection, stale
-  attestation rejection, unsupported scheme ids, and retention pruning. See
+- **Հանձնաժողովը ցույց է տալիս.
+  ժամանակացույցեր (`committee_id`, պատվիրված անդամներ, շեմ, `activation_height`, `retire_height`):
+  Մանիֆեստները բեռնված են `JdgCommitteeSchedule::from_path`-ով և խստորեն ավելանում են
+  ակտիվացման բարձրությունները կամընտիր շնորհի համընկնումով (`grace_blocks`) թոշակի անցնելու/ակտիվացման միջև
+  հանձնաժողովներ։
+- **Ատեստավորման պահակ.** `JdgAttestationGuard`-ը պարտադրում է տվյալների տարածության կապը, ժամկետի ավարտը, հնացած սահմանները,
+  հանձնաժողովի նույնականացման/շեմի համընկնում, ստորագրողների անդամակցություն, աջակցվող ստորագրության սխեմաներ և կամընտիր
+  SDN վավերացում `JdgSdnEnforcer`-ի միջոցով: Չափի գլխարկները, առավելագույն ուշացումը և ստորագրության թույլատրելի սխեմաներն են
+  կոնստրուկտորի պարամետրեր; `validate(attestation, dataspace, current_height)`-ը վերադարձնում է ակտիվը
+  հանձնաժողով կամ կառուցվածքային սխալ:
+  - `scheme_id = 1` (`simple_threshold`). յուրաքանչյուր ստորագրողի ստորագրություններ, կամընտիր ստորագրողի բիթքարտեզ:
+  - `scheme_id = 2` (`bls_normal_aggregate`). մեկ նախնական ագրեգացված BLS-նորմալ ստորագրություն
+    ատեստավորման հեշ; ստորագրողի բիտ քարտեզը ընտրովի, լռելյայն է բոլոր ստորագրողների համար ատեստավորման մեջ: BLS
+    Համախառն վավերացումը պահանջում է վավեր PoP մանիֆեստում հանձնաժողովի անդամի համար. անհայտ կորած կամ
+    անվավեր PoP-ները մերժում են ատեստավորումը:
+  Կարգավորեք թույլտվությունների ցանկը `governance.jdg_signature_schemes`-ի միջոցով:
+- **Պահպանման պահոց.** `JdgAttestationStore` հետևում է հավաստագրերին յուրաքանչյուր տվյալների տարածության համար՝ կարգավորելի
+  տվյալների տարածության համար նախատեսված գլխարկ, ներդիրի ամենահին գրառումները կտրելով: Զանգահարեք `for_dataspace` կամ
+  `for_dataspace_and_epoch`՝ աուդիտի/վերարտադրման փաթեթները ստանալու համար:
+- **Թեստեր. ** Միավորի ծածկույթն այժմ իրականացնում է հանձնաժողովի վավեր ընտրություն, ստորագրողի անհայտ մերժում, հնացած
+  ատեստավորման մերժում, չաջակցվող սխեմաների ID-ներ և պահպանման էտում: Տես
   `crates/iroha_core/src/jurisdiction.rs`.
 
-The guard rejects schemes outside the configured allow-list.
+Պահակը մերժում է կազմաձևված թույլտվությունների ցանկից դուրս սխեմաները:

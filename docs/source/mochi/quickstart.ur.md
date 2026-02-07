@@ -6,66 +6,67 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 44faf6c98d141959cf8cf40b1df7d3d82c3448e6f2b1bc4fa54cdeceb97994b0
 source_last_modified: "2026-01-03T18:07:56.999063+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# MOCHI Quickstart
+# موچی کوئیک اسٹارٹ
 
-**MOCHI** is the desktop supervisor for local Hyperledger Iroha networks. This guide walks through
-installing the prerequisites, building the application, launching the egui shell, and using the
-runtime tools (settings, snapshots, wipes) for day‑to‑day development.
+** موچی ** مقامی Hyperledger Iroha نیٹ ورکس کے لئے ڈیسک ٹاپ سپروائزر ہے۔ یہ گائیڈ چلتا ہے
+لازمی شرائط کو انسٹال کرنا ، درخواست کی تعمیر ، EGUI شیل لانچ کرنا ، اور استعمال کرنا
+دن - دن کی ترقی کے لئے رن ٹائم ٹولز (ترتیبات ، اسنیپ شاٹس ، مسح)۔
 
-## Prerequisites
+## شرائط
 
-- Rust toolchain: `rustup default stable` (workspace targets edition 2024 / Rust 1.82+).
-- Platform toolchain:
-  - macOS: Xcode Command Line Tools (`xcode-select --install`).
-  - Linux: GCC, pkg-config, OpenSSL headers (`sudo apt install build-essential pkg-config libssl-dev`).
-- Iroha workspace dependencies:
-  - `cargo xtask mochi-bundle` requires built `irohad`, `kagami`, and `iroha_cli`. Build them once via
-    `cargo build -p irohad -p kagami -p iroha_cli`.
-- Optional: `direnv` or `cargo binstall` for managing local cargo binaries.
+- مورچا ٹولچین: `rustup default stable` (ورک اسپیس اہداف ایڈیشن 2024 / مورچا 1.82+)۔
+- پلیٹ فارم ٹولچین:
+  - میکوس: ایکس کوڈ کمانڈ لائن ٹولز (`xcode-select --install`)۔
+  - لینکس: جی سی سی ، پی کے جی-کنفیگ ، اوپن ایس ایل ہیڈر (`sudo apt install build-essential pkg-config libssl-dev`)۔
+- Iroha ورک اسپیس انحصار:
+  - `cargo xtask mochi-bundle` میں بلٹ `irohad` ، `kagami` ، اور `iroha_cli` کی ضرورت ہے۔ ایک بار ان کی تعمیر کریں
+    `cargo build -p irohad -p kagami -p iroha_cli`۔
+- اختیاری: مقامی کارگو بائنریز کے انتظام کے لئے `direnv` یا `cargo binstall`۔
 
-MOCHI shells out to the CLI binaries. Ensure they are discoverable via the environment variables
-below or available on the PATH:
+موچی نے سی ایل آئی بائنریز کے پاس گولہ باری کی۔ اس بات کو یقینی بنائیں کہ وہ ماحولیاتی متغیرات کے ذریعہ قابل دریافت ہیں
+نیچے یا راستے پر دستیاب:
 
-| Binary   | Environment override | Notes                                   |
-|----------|----------------------|-----------------------------------------|
-| `irohad` | `MOCHI_IROHAD`       | Supervises peers                        |
-| `kagami` | `MOCHI_KAGAMI`       | Generates genesis manifests/snapshots   |
-| `iroha_cli` | `MOCHI_IROHA_CLI` | Optional for upcoming helper features   |
+| بائنری | ماحولیات کا اوور رائڈ | نوٹ |
+| ---------- | ---------------------- |
+| `irohad` | `MOCHI_IROHAD` | ساتھیوں کی نگرانی |
+| `kagami` | `MOCHI_KAGAMI` | پیدائش پیدا کرتا ہے
+| `iroha_cli` | `MOCHI_IROHA_CLI` | آئندہ مددگار خصوصیات کے لئے اختیاری |
 
-## Building MOCHI
+## بلڈنگ موچی
 
-From the repository root:
+ذخیرہ جڑ سے:
 
 ```bash
 cargo build -p mochi-ui-egui
 ```
 
-This command builds both `mochi-core` and the egui frontend. To produce a distributable bundle, run:
+یہ کمانڈ `mochi-core` اور EGUI فرنٹینڈ دونوں کی تعمیر کرتا ہے۔ تقسیم کرنے والا بنڈل تیار کرنے کے لئے ، چلائیں:
 
 ```bash
 cargo xtask mochi-bundle
 ```
 
-The bundle task assembles the binaries, manifest, and config stubs under `target/mochi-bundle`.
+بنڈل کام `target/mochi-bundle` کے تحت بائنریوں ، منشور اور تشکیل کے اسٹبس کو جمع کرتا ہے۔
 
-## Launching the egui shell
+## EGUI شیل لانچ کرنا
 
-Run the UI directly from cargo:
+کارگو سے براہ راست UI چلائیں:
 
 ```bash
 cargo run -p mochi-ui-egui
 ```
 
-By default MOCHI creates a single-peer preset in a temporary data directory:
+پہلے سے طے شدہ موچی عارضی ڈیٹا ڈائرکٹری میں ایک ہی پیرس سیٹ تیار کرتا ہے:
 
-- Data root: `$TMPDIR/mochi`.
-- Torii base port: `8080`.
-- P2P base port: `1337`.
+- ڈیٹا روٹ: `$TMPDIR/mochi`۔
+- Torii بیس پورٹ: `8080`۔
+- P2P بیس پورٹ: `1337`۔
 
-Use CLI flags to override the defaults when launching:
+لانچ کرتے وقت ڈیفالٹس کو اوور رائڈ کرنے کے لئے سی ایل آئی کے جھنڈوں کا استعمال کریں:
 
 ```bash
 cargo run -p mochi-ui-egui -- \
@@ -77,99 +78,95 @@ cargo run -p mochi-ui-egui -- \
   --irohad /path/to/irohad
 ```
 
-Environment variables mirror the same overrides when CLI flags are omitted: set `MOCHI_DATA_ROOT`,
-`MOCHI_PROFILE`, `MOCHI_CHAIN_ID`, `MOCHI_TORII_START`, `MOCHI_P2P_START`, `MOCHI_RESTART_MODE`,
-`MOCHI_RESTART_MAX`, or `MOCHI_RESTART_BACKOFF_MS` to preseed the supervisor builder; binary paths
-continue to respect `MOCHI_IROHAD`/`MOCHI_KAGAMI`/`MOCHI_IROHA_CLI`, and `MOCHI_CONFIG` points at an
-explicit `config/local.toml`.
+ماحولیاتی متغیرات اسی اوور رائڈز کا آئینہ دار ہیں جب سی ایل آئی کے جھنڈوں کو چھوڑ دیا جاتا ہے: `MOCHI_DATA_ROOT` سیٹ کریں ،
+`MOCHI_PROFILE` ، `MOCHI_CHAIN_ID` ، `MOCHI_TORII_START` ، `MOCHI_P2P_START` ، `MOCHI_RESTART_MODE` ،
+`MOCHI_RESTART_MAX` ، یا `MOCHI_RESTART_BACKOFF_MS` سپروائزر بلڈر کو پیش کرنے کے لئے ؛ بائنری راستے
+`MOCHI_IROHAD`/`MOCHI_KAGAMI`/`MOCHI_IROHA_CLI` ، اور `MOCHI_CONFIG` پوائنٹس کو اے این پر جاری رکھیں
+واضح `config/local.toml`۔
 
-## Settings & persistence
+## ترتیبات اور استقامت
 
-Open the **Settings** dialog from the dashboard toolbar to adjust the supervisor configuration:
+سپروائزر کی تشکیل کو ایڈجسٹ کرنے کے لئے ڈیش بورڈ ٹول بار سے ** ترتیبات ** ڈائیلاگ کھولیں:
 
-- **Data root** — base directory for peer configs, storage, logs, and snapshots.
-- **Torii / P2P base ports** — starting ports for deterministic allocation.
-- **Log visibility** — toggle stdout/stderr/system channels in the log viewer.
+- ** ڈیٹا روٹ ** - ہم مرتبہ کی تشکیل ، اسٹوریج ، لاگ اور اسنیپ شاٹس کے لئے بیس ڈائرکٹری۔
+۔
+- ** لاگ انیبلٹی ** - لاگ ناظر میں STDOUT/STDERR/سسٹم چینلز ٹوگل کریں۔
 
-Advanced knobs such as the supervisor restart policy live in
-`config/local.toml`. Set `[supervisor.restart] mode = "never"` to disable
-automatic restarts during incident debugging, or adjust
-`max_restarts`/`backoff_ms` (via either the config file or the CLI flags
-`--restart-mode`, `--restart-max`, `--restart-backoff-ms`) to control retry
-behaviour.
+اعلی درجے کی نوبس جیسے سپروائزر دوبارہ شروع کرنے والی پالیسی براہ راست
+`config/local.toml`۔ غیر فعال کرنے کے لئے `[supervisor.restart] mode = "never"` سیٹ کریں
+واقعہ ڈیبگنگ کے دوران خودکار دوبارہ شروع ہوتا ہے ، یا ایڈجسٹ ہوتا ہے
+`max_restarts`/`backoff_ms` (یا تو تشکیل فائل یا سی ایل آئی جھنڈوں کے ذریعے
+`--restart-mode` ، `--restart-max` ، `--restart-backoff-ms`) دوبارہ کنٹرول کرنے کے لئے
+سلوک.تبدیلیوں کا اطلاق سپروائزر کی تعمیر نو ، چلانے والے ساتھیوں کو دوبارہ شروع کرتا ہے ، اور اوور رائڈس کو لکھتا ہے
+`config/local.toml`۔ کنفیگریشن انضمام غیر متعلقہ چابیاں محفوظ رکھتا ہے تاکہ اعلی درجے کے صارف رکھ سکتے ہیں
+موچی کے زیر انتظام اقدار کے ساتھ مل کر دستی موافقت۔
 
-Applying changes rebuilds the supervisor, restarts any running peers, and writes the overrides to
-`config/local.toml`. The configuration merge preserves unrelated keys so advanced users can keep
-manual tweaks alongside MOCHI-managed values.
+## سنیپ شاٹس اور مسح/دوبارہ جنیسیس
 
-## Snapshots & wipe/re-genesis
+** بحالی ** ڈائیلاگ سے دو حفاظتی کارروائیوں کو بے نقاب کیا گیا ہے:
 
-The **Maintenance** dialog exposes two safety operations:
+- ** برآمد سنیپ شاٹ ** - کاپیاں ہم مرتبہ اسٹوریج/کنفیگ/لاگز اور موجودہ جینیسیس میں ظاہر ہوں
+  فعال ڈیٹا روٹ کے تحت `snapshots/<label>`۔ لیبل خود بخود صاف ہوجاتے ہیں۔
+- ** اسنیپ شاٹ کو بحال کریں ** - ریہائڈریٹ ہم مرتبہ اسٹوریج ، اسنیپ شاٹ کی جڑیں ، تشکیل ، لاگ اور پیدائش
+  موجودہ بنڈل سے ظاہر ہوں۔ `Supervisor::restore_snapshot` یا تو مطلق راستہ قبول کرتا ہے یا
+  سینیٹائزڈ `snapshots/<label>` فولڈر کا نام ؛ UI اس بہاؤ کو آئینہ دیتا ہے لہذا بحالی → بحال کریں
+  فائلوں کو دستی طور پر چھوئے بغیر شواہد کے بنڈلوں کو دوبارہ چلا سکتے ہیں۔
+۔
+  Kagami ، اور جب مسح مکمل ہوجاتا ہے تو ساتھیوں کو دوبارہ شروع کرتا ہے۔
 
-- **Export snapshot** — copies peer storage/config/logs and the current genesis manifest into
-  `snapshots/<label>` under the active data root. Labels are sanitized automatically.
-- **Restore snapshot** — rehydrates peer storage, snapshot roots, configs, logs, and the genesis
-  manifest from an existing bundle. `Supervisor::restore_snapshot` accepts either an absolute path or
-  the sanitised `snapshots/<label>` folder name; the UI mirrors this flow so Maintenance → Restore
-  can replay evidence bundles without touching files manually.
-- **Wipe & re-genesis** — stops running peers, removes storage directories, regenerates genesis via
-  Kagami, and restarts peers when the wipe completes.
+دونوں بہاؤ رجعت ٹیسٹ (`export_snapshot_captures_storage_and_metadata` ، ،
+`wipe_and_regenerate_resets_storage_and_genesis`) تعی .ن شدہ نتائج کی ضمانت کے ل .۔
 
-Both flows are covered by regression tests (`export_snapshot_captures_storage_and_metadata`,
-`wipe_and_regenerate_resets_storage_and_genesis`) to guarantee deterministic outputs.
+## لاگ اور اسٹریمز
 
-## Logs & streams
+ڈیش بورڈ ایک نظر میں ڈیٹا/میٹرکس کو بے نقاب کرتا ہے:
 
-The dashboard exposes data/metrics at a glance:
+- ** لاگ ** - `irohad` stdout/stderr/سسٹم لائف سائیکل پیغامات کی پیروی کرتا ہے۔ ترتیبات میں چینلز کو ٹوگل کریں۔
+۔
+  Norito- decoded خلاصے کے ساتھ۔
+۔
+- ** اسٹارٹ اپ تیاری ** - دبانے کے بعد ** اسٹارٹ ** (سنگل ہم مرتبہ یا تمام ساتھی) ، موچی تحقیقات
+  `/status` پابند بیک آف کے ساتھ ؛ بینر کی اطلاع ہے کہ جب ہر ہم مرتبہ تیار ہوجاتا ہے (مشاہدہ کے ساتھ
+  قطار کی گہرائی) یا اگر تیاری کا وقت ختم ہوجائے تو Torii غلطی کی سطحیں۔
 
-- **Logs** — follows `irohad` stdout/stderr/system lifecycle messages. Toggle channels in Settings.
-- **Blocks / Events** — managed streams auto-reconnect with exponential backoff and annotate frames
-  with Norito-decoded summaries.
-- **Status** — polls `/status` and renders sparklines for queue depth, throughput, and latency.
-- **Startup readiness** — after pressing **Start** (single peer or all peers), MOCHI probes
-  `/status` with bounded backoff; the banner reports when each peer goes ready (with the observed
-  queue depth) or surfaces the Torii error if readiness times out.
+ریاستی ایکسپلورر اور کمپوزر کے لئے ٹیبز اکاؤنٹس ، اثاثوں ، ساتھیوں اور عام تک فوری رسائی فراہم کرتے ہیں
+UI چھوڑنے کے بغیر ہدایات۔ ساتھیوں کا نظارہ `FindPeers` استفسار کی آئینہ دار ہے تاکہ آپ تصدیق کرسکیں
+انضمام ٹیسٹ چلانے سے پہلے کون سی عوامی چابیاں فی الحال ویلڈیٹر سیٹ میں رجسٹرڈ ہیں۔
 
-Tabs for state explorer and composer provide quick access to accounts, assets, peers, and common
-instructions without leaving the UI. The Peers view mirrors the `FindPeers` query so you can confirm
-which public keys are currently registered in the validator set before running integration tests.
+کمپوزر ٹول بار کے ** سائننگ والٹ ** کے بٹن کو سائن ان کرنے یا ترمیم کرنے کے لئے سائن ان کرنے کے لئے سائننگ والٹ ** کے بٹن کا انتظام کریں۔
+ڈائیلاگ فعال نیٹ ورک روٹ (`<data_root>/<profile>/signers.json`) کے اندراجات لکھتا ہے ، اور محفوظ کیا جاتا ہے
+ٹرانزیکشن پیش نظارہ اور گذارشات کے لئے والٹ کیز فوری طور پر دستیاب ہیں۔ جب والٹ ہے
+کمپوزر کو خالی کریں بنڈل والی ترقیاتی چابیاں پر واپس گریں تاکہ مقامی ورک فلو کام جاری رکھے۔
+فارم اب ٹکسال/برن/ٹرانسفر (بشمول وصول شدہ وصول) ، ڈومین/اکاؤنٹ/اثاثہ تعریف کا احاطہ کرتے ہیں
+رجسٹریشن ، اکاؤنٹ میں داخلے کی پالیسیاں ، ملٹی سگ کی تجاویز ، خلائی ڈائرکٹری ظاہر (AXT/AMX) ،
+SoraFS پن ظاہر ہوتا ہے ، اور حکمرانی کے اقدامات جیسے کردار کو بہت عام کرنا یا منسوخ کرنا
+روڈ میپ کے مستند کاموں کو ہاتھ سے لکھنے Norito پے لوڈ کے بغیر ہی ریہرسل کی جاسکتی ہے۔
 
-Use the composer toolbar's **Manage signing vault** button to import or edit signing authorities. The
-dialog writes entries to the active network root (`<data_root>/<profile>/signers.json`), and saved
-vault keys are immediately available for transaction previews and submissions. When the vault is
-empty the composer falls back to the bundled development keys so local workflows continue to work.
-Forms now cover mint/burn/transfer (including implicit receive), domain/account/asset-definition
-registration, account admission policies, multisig proposals, Space Directory manifests (AXT/AMX),
-SoraFS pin manifests, and governance actions such as granting or revoking roles so common
-roadmap-authoring tasks can be rehearsed without hand-writing Norito payloads.
+## صفائی اور خرابیوں کا سراغ لگانا- زیر نگرانی ساتھیوں کو ختم کرنے کے لئے درخواست کو روکیں۔
+- تمام ریاست کو دوبارہ ترتیب دینے کے لئے ڈیٹا روٹ (`rm -rf <data_root>`) کو ہٹا دیں۔
+- اگر Kagami یا irohad مقامات تبدیل ہوجاتے ہیں تو ، ماحولیاتی متغیرات کو اپ ڈیٹ کریں یا موچی کو دوبارہ چلائیں
+  مناسب CLI جھنڈے ؛ ترتیبات کا ڈائیلاگ اگلی درخواست پر نئی راہیں برقرار رکھے گا۔
 
-## Cleanup & troubleshooting
+اضافی آٹومیشن چیک کے لئے `mochi/mochi-core/tests` (سپروائزر لائف سائیکل ٹیسٹ) اور
+`mochi/mochi-integration` کے لئے مذاق شدہ Torii منظرنامے۔ بنڈل یا تار بھیجنے کے لئے
+سی آئی پائپ لائنوں میں ڈیسک ٹاپ ، {DOC} `mochi/packaging` گائیڈ کا حوالہ دیں۔
 
-- Stop the application to terminate supervised peers.
-- Remove the data root (`rm -rf <data_root>`) to reset all state.
-- If Kagami or irohad locations change, update the environment variables or re-run MOCHI with the
-  appropriate CLI flags; the Settings dialog will persist new paths on the next apply.
+## مقامی ٹیسٹ گیٹ
 
-For additional automation check `mochi/mochi-core/tests` (supervisor lifecycle tests) and
-`mochi/mochi-integration` for mocked Torii scenarios. To ship bundles or wire the
-desktop into CI pipelines, refer to the {doc}`mochi/packaging` guide.
-
-## Local test gate
-
-Run `ci/check_mochi.sh` before sending patches so the shared CI gate exercises all three MOCHI
-crates:
+پیچ بھیجنے سے پہلے `ci/check_mochi.sh` چلائیں لہذا مشترکہ CI گیٹ تینوں موچی کو ورزش کرتا ہے
+کریٹ:
 
 ```bash
 ./ci/check_mochi.sh
 ```
 
-The helper executes `cargo check`/`cargo test` for `mochi-core`, `mochi-ui-egui`, and
-`mochi-integration`, which catches fixture drift (canonical block/event captures) and egui harness
-regressions in one shot. If the script reports stale fixtures, rerun the ignored regeneration tests,
-for example:
+ہیلپر Iroha ، `mochi-ui-egui` ، اور کے لئے `cargo check`/`cargo test` پر عمل کرتا ہے
+`mochi-integration` ، جو فکسچر بڑھے (کیننیکل بلاک/ایونٹ کیپچرز) اور ایگوئی کنٹرول کو پکڑتا ہے
+ایک شاٹ میں رجعتیں۔ اگر اسکرپٹ باسی فکسچر کی اطلاع دیتا ہے تو ، نظرانداز شدہ تخلیق نو کے ٹیسٹوں کو دوبارہ جاری کریں ،
+مثال کے طور پر:
 
 ```bash
 cargo test -p mochi-core regenerate_block_wire_fixture -- --ignored
 ```
 
-Re-running the gate after regenerating ensures the updated bytes stay consistent before you push.
+دوبارہ تخلیق کرنے کے بعد گیٹ کو دوبارہ چلانے سے پہلے آپ کو آگے بڑھنے سے پہلے اپ ڈیٹ شدہ بائٹس مستقل رہیں۔

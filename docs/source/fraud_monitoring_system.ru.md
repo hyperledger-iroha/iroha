@@ -6,218 +6,198 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 7c8262bacbb15b83bd70c824990e4948832418b59f184bca353eee899e44f4d4
 source_last_modified: "2026-01-03T18:07:57.676991+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Fraud Monitoring System
+# Система мониторинга мошенничества
 
-This document captures the reference design for the shared fraud monitoring capability that will accompany the core ledger. The goal is to provide payment service providers (PSPs) with high-quality risk signals for every transaction while keeping custody, privacy, and policy decisions under the control of designated operators outside the settlement engine.
+В этом документе представлен эталонный проект общей возможности мониторинга мошенничества, которая будет сопровождать основной реестр. Цель состоит в том, чтобы предоставить поставщикам платежных услуг (PSP) высококачественные сигналы риска для каждой транзакции, сохраняя при этом хранение, конфиденциальность и политические решения под контролем назначенных операторов за пределами механизма расчетов.
 
-## Goals and Success Criteria
-- Deliver real-time fraud risk assessments (<120 ms 95p, <40 ms median) for every payment touching the settlement engine.
-- Preserve user privacy by ensuring the central service never processes personally identifiable information (PII) and only ingests pseudonymous identifiers and behavioral telemetry.
-- Support multi-PSP environments where each provider keeps operational autonomy but can query shared intelligence.
-- Adapt continuously to new attack patterns via supervised and unsupervised models without introducing non-deterministic ledger behavior.
-- Provide auditable decision traces for regulators and independent reviewers without exposing sensitive wallets or counterparties.
+## Цели и критерии успеха
+- Предоставляйте оценки рисков мошенничества в режиме реального времени (<120 мс 95p, <40 мс в среднем) для каждого платежа, касающегося механизма расчетов.
+- Сохраняйте конфиденциальность пользователей, гарантируя, что центральная служба никогда не обрабатывает личную информацию (PII), а принимает только псевдонимные идентификаторы и поведенческую телеметрию.
+- Поддержка сред с несколькими PSP, в которых каждый поставщик сохраняет операционную автономию, но может запрашивать общие аналитические данные.
+- Постоянно адаптируйтесь к новым моделям атак с помощью контролируемых и неконтролируемых моделей без введения недетерминированного поведения реестра.
+- Предоставляйте регулирующим органам и независимым проверяющим отслеживание решений, поддающееся проверке, не раскрывая конфиденциальные кошельки или контрагентов.
 
-## Scope
-- **In-scope:** Transaction risk scoring, behavioral analytics, cross-PSP correlation, anomaly alerting, governance hooks, and PSP integration APIs.
-- **Out-of-scope:** Direct enforcement (remain PSP responsibility), sanctions screening (handled by existing compliance pipelines), and identity proofing (alias management covers this).
+## Область применения
+- **В объеме:** Оценка рисков транзакций, поведенческий анализ, корреляция между PSP, оповещение об аномалиях, механизмы управления и API-интерфейсы интеграции PSP.
+– **Выходит за рамки:** Прямое обеспечение соблюдения требований (остается за PSP), проверка санкций (осуществляется с помощью существующих механизмов обеспечения соответствия) и проверка личности (эту задачу охватывает управление псевдонимами).
 
-## Functional Requirements
-1. **Transaction Scoring API**: Synchronous API that PSPs call before forwarding a payment to the settlement engine, returning a risk score, categorical verdict, and reasoning features.
-2. **Event Ingestion**: Stream of settlement outcomes, wallet lifecycle events, device fingerprints, and PSP-level fraud feedback for continuous learning.
-3. **Model Lifecycle Management**: Versioned models with offline training, shadow deployment, staged rollout, and rollback support. Deterministic fallback heuristic must exist for every feature.
-4. **Feedback Loop**: PSPs must be able to submit confirmed fraud cases, false positives, and remediation notes. System aligns feedback with risk features and updates analytics.
-5. **Privacy Controls**: All data stored and transmitted must be alias-based. Any request containing raw identity metadata is rejected and logged.
-6. **Governance Reporting**: Scheduled exports of aggregated metrics (detections per PSP, typologies, response latency) plus ad-hoc investigation APIs for authorized auditors.
-7. **Resilience**: Active-active deployment across at least two facilities with automatic queue draining and replay. If the service is degraded, PSPs fall back to local rules without blocking the ledger.
+## Функциональные требования
+1. **API для оценки транзакций**: синхронный API, который PSP вызывает перед пересылкой платежа в систему расчетов, возвращая оценку риска, категорический вердикт и функции обоснования.
+2. **Прием событий**: поток результатов расчетов, событий жизненного цикла кошелька, отпечатков пальцев устройств и отзывов о мошенничестве на уровне PSP для непрерывного обучения.
+3. **Управление жизненным циклом модели**. Версионные модели с автономным обучением, теневым развертыванием, поэтапным развертыванием и поддержкой отката. Детерминированная запасная эвристика должна существовать для каждой функции.
+4. **Петля обратной связи**: PSP должны иметь возможность отправлять подтвержденные случаи мошенничества, ложноположительные результаты и примечания по исправлению ситуации. Система согласовывает обратную связь с функциями рисков и обновляет аналитику.
+5. **Контроль конфиденциальности**. Все сохраняемые и передаваемые данные должны быть основаны на псевдонимах. Любой запрос, содержащий необработанные метаданные идентификации, отклоняется и регистрируется.
+6. **Государственная отчетность**: запланированный экспорт агрегированных показателей (обнаружения по PSP, типологии, задержка ответа), а также API специальных исследований для уполномоченных аудиторов.
+7. **Устойчивость**: активное развертывание как минимум на двух объектах с автоматическим сливом очереди и повторным воспроизведением. Если качество услуги ухудшается, PSP возвращаются к местным правилам, не блокируя реестр.## Нефункциональные требования
+- **Детерминизм и последовательность**: оценки рисков определяют решения PSP, но не влияют на исполнение реестра. Коммиты Ledger остаются детерминированными на всех узлах.
+- **Масштабируемость**: поддержка ≥10 тыс. оценок риска в секунду с помощью горизонтального масштабирования и разделения сообщений с использованием идентификаторов псевдокошелька.
+- **Наблюдаемость**: предоставляйте метрики (`fraud.scoring_latency_ms`, `fraud.risk_score_distribution`, `fraud.api_error_rate`, `fraud.model_version_active`) и структурированные журналы для каждого вызова оценки.
+- **Безопасность**: взаимный TLS между PSP и центральной службой, аппаратные модули безопасности для подписи конвертов ответов, контрольные журналы с защитой от несанкционированного доступа.
+- **Соответствие**: соответствие требованиям ПОД/ФТ, предоставление настраиваемых периодов хранения и интеграция с рабочими процессами сохранения доказательств.
 
-## Non-Functional Requirements
-- **Determinism & Consistency**: Risk scores guide PSP decisions but do not mutate ledger execution. Ledger commits remain deterministic across nodes.
-- **Scalability**: Sustain ≥10k risk evaluations per second with horizontal scaling and message partitioning keyed by pseudo-wallet identifiers.
-- **Observability**: Expose metrics (`fraud.scoring_latency_ms`, `fraud.risk_score_distribution`, `fraud.api_error_rate`, `fraud.model_version_active`) and structured logs for each scoring call.
-- **Security**: Mutual TLS between PSPs and the central service, hardware security modules for signing response envelopes, tamper-evident audit trails.
-- **Compliance**: Align with AML/CFT requirements, provide configurable retention periods, and integrate with evidence preservation workflows.
+## Обзор архитектуры
+1. **Уровень шлюза API**
+  - Получает запросы на оценку и обратную связь через аутентифицированные API HTTP/JSON.
+   - Выполняет проверку схемы с использованием кодеков Norito и устанавливает ограничения скорости для каждого идентификатора PSP.
 
-## Architecture Overview
-1. **API Gateway Layer**
-  - Receives scoring and feedback requests over authenticated HTTP/JSON APIs.
-   - Performs schema validation using Norito codecs and enforces rate limits per PSP id.
+2. **Служба агрегирования функций**
+   - Объединяет входящие запросы с историческими агрегатами (скорость, геопространственные закономерности, использование устройств), хранящимися в хранилище функций временных рядов.
+   - Поддерживает настраиваемые окна функций (минуты, часы, дни) с использованием детерминированных функций агрегирования.
 
-2. **Feature Aggregation Service**
-   - Joins incoming requests with historical aggregates (velocity, geospatial patterns, device usage) stored in a time-series feature store.
-   - Supports configurable feature windows (minutes, hours, days) using deterministic aggregation functions.
+3. **Инструмент управления рисками**
+   - Выполняет активный конвейер модели (ансамбль деревьев с градиентным усилением, детекторы аномалий, правила).
+   - Включает детерминированный запасной набор правил, гарантирующий ограниченные ответы, когда оценки модели недоступны.
+   - Выдает конверты `FraudAssessment` с партитурой, группой, дополнительными функциями и версией модели.## Модели оценки и эвристики
+- **Шкала оценок и диапазоны**: оценки риска нормализованы до 0–1000. Диапазоны определяются как: `0–249` (низкий), `250–549` (средний), `550–749` (высокий), `750+` (критический). Полосы соответствуют рекомендуемым действиям для PSP (автоматическое одобрение, повышение уровня, постановка в очередь на проверку, автоматическое отклонение), но обеспечение соблюдения остается специфичным для PSP.
+- **Модель ансамбля**:
+  - Деревья решений с градиентным усилением включают структурированные функции, такие как сумма, псевдоним/скорость устройства, категория продавца, сила аутентификации, уровень доверия PSP и функции графика между кошельками.
+  - Детектор аномалий на основе автоэнкодера работает с временными окнами поведенческих векторов (частота расходования каждого псевдонима, переключение устройств, временная энтропия). Результаты калибруются по недавней активности PSP, чтобы ограничить дрейф.
+  - Правила детерминированной политики выполняются первыми; их выходные данные подаются в статистические модели как двоичные/непрерывные функции, чтобы ансамбль мог изучать взаимодействия.
+- **Резервная эвристика**: при сбое выполнения модели детерминированный уровень по-прежнему выдает ограниченную оценку путем агрегирования штрафов за правила. Каждое правило имеет настраиваемый вес, который суммируется, а затем фиксируется по шкале от 0 до 1000, гарантируя задержку и объяснимость в наихудшем случае.
+- **Бюджетирование задержек**: целевые показатели конвейера оценки <20 мс для шлюза API + проверка, <30 мс для агрегирования функций (обслуживаются из кэшей в памяти с отложенной записью в постоянные хранилища) и <40 мс для оценки ансамбля. Детерминированный резервный возврат возвращается в течение <10 мс, если вывод ML превышает бюджет, гарантируя, что общее время P95 останется ниже 120 мс.
+ - **Бюджетирование задержек**: целевые показатели конвейера оценки <20 мс для шлюза API + проверка, <30 мс для агрегирования функций (обслуживаются из кэшей в памяти с отложенной записью в постоянные хранилища) и <40 мс для оценки ансамбля. Детерминированный резервный возврат возвращается в течение <10 мс, если вывод ML превышает бюджет, гарантируя, что общее время P95 останется ниже 120 мс.## Проектирование кэша функций в памяти
+- **Разметка сегментов**: хранилища функций сегментируются по 64-битному хэшу псевдонимов на сегменты `N = 256`. Каждый осколок владеет:
+  - Кольцевой буфер без блокировки для дельт последних транзакций (окна 5 минут + 1 час), хранящийся в виде структуры массивов, чтобы максимизировать локальность строки кэша.
+  - Сжатое дерево Фенвика (16-битные сегменты) для поддержки агрегатов за 24 часа/7 дней без полного перерасчета.
+  - Хеш-карта с возможностью сопоставления контрагентов → скользящая статистика (количество, сумма, дисперсия, последняя временная метка) ограничена 1024 записями на псевдоним.
+- **Резиденция в памяти**: горячие осколки остаются в оперативной памяти. Для юниверса из 50 млн псевдонимов с 1% активности за последний час резидентность кэша составляет ~500 тыс. псевдонимов. При ~320 Б на псевдоним активных метаданных рабочий набор составляет ~160 МБ — достаточно мало для кэша L3 на современных серверах.
+- **Параллелизм**: читатели заимствуют неизменяемые ссылки посредством восстановления на основе эпох; авторы добавляют дельты и обновляют агрегаты, используя сравнение и замену. Это позволяет избежать конкуренции мьютексов и сохраняет горячие пути к двум атомарным операциям + погоню за ограниченным указателем.
+- **Предварительная выборка**: специалист по оценке выдает подсказки `prefetch_read` для следующего фрагмента псевдонима после завершения проверки запроса, скрывая задержку основной памяти (~ 80 нс) за агрегацией функций.
+- **Журнал отложенной записи**: WAL для каждого сегмента группирует дельты каждые 50 мс (или 4 КБ) и сбрасывает их в долговременное хранилище. Контрольные точки запускаются каждые 5 минут, чтобы обеспечить жесткие границы восстановления.
 
-3. **Risk Engine**
-   - Executes the active model pipeline (ensemble of gradient boosted trees, anomaly detectors, rules).
-   - Includes a deterministic fallback rule-set to guarantee bounded responses when model scores are unavailable.
-   - Emits `FraudAssessment` envelopes with score, band, contributing features, and model version.
+### Теоретическая задержка (сервер класса Intel Ice Lake, 3,1 ГГц)
+- **Поиск по сегментам + предварительная выборка**: 1 промах в кэше (~80 нс) плюс вычисление хэша (<10 нс).
+- **Итерация кольцевого буфера (32 записи)**: 32 × 2 загрузки = 64 загрузки; с 32 строками кэша и последовательным доступом он остается в L1 → ~ 20 нс.
+- **Обновления Фенвика (log₂ 2048 ≈ 11 шагов)**: 11 переходов указателя; при условии попадания половины L1 и половины L2 → ~30 нс.
+- **Пробная карта скачков (коэффициент загрузки 0,75, 2 зонда)**: 2 строки кэша, ~2 × 15 нс.
+- **Сборка признаков модели**: 150 скалярных операций (<0,1 нс каждая) → ~15 нс.Суммирование этих значений дает ~160 нс вычислений и ~120 нс задержек памяти на запрос (~0,28 мкс). Благодаря четырем одновременно работающим процессорам агрегации на ядро ​​стадия легко укладывается в бюджет 30 мс даже при пиковой нагрузке; фактическое развертывание должно записывать гистограммы для проверки (через `fraud.feature_cache_lookup_ms`).
+- **Окна функций и агрегирование**:
+  - Краткосрочные (скользящие 5 минут, 1 час) и долгосрочные (24 часа, 7 дней) окна отслеживают скорость расходов, повторное использование устройств и степень псевдонимов.
+  - Функции графиков (например, общие устройства по псевдонимам, внезапное разветвление, новые контрагенты в кластерах с высоким уровнем риска) основаны на регулярно сжатых сводных данных, поэтому запросы выполняются за доли миллисекунды.
+  - Эвристика местоположения сравнивает грубые геобазы с историческим поведением, отмечая невероятные скачки (например, несколько удаленных местоположений в течение нескольких минут) с использованием ограниченного приращения риска на основе Хаверсина.
+  - Детекторы формы потока поддерживают скользящие гистограммы входящих/исходящих объемов и контрагентов для выявления признаков смешивания/перемешивания (быстрый вход с последующим аналогичным разветвлением, циклические последовательности скачков, кратковременные посредники).
+- **Каталог правил (неполный)**:
+  - **Нарушение скорости**: серия быстрых передач ценных бумаг, превышающих пороговые значения для псевдонима или устройства.
+  - **Аномалия графа псевдонимов**: псевдоним взаимодействует с кластером, связанным с подтвержденными случаями мошенничества или известными шаблонами мулов.
+  - **Повторное использование устройства**: общий отпечаток устройства для псевдонимов, принадлежащих разным группам пользователей PSP, без предварительной привязки.
+  - **Первоначальная высокая ценность**: сумма попыток нового псевдонима превышает типичный коридор регистрации PSP.
+  - **Понижение уровня аутентификации**: в транзакции используются более слабые факторы, чем базовые параметры учетной записи (например, переход от биометрических данных к PIN-коду) без заявленного PSP обоснования.
+  - **Схема смешивания/перемешивания**: псевдоним участвует в цепочках с высокой степенью разветвления/разветвления с тесно связанной синхронизацией, повторяющимися объемами туда и обратно или циклическими потоками через несколько псевдонимов в течение коротких окон. Правило повышает оценку с помощью пиков централизации графа и детекторов формы потока; в тяжелых случаях привязывается к полосе `high` еще до вывода ML.
+  - **Попадание в черный список транзакций**: псевдоним или контрагент появляется в общем канале черного списка, курируемом посредством голосования по управлению в цепочке или делегированных полномочий с контролем `sudo` (например, нормативные приказы, подтвержденное мошенничество). Score фиксируется на полосе `critical` и выдает код причины `BLACKLIST_MATCH`; Поставщики услуг связи должны регистрировать изменения для целей аудита.
+  - **Несоответствие подписи песочницы**: PSP отправляет оценку, созданную с использованием устаревшей подписи модели; Оценка повышается до `critical` и срабатывают триггеры проверки.
+- **Коды причин**: каждая оценка включает машиночитаемые коды причин, ранжированные по весу вклада (например, `VELOCITY_BREACH`, `NEW_DEVICE`, `GRAPH_HIGH_RISK`, `AUTH_DOWNGRADE`). PSP могут предоставлять их операторам или кошелькам для обмена сообщениями с пользователями.- **Управление моделью**. Калибровка и установка пороговых значений соответствуют документированным схемам: кривые ROC/PR пересматриваются ежеквартально, проводится бэк-тестирование на предмет явного мошенничества, а модели-претенденты работают в тени до тех пор, пока они не станут стабильными. Любое обновление пороговых значений требует двойного одобрения (мошеннические операции + независимый риск).
 
-## Scoring Models and Heuristics
-- **Score Scale & Bands**: Risk scores are normalized to 0–1,000. Bands are defined as: `0–249` (low), `250–549` (medium), `550–749` (high), `750+` (critical). Bands map to recommended actions for PSPs (auto-approve, step-up, queue-for-review, auto-decline) but enforcement remains PSP-specific.
-- **Model Ensemble**:
-  - Gradient-boosted decision trees ingest structured features such as amount, alias/device velocity, merchant category, authentication strength, PSP trust tier, and cross-wallet graph features.
-  - An autoencoder-based anomaly detector runs on time-windowed behavioural vectors (per-alias spend cadence, device switching, temporal entropy). Scores are calibrated against recent PSP activity to limit drift.
-  - Deterministic policy rules execute first; their outputs feed the statistical models as binary/continuous features so the ensemble can learn interactions.
-- **Fallback Heuristics**: When model execution fails, the deterministic layer still produces a bounded score by aggregating rule penalties. Each rule contributes a configurable weight, summed then clamped to the 0–1,000 scale, guaranteeing worst-case latency and explainability.
-- **Latency Budgeting**: Scoring pipeline targets <20 ms for API gateway + validation, <30 ms for feature aggregation (served from in-memory caches with write-behind to persistent stores), and <40 ms for ensemble evaluation. Deterministic fallback returns within <10 ms if ML inference exceeds its budget, ensuring overall P95 stays under 120 ms.
- - **Latency Budgeting**: Scoring pipeline targets <20 ms for API gateway + validation, <30 ms for feature aggregation (served from in-memory caches with write-behind to persistent stores), and <40 ms for ensemble evaluation. Deterministic fallback returns within <10 ms if ML inference exceeds its budget, ensuring overall P95 stays under 120 ms.
+## Поток черного списка, полученного от государственных органов
+- **Разработка внутри цепочки**: записи в черном списке вводятся через подсистему управления (`iroha_core::smartcontracts::isi::governance`) в виде ISI `BlacklistProposal`, в котором перечислены псевдонимы, идентификаторы PSP или отпечатки пальцев устройств, подлежащих блокировке. Заинтересованные стороны голосуют, используя стандартную систему голосования; как только кворум достигнут, цепочка выдает запись `GovernanceEvent::BlacklistUpdated`, содержащую утвержденные добавления/удаления, а также монотонно увеличивающуюся запись `blacklist_epoch`.
+- **Делегированный путь sudo**: экстренные действия можно выполнить с помощью инструкции `sudo::Execute`, которая генерирует то же событие `BlacklistUpdated`, но помечает изменение как `origin = Sudo`. Это отражает историю цепочки с явным происхождением, поэтому аудиторы могут отличить консенсусные голоса от делегированных вмешательств.
+- **Канал распространения**: служба моста FMS подписывается на поток `LedgerEvent` (в кодировке Norito) и отслеживает события `BlacklistUpdated`. Каждое событие проверяется на соответствие доказательству Меркла управления и сверяется с подписью блока перед применением. События идемпотентны; FMS поддерживает последнюю версию `blacklist_epoch`, чтобы избежать повторов.
+- **Приложение внутри FMS**: после принятия обновления записи записываются в хранилище детерминированных правил (поддерживаемое хранилищем только для добавления с журналами аудита). Система подсчета очков выполняет горячую перезагрузку черного списка в течение 30 секунд, гарантируя, что последующие оценки активируют правило `BLACKLIST_MATCH` и фиксируют значение `critical`.
+- **Аудит и откат**: руководство может проголосовать за удаление записей через тот же конвейер. FMS хранит исторические снимки с тегами `blacklist_epoch`, чтобы операторы могли отвечать на судебно-медицинские вопросы или воспроизводить прошлые решения во время расследований.
 
-## In-Memory Feature Cache Design
-- **Shard Layout**: Feature stores are sharded by 64-bit alias hash into `N = 256` shards. Each shard owns:
-  - A lock-free ring buffer for recent transaction deltas (5 min + 1 hr windows) stored as struct-of-arrays to maximise cache-line locality.
-  - A compressed Fenwick tree (bit-packed 16-bit buckets) to maintain 24 hr / 7 day aggregates without full recomputation.
-  - A hop-scotch hash map mapping counterparties → rolling stats (count, sum, variance, last timestamp) capped at 1,024 entries per alias.
-- **Memory Residency**: Hot shards stay in RAM. For a 50 M alias universe with 1% active in the last hour, cache residency is ~500k aliases. At ~320 B per alias of active metadata, the working set is ~160 MB—small enough for L3 cache on modern servers.
-- **Concurrency**: Readers borrow immutable references via epoch-based reclamation; writers append deltas and update aggregates using compare-and-swap. This avoids mutex contention and keeps hot paths to two atomic ops + bounded pointer chasing.
-- **Prefetching**: The scoring worker issues manual `prefetch_read` hints for the next alias shard once request validation completes, hiding main-memory latency (~80 ns) behind feature aggregation.
-- **Write-behind Log**: A per-shard WAL batches deltas every 50 ms (or 4 KB) and flushes to the durable store. Checkpoints run every 5 minutes to keep recovery bounds tight.
+4. **Платформа обучения и аналитики**
+   - Получает подтвержденные события мошенничества, результаты расчетов и отзывы PSP через реестр, предназначенный только для добавления (например, Kafka + объектное хранилище).
+   - Предоставляет автономные блокноты/работы для специалистов по обработке данных для переобучения моделей. Артефакты модели проверяются и подписываются перед продвижением.
 
-### Theoretical Latency Breakdown (Intel Ice Lake-class server, 3.1 GHz)
-- **Shard lookup + prefetch**: 1 cache miss (~80 ns) plus hash calculation (<10 ns).
-- **Ring buffer iteration (32 entries)**: 32 × 2 loads = 64 loads; with 32 B cache lines and sequential access this stays in L1 → ~20 ns.
-- **Fenwick updates (log₂ 2048 ≈ 11 steps)**: 11 pointer hops; assuming half L1, half L2 hits → ~30 ns.
-- **Hop-scotch map probe (load factor 0.75, 2 probes)**: 2 cache lines, ~2 × 15 ns.
-- **Model feature assembly**: 150 scalar ops (<0.1 ns each) → ~15 ns.
+5. **Портал управления**
+   - Ограниченный интерфейс для аудиторов, позволяющий просматривать тенденции, искать исторические оценки и экспортировать отчеты об инцидентах.
+   - Внедряет проверки политики, чтобы следователи не могли перейти к PII без сотрудничества с PSP.
 
-Summing these gives ~160 ns of compute and ~120 ns of memory stalls per request (~0.28 µs). With four concurrent aggregation workers per core, the stage easily meets the 30 ms budget even under burst load; actual deployment should record histograms to validate (via `fraud.feature_cache_lookup_ms`).
-- **Feature Windows & Aggregation**:
-  - Short-term (rolling 5 min, 1 hr) and long-term (24 hr, 7 day) windows track spend velocity, device reuse, and alias graph degrees.
-  - Graph features (e.g., shared devices across aliases, sudden fan-out, new counterparties in high-risk clusters) rely on regularly compacted summaries so queries stay sub-millisecond.
-  - Location heuristics compare coarse geobuckets with historical behaviour, flagging improbable jumps (e.g., multiple distant locations within minutes) using a capped Haversine-based risk increment.
-  - Flow-shape detectors maintain rolling histograms of inbound/outbound amounts and counterparties to spot mixing/tumbling signatures (rapid fan-in followed by similar fan-out, cyclical hop sequences, short-lived intermediaries).
-- **Rule Catalogue (non-exhaustive)**:
-  - **Velocity breach**: Rapid series of high-value transfers exceeding per-alias or per-device thresholds.
-  - **Alias graph anomaly**: Alias interacts with a cluster linked to confirmed fraud cases or known mule patterns.
-  - **Device reuse**: Shared device fingerprint across aliases belonging to different PSP user cohorts without prior linkage.
-  - **First-time high-value**: New alias attempting amounts above the PSP’s typical onboarding corridor.
-  - **Authentication downgrade**: Transaction uses weaker factors than the account’s baseline (e.g., fallback from biometric to PIN) without PSP-declared justification.
-  - **Mixing/tumbling pattern**: Alias participates in high fan-in/fan-out chains with tightly coupled timing, repeating round-trip amounts, or circular flows across multiple aliases within short windows. Rule boosts score using graph centrality spikes and flow-shape detectors; severe cases clamp to the `high` band even before ML output.
-  - **Transaction blacklist hit**: Alias or counterparty appears on the shared blacklist feed curated via on-chain governance voting or a delegated authority with `sudo` controls (e.g., regulatory orders, confirmed fraud). Score clamps to the `critical` band and emits `BLACKLIST_MATCH` reason code; PSPs must log overrides for audit.
-  - **Sandbox signature mismatch**: PSP submits an assessment generated with an outdated model signature; score escalates to `critical` and audit hook triggers.
-- **Reason Codes**: Every assessment includes machine-readable reason codes ranked by contribution weight (e.g., `VELOCITY_BREACH`, `NEW_DEVICE`, `GRAPH_HIGH_RISK`, `AUTH_DOWNGRADE`). PSPs can surface these to operators or wallets for user messaging.
-- **Model Governance**: Calibration and threshold setting follow documented playbooks—ROC/PR curves reviewed quarterly, back-testing against labelled fraud, and challenger models run in shadow until stable. Any threshold update requires dual approval (fraud operations + independent risk).
+6. **Адаптеры интеграции**
+   - Облегченные SDK для PSP (Rust, Kotlin, Swift, TypeScript), реализующие запросы/ответы Norito и локальное кэширование.
+   - Механизм расчетов (внутри `iroha_core`), который записывает ссылки на оценку рисков, когда PSP пересылает транзакции после проверки.## Поток данных
+1. PSP проходит аутентификацию на шлюзе API и отправляет `RiskQuery`, содержащий:
+   - Идентификаторы псевдонимов для плательщика/получателя, хешированный идентификатор устройства, сумма транзакции, категория, грубый сегмент геолокации, флаги доверия PSP и метаданные последнего сеанса.
+2. Шлюз проверяет полезную нагрузку, дополняет метаданными PSP (уровень лицензии, SLA) и ставит в очередь агрегацию функций.
+3. Сервис объектов извлекает последние агрегаты, создает вектор модели и отправляет его в механизм управления рисками.
+4. Механизм управления рисками оценивает запрос, присоединяет детерминированные коды причин, подписывает `FraudAssessment` и возвращает его PSP.
+5. PSP объединяет оценку со своими местными политиками для одобрения, отклонения или усиления аутентификации транзакции.
+6. Результат (одобрено/отклонено, мошенничество подтверждено/ложноположительный результат) асинхронно передается на платформу обучения для постоянного совершенствования.
+7. Ежедневные пакетные процессы собирают показатели для управленческой отчетности и передают оповещения о политике (например, о росте числа случаев социальной инженерии) на информационные панели PSP.
 
-## Governance-Sourced Blacklist Flow
-- **On-chain authoring**: Blacklist entries are introduced through the governance subsystem (`iroha_core::smartcontracts::isi::governance`) as a `BlacklistProposal` ISI that lists aliases, PSP ids, or device fingerprints to block. Stakeholders vote using the standard ballot pipeline; once quorum is met, the chain emits a `GovernanceEvent::BlacklistUpdated` record carrying the approved additions/removals plus a monotonically increasing `blacklist_epoch`.
-- **Delegated sudo path**: Emergency actions can be executed via the `sudo::Execute` instruction, which emits the same `BlacklistUpdated` event but flags the change as `origin = Sudo`. This mirrors on-chain history with explicit provenance so auditors can distinguish consensus votes from delegated interventions.
-- **Distribution channel**: The FMS bridge service subscribes to the `LedgerEvent` stream (Norito-encoded) and watches for `BlacklistUpdated` events. Each event is validated against the governance Merkle proof and verified with the block signature before being applied. Events are idempotent; the FMS maintains the latest `blacklist_epoch` to avoid replays.
-- **Application inside FMS**: Once an update is accepted, the entries are written to the deterministic rule store (backed by append-only storage with audit logs). The scoring engine hot-reloads the blacklist within 30 seconds, ensuring subsequent assessments trigger the `BLACKLIST_MATCH` rule and clamp to `critical`.
-- **Audit & rollback**: Governance can vote to remove entries via the same pipeline. The FMS keeps historical snapshots tagged by `blacklist_epoch` so operators can answer forensic questions or replay past decisions during investigations.
-
-4. **Learning & Analytics Platform**
-   - Receives confirmed fraud events, settlement outcomes, and PSP feedback via an append-only ledger (e.g., Kafka + object storage).
-   - Provides offline notebooks/jobs for data scientists to retrain models. Model artifacts are versioned and signed before promotion.
-
-5. **Governance Portal**
-   - Restricted interface for auditors to review trends, search historical assessments, and export incident reports.
-   - Implements policy checks so investigators cannot drill down to PII without PSP cooperation.
-
-6. **Integration Adapters**
-   - Lightweight SDKs for PSPs (Rust, Kotlin, Swift, TypeScript) implementing the Norito requests/responses and local caching.
-   - Settlement engine hook (within `iroha_core`) that records risk assessment references when PSPs forward transactions post-check.
-
-## Data Flow
-1. PSP authenticates to the API gateway and submits a `RiskQuery` containing:
-   - Alias identifiers for payer/payee, hashed device id, transaction amount, category, geolocation coarse bucket, PSP confidence flags, and recent session metadata.
-2. Gateway validates payload, enriches with PSP metadata (licence tier, SLA) and queues for feature aggregation.
-3. Feature service pulls the latest aggregates, constructs the model vector, and sends it to the risk engine.
-4. Risk engine evaluates the request, attaches deterministic reason codes, signs the `FraudAssessment`, and returns it to the PSP.
-5. PSP combines the assessment with its local policies to approve, decline, or step-up authenticate the transaction.
-6. Outcome (approved/declined, fraud confirmed/false positive) is pushed asynchronously to the learning platform for continuous improvement.
-7. Daily batch processes roll up metrics for governance reporting and push policy alerts (e.g., rising social-engineering cases) to PSP dashboards.
-
-## Integration with Iroha Components
-- **Core Host Hooks**: Transaction admission now enforces the `fraud_assessment_band` metadata whenever `fraud_monitoring.enabled` and `required_minimum_band` are set. The host rejects transactions missing the field or carrying a band below the configured minimum, and emits a deterministic warning when `missing_assessment_grace_secs` is non-zero (grace window scheduled for removal in milestone FM-204 once the remote verifier is wired). Assessments must also include `fraud_assessment_score_bps`; the host cross-checks the score against the declared band (0–249 ➜ low, 250–549 ➜ medium, 550–749 ➜ high, 750+ ➜ critical, with basis-point values supported up to 10 000). When `fraud_monitoring.attesters` is configured, transactions must attach a Norito-encoded `fraud_assessment_envelope` (base64) and a matching `fraud_assessment_digest` (hex). The daemon deterministically decodes the envelope, verifies the Ed25519 signature against the attester registry, recomputes the digest over the unsigned payload, and rejects mismatches so only attested assessments reach consensus.
-- **Configuration**: Add configuration entries under `iroha_config::fraud_monitoring` for the risk service endpoints, timeouts, and required assessment bands. Defaults disable enforcement for local development.
-
-  | Key | Type | Default | Notes |
+## Интеграция с компонентами Iroha
+- **Перехватчики основного хоста**: прием транзакций теперь обеспечивает применение метаданных `fraud_assessment_band` всякий раз, когда установлены `fraud_monitoring.enabled` и `required_minimum_band`. Хост отклоняет транзакции, в которых отсутствует поле или диапазон ниже настроенного минимума, и выдает детерминированное предупреждение, когда `missing_assessment_grace_secs` не равно нулю (окно отсрочки запланировано для удаления в этапе FM-204 после подключения удаленного верификатора). Оценки также должны включать `fraud_assessment_score_bps`; хост сверяет оценку с заявленным диапазоном (0–249 ➜ низкий, 250–549 ➜ средний, 550–749 ➜ высокий, 750+ ➜ критический, с поддержкой значений базисных пунктов до 10 000). Когда настроен `fraud_monitoring.attesters`, транзакции должны присоединять `fraud_assessment_envelope` в кодировке Norito (base64) и соответствующий `fraud_assessment_digest` (шестнадцатеричный). Демон детерминированно декодирует конверт, сверяет подпись Ed25519 с реестром проверяющего, пересчитывает дайджест для неподписанных полезных данных и отклоняет несоответствия, поэтому только проверенные оценки достигают консенсуса.
+- **Конфигурация**: добавьте записи конфигурации в раздел `iroha_config::fraud_monitoring` для конечных точек службы рисков, тайм-аутов и необходимых диапазонов оценки. По умолчанию отключается принудительное применение для локальной разработки.| Ключ | Тип | По умолчанию | Заметки |
   | --- | --- | --- | --- |
-  | `enabled` | bool | `false` | Master switch for admission checks; without `required_minimum_band` the host logs a warning and skips enforcement. |
-  | `service_endpoints` | array<URL> | `[]` | Ordered list of fraud service base URLs. Duplicates are removed deterministically; reserved for the upcoming verifier. |
-  | `connect_timeout_ms` | duration | `500` | Milliseconds before connection attempts abort; zero values fold back to the default. |
-  | `request_timeout_ms` | duration | `1500` | Milliseconds to await a response from the risk service. |
-  | `missing_assessment_grace_secs` | duration | `0` | Grace window allowing missing assessments; non-zero values trigger a deterministic fallback that logs and allows the transaction. |
-  | `required_minimum_band` | enum (`low`, `medium`, `high`, `critical`) | `null` | When set, transactions must attach an assessment at or above this severity band; lower values are rejected. Set to `null` to disable gating even if `enabled` is true. |
-  | `attesters` | array<{ engine_id, public_key }> | `[]` | Optional registry of attestation engines. When populated, envelopes must be signed by one of the listed keys and include a matching digest. |
+  | `enabled` | бул | `false` | Главный переключатель для входных проверок; без `required_minimum_band` хост регистрирует предупреждение и пропускает принудительное применение. |
+  | `service_endpoints` | массив | `[]` | Упорядоченный список базовых URL-адресов служб мошенничества. Дубликаты удаляются детерминированно; зарезервировано для предстоящего верификатора. |
+  | `connect_timeout_ms` | продолжительность | `500` | За миллисекунды до прерывания попыток подключения; нулевые значения возвращаются к значениям по умолчанию. |
+  | `request_timeout_ms` | продолжительность | `1500` | Миллисекунды ожидания ответа от службы рисков. |
+  | `missing_assessment_grace_secs` | продолжительность | `0` | Льготное окно, позволяющее пропустить оценки; ненулевые значения запускают детерминированный резервный режим, который регистрирует и разрешает транзакцию. |
+  | `required_minimum_band` | перечисление (`low`, `medium`, `high`, `critical`) | `null` | Если этот параметр установлен, транзакциям должна быть присвоена оценка на уровне этого диапазона серьезности или выше; более низкие значения отклоняются. Установите значение `null`, чтобы отключить стробирование, даже если `enabled` истинно. |
+  | `attesters` | массив | `[]` | Необязательный реестр механизмов аттестации. При заполнении конверты должны быть подписаны одним из перечисленных ключей и включать соответствующий дайджест. |
 
-- **Validation**: Unit tests in `crates/iroha_core/tests/fraud_monitoring.rs` cover disabled, missing, and insufficient-band paths; `integration_tests::fraud_monitoring_requires_assessment_bands` exercises the mocked-assessment flow end-to-end.
+- **Проверка**: модульные тесты в `crates/iroha_core/tests/fraud_monitoring.rs` охватывают отключенные, отсутствующие и недостаточно полосные пути; `integration_tests::fraud_monitoring_requires_assessment_bands` выполняет сквозной поток ложной оценки.
 
-- **Telemetry**: `iroha_telemetry` exports PSP-facing collectors capturing assessment counts (`fraud_psp_assessments_total{tenant,band,lane,subnet}`), missing metadata (`fraud_psp_missing_assessment_total{tenant,lane,subnet,cause}`), latency histograms (`fraud_psp_latency_ms{tenant,lane,subnet}`), score distributions (`fraud_psp_score_bps{tenant,band,lane,subnet}`), invalid payloads (`fraud_psp_invalid_metadata_total{tenant,field,lane,subnet}`), attestation outcomes (`fraud_psp_attestation_total{tenant,engine,lane,subnet,status}`), and outcome mismatches (`fraud_psp_outcome_mismatch_total{tenant,direction,lane,subnet}`). Metadata keys expected on every transaction are `fraud_assessment_band`, `fraud_assessment_tenant`, `fraud_assessment_score_bps`, `fraud_assessment_latency_ms`, the attester envelope/digest pair (`fraud_assessment_envelope`, `fraud_assessment_digest`), and the post-incident `fraud_assessment_disposition` flag (values: `approved`, `declined`, `manual_review`, `confirmed_fraud`, `false_positive`, `chargeback`, `loss`).
-- **Norito Schema**: Define Norito types for `RiskQuery`, `FraudAssessment`, and governance reports. Provide roundtrip tests to guarantee codec stability.
+- **Телеметрия**: `iroha_telemetry` экспортирует коллекторы, ориентированные на PSP, фиксирующие количество оценок (`fraud_psp_assessments_total{tenant,band,lane,subnet}`), отсутствующие метаданные (`fraud_psp_missing_assessment_total{tenant,lane,subnet,cause}`), гистограммы задержки (`fraud_psp_latency_ms{tenant,lane,subnet}`), распределения оценок (`fraud_psp_score_bps{tenant,band,lane,subnet}`), недопустимые полезные данные. (`fraud_psp_invalid_metadata_total{tenant,field,lane,subnet}`), результаты аттестации (`fraud_psp_attestation_total{tenant,engine,lane,subnet,status}`) и несоответствия результатов (`fraud_psp_outcome_mismatch_total{tenant,direction,lane,subnet}`). Ключи метаданных, ожидаемые для каждой транзакции, — это `fraud_assessment_band`, `fraud_assessment_tenant`, `fraud_assessment_score_bps`, `fraud_assessment_latency_ms`, пара конверт/дайджест аттестатора (`fraud_assessment_envelope`, `fraud_assessment_digest`) и послеинцидентная пара. Флаг `fraud_assessment_disposition` (значения: `approved`, `declined`, `manual_review`, `confirmed_fraud`, `false_positive`, `chargeback`, `loss`).
+- **Схема Norito**: определите типы Norito для `RiskQuery`, `FraudAssessment` и отчетов управления. Проведите круговые тесты, чтобы гарантировать стабильность кодека.
 
-## Privacy & Data Minimization
-- Aliases, hashed device IDs, and coarse geolocation buckets form the entire data plane shared with the central service.
-- PSPs retain mapping from aliases to real identities; no such mapping leaves their perimeter.
-- Risk models operate only on pseudonymous behavioral signals plus PSP-submitted context (merchant category, channel, authentication strength).
-- Audit exports are aggregated (e.g., counts per PSP per day). Any drill-down requires dual control and PSP-side de-anonymization.
+## Конфиденциальность и минимизация данных
+- Псевдонимы, хешированные идентификаторы устройств и сегменты грубой геолокации образуют всю плоскость данных, совместно используемую центральной службой.
+- PSP сохраняют сопоставление псевдонимов с реальными личностями; ни одно такое отображение не выходит за их периметр.
+- Модели риска работают только на псевдонимных поведенческих сигналах плюс контекст, предоставленный PSP (категория продавца, канал, сила аутентификации).
+- Экспорт данных аудита агрегируется (например, количество на PSP в день). Любая детализация требует двойного контроля и деанонимизации на стороне PSP.## Операции и развертывание
+- Развернуть скоринговую платформу как выделенную подсистему, управляемую назначенным оператором, отличным от операторов узлов центрального банка.
+- Обеспечьте синее/зеленое окружение: `fraud-scoring-prod`, `fraud-scoring-shadow`, `fraud-lab`.
+- Внедрение автоматических проверок работоспособности (задержка API, журнал невыполненных сообщений, успешная загрузка модели). Если проверки работоспособности завершаются неудачей, PSP SDK автоматически переключаются в локальный режим и уведомляют операторов.
+- Поддержка сегментов хранения: горячее хранилище (30 дней в хранилище функций), теплое хранилище (1 год в хранилище объектов), холодный архив (сжатие на 5 лет).
 
-## Operations & Deployment
-- Deploy the scoring platform as a dedicated subsystem managed by an appointed operator distinct from the central bank node operators.
-- Provide blue/green environments: `fraud-scoring-prod`, `fraud-scoring-shadow`, `fraud-lab`.
-- Implement automated health checks (API latency, message backlog, model load success). If health checks fail, PSP SDKs automatically switch to local-only mode and notify operators.
-- Maintain retention buckets: hot storage (30 days in feature store), warm storage (1 year in object storage), cold archive (5 years compressed).
+## Сборщики телеметрии и информационные панели
 
-## Telemetry Collectors & Dashboards
+### Требуются коллекторы
 
-### Required collectors
+- **Очистка Prometheus**: включите `/metrics` на каждом валидаторе, на котором запущен профиль интеграции PSP, чтобы экспортировались серии `fraud_psp_*`. Метки по умолчанию включают идентификаторы-заполнители `subnet="global"` и `lane`, поэтому панели мониторинга могут поворачиваться после поставки маршрутизации с несколькими подсетями.
+- **Общие оценки**: `fraud_psp_assessments_total{tenant,band}` подсчитывает принятые оценки по группам серьезности; предупреждает о пожаре, если арендатор перестает сообщать в течение 5 минут.
+- **Отсутствуют метаданные**: `fraud_psp_missing_assessment_total{tenant,cause}` отличает жесткие отклонения (`cause="missing"`) от льготного окна (`cause="grace"`). Транзакции шлюза, которые неоднократно попадают в корзину отсрочки.
+- **Гистограмма задержки**: `fraud_psp_latency_ms_bucket` отслеживает задержку оценки, сообщаемую PSP. Целевое значение 20 % от среднего значения за 30 дней.
+- **Недопустимые метаданные**: `fraud_psp_invalid_metadata_total{field}` отмечает регрессию полезной нагрузки PSP (например, отсутствие идентификаторов клиентов, неверные расположения), поэтому обновления SDK можно быстро развернуть.
+- **Состояние аттестации**: `fraud_psp_attestation_total{tenant,engine,status}` подтверждает, что конверты подписываются и дайджесты совпадают. Оповещение, если `status!="verified"` резко возрастает для любого клиента или ядра.
 
-- **Prometheus scrape**: enable `/metrics` on every validator running the PSP integration profile so `fraud_psp_*` series are exported. Default labels include placeholder `subnet="global"` and `lane` IDs so dashboards can pivot once multi-subnet routing ships.
-- **Assessment totals**: `fraud_psp_assessments_total{tenant,band}` counts accepted assessments per severity band; alerts fire if a tenant stops reporting for 5 minutes.
-- **Missing metadata**: `fraud_psp_missing_assessment_total{tenant,cause}` distinguishes hard rejections (`cause="missing"`) from grace-window allowances (`cause="grace"`). Gate transactions that repeatedly fall into the grace bucket.
-- **Latency histogram**: `fraud_psp_latency_ms_bucket` traces PSP-reported scoring latency. Target <120 ms P95 with alerts at 150 ms.
-- **Score distribution**: `fraud_psp_score_bps_bucket{band}` snapshots risk-score drift; wire percentiles to the governance dashboard.
-- **Outcome mismatches**: `fraud_psp_outcome_mismatch_total{direction}` splits false positives (`direction="false_positive"`) from missed fraud (`"missed_fraud"`). Escalate if either direction deviates >20% from trailing 30-day mean.
-- **Invalid metadata**: `fraud_psp_invalid_metadata_total{field}` flags PSP payload regressions (e.g., missing tenant IDs, malformed dispositions) so SDK updates can be rolled out quickly.
-- **Attestation status**: `fraud_psp_attestation_total{tenant,engine,status}` confirms that envelopes are being signed and digests match. Alert if `status!="verified"` spikes for any tenant or engine.
+### Покрытие информационной панели
 
-### Dashboard coverage
+- **Обзор для руководителей**: составная диаграмма с областями `fraud_psp_assessments_total` по полосам на каждого арендатора в сочетании с таблицей, в которой приведены сведения о задержке P95 и количестве несоответствий.
+- **Операции**: панели гистограмм для `fraud_psp_latency_ms` и `fraud_psp_score_bps` со сравнением по неделям, а также счетчики отдельных статов для `fraud_psp_missing_assessment_total`, разделенные на `cause`.
+- **Мониторинг рисков**: гистограмма `fraud_psp_outcome_mismatch_total` на каждого арендатора, подробная таблица со списком недавних случаев `fraud_assessment_disposition=confirmed_fraud`, где `band` был `low` или `medium`.
+- **Правила оповещений**:
+  - `rate(fraud_psp_missing_assessment_total{cause="missing"}[5m]) > 0` → пейджинговое оповещение (отказ в приеме PSP-трафика).
+  - `histogram_quantile(0.95, sum(rate(fraud_psp_latency_ms_bucket[10m])) by (le,tenant)) > 150` → нарушение задержки SLO.
+  - `sum by (tenant) (rate(fraud_psp_outcome_mismatch_total{direction="missed_fraud"}[1h])) > 0.01` → дрейф модели/пробел в политике.
 
-- **Executive overview**: stacked area chart of `fraud_psp_assessments_total` by band per tenant, coupled with a table summarising P95 latency and mismatch counts.
-- **Operations**: histogram panels for `fraud_psp_latency_ms` and `fraud_psp_score_bps` with week-over-week comparison, plus single-stat counters for `fraud_psp_missing_assessment_total` split by `cause`.
-- **Risk monitoring**: bar chart of `fraud_psp_outcome_mismatch_total` per tenant, drill-down table listing recent `fraud_assessment_disposition=confirmed_fraud` cases where `band` was `low` or `medium`.
-- **Alert rules**:
-  - `rate(fraud_psp_missing_assessment_total{cause="missing"}[5m]) > 0` → paging alert (admission rejecting PSP traffic).
-  - `histogram_quantile(0.95, sum(rate(fraud_psp_latency_ms_bucket[10m])) by (le,tenant)) > 150` → latency SLO breach.
-  - `sum by (tenant) (rate(fraud_psp_outcome_mismatch_total{direction="missed_fraud"}[1h])) > 0.01` → model drift / policy gap.
+### Ожидания аварийного переключения- PSP SDK должны поддерживать две активные конечные точки оценки и выполнять аварийное переключение в течение 15 секунд после обнаружения транспортных ошибок или скачков задержки >200 мс. Реестр допускает льготный трафик максимум на `fraud_monitoring.missing_assessment_grace_secs`; во время производства операторы должны удерживать ручку на уровне <= 30 секунд.
+- Валидаторы записывают `fraud_psp_missing_assessment_total{cause="grace"}` в режиме резервного копирования; Если арендатор остается в режиме отсрочки более 5 минут, PSP должен переключиться на проверку вручную и открыть инцидент Sev2 с общей командой по борьбе с мошенничеством.
+- Развертывания «активный-активный» должны демонстрировать слив/воспроизведение очереди во время тренировок по аварийному восстановлению. Показатели воспроизведения должны поддерживать `fraud_psp_latency_ms` P99 менее 400 мс для окна воспроизведения.
 
-### Failover expectations
+## Контрольный список обмена данными PSP
 
-- PSP SDKs must maintain two active scoring endpoints and fail over within 15 seconds of detecting transport errors or latency spikes >200 ms. The ledger tolerates grace traffic for at most `fraud_monitoring.missing_assessment_grace_secs`; operators should keep the knob at <=30 seconds in production.
-- Validators record `fraud_psp_missing_assessment_total{cause="grace"}` while in fallback; if a tenant stays in grace for >5 minutes, the PSP must switch to manual review and open a Sev2 incident with the shared fraud operations team.
-- Active-active deployments must demonstrate queue drain/replay during disaster recovery drills. Replay metrics should keep `fraud_psp_latency_ms` P99 under 400 ms for the replay window.
+1. **Телеметрия**: раскрывайте ключи метаданных, перечисленные выше, для каждой транзакции, передаваемой в реестр; Идентификаторы арендаторов должны быть псевдонимными и соответствовать контракту PSP.
+2. **Анонимизация**: убедитесь, что хэши устройств, идентификаторы псевдонимов и расположения псевдонимизированы, прежде чем покинуть периметр PSP; никакие PII не могут быть встроены в метаданные Norito.
+3. **Отчеты о задержке**: заполните `fraud_assessment_latency_ms` сквозной синхронизацией (шлюз к PSP), чтобы регрессии SLA появлялись немедленно.
+4. **Сверка результатов**: обновляйте `fraud_assessment_disposition` после подтверждения случаев мошенничества (например, публикации отзывного платежа), чтобы обеспечить точность показателей несоответствия.
+5. **Тренировки по отработке отказа**: повторяйте ежеквартально, используя общий контрольный список: проверяйте автоматическое переключение конечных точек, обеспечивайте ведение журнала льготного окна и прикрепляйте заметки по тренировке к последующей задаче, отправленной `scripts/ci/schedule_fraud_scoring.sh`.
+6. **Проверка информационной панели**. Операционные группы PSP должны проверять информационные панели Prometheus после адаптации и после каждого упражнения красной команды, чтобы убедиться, что метрики соответствуют ожидаемым меткам арендаторов.
 
-## PSP Data-Sharing Checklist
+## Вопросы безопасности
+- Все ответы подписываются аппаратными ключами; PSP проверяют подписи, прежде чем доверять оценкам.
+- Ограничение скорости по псевдониму/устройству для смягчения пробных атак, направленных на изучение границ модели.
+- Встраивайте водяные знаки в оценки, чтобы отслеживать просочившиеся ответы, не раскрывая публично личность PSP.
+- Проводить ежеквартальные учения красной команды в координации с рабочей группой по безопасности (этап 0) и вносить результаты в обновления дорожной карты.## Этапы реализации
+1. **Этап 0 – Фундамент**
+   - Завершение разработки схем Norito, структуры PSP SDK, проводки конфигурации и заглушки проверки на стороне бухгалтерской книги.
+   - Создайте механизм детерминированных правил, охватывающий обязательные проверки рисков (скорость, скорость для пары псевдонимов, повторное использование устройства).
+2. **Этап 1 – MVP по центральному подсчету очков**
+   - Развертывание хранилища функций, службы оценки и информационных панелей телеметрии.
+   - Интегрировать оценку в реальном времени с ограниченной когортой PSP; фиксировать задержку и показатели качества.
+3. **Этап 2. Расширенная аналитика**
+   - Внедрить обнаружение аномалий, графический анализ связей и адаптивные пороговые значения.
+   - Запуск портала управления и конвейеров пакетной отчетности.
+4. **Этап 3 – Непрерывное обучение и автоматизация**
+   - Автоматизируйте конвейеры обучения/проверки моделей, добавляйте канареечные развертывания и расширяйте охват SDK.
+   - Соответствуйте соглашениям о совместном использовании данных между юрисдикциями и подключайтесь к будущим мостам с несколькими подсетями.
 
-1. **Telemetry plumbing**: expose the metadata keys listed above for every transaction handed to the ledger; tenant identifiers must be pseudonymous and scoped to the PSP contract.
-2. **Anonymisation**: confirm that device hashes, alias identifiers, and dispositions are pseudonymised before leaving the PSP perimeter; no PII can be embedded in Norito metadata.
-3. **Latency reporting**: populate `fraud_assessment_latency_ms` with end-to-end timing (gateway to PSP) so SLA regressions surface immediately.
-4. **Outcome reconciliation**: update `fraud_assessment_disposition` once fraud cases are confirmed (e.g., chargeback posted) to keep mismatch metrics accurate.
-5. **Failover drills**: rehearse quarterly using the shared checklist—verify automatic endpoint failover, ensure grace-window logging, and attach drill notes to the follow-up task filed by `scripts/ci/schedule_fraud_scoring.sh`.
-6. **Dashboard validation**: PSP operations teams must review Prometheus dashboards after onboarding and after every red-team exercise to confirm metrics are flowing with expected tenant labels.
-
-## Security Considerations
-- All responses are signed with hardware-backed keys; PSPs validate signatures before trusting scores.
-- Rate-limit by alias/device to mitigate probing attacks aiming to learn model boundaries.
-- Embed watermarking inside assessments to trace leaked responses without revealing PSP identity publicly.
-- Run quarterly red-team exercises in coordination with the Security WG (Milestone 0) and feed findings into roadmap updates.
-
-## Implementation Phases
-1. **Phase 0 – Foundations**
-   - Finalize Norito schemas, PSP SDK scaffolding, configuration wiring, and ledger-side verification stub.
-   - Build deterministic rule engine covering mandatory risk checks (velocity, velocity per alias pair, device reuse).
-2. **Phase 1 – Central Scoring MVP**
-   - Deploy feature store, scoring service, and telemetry dashboards.
-   - Integrate real-time scoring with a limited PSP cohort; capture latency and quality metrics.
-3. **Phase 2 – Advanced Analytics**
-   - Introduce anomaly detection, graph-based link analysis, and adaptive thresholds.
-   - Launch governance portal and batch reporting pipelines.
-4. **Phase 3 – Continuous Learning & Automation**
-   - Automate model training/validation pipelines, add canary deployments, and expand SDK coverage.
-   - Align with cross-jurisdiction data-sharing agreements and plug into future multi-subnet bridges.
-
-## Open Questions
-- What regulatory body will charter the operator of the fraud service, and how are oversight responsibilities shared?
-- How do PSPs expose end-user challenge flows while maintaining consistent UX across providers?
-- Which privacy-enhancing technologies (e.g., secure enclaves, homomorphic aggregation) should be prioritized once baseline service is stable?
+## Открытые вопросы
+- Какой регулирующий орган будет нанимать оператора службы по борьбе с мошенничеством и как распределяются обязанности по надзору?
+- Как PSP раскрывают потоки задач для конечных пользователей, сохраняя при этом согласованный UX между поставщиками?
+- Каким технологиям повышения конфиденциальности (например, безопасным анклавам, гомоморфной агрегации) следует отдать приоритет, как только базовый сервис станет стабильным?

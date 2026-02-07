@@ -7,19 +7,20 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 8d4569e75fb219979ee7c5e776427336bc43c155a24210af977e7a8e6ee1c8be
 source_last_modified: "2025-12-29T18:16:35.958788+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! ISO 20022 clarification prompt templates for roadmap Milestone F3.
+//! လမ်းပြမြေပုံ Milestone F3 အတွက် ISO 20022 ရှင်းလင်းချက်ပုံစံ နမူနာများ။
 
-# ISO 20022 Clarification Prompt Templates
+# ISO 20022 ရှင်းလင်းချက် အမှာစာ နမူနာများ
 
-These templates help seed requests to LLM (or other assistants) when financial-settlement engineers need quick references from ISO 20022 documentation or market-structure norms. Always include concrete payload samples and cite the specific message families you are working on so responses remain deterministic and audit-friendly.
+ဘဏ္ဍာရေးဖြေရှင်းမှုအင်ဂျင်နီယာများသည် ISO 20022 စာရွက်စာတမ်းများ သို့မဟုတ် စျေးကွက်ဖွဲ့စည်းပုံဆိုင်ရာ စံနှုန်းများထံမှ အမြန်ကိုးကားမှုများ လိုအပ်သည့်အခါ ဤပုံစံများသည် LLM (သို့မဟုတ် အခြားလက်ထောက်များ) သို့ မျိုးစေ့တောင်းဆိုမှုများကို ကူညီပေးပါသည်။ ခိုင်မာသော ပေးဆောင်မှုနမူနာများကို အမြဲထည့်သွင်းပြီး သင်လုပ်ဆောင်နေသည့် တိကျသောမက်ဆေ့ချ်မိသားစုများကို ကိုးကား၍ တုံ့ပြန်မှုများသည် အဆုံးအဖြတ်ရှိပြီး စာရင်းစစ်ဖော်ရွေနေမည်ဖြစ်သည်။
 
-## Before You Ask
-- Identify the ISO 20022 message (`MsgDefId`, variant, market practice pack) and version.
-- Collect the Norito/ISI context: instruction name, legs, optional parameters, expected execution timeline.
-- Note which artefacts you already have (schema snippet, BR-n validation rule, market practice note).
-- Clarify whether you need regulatory guidance (e.g., CPMI-IOSCO) or operational norms (cut-off windows, liquidity buffers).
+##မမေးခင်
+- ISO 20022 မက်ဆေ့ဂျ် (`MsgDefId`၊ မူကွဲ၊ စျေးကွက်လေ့ကျင့်ရေးထုပ်ပိုး) နှင့် ဗားရှင်းကို ခွဲခြားသတ်မှတ်ပါ။
+- Norito/ISI အကြောင်းအရာကို စုဆောင်းပါ- ညွှန်ကြားချက်အမည်၊ ခြေထောက်များ၊ ရွေးချယ်ခွင့် ကန့်သတ်ချက်များ၊ မျှော်မှန်းထားသော လုပ်ဆောင်မှုအချိန်ဇယား။
+- သင့်တွင်ရှိပြီးသားအရာများကို မှတ်သားပါ (စကမာအတိုအထွာ၊ BR-n အတည်ပြုခြင်းစည်းမျဉ်း၊ စျေးကွက်အလေ့အကျင့်မှတ်စု)။
+- စည်းမျဉ်းလမ်းညွှန်ချက် (ဥပမာ၊ CPMI-IOSCO) သို့မဟုတ် လုပ်ငန်းလည်ပတ်မှုဆိုင်ရာ စံနှုန်းများ (ဖြတ်ထားသော windows၊ ငွေဖြစ်လွယ်မှုကြားခံများ) လိုအပ်သည်ဆိုသည်ကို ရှင်းလင်းပါ။
 
 ## Template 1 – Field Mapping & Semantics
 ```text
@@ -38,7 +39,7 @@ Questions:
 Return the answer as a table with `Field`, `ISO Path`, `Rules`, `Notes`.
 ```
 
-## Template 2 – Settlement Workflow & Timeline Clarifications
+## နမူနာပုံစံ 2 – အလုပ်အသွားအလာကို ဖြေရှင်းခြင်းနှင့် အချိန်လိုင်းရှင်းလင်းချက်များ
 ```text
 You are LLM advising on DvP/PvP settlement workflows referencing ISO 20022 repo/payments messages.
 Scenario: {{brief_repo_or_pvp_scenario}}, including legs, currencies, and counterparties.
@@ -55,7 +56,7 @@ Questions:
 Deliver the answer as bullet lists grouped by phase, citing ISO references (e.g., sese.023 BR23).
 ```
 
-## Template 3 – Validation Rules & Code Sets
+## Template 3 – အတည်ပြုခြင်း စည်းမျဉ်းများနှင့် ကုဒ်အစုံများ
 ```text
 You are LLM validating ISO 20022 message content.
 Message: {{message_id_version}} for {{business_process}}.
@@ -68,7 +69,7 @@ Tasks:
 Produce the result as a checklist with `Requirement`, `Reference`, `Implementation Hint`.
 ```
 
-## Template 4 – Market-Structure & Regulatory Context
+## Template 4 – စျေးကွက်-ဖွဲ့စည်းပုံနှင့် စည်းမျဉ်းစည်းကမ်းဆိုင်ရာ အကြောင်းအရာ
 ```text
 You are LLM providing market-structure references for ISO 20022 settlement.
 Region/Market: {{market_or_region}}
@@ -81,7 +82,7 @@ Need:
 Return concise paragraphs with citations and note where operator documentation should reference these rules.
 ```
 
-## Template 5 – Exception Handling & Reconciliation
+## ပုံစံ ၅ – ခြွင်းချက် ကိုင်တွယ်မှုနှင့် ပြန်လည်သင့်မြတ်ရေး
 ```text
 You are LLM focusing on exception handling for ISO 20022-driven settlements.
 Scenario: {{failure_case}} (e.g., counterparty fails cash leg).
@@ -94,7 +95,7 @@ Questions:
 Respond with a step-by-step outline and map each action to ISO codes.
 ```
 
-## Usage Notes
-- Store filled-in prompts in the issue tracker or design docs to ensure conversations remain auditable.
-- When sharing external references, link to official ISO documentation portals or SMPG extracts; avoid unpublished material.
-- Update this template set whenever new ISO message families or market practices enter scope (e.g., pacs.009, derivatives collateral).
+## အသုံးပြုမှုမှတ်စုများ
+- စကားဝိုင်းများကို စစ်မှန်ကြောင်း သေချာစေရန်အတွက် ပြဿနာခြေရာခံ သို့မဟုတ် ဒီဇိုင်းစာတမ်းများတွင် ဖြည့်သွင်းထားသော အချက်ပြမှုများကို သိမ်းဆည်းပါ။
+- ပြင်ပကိုးကားချက်များကိုမျှဝေသည့်အခါ၊ တရားဝင် ISO စာရွက်စာတမ်းပေါ်တယ်များ သို့မဟုတ် SMPG ကောက်နုတ်ချက်များကို ချိတ်ဆက်ပါ။ မထုတ်ဝေရသေးသော အကြောင်းအရာများကို ရှောင်ကြဉ်ပါ။
+- ISO မက်ဆေ့ခ်ျမိသားစုအသစ်များ သို့မဟုတ် စျေးကွက်အလေ့အကျင့်များ (ဥပမာ၊ pacs.009၊ ဆင်းသက်လာသော အပေါင်ပစ္စည်း) နယ်ပယ်သို့ ဝင်ရောက်သည့်အခါတိုင်း ဤပုံစံပုံစံကို အပ်ဒိတ်လုပ်ပါ။

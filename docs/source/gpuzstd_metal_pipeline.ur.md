@@ -7,115 +7,114 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 019b3aa25ae224c1595467ac809f2c53290813e91a78b78b94ca71c3dd950264
 source_last_modified: "2026-01-31T19:25:45.072449+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# GPU Zstd (Metal) Pipeline
+# GPU ZSTD (دھات) پائپ لائن
 
-This document describes the deterministic GPU pipeline used by the Metal helper
-for zstd compression. It is a design and implementation guide for the
-`gpuzstd_metal` helper that emits standard zstd frames and deterministic bytes
-for a given sequence stream. Outputs must roundtrip with CPU decoders; byte-for-
-byte parity with the CPU compressor is not required because sequence generation
-differs.
+اس دستاویز میں دھات کے مددگار کے ذریعہ استعمال ہونے والے جینیاتی GPU پائپ لائن کی وضاحت کی گئی ہے
+ZSTD کمپریشن کے لئے۔ یہ ایک ڈیزائن اور عمل درآمد گائیڈ ہے
+`gpuzstd_metal` مددگار جو معیاری ZSTD فریموں اور عین مطابق بائٹس کو خارج کرتا ہے
+ایک دیئے گئے تسلسل اسٹریم کے لئے۔ آؤٹ پٹ کو سی پی یو ڈیکوڈرز کے ساتھ راؤنڈ ٹریپ کرنا چاہئے۔ بائٹ کے لئے-
+سی پی یو کمپریسر کے ساتھ بائٹ برابری کی ضرورت نہیں ہے کیونکہ تسلسل کی نسل
+مختلف
 
-## Goals
+## اہداف
 
-- Emit standard zstd frames that decode identically with CPU zstd; byte parity
-  with the CPU compressor is not required.
-- Deterministic outputs across hardware, drivers, and thread scheduling.
-- Explicit bounds checks and predictable buffer lifetimes.
+- معیاری ZSTD فریموں کو خارج کریں جو سی پی یو زیڈ ایس ٹی ڈی کے ساتھ یکساں طور پر ڈیکوڈ کرتے ہیں۔ بائٹ برابری
+  سی پی یو کے ساتھ کمپریسر کی ضرورت نہیں ہے۔
+- ہارڈ ویئر ، ڈرائیوروں ، اور تھریڈ شیڈولنگ میں ڈٹرمینسٹک آؤٹ پٹ۔
+- واضح حدود چیک اور پیش قیاسی بفر لائف ٹائمز۔
 
-## Current implementation note
+## موجودہ عمل درآمد نوٹ
 
-- Match finding and sequence generation run on GPU.
-- Frame assembly and entropy coding (Huffman/FSE) currently run on the host
-  using the in-crate encoder; GPU Huffman/FSE kernels are parity-tested but not
-  yet wired into the full frame path.
-- Decode uses the in-crate frame decoder with a CPU zstd fallback for unsupported frames;
-  full GPU block decode remains in progress.
+- جی پی یو پر میچ کی تلاش اور ترتیب جنریشن چل رہی ہے۔
+- فریم اسمبلی اور اینٹروپی کوڈنگ (ہف مین/ایف ایس ای) فی الحال میزبان پر چلتی ہے
+  کریٹ انکوڈر کا استعمال کرتے ہوئے ؛ جی پی یو ہف مین/ایف ایس ای دانا برابری کے مطابق ہیں لیکن نہیں
+  پھر بھی پورے فریم کے راستے میں وائرڈ۔
+- ڈیکوڈ غیر تعاون یافتہ فریموں کے لئے سی پی یو زیڈ ایس ٹی ڈی فال بیک کے ساتھ کریٹ فریم ڈیکوڈر کا استعمال کرتا ہے۔
+  مکمل GPU بلاک ڈیکوڈ جاری ہے۔
 
-## Encoding pipeline (high level)
+## انکوڈنگ پائپ لائن (اعلی سطح)
 
-1. Input staging
-   - Copy the input into a device buffer.
-   - Partition into fixed-size chunks (for sequence generation) and blocks (for
-     zstd frame assembly).
-2. Match finding and sequence emission
-   - GPU kernels scan each chunk and emit sequences (literal length, match
-     length, offset).
-   - Sequence ordering is stable and deterministic.
-3. Literal preparation
-   - Collect literals referenced by sequences.
-   - Build literal histograms and select literal block mode (raw, RLE, or
-     Huffman) deterministically.
-4. Huffman tables (literals)
-   - Generate code lengths from the histogram.
-   - Build canonical tables with deterministic tie-breaking that matches CPU
-     zstd output.
-5. FSE tables (LL/ML/OF)
-   - Normalize frequency counts.
-   - Build FSE decoding/encoding tables deterministically.
-6. Bitstream writer
-   - Pack bits little-endian (LSB-first).
-   - Flush on byte boundaries; pad with zeros only.
-   - Mask values to declared bit widths and enforce capacity checks.
-7. Block and frame assembly
-   - Emit block headers (type, size, last-block flag).
-   - Serialize literals and sequences into compressed blocks.
-   - Emit standard zstd frame headers and optional checksums.
+1. ان پٹ اسٹیجنگ
+   - ان پٹ کو ڈیوائس بفر میں کاپی کریں۔
+   - فکسڈ سائز کے حصوں میں تقسیم (ترتیب نسل کے لئے) اور بلاکس (کے لئے
+     ZSTD فریم اسمبلی)۔
+2. میچ کی تلاش اور ترتیب کا اخراج
+   - جی پی یو کی دانا ہر ایک حصہ کو اسکین کرتے ہیں اور خارج ہونے والے سلسلے (لفظی لمبائی ، میچ)
+     لمبائی ، آفسیٹ)۔
+   - ترتیب ترتیب مستحکم اور تعصب پسند ہے۔
+3. لفظی تیاری
+   - ترتیب کے ذریعہ حوالہ کردہ لفظی جمع کریں۔
+   - لغوی ہسٹگرامس بنائیں اور لفظی بلاک موڈ منتخب کریں (خام ، RLE ، یا
+     ہف مین) عزم کے مطابق۔
+4. ہف مین ٹیبلز (لفظی)
+   - ہسٹوگرام سے کوڈ کی لمبائی تیار کریں۔
+   - سی پی یو سے مماثل ٹائی بریکنگ کے ساتھ کیننیکل ٹیبل بنائیں جو سی پی یو سے مماثل ہیں
+     زیڈ ایس ٹی ڈی آؤٹ پٹ۔
+5. ایف ایس ای ٹیبلز (ایل ایل/ایم ایل/آف)
+   - تعدد کی گنتی کو معمول پر لائیں۔
+   - ایف ایس ای کو ضابطہ کشائی/انکوڈنگ ٹیبلز کو طے شدہ طور پر بنائیں۔
+6. بٹس اسٹریم مصنف
+   -پیک بٹس لٹل اینڈین (ایل ایس بی فرسٹ)۔
+   - بائٹ حدود پر فلش ؛ صرف زیرو کے ساتھ پیڈ۔
+   - ماسک کی اقدار کو تھوڑا سا چوڑائی اور صلاحیت کے چیکوں کو نافذ کرنے کے لئے اقدار۔
+7. بلاک اور فریم اسمبلی
+   - بلاک ہیڈر (قسم ، سائز ، آخری بلاک پرچم) خارج کریں۔
+   - کمپریسڈ بلاکس میں لفظی اور ترتیب کو سیریلائز کریں۔
+   - معیاری ZSTD فریم ہیڈر اور اختیاری چیکسم خارج کریں۔
 
-## Decoding pipeline (high level)
+## پائپ لائن کی ضابطہ کشائی (اعلی سطح)
 
-1. Frame parse
-   - Validate magic bytes, window settings, and frame header fields.
-2. Bitstream reader
-   - Read LSB-first bit sequences with strict bounds checks.
-3. Literal decode
-   - Decode literal blocks (raw, RLE, or Huffman) into the literal buffer.
-4. Sequence decode
-   - Decode LL/ML/OF values using FSE tables.
-   - Reconstruct matches using the sliding window.
-5. Output and checksum
-   - Write reconstructed bytes into the output buffer.
-   - Verify optional checksums when enabled.
+1. فریم پارس
+   - جادو بائٹس ، ونڈو کی ترتیبات ، اور فریم ہیڈر فیلڈز کی توثیق کریں۔
+2. بٹ اسٹریم ریڈر
+   - سخت حدود چیکوں کے ساتھ ایل ایس بی فرسٹ بٹ تسلسل پڑھیں۔
+3. لفظی ڈیکوڈ
+   - لفظی بفر میں لغوی بلاکس (خام ، rle ، یا ہف مین) کو ڈیکوڈ کریں۔
+4. تسلسل ڈیکوڈ
+   - ایف ایس ای ٹیبلز کا استعمال کرتے ہوئے ایل ایل/ایم ایل/اقدار کا ڈیکوڈ۔
+   - سلائیڈنگ ونڈو کا استعمال کرتے ہوئے میچوں کی تشکیل نو۔
+5. آؤٹ پٹ اور چیکسم
+   - آؤٹ پٹ بفر میں تعمیر نو بائٹس لکھیں۔
+   - فعال ہونے پر اختیاری چیکوں کی تصدیق کریں۔
 
-## Buffer lifetimes and ownership
+## بفر لائف ٹائمز اور ملکیت-ان پٹ بفر: میزبان -> ڈیوائس ، صرف پڑھیں۔
+- تسلسل بفر: آلہ ، میچ فائنڈنگ کے ذریعہ تیار کیا گیا اور انٹروپی کے ذریعہ استعمال کیا جاتا ہے
+  کوڈنگ ؛ کوئی کراس بلاک دوبارہ استعمال نہیں۔
+- لفظی بفر: آلہ ، ہر بلاک کے لئے تیار کیا جاتا ہے اور بلاک کے بعد جاری ہوتا ہے
+  اخراج
+- آؤٹ پٹ بفر: ڈیوائس ، حتمی فریم بائٹس پر مشتمل ہے جب تک کہ میزبان ان کی کاپی نہ کرے
+  باہر
+- سکریچ بفرز: دانا میں دوبارہ استعمال کیا جاتا ہے ، لیکن ہمیشہ عزم کے ساتھ اوور رائٹ کیا جاتا ہے۔
 
-- Input buffer: host -> device, read-only.
-- Sequence buffer: device, produced by match-finding and consumed by entropy
-  coding; no cross-block reuse.
-- Literal buffer: device, produced for each block and released after block
-  emission.
-- Output buffer: device, holds the final frame bytes until the host copies them
-  out.
-- Scratch buffers: reused across kernels, but always overwritten deterministically.
+## دانا کی ذمہ داریاں
 
-## Kernel responsibilities
+۔
+- ہف مین بلڈ دانا: کوڈ کی لمبائی اور کیننیکل ٹیبلز اخذ کریں۔
+- ایف ایس ای بلڈ دانا: ٹیبلز اور ریاستی مشینوں کے ایل ایل/ایم ایل/تعمیر کریں۔
+- بلاک انکوڈ دانا: بٹس اسٹریم میں لفظی اور ترتیب کو سیریلائز کریں۔
+۔
 
-- Match finding kernels: find matches and emit sequences (LL/ML/OF + literals).
-- Huffman build kernels: derive code lengths and canonical tables.
-- FSE build kernels: build LL/ML/OF tables and state machines.
-- Block encode kernels: serialize literals and sequences into the bitstream.
-- Block decode kernels: parse bitstream and reconstruct literals/sequences.
+## عزم اور برابری کی رکاوٹیں
 
-## Determinism and parity constraints
+- کیننیکل ٹیبل بلڈز کو سی پی یو کی طرح آرڈرنگ اور ٹائی بریکنگ کا استعمال کرنا چاہئے
+  زیڈ ایس ٹی ڈی۔
+- کوئی ایٹمکس یا کمی جو کسی بھی آؤٹ پٹ بائٹ کے لئے تھریڈ شیڈولنگ پر منحصر ہے۔
+-بٹس اسٹریم پیکنگ لٹل اینڈین ، ایل ایس بی فرسٹ ہے۔ زیرو کے ساتھ بائٹ سیدھ پیڈ۔
+- تمام حدود چیک واضح ہیں۔ غلط آدانوں نے عزم سے ناکام کیا۔
 
-- Canonical table builds must use the same ordering and tie-breaking as CPU
-  zstd.
-- No atomics or reductions that depend on thread scheduling for any output byte.
-- Bitstream packing is little-endian, LSB-first; byte alignment pads with zeros.
-- All bounds checks are explicit; invalid inputs fail deterministically.
+## توثیق
 
-## Validation
+- بٹ اسٹریم مصنف/قاری کے لئے سی پی یو گولڈن ویکٹر۔
+- جی پی یو اور سی پی یو آؤٹ پٹس کا موازنہ کرنے والے کارپس پیریٹی ٹیسٹ۔
+- خراب شدہ فریموں اور حدود کے حالات کے لئے فز کوریج۔
 
-- CPU golden vectors for the bitstream writer/reader.
-- Corpus parity tests comparing GPU and CPU outputs.
-- Fuzz coverage for malformed frames and boundary conditions.
+## بینچ مارکنگ
 
-## Benchmarking
-
-Run `cargo test -p gpuzstd_metal gpu_vs_cpu_benchmark -- --ignored --nocapture` to
-compare CPU vs GPU encode latency across payload sizes. The test skips on hosts
-without a Metal-capable device; capture the output alongside hardware details
-when adjusting the GPU offload thresholds. Norito enforces the same cutoff in
-`gpu_zstd::encode_all`, so direct callers match the heuristic gate.
+`cargo test -p gpuzstd_metal gpu_vs_cpu_benchmark -- --ignored --nocapture` کو چلائیں
+پے لوڈ کے سائز میں سی پی یو بمقابلہ جی پی یو انکوڈ لیٹینسی کا موازنہ کریں۔ ٹیسٹ میزبانوں پر چھوڑ دیتا ہے
+دھات کے قابل آلہ کے بغیر ؛ ہارڈ ویئر کی تفصیلات کے ساتھ ساتھ آؤٹ پٹ پر قبضہ کریں
+جب GPU آف لوڈ دہلیز کو ایڈجسٹ کرتے ہو۔ Norito اسی کٹ آف کو نافذ کرتا ہے
+`gpu_zstd::encode_all` ، لہذا براہ راست کال کرنے والے ہورسٹک گیٹ سے ملتے ہیں۔

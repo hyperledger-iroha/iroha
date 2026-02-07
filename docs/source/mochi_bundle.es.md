@@ -6,48 +6,49 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: f2dd292b7d15b449f3cec1b79343387a8c23beef3a163367bd5fa8ced8593aae
 source_last_modified: "2026-01-03T18:08:00.656311+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# MOCHI Bundle Tooling
+# Paquete de herramientas MOCHI
 
-MOCHI ships with a lightweight packaging workflow so developers can produce a
-portable desktop bundle without wiring bespoke CI scripts. The `xtask`
-subcommand handles compilation, layout, hashing, and (optionally) archive
-creation in one shot.
+MOCHI se entrega con un flujo de trabajo de empaque liviano para que los desarrolladores puedan producir un
+Paquete de escritorio portátil sin cableado de scripts CI personalizados. El `xtask`
+El subcomando maneja la compilación, el diseño, el hashing y (opcionalmente) el archivo.
+creación de una sola vez.
 
-## Generating a bundle
+## Generando un paquete
 
 ```bash
 cargo xtask mochi-bundle
 ```
 
-By default the command builds release binaries, assembles the bundle under
-`target/mochi-bundle/`, and emits a `mochi-<os>-<arch>-release.tar.gz` archive
-alongside a deterministic `manifest.json`. The manifest lists every file with
-its size and SHA-256 hash so CI pipelines can re-run verification or publish
-attestations. The helper ensures both the `mochi` desktop shell and the
-workspace `kagami` binary are present so genesis generation works out of the
-box.
+De forma predeterminada, el comando crea archivos binarios de lanzamiento, ensambla el paquete en
+`target/mochi-bundle/` y emite un archivo `mochi-<os>-<arch>-release.tar.gz`
+junto con un determinista `manifest.json`. El manifiesto enumera todos los archivos con
+su tamaño y hash SHA-256 para que las canalizaciones de CI puedan volver a ejecutar la verificación o publicar
+atestados. El asistente garantiza que tanto el shell del escritorio `mochi` como el
+El binario del espacio de trabajo `kagami` está presente, por lo que la generación de génesis funciona a partir del
+caja.
 
-### Flags
+### Banderas
 
-| Flag                | Description                                                                 |
+| Bandera | Descripción |
 |---------------------|-----------------------------------------------------------------------------|
-| `--out <dir>`       | Override the output directory (defaults to `target/mochi-bundle`).         |
-| `--profile <name>`  | Build with a specific Cargo profile (e.g., `debug` for tests).              |
-| `--no-archive`      | Skip the `.tar.gz` archive, leaving only the prepared folder.               |
-| `--kagami <path>`   | Use an explicit `kagami` binary instead of building `iroha_kagami`.         |
-| `--matrix <path>`   | Append bundle metadata to a JSON matrix for CI provenance tracking.         |
-| `--smoke`           | Run `mochi --help` from the packaged bundle as a basic execution gate.      |
-| `--stage <dir>`     | Copy the finished bundle (and archive, when present) into a staging folder. |
+| `--out <dir>` | Anule el directorio de salida (el valor predeterminado es `target/mochi-bundle`).         |
+| `--profile <name>` | Compile con un perfil de carga específico (por ejemplo, `debug` para pruebas).              |
+| `--no-archive` | Omita el archivo `.tar.gz` y deje solo la carpeta preparada.               |
+| `--kagami <path>` | Utilice un binario `kagami` explícito en lugar de compilar `iroha_kagami`.         |
+| `--matrix <path>` | Agregue metadatos del paquete a una matriz JSON para realizar un seguimiento de la procedencia de CI.         |
+| `--smoke` | Ejecute `mochi --help` desde el paquete empaquetado como puerta de ejecución básica.      |
+| `--stage <dir>` | Copie el paquete terminado (y archívelo, cuando esté presente) en una carpeta provisional. |
 
-`--stage` is intended for CI pipelines where each build agent uploads its
-artefacts to a shared location. The helper recreates the bundle directory and
-copies the generated archive into the staging directory so publish jobs can
-collect platform-specific outputs without shell scripting.
+`--stage` está destinado a canalizaciones de CI donde cada agente de compilación carga su
+artefactos a una ubicación compartida. El asistente recrea el directorio del paquete y
+copia el archivo generado en el directorio provisional para que los trabajos de publicación puedan
+recopile resultados específicos de la plataforma sin scripts de shell.
 
-The layout inside the bundle is intentionally simple:
+El diseño dentro del paquete es intencionalmente simple:
 
 ```
 bin/mochi              # egui desktop executable
@@ -58,11 +59,11 @@ LICENSE                # repository licence
 manifest.json          # generated file manifest with SHA-256 digests
 ```
 
-### Runtime overrides
+### Anulaciones de tiempo de ejecución
 
-The packaged `mochi` executable accepts command-line overrides for the most
-common supervisor settings. Use these flags instead of editing
-`config/local.toml` when experimenting:
+El ejecutable `mochi` empaquetado acepta anulaciones de línea de comandos para la mayoría
+entornos comunes de supervisor. Utilice estas banderas en lugar de editar
+`config/local.toml` al experimentar:
 
 ```
 ./bin/mochi --data-root ./data --profile four-peer-bft \
@@ -70,16 +71,16 @@ common supervisor settings. Use these flags instead of editing
     --irohad /path/to/irohad --kagami /path/to/kagami
 ```
 
-Any CLI value takes precedence over `config/local.toml` entries and environment
+Cualquier valor CLI tiene prioridad sobre las entradas y el entorno `config/local.toml`
 variables.
 
-## Snapshot automation
+## Automatización de instantáneas
 
-`manifest.json` records the generation timestamp, target triple, Cargo profile,
-and the complete file inventory. Pipelines can diff the manifest to detect when
-new artefacts appear, upload the JSON alongside release assets, or audit the
-hashes before promoting a bundle to operators.
+`manifest.json` registra la marca de tiempo de generación, triple objetivo, perfil de carga,
+y el inventario completo del expediente. Las canalizaciones pueden diferenciar el manifiesto para detectar cuándo
+aparecen nuevos artefactos, cargue el JSON junto con los activos de lanzamiento o audite el
+hashes antes de promocionar un paquete a los operadores.
 
-The helper is idempotent: re-running the command updates the manifest and
-overwrites the previous archive, keeping `target/mochi-bundle/` as the single
-source of truth for the latest bundle on the current machine.
+El asistente es idempotente: volver a ejecutar el comando actualiza el manifiesto y
+sobrescribe el archivo anterior, manteniendo `target/mochi-bundle/` como único
+fuente de verdad para el último paquete en la máquina actual.

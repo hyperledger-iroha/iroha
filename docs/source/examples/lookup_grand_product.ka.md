@@ -7,28 +7,29 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 6f6421d420a704c5c4af335741e309adf641702ddb8c291dce94ea5581557a66
 source_last_modified: "2025-12-29T18:16:35.953884+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Lookup Grand-Product Example
+# ძიება გრანდიოზული პროდუქტის მაგალითი
 
-This example expands the FASTPQ permission lookup argument mentioned in
-`fastpq_plan.md`.  In the Stage 2 pipeline the prover evaluates the selector
-(`s_perm`) and witness (`perm_hash`) columns on the low-degree extension (LDE)
-domain, updates a running grand product `Z_i`, and finally commits the entire
-sequence with Poseidon.  The hashed accumulator is appended to the transcript
-under the `fastpq:v1:lookup:product` domain, while the final `Z_i` still matches
-the committed permission table product `T`.
+ეს მაგალითი აფართოებს FASTPQ ნებართვის მოძიების არგუმენტს, რომელიც ნახსენებია
+`fastpq_plan.md`.  2 ეტაპის მილსადენში პროვერი აფასებს სელექტორს
+(`s_perm`) და მოწმის (`perm_hash`) სვეტები დაბალი ხარისხის გაფართოებაზე (LDE)
+დომენი, განაახლებს გაშვებულ გრანდიოზულ პროდუქტს `Z_i` და საბოლოოდ ახორციელებს მთელს
+თანმიმდევრობა პოსეიდონთან.  ჰეშირებული აკუმულატორი თან ერთვის ტრანსკრიპტს
+`fastpq:v1:lookup:product` დომენის ქვეშ, ხოლო საბოლოო `Z_i` მაინც ემთხვევა
+ჩადენილი ნებართვის ცხრილის პროდუქტი `T`.
 
-We consider a tiny batch with the following selector values:
+ჩვენ განვიხილავთ მცირე პარტიას შემდეგი ამომრჩეველი მნიშვნელობებით:
 
-| row | `s_perm` | `perm_hash`                                   |
-| --- | -------- | ---------------------------------------------- |
-| 0   | 1        | `0x019a...` (grant role = auditor, perm = transfer_asset) |
-| 1   | 0        | `0xabcd...` (no permission change)                |
-| 2   | 1        | `0x42ff...` (revoke role = auditor, perm = burn_asset) |
+| რიგი | `s_perm` | `perm_hash` |
+| --- | -------- | --------------------------------------------- |
+| 0 | 1 | `0x019a...` (გრანტის როლი = აუდიტორი, პერმის = გადაცემის_აქტივი) |
+| 1 | 0 | `0xabcd...` (ნებართვის ცვლილების გარეშე) |
+| 2 | 1 | `0x42ff...` (გაუქმება როლი = აუდიტორი, პერმის = დამწვრობა_აქტივი) |
 
-Let `gamma = 0xdead...` be the Fiat-Shamir lookup challenge derived from the
-transcript.  The prover initialises `Z_0 = 1` and folds each row:
+მოდით, `gamma = 0xdead...` იყოს Fiat-Shamir საძიებო გამოწვევა, რომელიც გამომდინარეობს
+ჩანაწერი.  პროვერი ახდენს `Z_0 = 1` ინიციალიზაციას და იკეცება თითოეული მწკრივი:
 
 ```
 Z_0 = 1
@@ -37,27 +38,27 @@ Z_2 = Z_1 * (perm_hash_1 + gamma)^(s_perm_1) = Z_1 (selector is zero)
 Z_3 = Z_2 * (perm_hash_2 + gamma)^(s_perm_2)
 ```
 
-Rows where `s_perm = 0` do not alter the accumulator.  After processing the
-trace, the prover Poseidon-hashes the sequence `[Z_1, Z_2, ...]` for the transcript
-yet also publishes `Z_final = Z_3` (the final running product) to match the table
-boundary condition.
+რიგები, სადაც `s_perm = 0` არ ცვლის აკუმულატორს.  დამუშავების შემდეგ
+კვალი, პროვერ პოსეიდონ-ჰეშს `[Z_1, Z_2, ...]` თანმიმდევრობა ტრანსკრიპტისთვის
+თუმცა ასევე აქვეყნებს `Z_final = Z_3` (საბოლოო გაშვებული პროდუქტი) ცხრილის შესატყვისად
+სასაზღვრო მდგომარეობა.
 
-On the table side, the committed permission Merkle tree encodes the deterministic
-set of active permissions for the slot.  The verifier (or the prover during
-witness generation) computes
+მაგიდის მხარეს, ნებართვის მერკლის ხე შიფრავს დეტერმინისტს
+აქტიური ნებართვების ნაკრები სლოტზე.  შემმოწმებელი (ან პროვერი დროს
+მოწმეთა წარმოქმნა) ითვლის
 
 ```
 T = product over entries: (entry.hash + gamma)
 ```
 
-The protocol enforces the boundary constraint `Z_final / T = 1`.  If the trace
-introduced a permission that is not present in the table (or omitted one that
-is), the grand product ratio diverges from 1 and the verifier rejects.  Because
-both sides multiply by `(value + gamma)` inside the Goldilocks field, the ratio
-remains stable across CPU/GPU backends.
+პროტოკოლი ახორციელებს საზღვრის შეზღუდვას `Z_final / T = 1`.  თუ კვალი
+შემოიღო ნებართვა, რომელიც არ არის ცხრილში (ან გამოტოვა ერთი, რომელიც
+არის), გრანდიოზული პროდუქტის კოეფიციენტი განსხვავდება 1-დან და ვერიფიკატორი უარყოფს.  იმიტომ რომ
+ორივე მხარე მრავლდება `(value + gamma)`-ზე Goldilocks ველში, თანაფარდობა
+რჩება სტაბილური CPU/GPU backends-ში.
 
-To serialise the example as Norito JSON for fixtures, record the tuple of
-`perm_hash`, selector, and accumulator after each row, for example:
+მაგალითის სერიებისთვის, როგორც Norito JSON მოწყობილობებისთვის, ჩაწერეთ რამდენიმე
+`perm_hash`, სელექტორი და აკუმულატორი ყოველი მწკრივის შემდეგ, მაგალითად:
 
 ```json
 {
@@ -71,7 +72,7 @@ To serialise the example as Norito JSON for fixtures, record the tuple of
 }
 ```
 
-The hexadecimal placeholders (`0x...`) can be replaced with concrete Goldilocks
-field elements when generating automated tests.  Stage 2 fixtures additionally
-record the Poseidon hash of the running accumulator but keep the same JSON shape,
-so the example can double as a template for future test vectors.
+თექვსმეტობითი ჩანაცვლება (`0x...`) შეიძლება შეიცვალოს ბეტონის ოქროთი
+ველის ელემენტები ავტომატური ტესტების გენერირებისას.  2 ეტაპის სეზონი დამატებით
+ჩაწერეთ გაშვებული აკუმულატორის Poseidon ჰეში, მაგრამ შეინარჩუნეთ იგივე JSON ფორმა,
+ასე რომ, მაგალითი შეიძლება გაორმაგდეს, როგორც შაბლონი მომავალი ტესტის ვექტორებისთვის.

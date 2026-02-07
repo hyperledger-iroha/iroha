@@ -6,40 +6,41 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 89be62d7bb2bb79fd994d207489d310ef4c997be53447fbee8ac1f7b758d3beb
 source_last_modified: "2026-01-03T18:07:57.641039+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Impact Assessment Tooling (MINFO‑4b)
+# Herramientas de evaluación de impacto (MINFO-4b)
 
-Roadmap reference: **MINFO‑4b — Impact assessment tooling.**  
-Owner: Governance Council / Analytics
+Referencia de la hoja de ruta: **MINFO‑4b — Herramientas de evaluación de impacto.**  
+Propietario: Consejo de Gobernanza / Análisis
 
-This note documents the `cargo xtask ministry-agenda impact` command that now
-produces the automated hash-family diff required for referendum packets. The
-tool consumes validated Agenda Council proposals, the duplicate registry, and
-an optional denylist/policy snapshot so reviewers can see exactly which
-fingerprints are new, which collide with existing policy, and how many entries
-each hash family contributes.
+Esta nota documenta el comando `cargo xtask ministry-agenda impact` que ahora
+produce la diferencia automatizada de familia de hash requerida para los paquetes de referéndum. el
+La herramienta consume propuestas validadas del Consejo de Agenda, el registro duplicado y
+una instantánea opcional de lista de denegación/política para que los revisores puedan ver exactamente qué
+Las huellas dactilares son nuevas, cuáles chocan con la política existente y cuántas entradas
+cada familia de hash contribuye.
 
-## Inputs
+## Entradas
 
-1. **Agenda proposals.** One or more files that follow
+1. **Propuestas de agenda.** Uno o más archivos que siguen
    [`docs/source/ministry/agenda_council_proposal.md`](agenda_council_proposal.md).
-   Pass them explicitly with `--proposal <path>` or point the command at a
-   directory via `--proposal-dir <dir>` and every `*.json` file under that path
-   is included.
-2. **Duplicate registry (optional).** A JSON file matching
-   `docs/examples/ministry/agenda_duplicate_registry.json`. Conflicts are
-   reported under `source = "duplicate_registry"`.
-3. **Policy snapshot (optional).** A lightweight manifest that lists every
-   fingerprint already enforced by GAR/Ministry policy. The loader expects the
-   schema shown below (see
+   Páselos explícitamente con `--proposal <path>` o apunte el comando a un
+   directorio a través de `--proposal-dir <dir>` y cada archivo `*.json` en esa ruta
+   está incluido.
+2. **Registro duplicado (opcional).** Un archivo JSON que coincida
+   `docs/examples/ministry/agenda_duplicate_registry.json`. Los conflictos son
+   reportado bajo `source = "duplicate_registry"`.
+3. **Instantánea de la política (opcional).** Un manifiesto liviano que enumera todos
+   huellas dactilares ya aplicadas por la política del GAR/Ministerio. El cargador espera que
+   esquema que se muestra a continuación (ver
    [`docs/examples/ministry/policy_snapshot_example.json`](../../examples/ministry/policy_snapshot_example.json)
-   for a complete sample):
+   para una muestra completa):
 
 ```json
 {
@@ -56,10 +57,10 @@ each hash family contributes.
 }
 ```
 
-Any entry whose `hash_family:hash_hex` fingerprint matches a proposal target is
-reported under `source = "policy_snapshot"` with the referenced `policy_id`.
+Cualquier entrada cuya huella digital `hash_family:hash_hex` coincida con un objetivo de propuesta es
+reportado bajo `source = "policy_snapshot"` con el `policy_id` referenciado.
 
-## Usage
+## Uso
 
 ```bash
 cargo xtask ministry-agenda impact \
@@ -69,8 +70,8 @@ cargo xtask ministry-agenda impact \
   --out artifacts/ministry/impact/AC-2026-001.json
 ```
 
-Additional proposals can be appended via repeated `--proposal` flags or by
-supplying a directory that contains an entire referendum batch:
+Se pueden agregar propuestas adicionales mediante indicadores `--proposal` repetidos o mediante
+proporcionando un directorio que contiene un lote completo de referéndum:
 
 ```bash
 cargo xtask ministry-agenda impact \
@@ -79,12 +80,12 @@ cargo xtask ministry-agenda impact \
   --out artifacts/ministry/impact/2026-03-31.json
 ```
 
-The command prints the generated JSON to stdout when `--out` is omitted.
+El comando imprime el JSON generado en la salida estándar cuando se omite `--out`.
 
-## Output
+## Salida
 
-The report is a signed-off artefact (record it under the referendum packet’s
-`artifacts/ministry/impact/` directory) with the following structure:
+El informe es un artefacto firmado (regístrelo bajo el nombre del paquete del referéndum).
+Directorio `artifacts/ministry/impact/`) con la siguiente estructura:
 
 ```json
 {
@@ -125,13 +126,13 @@ The report is a signed-off artefact (record it under the referendum packet’s
 }
 ```
 
-Attach this JSON to every referendum dossier alongside the neutral summary so
-panelists, jurors, and governance observers can see the exact blast radius of
-each proposal. The output is deterministic (sorted by hash family) and safe to
-include in CI/runbooks; if the duplicate registry or policy snapshot changes,
-rerun the command and attach the refreshed artefact before the vote opens.
+Adjunte este JSON a cada expediente de referéndum junto con el resumen neutral para que
+panelistas, jurados y observadores de gobernanza pueden ver el radio exacto de la explosión de
+cada propuesta. La salida es determinista (ordenada por familia de hash) y segura para
+incluir en CI/runbooks; si el registro duplicado o la instantánea de la política cambian,
+Vuelva a ejecutar el comando y adjunte el artefacto actualizado antes de que se abra la votación.
 
-> **Next step:** feed the generated impact report into
-> [`cargo xtask ministry-panel packet`](referendum_packet.md) so the
-> `ReferendumPacketV1` dossier contains both the hash-family breakdown and the
-> detailed conflict list for the proposal under review.
+> **Siguiente paso:** introducir el informe de impacto generado en
+> [`cargo xtask ministry-panel packet`](referendum_packet.md) por lo que el
+> El expediente `ReferendumPacketV1` contiene tanto el desglose de la familia hash como el
+> lista detallada de conflictos para la propuesta bajo revisión.

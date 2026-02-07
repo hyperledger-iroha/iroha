@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: cba8780bcec4ebf562dc9c5725f328b0ea2d9009517efa5b5a504e2fb6be81fe
 source_last_modified: "2026-01-11T04:52:11.136647+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Error Mapping Guide
+# Қателерді салыстыру нұсқаулығы
 
-Last updated: 2025-08-21
+Соңғы жаңартылған күні: 21.08.2025 ж
 
-This guide maps common failure modes in Iroha to stable error categories surfaced by the data model. Use it to design tests and to make client error handling predictable.
+Бұл нұсқаулық Iroha жүйесіндегі жалпы ақаулық режимдерін деректер үлгісімен анықталған тұрақты қате санаттарына салыстырады. Оны сынақтарды жобалау және клиент қателерін өңдеуді болжамды ету үшін пайдаланыңыз.
 
-Principles
-- Instruction and query paths emit structured enums. Avoid panics; report a specific category wherever possible.
-- Categories are stable, messages may evolve. Clients should match on categories, not on free‑form strings.
+Принциптер
+- Нұсқаулар мен сұрау жолдары құрылымдық сандарды шығарады. Дүрбелеңді болдырмау; мүмкіндігінше белгілі бір санатты хабарлаңыз.
+- Санаттар тұрақты, хабарлар дамуы мүмкін. Клиенттер еркін пішінді жолдарда емес, санаттар бойынша сәйкес келуі керек.
 
-Categories
-- InstructionExecutionError::Find: Entity missing (asset, account, domain, NFT, role, trigger, permission, public key, block, transaction). Example: removing a non‑existent metadata key yields Find(MetadataKey).
-- InstructionExecutionError::Repetition: Duplicate registration or conflicting ID. Contains the instruction type and the repeated IdBox.
-- InstructionExecutionError::Mintability: Mintability invariant violated (`Once` exhausted twice, `Limited(n)` overdrawn, or attempts to disable `Infinitely`). Examples: minting an asset defined as `Once` twice yields `Mintability(MintUnmintable)`; configuring `Limited(0)` yields `Mintability(InvalidMintabilityTokens)`.
-- InstructionExecutionError::Math: Numeric domain errors (overflow, divide‑by‑zero, negative value, not enough quantity). Example: burning more than available amount yields Math(NotEnoughQuantity).
-- InstructionExecutionError::InvalidParameter: Invalid instruction parameter or configuration (e.g., time trigger in the past). Use for malformed contract payloads.
-- InstructionExecutionError::Evaluate: DSL/spec mismatch for instruction shape or types. Example: wrong numeric spec for an asset value yields Evaluate(Type(AssetNumericSpec(..))).
-- InstructionExecutionError::InvariantViolation: Violation of a system invariant that cannot be expressed in other categories. Example: attempting to remove the last signatory.
-- InstructionExecutionError::Query: Wrapping of QueryExecutionFail when a query fails during instruction execution.
+Санаттар
+- InstructionExecutionError::Find: нысан жоқ (актив, тіркелгі, домен, NFT, рөл, триггер, рұқсат, ашық кілт, блок, транзакция). Мысал: жоқ метадеректер кілтін жою Find(MetadataKey) береді.
+- InstructionExecutionError::Қайталау: Қайталанатын тіркеу немесе қайшылықты идентификатор. Құрамында нұсқаулық түрі және қайталанатын IdBox бар.
+- InstructionExecutionError::Mintability: Mintability инварианты бұзылды (`Once` екі рет таусылды, `Limited(n)` асып түсті немесе `Infinitely` өшіруге әрекет жасады). Мысалдар: `Once` ретінде анықталған активті соғу `Mintability(MintUnmintable)` кірістілігін екі рет; `Limited(0)` конфигурациялау `Mintability(InvalidMintabilityTokens)` береді.
+- InstructionExecutionError::Math: Сандық домен қателері (толып кету, нөлге бөлу, теріс мән, жеткіліксіз сан). Мысал: қол жетімді сомадан көп жағу Math(NotEnoughQuantity) береді.
+- InstructionExecutionError::InvalidParameter: Жарамсыз нұсқау параметрі немесе конфигурация (мысалы, өткен уақыт триггері). Бұзылған келісім-шарттың пайдалы жүктемелері үшін пайдаланыңыз.
+- InstructionExecutionError::Evaluate: нұсқаулық пішіні немесе түрлері үшін DSL/спецификация сәйкессіздігі. Мысал: актив мәні үшін қате сандық спецификация Evaluate(Type(AssetNumericSpec(...))) береді.
+- InstructionExecutionError::InvariantViolation: басқа санаттарда көрсетуге болмайтын жүйе инварианты бұзылған. Мысалы: соңғы қол қоюшыны жою әрекеті.
+- InstructionExecutionError::Query: Нұсқауларды орындау кезінде сұрау сәтсіз болғанда QueryExecutionFail орау.
 
 QueryExecutionFail
-- Find: Missing entity in query context.
-- Conversion: Wrong type expected by a query.
-- NotFound: Missing live query cursor.
-- CursorMismatch / CursorDone: Cursor protocol errors.
-- FetchSizeTooBig: Server‑enforced limit exceeded.
-- GasBudgetExceeded: Query execution exceeded the gas/materialization budget.
-- InvalidSingularParameters: Unsupported parameters for singular queries.
-- CapacityLimit: Live query store capacity reached.
+- Табу: сұрау контекстінде жоқ нысан.
+- Түрлендіру: сұрау арқылы күтілетін қате түрі.
+- Табылған жоқ: тірі сұрау курсоры жоқ.
+- CursorMismatch / CursorDone: курсор протоколының қателері.
+- FetchSizeTooBig: серверлік шектен асып кетті.
+- GasBudgetExceeded: сұрауды орындау газ/материалдандыру бюджетінен асып түсті.
+- InvalidSingularParameters: жеке сұраулар үшін қолдау көрсетілмейтін параметрлер.
+- CapacityLimit: тірі сұрау қоймасының сыйымдылығына жетті.
 
-Testing Tips
-- Prefer unit tests close to the origin of an error. For example, asset numeric spec mismatch can be generated in data‑model tests.
-- Integration tests should cover end‑to‑end mapping for representative cases (e.g., duplicate register, missing key on remove, transfer without ownership).
-- Keep assertions resilient by matching enum variants instead of message substrings.
+Сынақ бойынша кеңестер
+- Қатенің шығуына жақын бірлік сынақтарына артықшылық беріңіз. Мысалы, активтің сандық спецификациясының сәйкессіздігі деректер үлгісі сынақтарында жасалуы мүмкін.
+- Интеграциялық сынақтар репрезентативті жағдайлар үшін түпкілікті салыстыруды қамтуы керек (мысалы, тізілімнің қайталануы, жою кезіндегі жетіспейтін кілт, иеліксіз беру).
+- Хабардың ішкі жолдарының орнына нөмір нұсқаларын сәйкестендіру арқылы бекітулерді тұрақты ұстаңыз.

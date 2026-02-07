@@ -7,82 +7,81 @@ generator: scripts/sync_docs_i18n.py
 source_hash: da8a99adbbcf1d8b209a25da32e256c0dad2860633f373d7410a3a91d790c938
 source_last_modified: "2026-01-21T19:17:13.236818+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# IVM Architecture Refactor Plan
+# IVM архитектура рефакторы планы
 
-This plan captures the short-term milestones for reshaping the Iroha Virtual Machine
-(IVM) into clearer layers while preserving security and performance characteristics.
-It focuses on isolating responsibilities, making host integrations safer, and
-preparing the Kotodama language stack for extraction into a standalone crate.
+Был план ҡыҫҡа ваҡытлы этаптарҙы ала өсөн үҙгәртеп ҡороу Iroha виртуаль машина .
+(IVM) хәүефһеҙлек һәм эш һөҙөмтәлелеге үҙенсәлектәрен һаҡлау менән бер рәттән, анығыраҡ ҡатламдарға.
+Ул яуаплылыҡты изоляциялау, хужа интеграцияларын хәүефһеҙерәк итеүгә йүнәлтелгән, һәм
+әҙерләү Kotodama тел стека өсөн экстракция айырым йәшниккә.
 
-## Goals
+## Маҡсаттар
 
-1. **Layered runtime façade** – introduce an explicit runtime interface so the VM
-   core can be embedded behind a narrow trait and alternative front-ends can evolve
-   without touching internal modules.
-2. **Host/syscall boundary  hardening** – route syscall dispatch through a
-   dedicated adapter that enforces ABI policy and pointer validation before any host
-   code executes.
-3. **Language/tooling separation** – move Kotodama specific code to a new crate and
-   keep only the bytecode execution surface in `ivm`.
-4. **Configuration cohesion** – unify acceleration and feature toggles so they are
-   driven through `iroha_config`, removing environment-based knobs in production
-   paths.
+1. **Ҡатламлы эшләү ваҡыты фасад** – асыҡ эшләү ваҡыты интерфейсын индереү, шуға күрә VM .
+   ядроһы тар һыҙат артында һеңдерелергә мөмкин һәм альтернатив фронт-эндтар үҫешә ала
+   эске модулдәргә ҡағылмайынса.
+2. **Һуғыш/syscall сик ҡатыу ** – маршрут syscall аша ебәрергә а
+   бағышланған адаптер, тип үтәй ABI сәйәсәте һәм күрһәткес раҫлау алдынан теләһә ниндәй хост .
+   код башҡара.
+3. **Тел/инструменттар айырыу** – күсерергә Kotodama аныҡ код яңы йәшник һәм
+   тик байткод башҡарыу өҫтөн генә һаҡларға `ivm`.
+4. **Конфигурация берҙәмлеге** – тиҙләтеү һәм функцияларҙы берләштереү, шулай итеп, улар
+   `iroha_config` аша идара ителә, етештереүҙә мөхит ручкаларын бөтөрөү
+   юлдар.
 
-## Phase Breakdown
+## Фаза өҙөлгән
 
-### Phase 1 – Runtime façade (in progress)
-- Add a `runtime` module that defines a `VmEngine` trait describing lifecycle
-  operations (`load_program`, `execute`, host plumbing).
-- Teach `IVM` to implement the trait.  This keeps the existing struct but allows
-  consumers (and future tests) to depend on the interface instead of concrete
-  types.
-- Start shedding direct module re-exports from `lib.rs` so callers import via the
-  façade when possible.
+### 1-се этап – йүгерергә фасады (прогресс)
+- `runtime` модуле өҫтәү, ул `VmEngine` һыҙаттарын һүрәтләгән тормош циклын билдәләй.
+  операциялары (`load_program`, `execute`, хужа сантехникаһы).
+- `IVM` өйрәтеү, һыҙатты тормошҡа ашырыу өсөн.  Был ғәмәлдәге структур һаҡлай, әммә мөмкинлек бирә
+  ҡулланыусылар (һәм киләсәктәге һынауҙар) бетон урынына интерфейсҡа бәйле
+  төрҙәре.
+- `lib.rs`-тан туранан-тура модуль ҡабаттан экспортын ҡойоуҙы башлау шулай шылтыратыусылар аша импортлау аша
+  фасад мөмкин булғанда.
 
-**Security / performance impact**: The façade restricts direct access to internal
-state; only safe entry points are exposed.  This makes it easier to audit host
-interactions and reason about gas or TLV handling.
+**Хәүефһеҙлек / етештереүсәнлеге йоғонтоһо**: Фасад туранан-тура эске рөхсәт сикләй
+дәүләт; тик хәүефһеҙ инеү нөктәләре асыҡлана.  Был еңеләйтә аудит хужаһы .
+үҙ-ара тәьҫир итешеү һәм аҡыл тураһында газ йәки TLV менән эш итеү.
 
-### Phase 2 – Syscall dispatcher
-- Introduce a `SyscallDispatcher` component that wraps `IVMHost` and enforces ABI
-  policy and pointer validation once, in one location.
-- Migrate the default host and mock hosts to use the dispatcher, removing
-  duplicated validation logic.
-- Make dispatcher pluggable so hosts can supply custom instrumentation without
-  bypassing safety checks.
-- Provide a `SyscallDispatcher::shared(...)` helper so cloned VMs can forward
-  syscalls through a shared `Arc<Mutex<..>>` host without each worker building
-  bespoke wrappers.
+### 2-се этап – Сыскалл диспетчеры
+- `SyscallDispatcher` компоненты менән таныштырыу, ул `IVMHost` уратып һәм ABI үтәй
+  сәйәсәт һәм күрһәткес раҫлау бер тапҡыр, бер урында.
+- диспетчер ҡулланыу өсөн ғәҙәттәге хужа һәм макет хужаларын күсерергә, алыу
+  ҡабатланған раҫлау логикаһы.
+- диспетчер pluggable, шулай итеп, хужалар ҡулланыусы приборҙар менән тәьмин итә ала .
+  хәүефһеҙлек тикшерелеүҙәрен урап үтергә.
+- `SyscallDispatcher::shared(...)` ярҙамсыһы тәьмин итеү, шулай клонланған виртуаль виртуаль
+  syscalls аша уртаҡ `Arc<Mutex<..>>` хужаһы һәр эшсе бинаһы булмаған
+  заказ буйынса урауҙар.
 
-**Security / performance impact**: Centralised gating protects against hosts that
-forget to call `is_syscall_allowed`, and it allows future caching of pointer
-validations for repeated syscalls.
+**Хәүефһеҙлек / етештереүсәнлеге йоғонтоһо**: Үҙәкләштерелгән ҡапҡа хужаларҙан һаҡлай, тип,
+`is_syscall_allowed` шылтыратырға оноторға, һәм ул киләсәктә күрһәткесте кэшлау мөмкинлеген бирә
+ҡабат-ҡабат syscalls өсөн раҫлауҙар.
 
-### Phase 3 – Kotodama extraction
-- Kotodama compiler extracted to `crates/kotodama_lang` (from `crates/ivm/src/kotodama`).
-- Provide a minimal bytecode API that the VM consumes (`compile_to_ivm_bytecode`).
+### 3-сө этап – Kotodama экстракцияһы
+- Kotodama компиляторы `crates/kotodama_lang` тиклем сығарылған (`crates/ivm/src/kotodama`-тан).
+- ВМ ҡулланған минималь байткод API тәьмин итеү (`compile_to_ivm_bytecode`).
 
-**Security / performance impact**: Decoupling lowers the attack surface of the VM
-core and allows language innovation without risking interpreter regressions.
+**Хәүефһеҙлек / етештереүсәнлеге йоғонтоһо**: Драпугинг һөжүм йөҙөн түбәнәйтә VM .
+ядро һәм тел инновациялары интерпретатор регрессияларын хәүеф аҫтына ҡуймайынса мөмкинлек бирә.### 4-се этап – Конфигурацияны нығытыу
+- `iroha_config` аша тиҙләтеү варианттары (мәҫәлән, GPU бэкэндтарына мөмкинлек бирә), шул уҡ ваҡытта ғәмәлдәге мөхитте күҙәтеп тора (`IVM_DISABLE_CUDA`, `IVM_DISABLE_METAL`) эшләү ваҡыты үлтереш коммутаторҙары булараҡ.
+- `RuntimeConfig` объектын яңы фасад аша шулай хосттарҙы һайлауҙы асыҡларға
+  детерминистик тиҙләнеш сәйәсәте асыҡтан-асыҡ.
 
-### Phase 4 – Configuration consolidation
-- Thread acceleration options through `iroha_config` presets (e.g., enabling GPU backends) while keeping the existing environment overrides (`IVM_DISABLE_CUDA`, `IVM_DISABLE_METAL`) as runtime kill switches.
-- Expose a `RuntimeConfig` object through the new façade so hosts select
-  deterministic acceleration policies explicitly.
+**Хәүефһеҙлек / етештереүсәнлеге йоғонтоһо**: env-нигеҙендә переключатель бөтөрөү ҡотолоу өнһөҙ
+конфигурация дрейф һәм детерминистик тәртипте тәьмин итеү буйынса таратыу.
 
-**Security / performance impact**: Eliminating env-based toggles avoids silent
-configuration drift and ensures deterministic behaviour across deployments.
+## Киләһе аҙымдар тиҙ арала
 
-## Immediate next steps
+- 1-се фазаны тамамлау, фасад һыҙатын өҫтәп, юғары кимәлдәге шылтыратыу урындарын яңыртыу өсөн
+  уға бәйле.
+- Аудит йәмәғәт ҡабаттан экспортлау өсөн тәьмин итеү өсөн генә фасад һәм аңлы рәүештә йәмәғәт APIs .
+  йәшниктән ағып сыға.
+- Прототип syscall диспетчер API айырым модуль һәм миграция .
+  ғәҙәттәге хост бер тапҡыр раҫланған.
 
-- Finish Phase 1 by adding the façade trait and updating high-level call sites to
-  depend on it.
-- Audit public re-exports to ensure only the façade and deliberately public APIs
-  leak out of the crate.
-- Prototype the syscall dispatcher API in a separate module and migrate the
-  default host once validated.
-
-Progress on each phase will be tracked in `status.md` once the implementation is
-underway.
+Һәр этапта прогресс `status.md`-та күҙәтеләсәк, бер тапҡыр тормошҡа ашырыу .
+бара.

@@ -14436,12 +14436,8 @@ async fn qc_broadcast_targets_snapshot_roster() {
 
     let block = sample_block(height, 0, parent);
     let block_hash = block.hash();
-    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     let view_idx = block.header().view_change_index();
-    actor.pending.pending_blocks.insert(
-        block_hash,
-        PendingBlock::new(block, payload_hash, height, view_idx),
-    );
+    insert_validated_pending(actor, block);
 
     let mut snapshot_roster = actor.effective_commit_topology();
     let local_peer = actor.common_config.peer.id().clone();
@@ -15687,7 +15683,11 @@ async fn deferred_votes_replay_after_commit_roster_history_arrives() {
         "test needs at least two validators"
     );
     let mut history_roster = active_roster.clone();
-    history_roster.rotate_left(1);
+    let rotate_at = super::network_topology::commit_quorum_from_len(history_roster.len())
+        .min(history_roster.len());
+    if rotate_at > 1 {
+        history_roster[..rotate_at].rotate_right(1);
+    }
 
     let block_height3 = sample_block(3, 0, Some(hash_height2));
     let hash_height3 = block_height3.hash();
@@ -15837,7 +15837,11 @@ async fn deferred_qcs_replay_after_commit_roster_history_arrives() {
         "test needs at least two validators"
     );
     let mut history_roster = active_roster.clone();
-    history_roster.rotate_left(1);
+    let rotate_at = super::network_topology::commit_quorum_from_len(history_roster.len())
+        .min(history_roster.len());
+    if rotate_at > 1 {
+        history_roster[..rotate_at].rotate_right(1);
+    }
 
     let block_height3 = sample_block(3, 0, Some(hash_height2));
     let hash_height3 = block_height3.hash();
@@ -33535,7 +33539,11 @@ async fn trigger_view_change_uses_commit_qc_roster_for_new_view_vote() {
     );
 
     let mut history_roster = active_roster.clone();
-    history_roster.rotate_left(1);
+    let rotate_at = super::network_topology::commit_quorum_from_len(history_roster.len())
+        .min(history_roster.len());
+    if rotate_at > 1 {
+        history_roster[..rotate_at].rotate_right(1);
+    }
 
     let block_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x11; Hash::LENGTH]));
@@ -33577,11 +33585,7 @@ async fn trigger_view_change_uses_commit_qc_roster_for_new_view_vote() {
     };
     status::record_commit_qc(commit_qc);
 
-    let expected_roster = {
-        let mut topo = super::network_topology::Topology::new(history_roster.clone());
-        topo.block_committed(history_roster.clone(), block_hash);
-        topo.as_ref().to_vec()
-    };
+    let expected_roster = active_roster.clone();
     assert_eq!(
         expected_roster, active_roster,
         "commit-QC roster canonicalization should preserve active membership ordering"

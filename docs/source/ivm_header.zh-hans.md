@@ -7,83 +7,82 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 779174437b1a7e57b371d3b41d1cab780d94700acf6642b1356cdb75504ae5fa
 source_last_modified: "2026-01-21T19:17:13.237630+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# IVM Bytecode Header
+# IVM 字节码头
 
 
-Magic
-- 4 bytes: ASCII `IVM\0` at offset 0.
+魔法
+- 4 个字节：偏移量 0 处的 ASCII `IVM\0`。
 
-Layout (current)
-- Offsets and sizes (17 bytes total):
-  - 0..4: magic `IVM\0`
-  - 4: `version_major: u8`
-  - 5: `version_minor: u8`
-  - 6: `mode: u8` (feature bits; see below)
-  - 7: `vector_length: u8`
-  - 8..16: `max_cycles: u64` (little‑endian)
-  - 16: `abi_version: u8`
+布局（当前）
+- 偏移量和大小（总共 17 个字节）：
+  - 0..4：魔法 `IVM\0`
+  - 4：`version_major: u8`
+  - 5：`version_minor: u8`
+  - 6：`mode: u8`（功能位；见下文）
+  - 7：`vector_length: u8`
+  - 8..16：`max_cycles: u64`（小端）
+  - 16：`abi_version: u8`
 
-Mode bits
-- `ZK = 0x01`, `VECTOR = 0x02`, `HTM = 0x04` (reserved/feature‑gated).
+模式位
+- `ZK = 0x01`、`VECTOR = 0x02`、`HTM = 0x04`（保留/功能门控）。
 
-Fields (meaning)
-- `abi_version`: syscall table and pointer‑ABI schema version.
-- `mode`: feature bits for ZK tracing/VECTOR/HTM.
-- `vector_length`: logical vector length for vector ops (0 → unset).
-- `max_cycles`: execution padding bound used in ZK mode and admission.
+字段（含义）
+- `abi_version`：系统调用表和指针 ABI 架构版本。
+- `mode`：ZK 跟踪/VECTOR/HTM 的功能位。
+- `vector_length`：向量操作的逻辑向量长度（0 → 未设置）。
+- `max_cycles`：ZK 模式和准入中使用的执行填充边界。
 
-Notes
-- Endianness and layout are defined by the implementation and bound to `version`. The on‑wire layout above reflects the current implementation in `crates/ivm_abi/src/metadata.rs`.
-- A minimal reader can rely on this layout for current artifacts and should handle future changes via `version` gating.
-- Hardware acceleration (SIMD/Metal/CUDA) is opt-in per host. The runtime reads `AccelerationConfig` values from `iroha_config`: `enable_simd` forces scalar fallbacks when false, while `enable_metal` and `enable_cuda` gate their respective backends even when compiled in. These toggles are applied through `ivm::set_acceleration_config` before VM creation.
-- Mobile SDKs (Android/Swift) surface the same knobs; `IrohaSwift.AccelerationSettings`
-  calls `connect_norito_set_acceleration_config` so macOS/iOS builds can opt into Metal /
-  NEON while keeping deterministic fallbacks.
-- Operators can also force-disable specific backends for diagnostics by exporting `IVM_DISABLE_METAL=1` or `IVM_DISABLE_CUDA=1`. These environment overrides take precedence over configuration and keep the VM on the deterministic CPU path.
+注释
+- 字节序和布局由实现定义并绑定到 `version`。上面的在线布局反映了 `crates/ivm_abi/src/metadata.rs` 中的当前实现。
+- 最小读者可以依赖此布局来获取当前工件，并应通过 `version` 门控处理未来的更改。
+- 每个主机可选择硬件加速（SIMD/Metal/CUDA）。运行时从 `iroha_config` 读取 `AccelerationConfig` 值：`enable_simd` 在为 false 时强制标量回退，而 `enable_metal` 和 `enable_cuda` 即使在编译时也会对其各自的后端进行门控。这些切换在创建 VM 之前通过 `ivm::set_acceleration_config` 应用。
+- 移动 SDK (Android/Swift) 具有相同的旋钮； `IrohaSwift.AccelerationSettings`
+  调用 `connect_norito_set_acceleration_config`，因此 macOS/iOS 版本可以选择使用 Metal /
+  NEON 同时保持确定性回退。
+- 操作员还可以通过导出 `IVM_DISABLE_METAL=1` 或 `IVM_DISABLE_CUDA=1` 来强制禁用特定后端进行诊断。这些环境覆盖优先于配置，并使虚拟机保持在确定性 CPU 路径上。
 
-Durable state helpers and ABI surface
-- The durable state helper syscalls (0x50–0x5A: STATE_{GET,SET,DEL}, ENCODE/DECODE_INT, BUILD_PATH_* and JSON/SCHEMA encode/decode) are part of the V1 ABI and are included in `abi_hash` computation.
-- CoreHost wires STATE_{GET,SET,DEL} to WSV-backed durable smart-contract state; dev/test hosts may use overlays or local persistence but must preserve the same observable behavior.
+持久状态助手和 ABI 表面
+- 持久状态帮助程序系统调用（0x50–0x5A：STATE_{GET,SET,DEL}、ENCODE/DECODE_INT、BUILD_PATH_* 和 JSON/SCHEMA 编码/解码）是 V1 ABI 的一部分，并包含在 `abi_hash` 计算中。
+- CoreHost 将 STATE_{GET,SET,DEL} 连接到 WSV 支持的持久智能合约状态；开发/测试主机可以使用覆盖或本地持久性，但必须保留相同的可观察行为。
 
-Validation
-- Node admission accepts only `version_major = 1` and `version_minor = 0` headers.
-- `mode` must only contain known bits: `ZK`, `VECTOR`, `HTM` (unknown bits are rejected).
-- `vector_length` is advisory and may be non‑zero even if the `VECTOR` bit is not set; admission enforces an upper bound only.
-- Supported `abi_version` values: first release accepts only `1` (V1); other values are rejected at admission.
+验证
+- 节点准入仅接受 `version_major = 1` 和 `version_minor = 0` 标头。
+- `mode` 必须仅包含已知位：`ZK`、`VECTOR`、`HTM`（拒绝未知位）。
+- `vector_length` 是建议性的，即使未设置 `VECTOR` 位，也可能为非零；准入仅强制执行上限。
+- 支持的 `abi_version` 值：第一个版本仅接受 `1` (V1)；其他值在入学时被拒绝。
 
-### Policy (generated)
-The following policy summary is generated from the implementation and should not be edited manually.
-
-<!-- BEGIN GENERATED HEADER POLICY -->
-| Field | Policy |
+### 政策（生成）
+以下政策摘要是在实施过程中生成的，不应手动编辑。<!-- BEGIN GENERATED HEADER POLICY -->
+|领域 |政策 |
 |---|---|
-| version_major | 1 |
-| version_minor | 0 |
-| mode (known bits) | 0x07 (ZK=0x01, VECTOR=0x02, HTM=0x04) |
-| abi_version | 1 |
-| vector_length | 0 or 1..=64 (advisory; independent of VECTOR bit) |
+|主要版本 | 1 |
+|次要版本 | 0 |
+|模式（已知位）| 0x07（ZK=0x01，矢量=0x02，HTM=0x04）|
+| abi_版本 | 1 |
+|向量长度| 0 或 1..=64（建议；与 VECTOR 位无关）|
 <!-- END GENERATED HEADER POLICY -->
 
-### ABI Hashes (generated)
-The following table is generated from the implementation and lists canonical `abi_hash` values for supported policies.
+### ABI 哈希（生成）
+下表是根据实现生成的，并列出了受支持策略的规范 `abi_hash` 值。
 
 <!-- BEGIN GENERATED ABI HASHES -->
-| Policy | abi_hash (hex) |
+|政策 | abi_hash（十六进制）|
 |---|---|
 | ABI v1 | ba1786031c3d0cdbd607debdae1cc611a0807bf9cf49ed349a0632855724969f |
 <!-- END GENERATED ABI HASHES -->
 
-- Minor updates may add instructions behind `feature_bits` and reserved opcode space; major updates may change encodings or remove/repurpose only together with a protocol upgrade.
-- Syscall ranges are stable; unknown for the active `abi_version` yields `E_SCALL_UNKNOWN`.
-- Gas schedules are bound to the `version` and require golden vectors on change.
+- 小更新可能会在 `feature_bits` 后面添加指令并保留操作码空间；主要更新可能会更改编码或仅与协议升级一起删除/重新调整用途。
+- 系统调用范围稳定；对于活动的 `abi_version` 未知，产生 `E_SCALL_UNKNOWN`。
+- Gas Schedule 与 `version` 绑定，并且需要更改时的黄金向量。
 
-Inspecting artifacts
-- Use `ivm_tool inspect <file.to>` for a stable view of header fields.
-- For development, examples/ include a small Makefile target `examples-inspect` that runs inspect over built artifacts.
+检查工件
+- 使用 `ivm_tool inspect <file.to>` 获得稳定的标头字段视图。
+- 对于开发，示例/包括一个小型 Makefile 目标 `examples-inspect`，该目标对构建的工件运行检查。
 
-Example (Rust): minimal magic + size check
+示例（Rust）：最小魔法+尺寸检查
 
 ```rust
 use std::fs::File;
@@ -99,4 +98,4 @@ fn is_ivm_artifact(path: &std::path::Path) -> std::io::Result<bool> {
 }
 ```
 
-Note: The exact header layout beyond the magic is versioned and implementation‑defined; prefer `ivm_tool inspect` for stable field names and values.
+注意：超出魔法范围的确切标题布局是版本化的并且是实现定义的；更喜欢 `ivm_tool inspect` 以获得稳定的字段名称和值。

@@ -7,169 +7,164 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 9201c0027f05b1ab2c83fa6b3e1a1e6dad3ff9660a8ed23bac7667408d421ada
 source_last_modified: "2026-01-22T14:35:37.551676+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Governance Playbook
+# Засаглалын тоглоомын ном
 
-This playbook captures the day-to-day rituals that keep the Sora Network
-governance council aligned. It aggregates the authoritative references from the
-repository so individual ceremonies can remain concise, while operators always
-have a single entry point for the broader process.
+Энэхүү тоглоомын номонд Сора сүлжээг хадгалж байдаг өдөр тутмын зан үйлийг багтаасан болно
+засаглалын зөвлөлд нэгдсэн. Энэ нь эрх бүхий лавлагааг нэгтгэдэг
+репозиторий, тиймээс хувь хүний ёслолууд товч хэвээр байх болно, харин операторууд үргэлж
+илүү өргөн хүрээтэй үйл явцын нэг нэвтрэх цэгтэй байна.
 
-## Council Ceremonies
+## Зөвлөлийн ёслолууд
 
-- **Fixture governance** – See [Sora Parliament Fixture Approval](sorafs/signing_ceremony.md)
-  for the on-chain approval flow that the Parliament’s Infrastructure Panel now
-  follows when reviewing SoraFS chunker updates.
-- **Vote tally publication** – Refer to
-  [Governance Vote Tally](governance_vote_tally.md) for the step-by-step CLI
-  workflow and reporting template.
+- **Тогтоолын засаглал** – [Сора Парламентын Бүтэц батлах тухай](sorafs/signing_ceremony.md) хэсгийг үзнэ үү.
+  одоо УИХ-ын Дэд бүтцийн зөвлөлөөс гинжин батлах урсгалын төлөө
+  SoraFS chunker шинэчлэлтүүдийг хянаж үзэхэд дараах зүйлийг хийнэ.
+- **Саналын дүнг нийтлэх** – Эндээс үзнэ үү
+  [Засаглалын саналын тоо](governance_vote_tally.md) алхам алхмаар CLI-д зориулсан
+  ажлын урсгал болон тайлангийн загвар.
 
-## Operational Runbooks
+## Үйл ажиллагааны Runbooks
 
-- **API integrations** – [Governance API reference](governance_api.md) lists the
-  REST/gRPC surfaces exposed by council services, including authentication
-  requirements and pagination rules.
-- **Telemetry dashboards** – The Grafana JSON definitions under
-  `docs/source/grafana_*` define the “Governance Constraints” and “Scheduler
-  TEU” boards. Export the JSON into Grafana after each release to stay aligned
-  with the canonical layout.
+- **API нэгтгэлүүд** – [Засаглалын API лавлагаа](governance_api.md)
+  REST/gRPC гадаргуу нь баталгаажуулалт зэрэг зөвлөлийн үйлчилгээнд илэрсэн
+  шаардлага, хуудасны дүрэм.
+- **Телеметрийн хяналтын самбар** – Доорх Grafana JSON тодорхойлолтууд
+  `docs/source/grafana_*` нь "Засаглалын хязгаарлалт" болон "Хуваарьлагч"-ыг тодорхойлдог.
+  TEU” самбарууд. Хувилбар болгоны дараа JSON-г Grafana руу экспортлоорой
+  каноник зохион байгуулалттай.
 
-## Data Availability Oversight
+## Өгөгдлийн хүртээмжийн хяналт
 
-### Retention classes
+### Хадгалах ангиуд
 
-Parliament panels approving DA manifests must reference the enforced retention
-policy before voting. The table below mirrors the defaults enforced via
-`torii.da_ingest.replication_policy` so reviewers can spot mismatches without
-hunting for the source TOML.【docs/source/da/replication_policy.md:1】
+DA манифестийг батлах парламентын зөвлөлүүд албадан хадгалалтын талаар лавлах ёстой
+санал өгөхөөс өмнө бодлого. Доорх хүснэгт нь дамжуулан хэрэгжүүлсэн өгөгдмөл тохиргоог харуулж байна
+`torii.da_ingest.replication_policy` тул тоймчид таарахгүй байгааг олж харах боломжтой
+TOML эх сурвалжийг хайж байна.【docs/source/da/replication_policy.md:1】
 
-| Governance tag | Blob class | Hot retention | Cold retention | Required replicas | Storage class |
+| Засаглалын шошго | Blob анги | Халуун хадгалах | Хүйтэн хадгалах | Шаардлагатай хуулбар | Хадгалах анги |
 |----------------|------------|---------------|----------------|-------------------|---------------|
-| `da.taikai.live` | `taikai_segment` | 24 h | 14 d | 5 | `hot` |
-| `da.sidecar` | `nexus_lane_sidecar` | 6 h | 7 d | 4 | `warm` |
-| `da.governance` | `governance_artifact` | 12 h | 180 d | 3 | `cold` |
-| `da.default` | _all other classes_ | 6 h | 30 d | 3 | `warm` |
+| `da.taikai.live` | `taikai_segment` | 24 цаг | 14d | 5 | `hot` |
+| `da.sidecar` | `nexus_lane_sidecar` | 6 цаг | 7d | 4 | `warm` |
+| `da.governance` | `governance_artifact` | 12 цаг | 180d | 3 | `cold` |
+| `da.default` | _бусад бүх ангиуд_ | 6 цаг | 30д | 3 | `warm` |
 
-The Infrastructure Panel should attach the filled template from
-`docs/examples/da_manifest_review_template.md` to every ballot so the manifest
-digest, retention tag, and Norito artefacts remain linked in the governance
-record.
+Дэд бүтцийн самбар нь бөглөсөн загварыг хавсаргах ёстой
+Саналын хуудас болгонд `docs/examples/da_manifest_review_template.md` тул манифест
+хураангуй, хадгалах шошго, Norito олдворууд засаглалд холбоотой хэвээр байна
+бичлэг.
 
-### Signed manifest audit trail
+### Гарын үсэг зурсан манифест аудитын мөр
 
-Before a ballot reaches the agenda, council staff must prove that the manifest
-bytes under review match the Parliament envelope and the SoraFS artefact. Use
-the existing tooling to collect that evidence:
-
-1. Fetch the manifest bundle from Torii (`iroha app da get-blob --storage-ticket <hex>`
-   or the equivalent SDK helper) so everyone hashes the same bytes that reached
-   the gateways.
-2. Run the manifest stub verifier with the signed envelope:
+Саналын хуудас хэлэлцэх асуудалд орохоос өмнө зөвлөлийн ажилтнууд манифест гэдгийг батлах ёстой
+Шалгаж буй байт нь УИХ-ын дугтуй болон SoraFS олдвортой таарч байна. Ашиглах
+Энэ нотлох баримтыг цуглуулах одоо байгаа хэрэгсэл:1. Torii (`iroha app da get-blob --storage-ticket <hex>`)-аас манифест багцыг татаж авах
+   эсвэл түүнтэй адилтгах SDK туслах) тул хүн бүр хүрсэн ижил байтыг хэш болгодог
+   гарцууд.
+2. Гарын үсэг зурсан дугтуйтай манифест stub баталгаажуулагчийг ажиллуулна уу:
    ```
    cargo run -p sorafs_car --bin sorafs-manifest-stub -- manifest.json \
      --manifest-signatures-in=fixtures/sorafs_chunker/manifest_signatures.json \
      --json-out=/tmp/manifest_report.json
    ```
-   This recomputes the BLAKE3 manifest digest, validates the
-   `chunk_digest_sha3_256`, and checks every Ed25519 signature embedded in
-   `manifest_signatures.json`. See `docs/source/sorafs/manifest_pipeline.md`
-   for additional CLI options.
-3. Copy the digest, `chunk_digest_sha3_256`, profile handle, and signer list into
-   the review template. NOTE: if the verifier reports “profile mismatch” or a
-   missing signature, halt the vote and request a corrected envelope.
-4. Store the verifier output (or CI artefact from
-   `ci/check_sorafs_fixtures.sh`) alongside the Norito `.to` payload so auditors
-   can replay the evidence without accessing internal gateways.
+   Энэ нь BLAKE3 манифест дижестийг дахин тооцоолж, баталгаажуулдаг
+   `chunk_digest_sha3_256` ба суулгагдсан Ed25519 гарын үсэг бүрийг шалгадаг.
+   `manifest_signatures.json`. `docs/source/sorafs/manifest_pipeline.md`-г үзнэ үү
+   нэмэлт CLI сонголтуудын хувьд.
+3. Тайжест, `chunk_digest_sha3_256`, профайл бариул, гарын үсэг зурсан хүмүүсийн жагсаалтыг хуулах
+   хянан үзэх загвар. ТАЙЛБАР: хэрэв баталгаажуулагч нь "профайл таарахгүй" гэж мэдээлсэн бол a
+   гарын үсэг дутуу, санал хураалтыг зогсоож, зассан дугтуйг хүсэх.
+4. Баталгаажуулагчийн гаралтыг (эсвэл CI олдворыг
+   `ci/check_sorafs_fixtures.sh`) Norito `.to` ачааллын зэрэгцээ аудиторууд
+   дотоод гарц руу нэвтрэхгүйгээр нотлох баримтыг дахин тоглуулах боломжтой.
 
-The resulting audit pack should let Parliament recreate every hash and signature
-check even after the manifest is rotated out of hot storage.
+Үүссэн аудитын багц нь УИХ-д хэш, гарын үсэг бүрийг дахин бий болгох боломжийг олгох ёстой
+манифестийг халуун хадгалалтаас эргүүлсний дараа ч шалга.
 
-### Review checklist
+### Хяналтын хуудсыг шалгана уу
 
-1. Pull the Parliament-approved manifest envelope (see
-   `docs/source/sorafs/signing_ceremony.md`) and record the BLAKE3 digest.
-2. Verify the manifest’s `RetentionPolicy` block matches the tag in the table
-   above; Torii will reject mismatches, but the council must capture the
-   evidence for auditors.【docs/source/da/replication_policy.md:32】
-3. Confirm that the submitted Norito payload references the same retention tag
-   and blob class that appears in the intake ticket.
-4. Attach proof of the policy check (CLI output, `torii.da_ingest.replication_policy`
-   dump, or CI artefact) to the review packet so SRE can replay the decision.
-5. Record planned subsidy taps or rent adjustments when the proposal depends on
+1. УИХ-аас баталсан манифестийн дугтуйг татах (үзнэ үү
+   `docs/source/sorafs/signing_ceremony.md`) ба BLAKE3 дижестийг бичнэ.
+2. Манифестын `RetentionPolicy` блок нь хүснэгтийн шошготой таарч байгаа эсэхийг шалгана уу.
+   дээрх; Torii таарахгүй байхаас татгалзах болно, гэхдээ зөвлөл
+   аудиторуудад зориулсан нотолгоо.【docs/source/da/replication_policy.md:32】
+3. Илгээсэн Norito ачаалал нь ижил хадгалалтын шошгыг иш татсан болохыг баталгаажуулна уу.
+   болон оролтын тасалбарт харагдах blob анги.
+4. Бодлогын шалгалтын нотолгоог хавсаргана уу (CLI гаралт, `torii.da_ingest.replication_policy`
+   dump, эсвэл CI artefact) -ийг хянан шалгах багц руу оруулснаар SRE шийдвэрийг дахин тоглуулах боломжтой.
+5. Төлөвлөсөн татаас, түрээсийн зохицуулалтыг тухайн саналаас хамаарч бүртгэх
    `docs/source/sorafs_reserve_rent_plan.md`.
 
-### Escalation matrix
+### Эскалацын матриц
 
-| Request type | Owning panel | Evidence to attach | Deadlines & telemetry | References |
-|--------------|--------------|--------------------|-----------------------|------------|
-| Subsidy / rent adjustment | Infrastructure + Treasury | Filled DA packet, rent delta from `reserve_rentd`, updated reserve projection CSV, council vote minutes | Note rent impact before submitting the Treasury update; include rolling 30 d buffer telemetry so Finance can reconcile within the next settlement window | `docs/source/sorafs_reserve_rent_plan.md`, `docs/examples/da_manifest_review_template.md` |
-| Moderation takedown / compliance action | Moderation + Compliance | Compliance ticket (`ComplianceUpdateV1`), proof tokens, signed manifest digest, appeal status | Follow the gateway compliance SLA (acknowledge within 24 h, full removal ≤72 h). Attach `TransparencyReportV1` excerpt showing the action. | `docs/source/sorafs_gateway_compliance_plan.md`, `docs/source/sorafs_moderation_panel_plan.md` |
-| Emergency freeze / rollback | Parliament moderation panel | Prior approval packet, new freeze order, rollback manifest digest, incident log | Publish freeze notice immediately and schedule the rollback referendum within the next governance slot; include buffer saturation + DA replication telemetry to justify the emergency. | `docs/source/sorafs/signing_ceremony.md`, `docs/source/sorafs_moderation_panel_plan.md` |
+| Хүсэлтийн төрөл | Өмчлөх самбар | Хавсаргах нотлох баримт | Эцсийн хугацаа ба телеметр | Ашигласан материал |
+|-------------|--------------|--------------------|-----------------------|------------|
+| Татаас / түрээсийн зохицуулалт | Дэд бүтэц + Төрийн сан | Дүүргэсэн DA пакет, `reserve_rentd`-аас түрээсийн дельта, шинэчилсэн нөөцийн төсөөлөл CSV, зөвлөлийн санал хураалтын минут | Төрийн сангийн шинэчлэлийг оруулахын өмнө түрээсийн нөлөөллийг анхаарч үзээрэй; 30d буфер телеметрийг оруулснаар Санхүү дараагийн тооцооны цонхонд эвлэрэх боломжтой | `docs/source/sorafs_reserve_rent_plan.md`, `docs/examples/da_manifest_review_template.md` |
+| Зохицуулах татан буулгах / дагаж мөрдөх арга хэмжээ | Зохицуулах + Дагаж мөрдөх | Дагаж мөрдөх тасалбар (`ComplianceUpdateV1`), нотлох тэмдэг, гарын үсэгтэй манифест тойм, давж заалдах статус | Гарцын нийцлийн SLA-г дагаж мөрдөөрэй (24 цагийн дотор хүлээн зөвшөөр, бүрэн хасалт ≤72 цагийн дотор). Үйлдлийг харуулсан `TransparencyReportV1` хэсгийг хавсаргана уу. | `docs/source/sorafs_gateway_compliance_plan.md`, `docs/source/sorafs_moderation_panel_plan.md` |
+| Яаралтай хөлдөх / буцаах | УИХ-ын зохицуулах хэсэг | Өмнөх зөвшөөрлийн багц, шинэ царцаах захиалга, буцаах манифест дижест, тохиолдлын бүртгэл | Царцаасан мэдэгдлийг нэн даруй нийтэлж, дараагийн засаглалын хүрээнд буцаах санал асуулга явуулахаар товлох; яаралтай байдлыг зөвтгөхийн тулд буферийн ханалт + DA хуулбарлах телеметрийг оруулна. | `docs/source/sorafs/signing_ceremony.md`, `docs/source/sorafs_moderation_panel_plan.md` |Тасалбар бүрийг яг таг хүлээн авахын тулд тасалбарыг шалгахдаа хүснэгтийг ашиглана уу
+бүрэн эрхээ хэрэгжүүлэхэд шаардагдах эд өлгийн зүйлс.
 
-Use the table when triaging intake tickets so every panel receives the exact
-artefacts required to execute its mandate.
+### Хүргэлтийн талаар мэдээлэх
 
-### Reporting deliverables
+DA-10-ын шийдвэр бүрийг дараах олдворуудтай хамт илгээх ёстой (тэдгээрийг
+Санал хураалтад дурдсан засаглалын DAG оруулгыг):
 
-Every DA-10 decision must ship with the following artefacts (attach them to the
-Governance DAG entry referenced in the vote):
+- Дууссан Markdown багц
+  `docs/examples/da_manifest_review_template.md` (одоо гарын үсэг болон
+  эрчимжүүлэх хэсгүүд).
+- Гарын үсэг зурсан Norito манифест (`.to`) дээр нь `manifest_signatures.json` дугтуй
+  эсвэл татан авалтыг нотлох CI баталгаажуулагч бүртгэлүүд.
+- Үйлдлээс үүдэлтэй аливаа ил тод байдлын шинэчлэлт:
+  - `TransparencyReportV1` дельта татан буулгах эсвэл дагаж мөрдөхөөс шалтгаалсан хөлдөлт.
+  - Түрээслэх/нөөцлөх дэвтэрийн дельта эсвэл татаас авахын тулд `ReserveSummaryV1` хормын хувилбар.
+- Хяналтын явцад цуглуулсан телеметрийн агшин зургийн холбоосууд (хуулбарлах гүн,
+  буферийн өндөр зай, зохицуулалтын хоцрогдол) тул ажиглагчид нөхцөл байдлыг хөндлөн шалгах боломжтой
+  болсны дараа.
 
-- The completed Markdown packet from
-  `docs/examples/da_manifest_review_template.md` (now including signature and
-  escalation sections).
-- The signed Norito manifest (`.to`) plus the `manifest_signatures.json` envelope
-  or CI verifier logs that prove the fetch digest.
-- Any transparency updates triggered by the action:
-  - `TransparencyReportV1` delta for takedowns or compliance-driven freezes.
-  - Rent/reserve ledger delta or `ReserveSummaryV1` snapshot for subsidies.
-- Links to telemetry snapshots collected during the review (replication depth,
-  buffer headroom, moderation backlog) so observers can cross-check conditions
-  after the fact.
+## Зохицуулах, нэмэгдүүлэх
 
-## Moderation & Escalation
+Даалгаврыг дагаж мөрдсөн гарцыг татан буулгах, татаасыг буцаах, эсвэл DA царцаана
+`docs/source/sorafs_gateway_compliance_plan.md`-д тодорхойлсон дамжуулах хоолой ба
+`docs/source/sorafs_moderation_panel_plan.md` дээрх давж заалдах хэрэгсэл. Самбарууд нь:
 
-Gateway takedowns, subsidy clawbacks, or DA freezes follow the compliance
-pipeline described in `docs/source/sorafs_gateway_compliance_plan.md` and the
-appeal tooling in `docs/source/sorafs_moderation_panel_plan.md`. Panels should:
+1. Гарсан дагаж мөрдөх тасалбарыг (`ComplianceUpdateV1` эсвэл
+   `ModerationAppealV1`) болон холбогдох нотлох токенуудыг хавсаргана уу.【docs/source/sorafs_gateway_compliance_plan.md:20】
+2. Хүсэлт нь зохицуулах давж заалдах замыг дуудаж байгаа эсэхийг баталгаажуулна уу (иргэний хэсэг
+   санал өгөх) эсвэл яаралтай парламентыг хөлдөөх; хоёр урсгал нь манифестыг иш татах ёстой
+   шинэ загварт шингээх болон хадгалах шошгыг авсан.【docs/source/sorafs_moderation_panel_plan.md:1】
+3. Өргөтгөх эцсийн хугацааг тоолох (давж мэдүүлэх/илчлэх цонх, онцгой байдал
+   царцаах хугацаа) мөн ямар зөвлөл эсвэл зөвлөл хяналтыг эзэмшиж байгааг зааж өгнө үү.
+4. Ашигласан телеметрийн агшин зуурын зургийг авах (буферийн зай, зохицуулалтын нөөц)
+   үйлдлийг зөвтгөх, ингэснээр доод талын аудитууд шийдвэртэй шууд таарч болно
+   муж.
 
-1. Log the originating compliance ticket (`ComplianceUpdateV1` or
-   `ModerationAppealV1`) and attach the associated proof tokens.【docs/source/sorafs_gateway_compliance_plan.md:20】
-2. Confirm whether the request invokes the moderation appeal path (citizen panel
-   vote) or an emergency Parliament freeze; both flows must cite the manifest
-   digest and retention tag captured in the new template.【docs/source/sorafs_moderation_panel_plan.md:1】
-3. Enumerate escalation deadlines (appeal commit/reveal windows, emergency
-   freeze duration) and state which council or panel owns the follow-up.
-4. Capture the telemetry snapshot (buffer headroom, moderation backlog) used to
-   justify the action so downstream audits can match the decision to the live
-   state.
+Дагаж мөрдөх болон зохицуулах самбар нь долоо хоног тутмын ил тод байдлын тайлангаа синк хийх ёстой
+төлбөр тооцооны чиглүүлэгчийн операторуудтай тул татан буулгах болон татаас нь адилхан нөлөөлдөг
+манифестуудын багц.
 
-The compliance and moderation panels must sync their weekly transparency reports
-with the settlement router operators so takedowns and subsidies affect the same
-set of manifests.
+## Тайлангийн загвар
 
-## Reporting Templates
+Бүх DA-10 тоймд одоо гарын үсэг зурсан Markdown багц шаардлагатай. Хуулбарлах
+`docs/examples/da_manifest_review_template.md`, манифест мета өгөгдлийг бөглөх,
+хадгалах баталгаажуулалтын хүснэгт болон хэсгийн санал хураалтын хураангуй, дараа нь бөглөж бөглөнө үү
+баримт бичиг (Norito/JSON олдворуудыг нэмсэн) Засаглалын DAG оруулгад оруулна.
+Самбарууд багцыг удирдлагын протоколд холбох ёстой бөгөөд ингэснээр ирээдүйд татан буулгах эсвэл
+татаасын сунгалт нь дахин ажиллуулахгүйгээр анхны манифест тоймоос иш татаж болно
+бүхэл бүтэн ёслол.
 
-All DA-10 reviews now require a signed Markdown packet. Copy
-`docs/examples/da_manifest_review_template.md`, populate the manifest metadata,
-retention verification table, and panel vote summary, then pin the completed
-document (plus referenced Norito/JSON artefacts) to the Governance DAG entry.
-Panels should link the packet in the governance minutes so future takedowns or
-subsidy renewals can cite the original manifest digest without re-running the
-entire ceremony.
+## Осол, хүчингүй болгох ажлын урсгал
 
-## Incident & Revocation Workflow
+Онцгой байдлын арга хэмжээ одоо гинжин хэлхээнд хийгддэг. Хэзээ бэхэлгээний хувилбар байх шаардлагатай
+буцаагаад, засаглалын тасалбараа гаргаж, УИХ-ын буцаах саналыг нээнэ
+өмнө нь батлагдсан манифест дижестийг зааж байна. Дэд бүтцийн самбар
+санал хураалтыг хариуцаж, Nexus-г дуусгасны дараа буцаалтыг нийтэлнэ
+доод түвшний үйлчлүүлэгчдийн хэрэглэдэг үйл явдал. Орон нутгийн JSON олдворууд шаардлагагүй.
 
-Emergency actions now happen on-chain. When a fixture release needs to be
-rolled back, file a governance ticket and open a Parliament revert proposal
-pointing at the previously approved manifest digest. The Infrastructure Panel
-handles the vote, and once finalized the Nexus runtime publishes the rollback
-event that downstream clients consume. No local JSON artefacts are required.
-
-## Keeping the Playbook Current
-
-- Update this file whenever a new governance-facing runbook lands in the
-  repository.
-- Cross-link new ceremonies here so the council index remains discoverable.
-- If a referenced document moves (for example, a new SDK path), update the link
-  as part of the same pull request to avoid stale pointers.
+## Тоглоомын дэвтрийг хэвээр хадгалах- Шинэ засаглалтай холбоотой runbook-д орох бүрт энэ файлыг шинэчил
+  хадгалах газар.
+- Шинэ ёслолуудыг энд холбосноор зөвлөлийн индекс илрэх боломжтой хэвээр байна.
+- Хэрэв иш татсан баримт бичиг хөдөлж байвал (жишээлбэл, шинэ SDK зам) холбоосыг шинэчилнэ үү
+  хуучирсан заагчаас зайлсхийхийн тулд ижил татах хүсэлтийн нэг хэсэг болгон.

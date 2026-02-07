@@ -6,83 +6,82 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: da8a99adbbcf1d8b209a25da32e256c0dad2860633f373d7410a3a91d790c938
 source_last_modified: "2026-01-21T10:21:48.087325+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# IVM Architecture Refactor Plan
+# IVM Plan de refactorización de arquitectura
 
-This plan captures the short-term milestones for reshaping the Iroha Virtual Machine
-(IVM) into clearer layers while preserving security and performance characteristics.
-It focuses on isolating responsibilities, making host integrations safer, and
-preparing the Kotodama language stack for extraction into a standalone crate.
+Este plan captura los hitos a corto plazo para remodelar la máquina virtual Iroha.
+(IVM) en capas más claras preservando al mismo tiempo las características de seguridad y rendimiento.
+Se centra en aislar responsabilidades, hacer que las integraciones de host sean más seguras y
+preparando la pila de idiomas Kotodama para su extracción en una caja independiente.
 
-## Goals
+## Metas
 
-1. **Layered runtime façade** – introduce an explicit runtime interface so the VM
-   core can be embedded behind a narrow trait and alternative front-ends can evolve
-   without touching internal modules.
-2. **Host/syscall boundary  hardening** – route syscall dispatch through a
-   dedicated adapter that enforces ABI policy and pointer validation before any host
-   code executes.
-3. **Language/tooling separation** – move Kotodama specific code to a new crate and
-   keep only the bytecode execution surface in `ivm`.
-4. **Configuration cohesion** – unify acceleration and feature toggles so they are
-   driven through `iroha_config`, removing environment-based knobs in production
-   paths.
+1. **Fachada de tiempo de ejecución en capas**: introduce una interfaz de tiempo de ejecución explícita para que la VM
+   El núcleo se puede incrustar detrás de un rasgo estrecho y las interfaces alternativas pueden evolucionar.
+   sin tocar los módulos internos.
+2. **Refuerzo de límites de host/llamada al sistema**: enrute el envío de llamadas al sistema a través de un
+   Adaptador dedicado que aplica la política ABI y la validación del puntero antes que cualquier host.
+   el código se ejecuta.
+3. **Separación de idioma/herramienta**: mueva el código específico Kotodama a una nueva caja y
+   mantenga solo la superficie de ejecución del código de bytes en `ivm`.
+4. **Cohesión de configuración**: unifica la aceleración y los cambios de funciones para que sean
+   impulsado a través de `iroha_config`, eliminando perillas basadas en el entorno en producción
+   caminos.
 
-## Phase Breakdown
+## Desglose de fases
 
-### Phase 1 – Runtime façade (in progress)
-- Add a `runtime` module that defines a `VmEngine` trait describing lifecycle
-  operations (`load_program`, `execute`, host plumbing).
-- Teach `IVM` to implement the trait.  This keeps the existing struct but allows
-  consumers (and future tests) to depend on the interface instead of concrete
-  types.
-- Start shedding direct module re-exports from `lib.rs` so callers import via the
-  façade when possible.
+### Fase 1 – Fachada de ejecución (en curso)
+- Agregar un módulo `runtime` que define un rasgo `VmEngine` que describe el ciclo de vida
+  operaciones (`load_program`, `execute`, plomería del host).
+- Enseñar a `IVM` a implementar el rasgo.  Esto mantiene la estructura existente pero permite
+  Los consumidores (y las pruebas futuras) dependerán de la interfaz en lugar de lo concreto.
+  tipos.
+- Comience a eliminar las reexportaciones directas del módulo desde `lib.rs` para que las personas que llaman importen a través de
+  fachada cuando sea posible.
 
-**Security / performance impact**: The façade restricts direct access to internal
-state; only safe entry points are exposed.  This makes it easier to audit host
-interactions and reason about gas or TLV handling.
+**Impacto en la seguridad/rendimiento**: La fachada restringe el acceso directo al interior
+estado; sólo los puntos de entrada seguros están expuestos.  Esto hace que sea más fácil auditar el host.
+interacciones y razones sobre el manejo de gas o TLV.
 
-### Phase 2 – Syscall dispatcher
-- Introduce a `SyscallDispatcher` component that wraps `IVMHost` and enforces ABI
-  policy and pointer validation once, in one location.
-- Migrate the default host and mock hosts to use the dispatcher, removing
-  duplicated validation logic.
-- Make dispatcher pluggable so hosts can supply custom instrumentation without
-  bypassing safety checks.
-- Provide a `SyscallDispatcher::shared(...)` helper so cloned VMs can forward
-  syscalls through a shared `Arc<Mutex<..>>` host without each worker building
-  bespoke wrappers.
+### Fase 2: despachador de llamadas al sistema
+- Introducir un componente `SyscallDispatcher` que envuelve `IVMHost` y aplica ABI
+  validación de política y puntero una vez, en una ubicación.
+- Migrar el host predeterminado y los hosts simulados para usar el despachador, eliminando
+  lógica de validación duplicada.
+- Haga que el despachador sea conectable para que los hosts puedan suministrar instrumentación personalizada sin
+  pasando por alto los controles de seguridad.
+- Proporcionar un asistente `SyscallDispatcher::shared(...)` para que las VM clonadas puedan reenviar
+  llamadas al sistema a través de un host `Arc<Mutex<..>>` compartido sin que cada trabajador construya
+  envoltorios a medida.
 
-**Security / performance impact**: Centralised gating protects against hosts that
-forget to call `is_syscall_allowed`, and it allows future caching of pointer
-validations for repeated syscalls.
+**Impacto en la seguridad/rendimiento**: la puerta centralizada protege contra hosts que
+olvide llamar a `is_syscall_allowed`, y permite el almacenamiento en caché futuro del puntero
+validaciones para llamadas al sistema repetidas.
 
-### Phase 3 – Kotodama extraction
-- Kotodama compiler extracted to `crates/kotodama_lang` (from `crates/ivm/src/kotodama`).
-- Provide a minimal bytecode API that the VM consumes (`compile_to_ivm_bytecode`).
+### Fase 3 – Extracción Kotodama
+- Compilador Kotodama extraído a `crates/kotodama_lang` (de `crates/ivm/src/kotodama`).
+- Proporcionar una API de código de bytes mínima que consume la VM (`compile_to_ivm_bytecode`).
 
-**Security / performance impact**: Decoupling lowers the attack surface of the VM
-core and allows language innovation without risking interpreter regressions.
+**Impacto en la seguridad/rendimiento**: el desacoplamiento reduce la superficie de ataque de la VM
+Core y permite la innovación del lenguaje sin correr el riesgo de regresiones del intérprete.### Fase 4 – Consolidación de la configuración
+- Opciones de aceleración de subprocesos a través de ajustes preestablecidos de `iroha_config` (por ejemplo, habilitar backends de GPU) mientras se mantienen las anulaciones del entorno existente (`IVM_DISABLE_CUDA`, `IVM_DISABLE_METAL`) como interruptores de interrupción del tiempo de ejecución.
+- Exponer un objeto `RuntimeConfig` a través de la nueva fachada para que los anfitriones seleccionen
+  explícitamente políticas de aceleración deterministas.
 
-### Phase 4 – Configuration consolidation
-- Thread acceleration options through `iroha_config` presets (e.g., enabling GPU backends) while keeping the existing environment overrides (`IVM_DISABLE_CUDA`, `IVM_DISABLE_METAL`) as runtime kill switches.
-- Expose a `RuntimeConfig` object through the new façade so hosts select
-  deterministic acceleration policies explicitly.
+**Impacto en la seguridad/rendimiento**: eliminar los cambios basados en entorno evita el silencio
+deriva de configuración y garantiza un comportamiento determinista en todas las implementaciones.
 
-**Security / performance impact**: Eliminating env-based toggles avoids silent
-configuration drift and ensures deterministic behaviour across deployments.
+## Próximos pasos inmediatos
 
-## Immediate next steps
+- Termine la Fase 1 agregando el rasgo de la fachada y actualizando los sitios de llamadas de alto nivel para
+  Depende de ello.
+- Auditar las reexportaciones públicas para garantizar solo la fachada y las API deliberadamente públicas.
+  escaparse de la caja.
+- Prototipo de la API del despachador de llamadas al sistema en un módulo separado y migrar la
+  host predeterminado una vez validado.
 
-- Finish Phase 1 by adding the façade trait and updating high-level call sites to
-  depend on it.
-- Audit public re-exports to ensure only the façade and deliberately public APIs
-  leak out of the crate.
-- Prototype the syscall dispatcher API in a separate module and migrate the
-  default host once validated.
-
-Progress on each phase will be tracked in `status.md` once the implementation is
-underway.
+El progreso en cada fase se rastreará en `status.md` una vez que se complete la implementación.
+en marcha.

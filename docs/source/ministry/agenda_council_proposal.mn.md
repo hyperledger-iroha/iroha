@@ -7,73 +7,76 @@ generator: scripts/sync_docs_i18n.py
 source_hash: d2a7a47fdf0c80d189c912baafa5d6ce81a17a4c90f2b1797e532989a56f5060
 source_last_modified: "2025-12-29T18:16:35.977493+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Agenda Council Proposal Schema (MINFO-2a)
+# Хэлэлцэх асуудлын зөвлөлийн саналын схем (MINFO-2a)
 
-Roadmap reference: **MINFO-2a — Proposal format validator.**
+Замын зургийн лавлагаа: **MINFO-2a — Саналын формат баталгаажуулагч.**
 
-The Agenda Council workflow batches citizen-submitted blacklist and policy change
-proposals before the governance panels review them. This document defines the
-canonical payload schema, evidence requirements, and duplication detection rules
-consumed by the new validator (`cargo xtask ministry-agenda validate`) so
-proposers can lint JSON submissions locally before uploading them to the portal.
+Хэлэлцэх асуудлын зөвлөлийн ажлын явц нь иргэдээс ирүүлсэн хар жагсаалт болон бодлогын өөрчлөлтийг багцлан гаргадаг
+саналуудыг засаглалын зөвлөл хянан хэлэлцэхээс өмнө. Энэхүү баримт бичиг нь
+каноник ачааллын схем, нотлох баримтын шаардлага, давхардал илрүүлэх дүрэм
+шинэ баталгаажуулагч (`cargo xtask ministry-agenda validate`) хэрэглэсэн тул
+Санал дэвшүүлэгчид JSON-н мэдүүлгийг портал руу байршуулахаас өмнө локал руу оруулах боломжтой.
 
-## Payload overview
+## Ачааллын тойм
 
-Agenda proposals use the `AgendaProposalV1` Norito schema
-(`iroha_data_model::ministry::AgendaProposalV1`). Fields are encoded as JSON when
-submitting through CLI/portal surfaces.
+Хэлэлцэх асуудлын саналд `AgendaProposalV1` Norito схемийг ашигладаг
+(`iroha_data_model::ministry::AgendaProposalV1`). Талбаруудыг хэзээ JSON гэж кодлодог
+CLI/portal гадаргуугаар дамжуулан илгээх.
 
-| Field | Type | Requirements |
+| Талбай | Төрөл | Тавигдах шаардлага |
 |-------|------|--------------|
-| `version` | `1` (u16) | Must equal `AGENDA_PROPOSAL_VERSION_V1`. |
-| `proposal_id` | string (`AC-YYYY-###`) | Stable identifier; enforced during validation. |
-| `submitted_at_unix_ms` | u64 | Milliseconds since Unix epoch. |
-| `language` | string | BCP‑47 tag (`"en"`, `"ja-JP"`, etc.). |
-| `action` | enum (`add-to-denylist`, `remove-from-denylist`, `amend-policy`) | Requested Ministry action. |
-| `summary.title` | string | ≤256 chars recommended. |
-| `summary.motivation` | string | Why the action is required. |
-| `summary.expected_impact` | string | Outcomes if the action is accepted. |
-| `tags[]` | lowercase strings | Optional triage labels. Allowed values: `csam`, `malware`, `fraud`, `harassment`, `impersonation`, `policy-escalation`, `terrorism`, `spam`. |
-| `targets[]` | objects | One or more hash family entries (see below). |
-| `evidence[]` | objects | One or more evidence attachments (see below). |
-| `submitter.name` | string | Display name or organization. |
-| `submitter.contact` | string | Email, Matrix handle, or phone; redacted from public dashboards. |
-| `submitter.organization` | string (optional) | Visible in reviewer UI. |
-| `submitter.pgp_fingerprint` | string (optional) | 40-hex uppercase fingerprint. |
-| `duplicates[]` | strings | Optional references to previously submitted proposal IDs. |
+| `version` | `1` (u16) | `AGENDA_PROPOSAL_VERSION_V1`-тэй тэнцүү байх ёстой. |
+| `proposal_id` | мөр (`AC-YYYY-###`) | Тогтвортой танигч; баталгаажуулалтын явцад мөрддөг. |
+| `submitted_at_unix_ms` | u64 | Юниксийн эринээс хойшхи миллисекунд. |
+| `language` | мөр | BCP‑47 шошго (`"en"`, `"ja-JP"` гэх мэт). |
+| `action` | тоо (`add-to-denylist`, `remove-from-denylist`, `amend-policy`) | Яамнаас арга хэмжээ авахыг хүссэн. |
+| `summary.title` | мөр | ≤256 тэмдэгт санал болгож байна. |
+| `summary.motivation` | мөр | Яагаад арга хэмжээ авах шаардлагатай байна. |
+| `summary.expected_impact` | мөр | Үйлдлийг хүлээн зөвшөөрсөн тохиолдолд гарах үр дүн. |
+| `tags[]` | жижиг үсгийн мөр | Нэмэлт гурвалсан шошго. Зөвшөөрөгдсөн утга: `csam`, `malware`, `fraud`, `harassment`, `impersonation`, `policy-escalation`, `policy-escalation`, ```bash
+cargo xtask ministry-agenda validate \
+  --proposal docs/examples/ministry/agenda_proposal_example.json \
+  --registry docs/examples/ministry/agenda_duplicate_registry.json
+```000. |
+| `targets[]` | объект | Нэг буюу хэд хэдэн хэш гэр бүлийн оруулгууд (доороос харна уу). |
+| `evidence[]` | объект | Нэг буюу хэд хэдэн нотлох баримт хавсралт (доороос үзнэ үү). |
+| `submitter.name` | мөр | Дэлгэцийн нэр эсвэл байгууллага. |
+| `submitter.contact` | мөр | Имэйл, матрицын бариул эсвэл утас; олон нийтийн хяналтын самбараас засварласан. |
+| `submitter.organization` | мөр (заавал биш) | Шүүгчийн UI дээр харагдана. |
+| `submitter.pgp_fingerprint` | мөр (заавал биш) | 40 зургаан талт том үсгийн хурууны хээ. |
+| `duplicates[]` | мөр | Өмнө нь илгээсэн саналын ID-н нэмэлт лавлагаа. |
 
-### Target entries (`targets[]`)
+### Зорилтот оруулгууд (`targets[]`)
 
-Each target represents a hash family digest referenced by the proposal.
+Зорилтот бүр нь саналд дурдсан хэш гэр бүлийн тоймыг илэрхийлнэ.
 
-| Field | Description | Validation |
+| Талбай | Тодорхойлолт | Баталгаажуулалт |
 |-------|-------------|------------|
-| `label` | Friendly name for reviewer context. | Non-empty. |
-| `hash_family` | Hash identifier (`blake3-256`, `sha256`, etc.). | ASCII letters/digits/`-_.`, ≤48 chars. |
-| `hash_hex` | Digest encoded in lowercase hex. | ≥16 bytes (32 hex chars) and must be valid hex. |
-| `reason` | Short description of why the digest should be actioned. | Non-empty. |
+| `label` | Шүүгчийн контекстэд зориулсан ээлтэй нэр. | Хоосон биш. |
+| `hash_family` | Хэш танигч (`blake3-256`, `sha256` гэх мэт). | ASCII үсэг/цифр/`-_.`, ≤48 тэмдэгт. |
+| `hash_hex` | Диджест жижиг зургаан үсгээр кодлогдсон. | ≥16 байт (32 зургаан талт тэмдэгт) ба хүчинтэй hex байх ёстой. |
+| `reason` | Яагаад задаргаа хийх ёстой талаар товч тайлбар. | Хоосон биш. |
 
-The validator rejects duplicate `hash_family:hash_hex` pairs within the same
-proposal and reports conflicts when the same fingerprint already exists in the
-duplicate registry (see below).
+Баталгаажуулагч нь ижил хугацаанд `hash_family:hash_hex` давхардсан хосуудаас татгалздаг.
+ижил хурууны хээ аль хэдийн байгаа үед санал болон тайлан зөрчил
+давхардсан бүртгэл (доороос үзнэ үү).
 
-### Evidence attachments (`evidence[]`)
+### Нотлох баримт хавсралт (`evidence[]`)
 
-Evidence entries document where reviewers can fetch supporting context.
-
-| Field | Type | Notes |
+Шүүгчид дэмжих контекст авчирч болох нотлох баримтын оруулгууд.| Талбай | Төрөл | Тэмдэглэл |
 |-------|------|-------|
-| `kind` | enum (`url`, `torii-case`, `sorafs-cid`, `attachment`) | Determines digest requirements. |
-| `uri` | string | HTTP(S) URL, Torii case ID, or SoraFS URI. |
-| `digest_blake3_hex` | string | Required for `sorafs-cid` and `attachment` kinds; optional for others. |
-| `description` | string | Optional free-form text for reviewers. |
+| `kind` | тоо (`url`, `torii-case`, `sorafs-cid`, `attachment`) | Хоол боловсруулах хэрэгцээг тодорхойлдог. |
+| `uri` | мөр | HTTP(S) URL, Torii хэргийн ID, эсвэл SoraFS URI. |
+| `digest_blake3_hex` | мөр | `sorafs-cid` болон `attachment` төрөлд шаардлагатай; бусдын хувьд сонголттой. |
+| `description` | мөр | Шүүмжлэгчдэд зориулсан чөлөөт хэлбэрийн нэмэлт текст. |
 
-### Duplicate registry
+### Давхардсан бүртгэл
 
-Operators can maintain a registry of existing fingerprints to prevent duplicate
-cases. The validator accepts a JSON file shaped as:
+Операторууд давхардахаас сэргийлэхийн тулд одоо байгаа хурууны хээний бүртгэлийг хөтөлж болно
+тохиолдлууд. Баталгаажуулагч нь дараах хэлбэртэй JSON файлыг хүлээн авдаг.
 
 ```json
 {
@@ -88,15 +91,15 @@ cases. The validator accepts a JSON file shaped as:
 }
 ```
 
-When a proposal target matches an entry, the validator aborts unless
-`--allow-registry-conflicts` is specified (warnings are still emitted).
-Use [`cargo xtask ministry-agenda impact`](impact_assessment_tooling.md) to
-generate the referendum-ready summary that cross-references the duplicate
-registry and policy snapshots.
+Саналын зорилт нь оруулгатай таарч байгаа тохиолдолд баталгаажуулагч хүчингүй болгодог
+`--allow-registry-conflicts`-г зааж өгсөн (анхааруулга гарсаар байна).
+[`cargo xtask ministry-agenda impact`](impact_assessment_tooling.md) ашиглана уу.
+давхардсан лавлагаа бүхий бүх нийтийн санал асуулгад бэлэн хураангуйг үүсгэх
+бүртгэлийн болон бодлогын хормын хувилбарууд.
 
-## CLI usage
+## CLI хэрэглээ
 
-Lint a single proposal and check it against a duplicate registry:
+Нэг саналыг давхарлаж, давхардсан бүртгэлийн эсрэг шалгана уу:
 
 ```bash
 cargo xtask ministry-agenda validate \
@@ -104,19 +107,19 @@ cargo xtask ministry-agenda validate \
   --registry docs/examples/ministry/agenda_duplicate_registry.json
 ```
 
-Pass `--allow-registry-conflicts` to downgrade duplicate hits to warnings when
-performing historical audits.
+`--allow-registry-conflicts`-г дамжуулж, давтагдсан цохилтыг анхааруулга болгон бууруулж болно.
+түүхэн аудит хийх.
 
-The CLI relies on the same Norito schema and validation helpers shipped in
-`iroha_data_model`, so SDKs/portals can reuse the `AgendaProposalV1::validate`
-method for consistent behaviour.
+CLI нь илгээсэн ижил Norito схем болон баталгаажуулалтын туслахууд дээр тулгуурладаг.
+`iroha_data_model`, тиймээс SDK/порталууд `AgendaProposalV1::validate`-г дахин ашиглах боломжтой
+тогтвортой зан үйлийн арга.
 
-## Sortition CLI (MINFO-2b)
+## Ангилах CLI (MINFO-2b)
 
-Roadmap reference: **MINFO-2b — Multi-slot sortition & audit log.**
+Замын зургийн лавлагаа: **MINFO-2b — Олон үүрт ялгах ба аудитын бүртгэл.**
 
-The Agenda Council roster is now managed via deterministic sortition so citizens
-can independently audit every draw. Use the new command:
+Хэлэлцэх асуудлын зөвлөлийн нэрсийн жагсаалтыг одоо иргэд тодорхойлогч ангиллын аргаар удирдаж байна
+сугалаа бүрт бие даан аудит хийх боломжтой. Шинэ тушаалыг ашиглана уу:
 
 ```bash
 cargo xtask ministry-agenda sortition \
@@ -126,7 +129,7 @@ cargo xtask ministry-agenda sortition \
   --out artifacts/ministry/agenda_sortition_2026Q1.json
 ```
 
-- `--roster` — JSON file describing every eligible member:
+- `--roster` — эрх бүхий гишүүн бүрийг тодорхойлсон JSON файл:
 
   ```json
   {
@@ -148,74 +151,70 @@ cargo xtask ministry-agenda sortition \
   }
   ```
 
-  The example file lives at
-  `docs/examples/ministry/agenda_council_roster.json`. Optional fields (role,
-  organization, contact, metadata) are captured in the Merkle leaf so auditors
-  can prove the roster that fed the draw.
+  Жишээ файл нь дараах хаягаар амьдардаг
+  `docs/examples/ministry/agenda_council_roster.json`. Нэмэлт талбарууд (дүрэг,
+  байгууллага, холбоо барих, мета өгөгдөл) нь Мерклийн хуудаснаас баригдсан тул аудиторууд
+  сугалаагаар хангасан жагсаалтыг баталж чадна.
 
-- `--slots` — number of council seats to fill.
-- `--seed` — 32-byte BLAKE3 seed (64 lowercase hex characters) recorded in the
-  governance minutes for the draw.
-- `--out` — optional output path. When omitted, the JSON summary is printed to
+- `--slots` — дүүргэх зөвлөлийн суудлын тоо.
+- `--seed` — 32 байт BLAKE3 үр (64 жижиг зургаан үсэг)
+  сугалаанд зориулсан засаглалын протокол.
+- `--out` — нэмэлт гаралтын зам. Үүнийг орхигдуулсан тохиолдолд JSON хураангуйг хэвлэнэ
   stdout.
 
-### Output summary
+### Гаралтын хураангуй
 
-The command emits a `SortitionSummary` JSON blob. Sample output is stored at
-`docs/examples/ministry/agenda_sortition_summary_example.json`. Key fields:
+Тушаал нь `SortitionSummary` JSON blob-г ялгаруулдаг. Дээжийн гаралтыг дараах хаягаар хадгална
+`docs/examples/ministry/agenda_sortition_summary_example.json`. Түлхүүр талбарууд:
 
-| Field | Description |
+| Талбай | Тодорхойлолт |
 |-------|-------------|
-| `algorithm` | Sortition label (`agenda-sortition-blake3-v1`). |
-| `roster_digest` | BLAKE3 + SHA-256 digests of the roster file (used to confirm audits operate over the same member list). |
-| `seed_hex` / `slots` | Echo the CLI inputs so auditors can reproduce the draw. |
-| `merkle_root_hex` | Root of the roster Merkle tree (`hash_node`/`hash_leaf` helpers in `xtask/src/ministry_agenda.rs`). |
-| `selected[]` | Entries for each slot, including the canonical member metadata, eligible index, original roster index, deterministic draw entropy, leaf hash, and Merkle proof siblings. |
+| `algorithm` | Ангилах шошго (`agenda-sortition-blake3-v1`). |
+| `roster_digest` | Жагсаалтын файлын BLAKE3 + SHA-256 боловсруулалт (нэг гишүүдийн жагсаалт дээр аудит хийж байгааг баталгаажуулахад ашигладаг). |
+| `seed_hex` / `slots` | CLI оролтыг цуурайлган хийснээр аудиторууд сугалааг дахин гаргах боломжтой. |
+| `merkle_root_hex` | Меркле модны жагсаалтын үндэс (`hash_node`/`hash_leaf` `xtask/src/ministry_agenda.rs` дахь туслагч). |
+| `selected[]` | Каноник гишүүн мета өгөгдөл, эрх бүхий индекс, анхны жагсаалтын индекс, детерминист сугалааны энтропи, навчны хэш, Merkle баталгаа ах дүүс зэрэг оролт тус бүрийн оруулгууд. |
 
-### Verifying a draw
+### Сугалааг баталгаажуулж байна1. `roster_path`-ийн лавласан жагсаалтыг татаж аваад BLAKE3/SHA-256-г шалгана уу.
+   тоймтой таарч байна.
+2. CLI-г ижил үр/слот/ жагсаалтаар дахин ажиллуулах; үр дүнд нь `selected[].member_id`
+   захиалга нь нийтлэгдсэн хураангуйтай тохирч байх ёстой.
+3. Тодорхой гишүүний хувьд цуваажсан гишүүн JSON ашиглан Merkle навчийг тооцоол
+   (`norito::json::to_vec(&sortition_member)`) ба нотлох хэш бүрийг нугалав. Финал
+   digest нь `merkle_root_hex`-тэй тэнцүү байх ёстой. Жишээ хураангуй дахь туслагч харуулж байна
+   `eligible_index`, `leaf_hash_hex`, `merkle_proof[]` зэргийг хэрхэн хослуулах талаар.
 
-1. Fetch the roster referenced by `roster_path` and verify its BLAKE3/SHA-256
-   digests match the summary.
-2. Re-run the CLI with the same seed/slots/roster; the resulting `selected[].member_id`
-   order should match the published summary.
-3. For a specific member, compute the Merkle leaf using the serialized member JSON
-   (`norito::json::to_vec(&sortition_member)`) and fold in each proof hash. The final
-   digest must equal `merkle_root_hex`. The helper in the example summary shows
-   how to combine `eligible_index`, `leaf_hash_hex`, and `merkle_proof[]`.
+Эдгээр олдворууд нь баталгаажуулах санамсаргүй байдлын MINFO-2b шаардлагыг хангаж,
+k-of-m сонгох ба гинжин API-г холбох хүртэл зөвхөн аудитын бүртгэлийг хавсаргана.
 
-These artefacts satisfy the MINFO-2b requirement for verifiable randomness,
-k-of-m selection, and append-only audit logs until the on-chain API is wired.
+## Баталгаажуулалтын алдааны лавлагаа
 
-## Validation error reference
-
-`AgendaProposalV1::validate` emits `AgendaProposalValidationError` variants
-whenever a payload fails linting. The table below summarises the most common
-errors so portal reviewers can translate CLI output into actionable guidance.
-
-| Error | Meaning | Remediation |
+`AgendaProposalV1::validate` нь `AgendaProposalValidationError` хувилбаруудыг ялгаруулдаг
+Ачааны ачааны хөвөн хатгах үед. Доорх хүснэгтэд хамгийн нийтлэг зүйлийг нэгтгэн харуулав
+алдаатай тул портал хянагч нар CLI гаралтыг хэрэгжүүлэх боломжтой заавар болгон хөрвүүлэх боломжтой.| Алдаа | Утга | Засах |
 |-------|---------|-------------|
-| `UnsupportedVersion { expected, found }` | Payload `version` differs from the validator’s supported schema. | Regenerate the JSON using the latest schema bundle so the version matches `expected`. |
-| `MissingProposalId` / `InvalidProposalIdFormat { value }` | `proposal_id` is empty or not in `AC-YYYY-###` form. | Populate a unique identifier following the documented format before re-submitting. |
-| `MissingSubmissionTimestamp` | `submitted_at_unix_ms` is zero or missing. | Record the submission timestamp in Unix milliseconds. |
-| `InvalidLanguageTag { value }` | `language` is not a valid BCP‑47 tag. | Use a standard tag such as `en`, `ja-JP`, or another locale recognised by BCP‑47. |
-| `MissingSummaryField { field }` | One of `summary.title`, `.motivation`, or `.expected_impact` is empty. | Provide non-empty text for the indicated summary field. |
-| `MissingSubmitterField { field }` | `submitter.name` or `submitter.contact` missing. | Supply the missing submitter metadata so reviewers can contact the proposer. |
-| `InvalidTag { value }` | `tags[]` entry not on the allowlist. | Remove or rename the tag to one of the documented values (`csam`, `malware`, etc.). |
-| `MissingTargets` | `targets[]` array is empty. | Provide at least one target hash family entry. |
-| `MissingTargetLabel { index }` / `MissingTargetReason { index }` | Target entry missing the `label` or `reason` fields. | Fill in the required field for the indexed entry before resubmitting. |
-| `InvalidHashFamily { index, value }` | Unsupported `hash_family` label. | Restrict hash family names to ASCII alphanumerics plus `-_`. |
-| `InvalidHashHex { index, value }` / `TargetDigestTooShort { index }` | Digest is not valid hex or is shorter than 16 bytes. | Provide a lowercase hex digest (≥32 hex chars) for the indexed target. |
-| `DuplicateTarget { index, fingerprint }` | Target digest duplicates an earlier entry or registry fingerprint. | Remove duplicates or merge the supporting evidence into a single target. |
-| `MissingEvidence` | No evidence attachments were supplied. | Attach at least one evidence record linking to reproduction material. |
-| `MissingEvidenceUri { index }` | Evidence entry missing the `uri` field. | Provide the fetchable URI or case identifier for the indexed evidence entry. |
-| `MissingEvidenceDigest { index }` / `InvalidEvidenceDigest { index, value }` | Evidence entry that requires a digest (SoraFS CID or attachment) is missing or has invalid `digest_blake3_hex`. | Supply a 64-character lowercase BLAKE3 digest for the indexed entry. |
+| `UnsupportedVersion { expected, found }` | Ачаалал `version` нь баталгаажуулагчийн дэмждэг схемээс ялгаатай. | Хувилбар нь `expected`-тэй тохирч байхын тулд хамгийн сүүлийн үеийн схемийн багцыг ашиглан JSON-г сэргээнэ үү. |
+| `MissingProposalId` / `InvalidProposalIdFormat { value }` | `proposal_id` хоосон эсвэл `AC-YYYY-###` хэлбэрээр байхгүй. | Дахин илгээхийн өмнө баримтжуулсан форматын дагуу өвөрмөц танигчийг бөглөнө үү. |
+| `MissingSubmissionTimestamp` | `submitted_at_unix_ms` тэг эсвэл байхгүй байна. | Илгээх цагийн тэмдгийг Unix миллисекундээр тэмдэглэ. |
+| `InvalidLanguageTag { value }` | `language` нь хүчинтэй BCP‑47 шошго биш байна. | `en`, `ja-JP` гэх мэт стандарт шошго эсвэл BCP‑47-р хүлээн зөвшөөрөгдсөн өөр хэлийг ашиглана уу. |
+| `MissingSummaryField { field }` | `summary.title`, `.motivation`, эсвэл `.expected_impact`-н нэг нь хоосон байна. | Заасан хураангуй талбарт хоосон бус текст оруулна уу. |
+| `MissingSubmitterField { field }` | `submitter.name` эсвэл `submitter.contact` дутуу байна. | Шүүгчид санал болгогчтой холбоо барьж болохын тулд дутуу илгээгчийн мета өгөгдлийг нийлүүлнэ үү. |
+| `InvalidTag { value }` | `tags[]` оруулга зөвшөөрөгдсөн жагсаалтад байхгүй. | Тагийг устгаж эсвэл баримтжуулсан утгуудын аль нэгээр нь нэрлэнэ үү (`csam`, `malware` гэх мэт). |
+| `MissingTargets` | `targets[]` массив хоосон байна. | Дор хаяж нэг зорилтот хэш гэр бүлийн оруулгыг оруулна уу. |
+| `MissingTargetLabel { index }` / `MissingTargetReason { index }` | Зорилтот оруулгад `label` эсвэл `reason` талбар дутуу байна. | Дахин илгээхийн өмнө индексжүүлсэн оруулгад шаардлагатай талбарыг бөглөнө үү. |
+| `InvalidHashFamily { index, value }` | Дэмжигдээгүй `hash_family` шошго. | Хэш овгийн нэрийг ASCII үсэг тоон дээр нэмэх нь `-_`-ээр хязгаарлана. |
+| `InvalidHashHex { index, value }` / `TargetDigestTooShort { index }` | Диджест нь хүчингүй hex буюу 16 байтаас богино байна. | Индексжүүлсэн зорилтын хувьд жижиг үсгээр зургаан өнцөгт (≥32 зургаан өнцөгт) бичнэ үү. |
+| `DuplicateTarget { index, fingerprint }` | Зорилтот тойм нь өмнөх бичилт эсвэл бүртгэлийн хурууны хээг хуулбарладаг. | Давхардсан хуулбарыг арилгах эсвэл дэмжих нотлох баримтыг нэг зорилт болгон нэгтгэх. |
+| `MissingEvidence` | Нотлох баримтын хавсралт ирүүлээгүй. | Хуулбарлах материалтай холбоотой дор хаяж нэг нотлох баримт хавсаргана. |
+| `MissingEvidenceUri { index }` | `uri` талбар дутуу нотлох баримт. | Индексжүүлсэн нотлох баримтын оруулгад татах боломжтой URI эсвэл тохиолдлын танигчийг оруулна уу. |
+| `MissingEvidenceDigest { index }` / `InvalidEvidenceDigest { index, value }` | Тайлбар (SoraFS CID эсвэл хавсралт) шаардлагатай нотлох баримтын оруулга дутуу эсвэл `digest_blake3_hex` хүчингүй байна. | Индексжүүлсэн оруулгад зориулж 64 тэмдэгттэй жижиг үсгийн BLAKE3 товчлолыг оруулна уу. |
 
-## Examples
+## Жишээ
 
-- `docs/examples/ministry/agenda_proposal_example.json` — canonical,
-  lint-clean proposal payload with two evidence attachments.
-- `docs/examples/ministry/agenda_duplicate_registry.json` — starter registry
-  containing a single BLAKE3 fingerprint and rationale.
+- `docs/examples/ministry/agenda_proposal_example.json` - каноник,
+  хоёр нотлох хавсралт бүхий хөвөн цэвэрлэх саналын ачаалал.
+- `docs/examples/ministry/agenda_duplicate_registry.json` — эхлэлийн бүртгэл
+  ганц BLAKE3 хурууны хээ болон үндэслэлийг агуулсан.
 
-Reuse these files as templates when integrating portal tooling or writing CI
-checks for automated submissions.
+Портал хэрэгслийг нэгтгэх эсвэл CI бичихдээ эдгээр файлыг загвар болгон дахин ашиглаарай
+автоматжуулсан мэдүүлгийг шалгадаг.

@@ -9,19 +9,20 @@ source_last_modified: "2025-12-29T18:16:35.983094+00:00"
 translation_last_reviewed: 2026-02-07
 title: Review Panel Summary Workflow (MINFO-4a)
 summary: Generate the neutral referendum summary with balanced citations, AI manifest references, and volunteer brief coverage.
+translator: machine-google-reviewed
 ---
 
-# Review Panel Summary (MINFO-4a)
+# Ko'rib chiqish panelining xulosasi (MINFO-4a)
 
-Roadmap item **MINFO-4a — Neutral summary generator** requires a reproducible workflow that turns an accepted agenda proposal, the volunteer brief corpus, and the attested AI moderation manifest into a neutral referendum summary. The deliverable must:
+“Yo‘l xaritasi” bandi **MINFO-4a — Neytral xulosa generatori** qabul qilingan kun tartibi taklifi, ko‘ngillilar uchun qisqacha korpus va tasdiqlangan AI moderatsiyasi manifestini neytral referendum xulosasiga aylantiradigan takrorlanadigan ish jarayonini talab qiladi. Yetkazib berish kerak:
 
-- Record the output as a Norito structure (`ReviewPanelSummaryV1`) so governance can archive it alongside manifests and ballots.
-- Lint the source material, failing fast when the review panel does not have balanced support/oppose coverage or when facts are missing citations.
-- Reference the AI manifest and the proposal evidence bundle in every highlight, ensuring the policy jury sees both automated and human context before voting.
+- Chiqishni Norito tuzilmasi (`ReviewPanelSummaryV1`) sifatida yozib oling, shunda boshqaruv uni manifestlar va byulletenlar bilan birga arxivlashi mumkin.
+- Ko'rib chiqish guruhi muvozanatli qo'llab-quvvatlamasa/qarshiliklarga ega bo'lmasa yoki faktlarda iqtiboslar etishmayotgan bo'lsa, tezda muvaffaqiyatsizlikka uchraydi.
+- Siyosat hay'ati ovoz berishdan oldin avtomatlashtirilgan va insoniy kontekstni ko'rishini ta'minlab, har bir diqqatga sazovor joylarda AI manifestiga va taklif dalillar to'plamiga murojaat qiling.
 
-## CLI usage
+## CLI foydalanish
 
-The workflow ships as part of `cargo xtask`:
+Ish oqimi `cargo xtask` qismi sifatida yuboriladi:
 
 ```bash
 cargo xtask ministry-panel synthesize \
@@ -32,23 +33,23 @@ cargo xtask ministry-panel synthesize \
 --output artifacts/review_panel/AC-2026-001-RP-2026-05.json
 ```
 
-Required inputs:
+Majburiy ma'lumotlar:
 
-1. `--proposal` – JSON payload adhering to `AgendaProposalV1`. The helper validates the schema before generating the summary.
-2. `--volunteer` – JSON array of volunteer briefs that follow `docs/source/ministry/volunteer_brief_template.md`. Off-topic entries are ignored automatically.
-3. `--ai-manifest` – Governance-signed `ModerationReproManifestV1` describing the AI committee that screened the content.
-4. `--panel-round` – Identifier for the current review round (`RP-YYYY-##`).
-5. `--output` – Destination file or `-` to stream to stdout. Use `--language` to override the proposal language and `--generated-at` to supply a deterministic Unix timestamp (milliseconds) when backfilling history.
+1. `--proposal` - `AgendaProposalV1` ga rioya qilgan JSON foydali yuk. Xulosa yaratishdan oldin yordamchi sxemani tasdiqlaydi.
+2. `--volunteer` - `docs/source/ministry/volunteer_brief_template.md` ga amal qiladigan ko'ngillilar brifinglarining JSON qatori. Mavzudan tashqari yozuvlar avtomatik ravishda e'tiborga olinmaydi.
+3. `--ai-manifest` - Boshqaruv tomonidan imzolangan `ModerationReproManifestV1`, kontentni tekshirgan AI qo'mitasini tavsiflaydi.
+4. `--panel-round` - Joriy ko'rib chiqish bosqichi uchun identifikator (`RP-YYYY-##`).
+5. `--output` - Belgilangan fayl yoki stdout ga o'tkazish uchun `-`. Taklif tilini bekor qilish uchun `--language` va tarixni to‘ldirishda deterministik Unix vaqt tamg‘asini (millisekundlar) berish uchun `--generated-at` dan foydalaning.
 
-Once the standalone summary is generated, run the
-[`cargo xtask ministry-panel packet`](referendum_packet.md) helper to assemble
-the complete referendum dossier (`ReferendumPacketV1`). Supplying
-`--summary-out` to the packet command will persist the same summary file while
-embedding it inside the packet object for downstream consumers.
+Mustaqil xulosa yaratilgandan so'ng, ishga tushiring
+[`cargo xtask ministry-panel packet`](referendum_packet.md) yig'ish uchun yordamchi
+referendumning to'liq fayli (`ReferendumPacketV1`). Yetkazib berish
+Paket buyrug'iga `--summary-out` bir xil xulosa faylini saqlab qoladi.
+uni quyi oqim iste'molchilari uchun paket ob'ektiga joylashtirish.
 
-### Automation via `ministry-transparency ingest`
+### `ministry-transparency ingest` orqali avtomatlashtirish
 
-Teams that already run `cargo xtask ministry-transparency ingest` for quarterly evidence bundles can now stitch the review panel summary into the same pipeline:
+Har choraklik dalillar to'plami uchun `cargo xtask ministry-transparency ingest`-ni ishga tushirgan jamoalar endi ko'rib chiqish panelining xulosasini bir xil chiziqqa yopishtirishlari mumkin:
 
 ```bash
 cargo xtask ministry-transparency ingest \
@@ -65,31 +66,29 @@ cargo xtask ministry-transparency ingest \
   --output artifacts/ministry/ingest.json
 ```
 
-All four `--panel-*` flags must be supplied together (and require `--volunteer`). The command emits the review panel summary to `--panel-summary-out`, embeds the parsed payload inside the ingest snapshot, and records a checksum so downstream tooling can attest to the evidence.
+Barcha to'rtta `--panel-*` bayroqlari birga ta'minlanishi kerak (va `--volunteer` talab qilinadi). Buyruq ko'rib chiqish panelining xulosasini `--panel-summary-out` ga chiqaradi, tahlil qilingan foydali yukni ingest snapshot ichiga joylashtiradi va quyi oqim asboblari dalillarni tasdiqlashi uchun nazorat summasini qayd qiladi.
 
-## Linting and failure modes
+## Linting va nosozlik rejimlari
 
-`cargo xtask ministry-panel synthesize` enforces the following invariants before writing the summary:
+Xulosa yozishdan oldin `cargo xtask ministry-panel synthesize` quyidagi invariantlarni qo'llaydi:
 
-- **Balanced stances:** at least one support brief and one oppose brief must be present. Missing coverage terminates the run with a descriptive error.
-- **Citation coverage:** highlights are only produced from fact rows that include citations. Missing citations never block the build, but each affected brief is listed under `warnings[]` in the output.
-- **Per-highlight references:** every highlight includes references to (a) the volunteer fact row(s), (b) the AI manifest ID, and (c) the first evidence attachment from the proposal so the packet always links back to the signed artefacts.
+- **Muvozanatli pozitsiyalar:** kamida bitta qo'llab-quvvatlovchi brief va bitta qarshi brief bo'lishi kerak. Yo'qolgan qamrov tavsiflovchi xato bilan ishlashni tugatadi.
+- **Iqtiboslar qamrovi:** diqqatga sazovor joylar faqat iqtiboslarni o'z ichiga olgan faktlar qatorlaridan ishlab chiqariladi. Yo'qotilgan iqtiboslar hech qachon qurilishni bloklamaydi, lekin har bir ta'sir qilingan qisqacha ma'lumot chiqishda `warnings[]` ostida keltirilgan.
+- **Har bir diqqatga sazovor havolalar:** har bir diqqatga sazovor joy (a) ixtiyoriy faktlar qatori(lari), (b) AI manifest identifikatori va (c) taklifning birinchi dalil ilovasiga havolalarni oʻz ichiga oladi, shuning uchun paket har doim imzolangan artefaktlarga bogʻlanadi.Agar biron-bir tekshiruv bajarilmasa, buyruq nolga teng bo'lmagan holat bilan chiqadi va muammoli yozuvga ishora qiladi. Muvaffaqiyatli ishga tushirishlar `ReviewPanelSummaryV1` sxemasiga mos keladigan JSON faylini yozadi va boshqaruv manifestlariga kiritilishi mumkin.
 
-If any check fails, the command exits with a non-zero status and points at the problematic record. Successful runs write a JSON file that matches the `ReviewPanelSummaryV1` schema and can be embedded in governance manifests.
+## Chiqish tuzilishi
 
-## Output structure
+`ReviewPanelSummaryV1` `crates/iroha_data_model/src/ministry/mod.rs` da yashaydi va `iroha_data_model` kassasi orqali har bir iste'molchi uchun mavjud. Asosiy bo'limlarga quyidagilar kiradi:
 
-`ReviewPanelSummaryV1` lives in `crates/iroha_data_model/src/ministry/mod.rs` and is available to every consumer via the `iroha_data_model` crate. Key sections include:
+- `overview` - Siyosat hakamlar hay'ati paketi uchun sarlavha, neytral qisqacha jumla va qaror konteksti.
+- `stance_distribution` - Har bir pozitsiya uchun qisqacha ma'lumotlar va faktlar qatorlari soni. Pastki oqim panellari nashr qilishdan oldin qamrovni tasdiqlash uchun buni o'qiydi.
+- `highlights` - To'liq malakali iqtiboslar bilan har bir pozitsiya uchun ikkita fakt xulosasi.
+- `ai_manifest` - Qayta ishlab chiqarish manifestidan olingan metadata (manifest UUID, yuguruvchi versiyasi, chegaralar).
+- `volunteer_references` - Audit uchun har bir qisqacha statistika (til, pozitsiya, qatorlar, keltirilgan qatorlar).
+- `warnings` - O'tkazib yuborilgan narsalarni tavsiflovchi erkin shakldagi lint xabarlar (masalan, iqtiboslar etishmayotgan faktlar qatorlari).
 
-- `overview` – Title, neutral summary sentence, and decision context for the policy jury packet.
-- `stance_distribution` – Count of briefs and fact rows per stance. Downstream dashboards read this to confirm coverage before publishing.
-- `highlights` – Up to two fact summaries per stance with fully qualified citations.
-- `ai_manifest` – Extracted metadata from the reproducibility manifest (manifest UUID, runner version, thresholds).
-- `volunteer_references` – Per-brief statistics (language, stance, rows, cited rows) for audit.
-- `warnings` – Free-form lint messages describing skipped items (e.g., fact rows with missing citations).
+## Misol
 
-## Example
+`docs/examples/ministry/review_panel_summary_example.json` yordamchi bilan ishlab chiqarilgan to'liq namunani o'z ichiga oladi. U muvozanatli qoʻllab-quvvatlash/qarshilik qamrovi, iqtiboslar uzatish, manifest havolalari va diqqatga sazovor joylarga koʻtarilishi mumkin boʻlmagan faktlar qatorlari uchun ogohlantirish satrlarini namoyish etadi. Neytral xulosani iste'mol qilishi kerak bo'lgan boshqaruv paneli, boshqaruv manifestlari yoki SDK vositalarini kengaytirishda undan foydalaning.
 
-`docs/examples/ministry/review_panel_summary_example.json` contains a full sample produced with the helper. It demonstrates balanced support/oppose coverage, citation wiring, manifest references, and warning strings for fact rows that could not be promoted to highlights. Use it when extending dashboards, governance manifests, or SDK tooling that need to consume the neutral summary.
-
-> **Tip:** include the generated summary alongside the signed AI manifest and volunteer brief digest in the referendum evidence bundle so policy juries can verify every artifact referenced by the review panel.
+> **Maslahat:** tuzilgan xulosani imzolangan sunʼiy intellekt manifesti va ixtiyoriy qisqacha dayjest bilan birga referendum dalillar toʻplamiga kiriting, shunda hakamlar hayʼati koʻrib chiqish guruhi tomonidan havola qilingan har bir artefaktni tekshirishi mumkin.

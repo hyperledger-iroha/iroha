@@ -7,19 +7,20 @@ generator: scripts/sync_docs_i18n.py
 source_hash: d5dd8e1b666be34bb9101898d355fe5e3c6efc32500c238c72a6ef9228c157f0
 source_last_modified: "2026-01-22T16:26:46.568155+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Repo Settlement Runbook
+# Репо есеп айырысу кітабы
 
-This guide documents the deterministic flow for repo and reverse-repo agreements in Iroha.
-It covers CLI orchestration, SDK helpers, and the expected governance knobs so operators can
-initiate, margin, and unwind agreements without writing raw Norito payloads. For governance
-checklists, evidence capture, and fraud/rollback procedures see
-[`repo_ops.md`](./repo_ops.md), which satisfies roadmap item F1.
+Бұл нұсқаулық Iroha ішіндегі репо және кері репо келісімдері үшін детерминирленген ағынды құжаттайды.
+Ол CLI оркестрін, SDK көмекшілерін және күтілетін басқару түймелерін қамтиды, осылайша операторлар
+шикі Norito пайдалы жүктемелерін жазбай келісімдерді бастаңыз, маржалаңыз және жойыңыз. Басқару үшін
+тексеру тізімдерін, дәлелдемелерді алу және алаяқтық/қайтару процедураларын қараңыз
+[`repo_ops.md`](./repo_ops.md), ол F1 жол картасы тармағын қанағаттандырады.
 
-## CLI commands
+## CLI командалары
 
-The `iroha app repo` command groups repo-specific helpers:
+`iroha app repo` пәрмені репо-арнайы көмекшілерді топтайды:
 
 ```bash
 # Stage an initiation instruction without submitting
@@ -57,17 +58,17 @@ iroha --config client.toml repo margin --agreement-id daily_repo
 iroha --config client.toml repo margin-call --agreement-id daily_repo
 ```
 
-* `repo initiate` and `repo unwind` respect `--input/--output` so the generated `InstructionBox`
-  payloads can be piped into other CLI flows or submitted immediately.
-* Pass `--custodian <account>` to route collateral to a tri-party custodian. When omitted, the
-  counterparty receives the pledge directly (bilateral repo).
-* `repo margin` queries the ledger via `FindRepoAgreements` and reports the next expected margin
-  timestamp (in milliseconds) alongside whether a margin callback is currently due.
-* `repo margin-call` appends a `RepoMarginCallIsi` instruction, recording the margin checkpoint and
-  emitting events for all participants. Calls are rejected if the cadence has not elapsed or if the
-  instruction is submitted by a non-participant.
+* `repo initiate` және `repo unwind` `--input/--output` құрметтейді, сондықтан жасалған `InstructionBox`
+  пайдалы жүктемелерді басқа CLI ағындарына жіберуге немесе дереу жіберуге болады.
+* Кепілді үш жақты кастодианға бағыттау үшін `--custodian <account>` өтіңіз. Өткізіп тастаған кезде,
+  контрагент кепілді тікелей алады (екі жақты репо).
+* `repo margin` бухгалтерлік кітапты `FindRepoAgreements` арқылы сұрайды және келесі күтілетін маржаны хабарлайды
+  уақыт белгісін (миллисекундпен) және маржаның кері шақыруының қазіргі уақытта қажет екенін көрсетеді.
+* `repo margin-call` `RepoMarginCallIsi` нұсқаулығын қосады, маржаны бақылау нүктесін және
+  барлық қатысушылар үшін оқиғаларды шығаратын. Қоңыраулар каденция аяқталмаған болса немесе қабылданбайды
+  нұсқауды қатысушы емес тұлға береді.
 
-## Python SDK helpers
+## Python SDK көмекшілері
 
 ```python
 from iroha_python import (
@@ -111,13 +112,13 @@ record = RepoAgreementRecord.from_payload(agreements[0])
 next_margin = record.next_margin_check_after(at_timestamp_ms=now_ms)
 ```
 
-* Both helpers normalise numeric quantities and metadata fields before invoking the PyO3 bindings.
-* `RepoAgreementRecord` mirrors the runtime schedule calculation so off-ledger automation can
-  determine when callbacks are due without recomputing the cadence manually.
+* Екі көмекші де PyO3 байланыстарын шақырмас бұрын сандық шамалар мен метадеректер өрістерін қалыпқа келтіреді.
+* `RepoAgreementRecord` жұмыс уақытының кестесін есептеуді көрсетеді, сондықтан бухгалтерлік есептен тыс автоматтандыру мүмкін
+  каденсті қолмен қайта есептеместен кері қоңыраулардың қашан болатынын анықтаңыз.
 
-## DvP / PvP settlements
+## DvP / PvP есеп айырысулары
 
-The `iroha app settlement` command stages delivery-versus-payment and payment-versus-payment instructions:
+`iroha app settlement` пәрмені жеткізу-төлемге қарсы және төлем-төлемге қарсы нұсқаулардың кезеңдерін бөледі:
 
 ```bash
 # Delivery leg first, then payment
@@ -153,20 +154,20 @@ iroha --config client.toml --output \
   --iso-xml-out trade_pvp.xml
 ```
 
-* Leg quantities accept integral or decimal values and are validated against the asset precision.
-* `--atomicity` accepts `all-or-nothing`, `commit-first-leg`, or `commit-second-leg`. Use these modes
-  with `--order` to express which leg remains committed if subsequent processing fails (`commit-first-leg`
-  keeps the first leg applied; `commit-second-leg` retains the second).
-* CLI invocations emit empty instruction metadata today; use the Python helpers when settlement-level
-  metadata needs to be attached.
-* See [`settlement_iso_mapping.md`](./settlement_iso_mapping.md) for the ISO 20022 field mapping that
-  backs these instructions (`sese.023`, `sese.025`, `colr.007`, `pacs.009`, `camt.054`).
-* Pass `--iso-xml-out <path>` to have the CLI emit a canonical XML preview alongside the Norito
-  instruction; the file follows the mapping above (`sese.023` for DvP, `sese.025` for PvP`). Pair the
-  flag with `--iso-reference-crosswalk <path>` so the CLI verifies `--delivery-instrument-id` against the
-  same snapshot Torii uses during runtime admission.
+* Аяқ шамалары интегралдық немесе ондық мәндерді қабылдайды және актив дәлдігіне қарсы тексеріледі.
+* `--atomicity` `all-or-nothing`, `commit-first-leg` немесе `commit-second-leg` қабылдайды. Осы режимдерді пайдаланыңыз
+  Егер келесі өңдеу сәтсіз болса, қай аяқтың орындалатынын білдіру үшін `--order` арқылы (`commit-first-leg`)
+  бірінші аяқты қолданады; `commit-second-leg` екіншісін сақтайды).
+* CLI шақырулары бүгін бос нұсқаулық метадеректерін шығарады; есеп айырысу деңгейінде Python көмекшілерін пайдаланыңыз
+  метадеректерді тіркеу қажет.
+* ISO 20022 өрісін салыстыру үшін [`settlement_iso_mapping.md`](./settlement_iso_mapping.md) қараңыз.
+  осы нұсқауларға қолдау көрсетеді (`sese.023`, `sese.025`, `colr.007`, `pacs.009`, `camt.054`).
+* CLI Norito қатарында канондық XML алдын ала қарауын шығару үшін `--iso-xml-out <path>` өтіңіз.
+  нұсқау; файл жоғарыдағы салыстыруды орындайды (DvP үшін `sese.023`, PvP` үшін `sese.025`). жұптаңыз
+  жалаушасы `--iso-reference-crosswalk <path>` бар, сондықтан CLI `--delivery-instrument-id` сәйкестігін тексереді.
+  бірдей сурет Torii орындау уақытын қабылдау кезінде пайдаланады.
 
-Python helpers mirror the CLI surface:
+Python көмекшілері CLI бетін көрсетеді:
 
 ```python
 from iroha_python import (
@@ -211,21 +212,19 @@ draft.settlement_pvp(
 )
 ```
 
-## Determinism & Governance Expectations
+## Детерминизм және басқарудан күтулер
 
-Repo instructions rely exclusively on Norito-encoded numeric types and the shared
-`RepoGovernance::with_defaults` logic. Keep the following invariants in mind:
-
-* Quantities are serialised with deterministic `NumericSpec` values: cash legs use
-  `fractional(2)` (two decimal places), collateral legs use `integer()`. Do not submit
-  values with greater precision—runtime guards will reject them and peers would diverge.
-* Tri-party repos persist the custodian account id in `RepoAgreement`. Lifecycle and margin events
-  emit a `RepoAccountRole::Custodian` payload so custodians can subscribe and reconcile inventory.
-* Haircuts are clamped to 10 000 bps (100 %) and margin frequencies are whole seconds. Provide
-  governance parameters in those canonical units to stay aligned with runtime expectations.
-* Timestamps are always unix milliseconds. All helpers forward them unchanged to the Norito
-  payload so peers derive identical schedules.
-* Initiation and unwind instructions reuse the same agreement identifier. The runtime rejects
-  duplicate IDs and unwinds for unknown agreements; CLI/SDK helpers surface those errors early.
-* `repo margin`/`RepoAgreementRecord::next_margin_check_after` return the canonical cadence. Always
-  consult this snapshot before triggering callbacks to avoid replaying stale schedules.
+Репо нұсқаулары тек Norito кодталған сандық түрлерге және ортақ
+`RepoGovernance::with_defaults` логикасы. Келесі инварианттарды есте сақтаңыз:* Мөлшер детерминирленген `NumericSpec` мәндерімен серияланады: қолма-қол ақшаны пайдалану
+  `fractional(2)` (екі ондық таңба), кепіл аяқтары `integer()` пайдаланады. Жібермеңіз
+  мәндер дәлдігі жоғарырақ — орындалу уақытының қорғаушылары оларды қабылдамайды және әріптестер алшақтайды.
+* Үш жақты реполар `RepoAgreement` ішіндегі кастодиан шотының идентификаторын сақтайды. Өмірлік цикл және маржа оқиғалары
+  `RepoAccountRole::Custodian` пайдалы жүктемесін шығарыңыз, осылайша кастодиандар жазылуы және түгендеуді салыстыра алады.
+* Шаш қиюлары 10000бит/с (100%) дейін қысылады және шет жиіліктері тұтас секундтар. қамтамасыз ету
+  орындау уақытының күтулеріне сәйкес болу үшін сол канондық бірліктердегі басқару параметрлері.
+* Уақыт белгілері әрқашан unix миллисекунд болып табылады. Барлық көмекшілер оларды өзгеріссіз Norito жібереді
+  пайдалы жүктеме, сондықтан әріптестер бірдей кестелерді шығарады.
+* Бастау және босату нұсқаулары бірдей келісім идентификаторын қайта пайдаланады. Орындау уақыты қабылданбайды
+  қайталанатын идентификаторлар және белгісіз келісімдерді ашу; CLI/SDK көмекшілері бұл қателерді ертерек анықтайды.
+* `repo margin`/`RepoAgreementRecord::next_margin_check_after` канондық каденцияны қайтарады. Әрқашан
+  ескірген кестелерді қайта ойнатпау үшін кері қоңырауларды іске қоспас бұрын осы суретті қараңыз.

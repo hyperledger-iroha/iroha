@@ -7,19 +7,20 @@ generator: scripts/sync_docs_i18n.py
 source_hash: d5dd8e1b666be34bb9101898d355fe5e3c6efc32500c238c72a6ef9228c157f0
 source_last_modified: "2026-01-22T16:26:46.568155+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Repo Settlement Runbook
+# Репо ҡасаба
 
-This guide documents the deterministic flow for repo and reverse-repo agreements in Iroha.
-It covers CLI orchestration, SDK helpers, and the expected governance knobs so operators can
-initiate, margin, and unwind agreements without writing raw Norito payloads. For governance
-checklists, evidence capture, and fraud/rollback procedures see
-[`repo_ops.md`](./repo_ops.md), which satisfies roadmap item F1.
+Был ҡулланма документлаштырыу өсөн детерминистик ағым өсөн репо һәм кире-репо килешеп Iroha.
+Ул CLI оркестрацияһын, SDK ярҙамсыларын һәм көтөлгән идара итеү ручкаларын ҡаплай, шуға күрә операторҙар
+инициаторы, маржа, һәм сеймал яҙмайынса, маржа һәм сеймал Norito файҙалы йөктәр. Идара итеү өсөн
+тикшерелгән исемлектәр, дәлилдәр тотоу, һәм мутлыҡ/кире кире ҡайтарыу процедуралары күрә
+[`repo_ops.md`] (./repo_ops.md), был юл картаһы пунктын ҡәнәғәтләндерә F1.
 
-## CLI commands
+## CLI командалары
 
-The `iroha app repo` command groups repo-specific helpers:
+`iroha app repo` команда төркөмдәре репо-конкрет ярҙамсылар:
 
 ```bash
 # Stage an initiation instruction without submitting
@@ -57,17 +58,17 @@ iroha --config client.toml repo margin --agreement-id daily_repo
 iroha --config client.toml repo margin-call --agreement-id daily_repo
 ```
 
-* `repo initiate` and `repo unwind` respect `--input/--output` so the generated `InstructionBox`
-  payloads can be piped into other CLI flows or submitted immediately.
-* Pass `--custodian <account>` to route collateral to a tri-party custodian. When omitted, the
-  counterparty receives the pledge directly (bilateral repo).
-* `repo margin` queries the ledger via `FindRepoAgreements` and reports the next expected margin
-  timestamp (in milliseconds) alongside whether a margin callback is currently due.
-* `repo margin-call` appends a `RepoMarginCallIsi` instruction, recording the margin checkpoint and
-  emitting events for all participants. Calls are rejected if the cadence has not elapsed or if the
-  instruction is submitted by a non-participant.
+* `repo initiate` һәм `repo unwind` хөрмәт `--input/--output` шулай итеп генерацияланған `InstructionBox`
+  файҙалы йөктәрҙе башҡа CLI ағымдарына торбаларға йәки шунда уҡ тапшырырға мөмкин.
+* Pass `--custodian <account>` өс яҡлы һаҡсыға залог маршрутлаштырыу өсөн. Ҡасан төшөрөп ҡалдырылған, был
+  контрагент туранан-тура вәғәҙәне ала (ике яҡлы репо).
+* `repo margin` эҙләүҙәр 18NI000000020X аша баш китабы һәм сираттағы көтөлгән маржа тураһында хәбәр итә
+  ваҡыт маркаһы (миллисекундтарҙа) әлеге ваҡытта маржа шылтыратыуының тейешме-юҡмы икәнлеген бер рәттән.
+* `repo margin-call` `RepoMarginCallIsi` инструкцияһын өҫтәй, маржа тикшерелеү пунктын теркәй һәм
+  ҡатнашыусылар өсөн саралар сығарыу. Шылтыратыуҙар кире ҡағыла, әгәр каденция үткән йәки әгәр
+  инструкцияны ҡатын-ҡыҙһыҙ кеше тапшыра.
 
-## Python SDK helpers
+## Python SDK ярҙамсылары
 
 ```python
 from iroha_python import (
@@ -111,13 +112,13 @@ record = RepoAgreementRecord.from_payload(agreements[0])
 next_margin = record.next_margin_check_after(at_timestamp_ms=now_ms)
 ```
 
-* Both helpers normalise numeric quantities and metadata fields before invoking the PyO3 bindings.
-* `RepoAgreementRecord` mirrors the runtime schedule calculation so off-ledger automation can
-  determine when callbacks are due without recomputing the cadence manually.
+* Ике ярҙамсы ла һанлы күләмдәр һәм метамағлүмәт ҡырҙарын PyO3 бәйләүҙәрен саҡырғансы нормаға килтерә.
+* `RepoAgreementRecord` көҙгө графигы иҫәпләүен иҫәпләү шулай офф-леджер автоматлаштырыу мөмкин
+  ҡасан шылтыратыуҙар тейеш, тип билдәләне, каденцияны ҡул менән ҡабаттан иҫәпләмәйенсә.
 
-## DvP / PvP settlements
+## DvP / PvP ҡасабалары
 
-The `iroha app settlement` command stages delivery-versus-payment and payment-versus-payment instructions:
+`iroha app settlement` командаһы тапшырыу-ҡаршы-түләү һәм түләү-ҡаршы түләүле күрһәтмәләр этаптары:
 
 ```bash
 # Delivery leg first, then payment
@@ -153,20 +154,20 @@ iroha --config client.toml --output \
   --iso-xml-out trade_pvp.xml
 ```
 
-* Leg quantities accept integral or decimal values and are validated against the asset precision.
-* `--atomicity` accepts `all-or-nothing`, `commit-first-leg`, or `commit-second-leg`. Use these modes
-  with `--order` to express which leg remains committed if subsequent processing fails (`commit-first-leg`
-  keeps the first leg applied; `commit-second-leg` retains the second).
-* CLI invocations emit empty instruction metadata today; use the Python helpers when settlement-level
-  metadata needs to be attached.
-* See [`settlement_iso_mapping.md`](./settlement_iso_mapping.md) for the ISO 20022 field mapping that
+* Аяҡ күләме интеграль йәки унлыҡ ҡиммәттәрен ҡабул итә һәм актив теүәллегенә ҡаршы раҫлана.
+* `--atomicity` ҡабул итә `all-or-nothing`, `commit-first-leg`, йәки `commit-second-leg`. Был режимдарҙы ҡулланығыҙ
+  `--order` менән, әгәр ҙә артабан эшкәрткән етешһеҙлектәр булһа, ниндәй аяҡ ҡылғанын белдерергә (Norito
+  беренсе аяҡты ҡуллана; `commit-second-leg` икенсеһен һаҡлай).
+* CLI саҡырыуҙары бөгөн буш инструкция метамағлүмәттәрен сығара; ҡулланыу Python ярҙамсылары ҡасан ҡасаба кимәлендә
+  метамағлүмәттәр беркетелергә тейеш.
+* Ҡара: ISO 20022 ялан картаһы өсөн ISO
   backs these instructions (`sese.023`, `sese.025`, `colr.007`, `pacs.009`, `camt.054`).
-* Pass `--iso-xml-out <path>` to have the CLI emit a canonical XML preview alongside the Norito
-  instruction; the file follows the mapping above (`sese.023` for DvP, `sese.025` for PvP`). Pair the
-  flag with `--iso-reference-crosswalk <path>` so the CLI verifies `--delivery-instrument-id` against the
-  same snapshot Torii uses during runtime admission.
+* Pass `--iso-xml-out <path>` CLI канонлы XML алдан ҡарау Norito менән бер рәттән сығарыу өсөн.
+  өйрәтеү; файл өҫтәге картаға ярашлы (`sese.023` өсөн DvP, `sese.025` өсөн PvP`). Пар
+  флаг менән `--iso-reference-crosswalk <path>` шулай CLI раҫлай `--delivery-instrument-id` ҡаршы .
+  шул уҡ снимок Torii ҡулланыу ваҡытында ҡабул итеү ваҡытында.
 
-Python helpers mirror the CLI surface:
+Питон ярҙамсылары CLI өҫтөн көҙгөләй:
 
 ```python
 from iroha_python import (
@@ -209,23 +210,21 @@ draft.settlement_pvp(
         to_account="ih58...",
     ),
 )
-```
+``` X
 
-## Determinism & Governance Expectations
+## Детерминизм & идара итеү көтөүҙәре
 
-Repo instructions rely exclusively on Norito-encoded numeric types and the shared
-`RepoGovernance::with_defaults` logic. Keep the following invariants in mind:
-
-* Quantities are serialised with deterministic `NumericSpec` values: cash legs use
-  `fractional(2)` (two decimal places), collateral legs use `integer()`. Do not submit
-  values with greater precision—runtime guards will reject them and peers would diverge.
-* Tri-party repos persist the custodian account id in `RepoAgreement`. Lifecycle and margin events
-  emit a `RepoAccountRole::Custodian` payload so custodians can subscribe and reconcile inventory.
-* Haircuts are clamped to 10 000 bps (100 %) and margin frequencies are whole seconds. Provide
-  governance parameters in those canonical units to stay aligned with runtime expectations.
-* Timestamps are always unix milliseconds. All helpers forward them unchanged to the Norito
-  payload so peers derive identical schedules.
-* Initiation and unwind instructions reuse the same agreement identifier. The runtime rejects
-  duplicate IDs and unwinds for unknown agreements; CLI/SDK helpers surface those errors early.
-* `repo margin`/`RepoAgreementRecord::next_margin_check_after` return the canonical cadence. Always
-  consult this snapshot before triggering callbacks to avoid replaying stale schedules.
+Репо күрһәтмәләре тик Norito-кодланған һанлы типтағы һәм уртаҡлыҡҡа ғына таяна.
+`RepoGovernance::with_defaults` логикаһы. Түбәндәге инварианттарҙы күҙ уңында тотоғоҙ:* Һандар менән сериализацияланған детерминистик `NumericSpec` ҡиммәттәре: аҡса аяҡтары ҡулланыу
+  `fractional(2)` (ике унлыҡ урыны), залог аяҡтары `integer()`X ҡуллана. Тапшырыуҙы тапшырмағыҙ .
+  ҡиммәттәре ҙурыраҡ теүәллек менән — йүгереүҙең һаҡсылары уларҙы кире ҡаға һәм тиҫтерҙәре айырылыр ине.
+* Три-партия репоһы һаҡлана һаҡсы иҫәп id `RepoAgreement`. Йәшәү циклы һәм маржа ваҡиғалары
+  `RepoAccountRole::Custodian` файҙалы йөктө сығарырға, шуға күрә һаҡсылар инвентаризация яҙыла һәм яраштыра ала.
+* Стрижка 10000б/п (100%) тиклем ҡыҫыла, ә маржа йышлыҡтары тотош секунд. Тәьмин итергә
+  идара итеү параметрҙары шул канонлы берәмектәрҙә эшләү өсөн тура килтереп, йөрөү ваҡыты өмөттәре.
+* Ваҡыт тамғалары һәр ваҡыт бер тапҡыр миллисекунд. Бөтә ярҙамсылар ҙа уларҙы Norito-ҡа үҙгәртмәйенсә тапшыра.
+  файҙалы йөк шулай тиҫтерҙәре бер үк графиктар ала.
+* Инициация һәм ялһыҙ күрһәтмәләр бер үк килешәү идентификаторын ҡабаттан ҡулланырға. Эшләү ваҡыты кире ҡаға.
+  дубликаты идентификаторҙар һәм билдәһеҙ килешелгән өсөн сисергә; CLI/SDK ярҙамсылары был хаталарҙы иртә сығара.
+* `repo margin` X/`RepoAgreementRecord::next_margin_check_after` канон каденцияһын ҡайтара. Һәр ваҡыт
+  был снимок менән кәңәшләшергә тиклем триггер шылтыратыуҙар ҡотолоу өсөн реплей иҫке графиктар.

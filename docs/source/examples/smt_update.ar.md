@@ -6,52 +6,51 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 788902cfafc6c7db6d52d4237b46ffe78193efd57852bc3427a16d7f3cda2f9c
 source_last_modified: "2026-01-03T18:08:00.438859+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Sparse Merkle Update Example
+# مثال على تحديث Merkle المتفرق
 
-This worked example illustrates how the FASTPQ Stage 2 trace encodes a
-non-membership witness using the `neighbour_leaf` column. The sparse Merkle tree
-is binary over Poseidon2 field elements. Keys are converted to canonical
-32-byte little-endian strings, hashed to a field element, and the most
-significant bits select the branch at each level.
+يوضح هذا المثال العملي كيفية ترميز تتبع FASTPQ Stage 2 لـ
+شاهد غير العضوية باستخدام العمود `neighbour_leaf`. شجرة ميركل المتناثرة
+ثنائي على عناصر حقل Poseidon2. يتم تحويل المفاتيح إلى الكنسي
+سلاسل صغيرة ذات 32 بايت، مجزأة إلى عنصر حقل، وأكثر من ذلك
+البتات المهمة تحدد الفرع في كل مستوى.
 
-## Scenario
+## السيناريو
 
-- Pre-state leaves
-  - `asset::alice::rose` -> hashed key `0x12b7...` with value `0x0000_0000_0000_0005`.
-  - `asset::bob::rose`   -> hashed key `0x1321...` with value `0x0000_0000_0000_0003`.
-- Update request: insert `asset::carol::rose` with value 2.
-- The canonical key hash for Carol expands to the 5-bit prefix `0b01011`. The
-  existing neighbours have prefixes `0b01010` (Alice) and `0b01101` (Bob).
+- إجازات ما قبل الولاية
+  - `asset::alice::rose` -> المفتاح المجزأ `0x12b7...` بقيمة `0x0000_0000_0000_0005`.
+  - `asset::bob::rose` -> المفتاح المجزأ `0x1321...` بقيمة `0x0000_0000_0000_0003`.
+- طلب التحديث: أدخل `asset::carol::rose` بالقيمة 2.
+- يمتد تجزئة المفتاح المتعارف عليه لـ Carol إلى البادئة ذات 5 بتات `0b01011`. ال
+  الجيران الحاليون لديهم البادئات `0b01010` (Alice) و`0b01101` (Bob).
 
-Because there is no leaf whose prefix matches `0b01011`, the prover must provide
-additional evidence that the interval `(alice, bob)` is empty. Stage 2 populates
-the trace row across the columns `path_bit_{level}`, `sibling_{level}`,
-`node_in_{level}`, and `node_out_{level}` (with `level` in `[0, 31]`). All values
-are Poseidon2 field elements encoded in little-endian form:
+نظرًا لعدم وجود ورقة تتطابق بادئتها مع `0b01011`، يجب أن يوفر المُثبِّت
+دليل إضافي على أن الفاصل الزمني `(alice, bob)` فارغ. المرحلة 2 يملأ
+صف التتبع عبر الأعمدة `path_bit_{level}`، `sibling_{level}`،
+`node_in_{level}` و`node_out_{level}` (مع `level` في `[0, 31]`). كل القيم
+هي عناصر حقل Poseidon2 مشفرة في شكل نهاية صغيرة:
 
-| level | `path_bit_level` | `sibling_level`             | `node_in_level`                      | `node_out_level`                     | Notes |
+| المستوى | `path_bit_level` | `sibling_level` | `node_in_level` | `node_out_level` | ملاحظات |
 | ----- | ---------------- | --------------------------- | ------------------------------------ | ------------------------------------ | ----- |
-| 0 | 1             | `0x241f...` (Alice leaf hash) | `0x0000...`                          | `0x4b12...` (`value_2 = 2`)          | Insert: start from zero, store new value. |
-| 1 | 1             | `0x7d45...` (empty right)     | Poseidon2(`node_out_0`, `sibling_0`) | Poseidon2(`sibling_1`, `node_out_1`) | Follow prefix bit 1. |
-| 2 | 0             | `0x03ae...` (Bob branch)      | Poseidon2(`node_out_1`, `sibling_1`) | Poseidon2(`node_in_2`, `sibling_2`)  | Branch flips because bit = 0. |
-| 3 | 1             | `0x9bc4...`                   | Poseidon2(`node_out_2`, `sibling_2`) | Poseidon2(`sibling_3`, `node_out_3`) | Higher levels continue hashing upward. |
-| 4 | 0             | `0xe112...`                   | Poseidon2(`node_out_3`, `sibling_3`) | Poseidon2(`node_in_4`, `sibling_4`)  | Root level; result is the post-state root. |
+| 0 | 1 | `0x241f...` (تجزئة ورقة أليس) | `0x0000...` | `0x4b12...` (`value_2 = 2`) | إدراج: البدء من الصفر، وتخزين قيمة جديدة. |
+| 1 | 1 | `0x7d45...` (فارغ لليمين) | بوسيدون2 (`node_out_0`، `sibling_0`) | بوسيدون2 (`sibling_1`، `node_out_1`) | اتبع بت البادئة 1. |
+| 2 | 0 | `0x03ae...` (فرع بوب) | بوسيدون2 (`node_out_1`، `sibling_1`) | بوسيدون2 (`node_in_2`، `sibling_2`) | يقلب الفرع لأن البت = 0. |
+| 3 | 1 | `0x9bc4...` | بوسيدون2 (`node_out_2`، `sibling_2`) | بوسيدون2 (`sibling_3`، `node_out_3`) | تستمر المستويات الأعلى في التجزئة للأعلى. |
+| 4 | 0 | `0xe112...` | بوسيدون2 (`node_out_3`، `sibling_3`) | بوسيدون2 (`node_in_4`، `sibling_4`) | مستوى الجذر والنتيجة هي جذر ما بعد الدولة. |
 
-The `neighbour_leaf` column for this row is populated with Bob's leaf
-(`key = 0x1321...`, `value = 3`, `hash = Poseidon2(key, value) = 0x03ae...`). When
-verifying, the AIR checks that:
+تتم تعبئة العمود `neighbour_leaf` لهذا الصف بورقة بوب
+(`key = 0x1321...`، `value = 3`، `hash = Poseidon2(key, value) = 0x03ae...`). متى
+للتحقق، يتحقق AIR مما يلي:
 
-1. The supplied neighbour corresponds to the sibling used at level 2.
-2. The neighbour key is lexicographically greater than the inserted key and the
-   left sibling (Alice) is lexicographically smaller.
-3. Replacing the inserted leaf with the neighbour reproduces the pre-state root.
-
-Together these checks prove that no leaf existed for the interval `(0b01010,
-0b01101)` before the update. Implementations generating FASTPQ traces can use
-this layout verbatim; the numerical constants above are illustrative. For a full
-JSON witness, emit the columns exactly as they appear in the table above (with
-numeric suffixes per level), using little-endian byte strings serialized with
-Norito JSON helpers.
+1. الجار المقدم يتوافق مع الأخ المستخدم في المستوى 2.
+2. مفتاح الجار أكبر من الناحية المعجمية من المفتاح المدرج و
+   الأخ الأيسر (أليس) أصغر من الناحية المعجمية.
+3. يؤدي استبدال الورقة المُدرجة بالورقة المجاورة إلى إعادة إنتاج جذر الحالة المسبقة.تثبت عمليات التحقق هذه معًا عدم وجود ورقة للفاصل الزمني `(0b01010،
+0b01101)` قبل التحديث. يمكن استخدام التطبيقات التي تولد آثار FASTPQ
+هذا التخطيط حرفيًا؛ الثوابت العددية أعلاه توضيحية. للحصول على كامل
+شاهد JSON، يصدر الأعمدة تمامًا كما تظهر في الجدول أعلاه (مع
+اللواحق الرقمية لكل مستوى)، وذلك باستخدام سلاسل بايت صغيرة نهاية متسلسلة مع
+مساعدي Norito JSON.

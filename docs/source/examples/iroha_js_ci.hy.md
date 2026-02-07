@@ -7,6 +7,7 @@ generator: scripts/sync_docs_i18n.py
 source_hash: d21afd33da5ee459b1f6ffb6ac7c42adc0852ed7929e69993f81914637b5e6b5
 source_last_modified: "2025-12-29T18:16:35.953373+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
@@ -14,35 +15,35 @@ translation_last_reviewed: 2026-02-07
   This document provides guidance for running @iroha/iroha-js in CI systems.
 -->
 
-# Iroha JS CI Reference
+# Iroha JS CI Հղում
 
-The `@iroha/iroha-js` package bundles native bindings via `iroha_js_host`. Any
-CI pipeline that executes tests or builds must provide both a Node.js runtime
-and the Rust toolchain so the native bundle can be compiled before the tests
-run.
+`@iroha/iroha-js` փաթեթը միավորում է բնիկ կապերը `iroha_js_host`-ի միջոցով: Ցանկացած
+CI խողովակաշարը, որն իրականացնում է թեստեր կամ կառուցումներ, պետք է ապահովի երկուսն էլ Node.js գործարկման ժամանակ
+և Rust գործիքների շղթան, որպեսզի հայրենի փաթեթը հնարավոր լինի կազմել թեստերից առաջ
+վազել.
 
-## Recommended Steps
+## Առաջարկվող քայլեր
 
-1. Use a Node LTS release (18 or 20) via `actions/setup-node` or your CI
-   equivalent.
-2. Install the Rust toolchain listed in `rust-toolchain.toml`. We recommend
-   `dtolnay/rust-toolchain@v1` in GitHub Actions.
-3. Cache the cargo registry/git indexes and the `target/` directory to avoid
-   rebuilding the native addon in every job.
-4. Run `npm install`, then `npm run lint:test`. The combined script enforces
-   ESLint with zero warnings, builds the native addon, and runs the Node test
-   suite so CI matches the release gating workflow.
-5. Optionally run `node --test` as a fast smoke step once `npm run build:native`
-   has produced the addon (for example, presubmit quick-check lanes that reuse
-   cached artifacts).
-6. Layer any additional linting or formatting checks from your consumer
-   project on top of `npm run lint:test` when stricter policies are required.
-7. When sharing configuration across services, load `iroha_config` and pass the
-   parsed document to `resolveToriiClientConfig({ config })` so Node clients
-   reuse the same timeout/retry/token policy as the rest of the deployment (see
-   `docs/source/sdk/js/quickstart.md` for a full example).
+1. Օգտագործեք Node LTS թողարկում (18 կամ 20) `actions/setup-node`-ի կամ ձեր CI-ի միջոցով
+   համարժեք։
+2. Տեղադրեք Rust գործիքների շղթան, որը նշված է `rust-toolchain.toml`-ում: Մենք խորհուրդ ենք տալիս
+   `dtolnay/rust-toolchain@v1` GitHub Actions-ում:
+3. Խուսափելու համար պահեք բեռների ռեեստրի/git ինդեքսները և `target/` գրացուցակը
+   վերակառուցելով հայրենի հավելումը յուրաքանչյուր աշխատանքում:
+4. Գործարկեք `npm install`, ապա `npm run lint:test`: Համակցված սցենարը ուժի մեջ է մտնում
+   ESLint-ը զրոյական նախազգուշացումներով, կառուցում է բնիկ հավելումը և գործարկում Node թեստը
+   հավաքակազմ, որպեսզի CI-ն համապատասխանի թողարկման դարպասի աշխատանքային հոսքին:
+5. Ընտրովի գործարկեք `node --test` որպես արագ ծխի քայլ մեկ անգամ `npm run build:native`
+   ստեղծել է հավելումը (օրինակ՝ նախապես ուղարկել արագ ստուգման ուղիներ, որոնք նորից օգտագործվում են
+   քեշավորված արտեֆակտներ):
+6. Շերտավորեք ձեր սպառողից ցանկացած հավելյալ երեսպատման կամ ձևաչափման ստուգումներ
+   նախագիծ `npm run lint:test`-ի վերևում, երբ պահանջվում է ավելի խիստ քաղաքականություն:
+7. Ծառայությունների միջև կոնֆիգուրացիան կիսելիս բեռնեք `iroha_config` և փոխանցեք
+   վերլուծված փաստաթուղթը `resolveToriiClientConfig({ config })`-ին, որպեսզի Node-ի հաճախորդներին
+   վերօգտագործել նույն ժամանակի վերջնաժամկետը/կրկնել/նշան քաղաքականությունը, ինչպես մնացած տեղակայումը (տես
+   `docs/source/sdk/js/quickstart.md` ամբողջական օրինակի համար):
 
-## GitHub Actions Template
+## GitHub Գործողությունների Կաղապար
 
 ```yaml
 name: iroha-js-ci
@@ -86,11 +87,11 @@ jobs:
       - run: npm run lint:test
 ```
 
-## Fast Smoke Job (Optional)
+## Արագ ծխի աշխատանք (ըստ ցանկության)
 
-For pull requests that only touch documentation or TypeScript definitions, a
-minimal job can reuse cached artifacts, rebuild the native module, and run the
-Node test runner directly:
+Ձգվող հարցումների համար, որոնք վերաբերում են միայն փաստաթղթերին կամ TypeScript սահմանումներին, ա
+նվազագույն աշխատանքը կարող է նորից օգտագործել քեշավորված արտեֆակտները, վերակառուցել բնիկ մոդուլը և գործարկել
+Հանգույցի փորձարկման վազող ուղղակիորեն.
 
 ```yaml
 jobs:
@@ -109,9 +110,9 @@ jobs:
       - run: node --test
 ```
 
-This job completes quickly while still verifying that the native addon compiles
-and that the Node test suite passes.
+Այս աշխատանքն ավարտվում է արագ՝ միաժամանակ հաստատելով, որ հայրենի հավելումը կազմվում է
+և որ Node թեստային փաթեթը անցնում է:
 
-> **Reference implementation:** the repository includes
-> `.github/workflows/javascript-sdk.yml`, which wires the steps above into a
-> Node 18/20 matrix with cargo caching.
+> **Հղման իրականացում.** պահեստը ներառում է
+> `.github/workflows/javascript-sdk.yml`, որը վերը նշված քայլերը միացնում է a
+> Հանգույց 18/20 մատրիցա՝ բեռների քեշավորումով:

@@ -7,115 +7,114 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 019b3aa25ae224c1595467ac809f2c53290813e91a78b78b94ca71c3dd950264
 source_last_modified: "2026-01-31T19:25:45.072449+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# GPU Zstd (Metal) Pipeline
+# GPU Zstd (သတ္တု) ပိုက်လိုင်း
 
-This document describes the deterministic GPU pipeline used by the Metal helper
-for zstd compression. It is a design and implementation guide for the
-`gpuzstd_metal` helper that emits standard zstd frames and deterministic bytes
-for a given sequence stream. Outputs must roundtrip with CPU decoders; byte-for-
-byte parity with the CPU compressor is not required because sequence generation
-differs.
+ဤစာတမ်းသည် သတ္တုအကူအညီပေးသူအသုံးပြုသည့် ဆုံးဖြတ်သတ်မှတ်ထားသော GPU ပိုက်လိုင်းကို ဖော်ပြသည်။
+zstd compression အတွက် ၎င်းသည် ဒီဇိုင်းနှင့် အကောင်အထည်ဖော်ရန် လမ်းညွှန်ချက်ဖြစ်သည်။
+`gpuzstd_metal` စံ zstd ဘောင်များနှင့် အဆုံးအဖြတ်ပေးသော ဘိုက်များကို ထုတ်လွှတ်သော ကူညီသူ
+ပေးထားသော sequence stream တစ်ခုအတွက်။ အထွက်များသည် CPU decoders များဖြင့် အသွားအပြန်ရှိရမည်။ byte-for-
+sequence ထုတ်လုပ်ခြင်းကြောင့် CPU compressor နှင့် byte parity မလိုအပ်ပါ။
+ကွဲပြားသည်။
 
-## Goals
+## ပန်းတိုင်
 
-- Emit standard zstd frames that decode identically with CPU zstd; byte parity
-  with the CPU compressor is not required.
-- Deterministic outputs across hardware, drivers, and thread scheduling.
-- Explicit bounds checks and predictable buffer lifetimes.
+- CPU zstd နှင့် ထပ်တူထပ်မျှ ကုဒ်ဖော်ပြသည့် စံ zstdဘောင်များကို ထုတ်လွှတ်ပါ။ byte parity
+  CPU compressor နှင့် မလိုအပ်ပါ။
+- ဟာ့ဒ်ဝဲ၊ ဒရိုက်ဘာများနှင့် thread အစီအစဉ်ဆွဲခြင်းများတွင် ရလဒ်များကို အဆုံးအဖြတ်ပေးသည်။
+- တိကျပြတ်သားသော ကန့်သတ်စစ်ဆေးမှုများနှင့် ကြိုတင်မှန်းဆနိုင်သော ကြားခံဘဝသက်တမ်း။
 
-## Current implementation note
+## လက်ရှိ အကောင်အထည်ဖော်မှု မှတ်စု
 
-- Match finding and sequence generation run on GPU.
-- Frame assembly and entropy coding (Huffman/FSE) currently run on the host
-  using the in-crate encoder; GPU Huffman/FSE kernels are parity-tested but not
-  yet wired into the full frame path.
-- Decode uses the in-crate frame decoder with a CPU zstd fallback for unsupported frames;
-  full GPU block decode remains in progress.
+- ကိုက်ညီမှုရှာဖွေခြင်းနှင့် စီစဉ်မျိုးဆက် GPU ပေါ်တွင် လုပ်ဆောင်သည်။
+- Frame စည်းဝေးပွဲနှင့် အင်ထရိုပီကုဒ် (Huffman/FSE) သည် လက်ရှိ host ပေါ်တွင် လုပ်ဆောင်နေသည်။
+  in-crate ကုဒ်ဒါကို အသုံးပြု၍ GPU Huffman/FSE kernels များကို parity-tested လုပ်ထားသော်လည်း မရပါ။
+  ဒါပေမယ့် full frame လမ်းကြောင်းထဲကို ကြိုးတပ်ထားတယ်။
+- Decode သည် ပံ့ပိုးမထားသောဘောင်များအတွက် CPU zstd fallback ဖြင့် in-crate frame decoder ကိုအသုံးပြုသည်။
+  GPU ပိတ်ဆို့ရေးကုဒ် အပြည့်အစုံကို ဆက်လက်လုပ်ဆောင်နေပါသည်။
 
-## Encoding pipeline (high level)
+## Encoding pipeline (အဆင့်မြင့်)
 
-1. Input staging
-   - Copy the input into a device buffer.
-   - Partition into fixed-size chunks (for sequence generation) and blocks (for
-     zstd frame assembly).
-2. Match finding and sequence emission
-   - GPU kernels scan each chunk and emit sequences (literal length, match
-     length, offset).
-   - Sequence ordering is stable and deterministic.
-3. Literal preparation
-   - Collect literals referenced by sequences.
-   - Build literal histograms and select literal block mode (raw, RLE, or
-     Huffman) deterministically.
-4. Huffman tables (literals)
-   - Generate code lengths from the histogram.
-   - Build canonical tables with deterministic tie-breaking that matches CPU
-     zstd output.
-5. FSE tables (LL/ML/OF)
-   - Normalize frequency counts.
-   - Build FSE decoding/encoding tables deterministically.
-6. Bitstream writer
-   - Pack bits little-endian (LSB-first).
-   - Flush on byte boundaries; pad with zeros only.
-   - Mask values to declared bit widths and enforce capacity checks.
-7. Block and frame assembly
-   - Emit block headers (type, size, last-block flag).
-   - Serialize literals and sequences into compressed blocks.
-   - Emit standard zstd frame headers and optional checksums.
+1. ထည့်သွင်းမှု အဆင့်
+   - ထည့်သွင်းမှုကို စက်ပစ္စည်းကြားခံတစ်ခုသို့ ကူးယူပါ။
+   - ပုံသေအရွယ်အစား အတုံးများ (အစီစဉ်မျိုးဆက်အတွက်) နှင့် တုံးများ (for
+     zstd frame တပ်ဆင်ခြင်း)။
+2. ကိုက်ညီမှုရှာဖွေခြင်းနှင့် sequence ထုတ်လွှတ်ခြင်း။
+   - GPU kernels သည် အတုံးတစ်ခုစီကို စကင်န်ဖတ်ပြီး အတွဲလိုက်များကို ထုတ်လွှတ်သည် (စာတိုအရှည်၊ ကိုက်ညီမှု
+     အရှည်၊ အော့ဖ်ဆက်)။
+   - Sequence ordering သည် တည်ငြိမ်ပြီး အဆုံးအဖြတ်ဖြစ်သည်။
+3. ပကတိပြင်ဆင်မှု
+   - အစီအစဥ်အလိုက် ရည်ညွှန်းထားသော စာလုံးများကို စုဆောင်းပါ။
+   - ပကတိဟီစတိုဂရမ်များကိုတည်ဆောက်ပြီး ပကတိပိတ်ဆို့မုဒ် (အကြမ်း၊ RLE သို့မဟုတ်
+     Huffman) က အဆုံးအဖြတ်ပေးသည်။
+4. Huffman ဇယားများ (အက္ခရာများ)
+   - histogram မှ ကုဒ်အရှည်များကို ဖန်တီးပါ။
+   - CPU နှင့် ကိုက်ညီသော အဆုံးအဖြတ်ပေးသော ကြိုးပြတ်ဖြင့် Canonical ဇယားများကို တည်ဆောက်ပါ။
+     zstd အထွက်။
+5. FSE ဇယားများ (LL/ML/OF)
+   - ကြိမ်နှုန်းအရေအတွက်များကို ပုံမှန်ပြုလုပ်ပါ။
+   - FSE ကုဒ်ကုဒ်/ကုဒ်နံပါတ်ဇယားများကို တိကျစွာတည်ဆောက်ပါ။
+6. Bitstream စာရေးဆရာ
+   - အထုပ်သေးသေးလေးများ (LSB-ပထမ) ထုပ်ပိုးပါ။
+   - byte နယ်နိမိတ်များကို ဖြုန်းတီးပါ။ သုညသာရှိသော pad ။
+   - ဘစ်အကျယ်များကို ကြေညာရန်နှင့် စွမ်းရည်စစ်ဆေးမှုများကို တွန်းအားပေးရန်အတွက် Mask တန်ဖိုးများ။
+7. ပိတ်ဆို့ခြင်းနှင့်ဘောင်တပ်ဆင်ခြင်း။
+   - ပိတ်ဆို့ခေါင်းစီးများ (အမျိုးအစား၊ အရွယ်အစား၊ နောက်ဆုံးပိတ်အလံ) ကိုထုတ်လွှတ်ပါ။
+   - စာသားများနှင့် အတွဲများကို ဖိသိပ်ထားသော ဘလောက်များအဖြစ် စီတန်းခွဲပါ။
+   - standard zstd frame headers များနှင့် optional checksum များကို ထုတ်လွှတ်ပါ။
 
-## Decoding pipeline (high level)
+## ကုဒ်ဆွဲပိုက်လိုင်း (အဆင့်မြင့်)၊
 
 1. Frame parse
-   - Validate magic bytes, window settings, and frame header fields.
-2. Bitstream reader
-   - Read LSB-first bit sequences with strict bounds checks.
-3. Literal decode
-   - Decode literal blocks (raw, RLE, or Huffman) into the literal buffer.
+   - မှော်ဘိုက်များ၊ ဝင်းဒိုးဆက်တင်များနှင့် ဘောင်ခေါင်းစီးအကွက်များကို အတည်ပြုပါ။
+2. Bitstream စာဖတ်သူ
+   - တင်းကျပ်သောကန့်သတ်စစ်ဆေးမှုများနှင့်အတူ LSB-ပထမဘစ်ဆင့်များကိုဖတ်ပါ။
+3. ပကတိကုဒ်
+   - ပကတိတုံးများ (အကြမ်း၊ RLE သို့မဟုတ် Huffman) ကို ပကတိကြားခံအဖြစ် ကုဒ်လုပ်ပါ။
 4. Sequence decode
-   - Decode LL/ML/OF values using FSE tables.
-   - Reconstruct matches using the sliding window.
-5. Output and checksum
-   - Write reconstructed bytes into the output buffer.
-   - Verify optional checksums when enabled.
+   - FSE ဇယားများကို အသုံးပြု၍ LL/ML/OF တန်ဖိုးများကို ကုဒ်လုပ်ပါ။
+   - လျှောပြတင်းပေါက်ကို အသုံးပြု၍ ကိုက်ညီမှုများကို ပြန်လည်တည်ဆောက်ပါ။
+5. Output နှင့် checksum
+   - အထွက်ကြားခံတွင် ပြန်လည်တည်ဆောက်ထားသော ဘိုက်များကို ရေးပါ။
+   - ဖွင့်ထားသည့်အခါ ရွေးချယ်နိုင်သော checksum များကို စစ်ဆေးပါ။
 
-## Buffer lifetimes and ownership
+## ကြားခံ တစ်သက်တာနှင့် ပိုင်ဆိုင်ခွင့်- ထည့်သွင်းမှု ကြားခံ- host -> စက်၊ ဖတ်ရန်သာ။
+- တစ်ဆက်တည်းကြားခံ- ကိုက်ညီမှုရှာဖွေခြင်းနှင့် အင်ထရိုပီဖြင့် စားသုံးခြင်းဖြင့် ထုတ်လုပ်သည့် စက်ပစ္စည်း
+  coding; ပြန်သုံးခြင်းမပြုရ။
+- ပကတိကြားခံ- ဘလောက်တစ်ခုစီအတွက် ထုတ်လုပ်ပြီး ပိတ်ဆို့ပြီးနောက် ထုတ်လွှတ်သော ကိရိယာ
+  ထုတ်လွှတ်မှု။
+- အထွက်ကြားခံ- စက်ပစ္စည်း၊ လက်ခံသူမှ ၎င်းတို့ကို မိတ္တူကူးသည်အထိ နောက်ဆုံးဘောင်ဘိုက်များကို ကိုင်ထားပါ။
+  ထွက်
+- Scratch buffers- kernels အနှံ့ ပြန်သုံးသော်လည်း အမြဲတမ်း အဆုံးအဖြတ်ကျကျ ထပ်ရေးထားသည်။
 
-- Input buffer: host -> device, read-only.
-- Sequence buffer: device, produced by match-finding and consumed by entropy
-  coding; no cross-block reuse.
-- Literal buffer: device, produced for each block and released after block
-  emission.
-- Output buffer: device, holds the final frame bytes until the host copies them
-  out.
-- Scratch buffers: reused across kernels, but always overwritten deterministically.
+## Kernel တာဝန်များ
 
-## Kernel responsibilities
+- kernels ရှာဖွေခြင်းကို ကိုက်ညီသည်- ကိုက်ညီမှုများကို ရှာဖွေပြီး အတွဲလိုက်များ (LL/ML/OF + literals) ကို ထုတ်လွှတ်သည်။
+- Huffman သည် kernels တည်ဆောက်သည်- ကုဒ်အရှည်များနှင့် canonical ဇယားများရယူသည်။
+- FSE build kernels- LL/ML/OF tables နှင့် state machines များကိုတည်ဆောက်ပါ။
+- ကုဒ်နံပါတ်များကို ပိတ်ဆို့ပါ- စာလုံးများနှင့် အတွဲများကို bitstream တွင် အမှတ်အသားပြုပါ။
+- decode kernels များကိုပိတ်ဆို့ပါ- bitstream ကိုခွဲခြမ်းစိတ်ဖြာပြီး literals/sequences များကို ပြန်လည်တည်ဆောက်ပါ။
 
-- Match finding kernels: find matches and emit sequences (LL/ML/OF + literals).
-- Huffman build kernels: derive code lengths and canonical tables.
-- FSE build kernels: build LL/ML/OF tables and state machines.
-- Block encode kernels: serialize literals and sequences into the bitstream.
-- Block decode kernels: parse bitstream and reconstruct literals/sequences.
+## အဆုံးအဖြတ်နှင့် တန်းတူညီမျှမှု ကန့်သတ်ချက်များ
 
-## Determinism and parity constraints
+- Canonical ဇယားတည်ဆောက်မှုများသည် CPU ကဲ့သို့ တူညီသောအမိန့်ပေးခြင်းနှင့် စည်းဖောက်ခြင်းကို အသုံးပြုရပါမည်။
+  zstd
+- မည်သည့် output byte အတွက်မဆို thread အစီအစဉ်ဆွဲခြင်းအပေါ် မူတည်သော အက်တမ် သို့မဟုတ် လျှော့ချခြင်း မရှိပါ။
+- Bitstream ထုပ်ပိုးမှုသည် အနည်းငယ်သာလွန်သည်၊ LSB-ပထမ၊ သုညနှင့်အတူ byte တန်းညှိအကွက်များ။
+- ကန့်သတ်စစ်ဆေးမှုများအားလုံးသည် ရှင်းလင်းပြတ်သားပြီး၊ မမှန်ကန်သော သွင်းအားစုများသည် အဆုံးအဖြတ်အရ ပျက်ကွက်သည်။
 
-- Canonical table builds must use the same ordering and tie-breaking as CPU
-  zstd.
-- No atomics or reductions that depend on thread scheduling for any output byte.
-- Bitstream packing is little-endian, LSB-first; byte alignment pads with zeros.
-- All bounds checks are explicit; invalid inputs fail deterministically.
+## အတည်ပြုခြင်း။
 
-## Validation
+- bitstream စာရေးဆရာ/စာဖတ်သူအတွက် CPU ရွှေရောင် vector များ။
+- GPU နှင့် CPU အထွက်များကို နှိုင်းယှဉ်ထားသော Corpus parity စမ်းသပ်မှုများ။
+- ပုံစံမမှန်သောဘောင်များနှင့် နယ်နိမိတ်အခြေအနေများအတွက် Fuzz လွှမ်းခြုံမှု။
 
-- CPU golden vectors for the bitstream writer/reader.
-- Corpus parity tests comparing GPU and CPU outputs.
-- Fuzz coverage for malformed frames and boundary conditions.
+## စံညွှန်းသတ်မှတ်ခြင်း။
 
-## Benchmarking
-
-Run `cargo test -p gpuzstd_metal gpu_vs_cpu_benchmark -- --ignored --nocapture` to
-compare CPU vs GPU encode latency across payload sizes. The test skips on hosts
-without a Metal-capable device; capture the output alongside hardware details
-when adjusting the GPU offload thresholds. Norito enforces the same cutoff in
-`gpu_zstd::encode_all`, so direct callers match the heuristic gate.
+`cargo test -p gpuzstd_metal gpu_vs_cpu_benchmark -- --ignored --nocapture` ကို Run လိုက်ပါ။
+payload အရွယ်အစားများတစ်လျှောက် CPU နှင့် GPU ကုဒ် တုံ့ပြန်ချိန်ကို နှိုင်းယှဉ်ပါ။ စာမေးပွဲသည် အိမ်ရှင်များထံ ကျော်သွားသည်။
+သတ္တုသုံးကိရိယာမပါဘဲ၊ ဟာ့ဒ်ဝဲအသေးစိတ်အချက်များနှင့်အတူ output ကိုဖမ်းယူပါ။
+GPU offload အဆင့်များကို ချိန်ညှိသောအခါ။ Norito သည် အလားတူဖြတ်တောက်မှုကို တွန်းအားပေးသည်။
+`gpu_zstd::encode_all`၊ ထို့ကြောင့် တိုက်ရိုက်ခေါ်ဆိုသူများသည် heuristic gate နှင့် ကိုက်ညီပါသည်။

@@ -7,83 +7,82 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 779174437b1a7e57b371d3b41d1cab780d94700acf6642b1356cdb75504ae5fa
 source_last_modified: "2026-01-21T19:17:13.237630+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# IVM Bytecode Header
+# IVM Байткодын толгой хэсэг
 
 
-Magic
-- 4 bytes: ASCII `IVM\0` at offset 0.
+Ид шид
+- 4 байт: ASCII `IVM\0` 0 офсет.
 
-Layout (current)
-- Offsets and sizes (17 bytes total):
-  - 0..4: magic `IVM\0`
+Байршил (одоогийн)
+- Оффсет ба хэмжээ (нийт 17 байт):
+  - 0..4: ид шидийн `IVM\0`
   - 4: `version_major: u8`
   - 5: `version_minor: u8`
-  - 6: `mode: u8` (feature bits; see below)
+  - 6: `mode: u8` (онцлогын битүүд; доороос үзнэ үү)
   - 7: `vector_length: u8`
-  - 8..16: `max_cycles: u64` (little‑endian)
+  - 8..16: `max_cycles: u64` (бяцхан-эндиан)
   - 16: `abi_version: u8`
 
-Mode bits
-- `ZK = 0x01`, `VECTOR = 0x02`, `HTM = 0x04` (reserved/feature‑gated).
+Горимын битүүд
+- `ZK = 0x01`, `VECTOR = 0x02`, `HTM = 0x04` (захиалагдсан/онцлогтой).
 
-Fields (meaning)
-- `abi_version`: syscall table and pointer‑ABI schema version.
-- `mode`: feature bits for ZK tracing/VECTOR/HTM.
-- `vector_length`: logical vector length for vector ops (0 → unset).
-- `max_cycles`: execution padding bound used in ZK mode and admission.
+Талбарууд (утга)
+- `abi_version`: системийн дуудлагын хүснэгт ба заагч-ABI схемийн хувилбар.
+- `mode`: ZK tracing/VECTOR/HTM-д зориулсан онцлог битүүд.
+- `vector_length`: вектор үйлдлийн логик вектор урт (0 → тохируулаагүй).
+- `max_cycles`: ZK горим болон элсэлтийн үед ашигласан гүйцэтгэлийн дэвсгэр.
 
-Notes
-- Endianness and layout are defined by the implementation and bound to `version`. The on‑wire layout above reflects the current implementation in `crates/ivm_abi/src/metadata.rs`.
-- A minimal reader can rely on this layout for current artifacts and should handle future changes via `version` gating.
-- Hardware acceleration (SIMD/Metal/CUDA) is opt-in per host. The runtime reads `AccelerationConfig` values from `iroha_config`: `enable_simd` forces scalar fallbacks when false, while `enable_metal` and `enable_cuda` gate their respective backends even when compiled in. These toggles are applied through `ivm::set_acceleration_config` before VM creation.
-- Mobile SDKs (Android/Swift) surface the same knobs; `IrohaSwift.AccelerationSettings`
-  calls `connect_norito_set_acceleration_config` so macOS/iOS builds can opt into Metal /
-  NEON while keeping deterministic fallbacks.
-- Operators can also force-disable specific backends for diagnostics by exporting `IVM_DISABLE_METAL=1` or `IVM_DISABLE_CUDA=1`. These environment overrides take precedence over configuration and keep the VM on the deterministic CPU path.
+Тэмдэглэл
+- Endianness болон зохион байгуулалт нь хэрэгжилтээр тодорхойлогддог бөгөөд `version`-тай холбоотой байдаг. Дээрх утаснуудын зохион байгуулалт нь `crates/ivm_abi/src/metadata.rs` дээрх одоогийн хэрэгжилтийг тусгасан болно.
+- Хамгийн бага уншигч одоогийн олдворын хувьд энэ бүдүүвч дээр найдаж болох бөгөөд ирээдүйн өөрчлөлтийг `version` гарцаар зохицуулах ёстой.
+- Техник хангамжийн хурдатгал (SIMD/Metal/CUDA) нь нэг хост бүрт хамрагдах боломжтой. Ажиллах цаг нь `iroha_config`-аас `AccelerationConfig` утгуудыг уншдаг: `enable_simd` нь худал үед скаляр буцаалтыг албаддаг бол `enable_metal` болон `enable_cuda` gate нь тус тусын арын төгсгөлд хүртэл хэрэглэгдэж байдаг. VM үүсгэхээс өмнө `ivm::set_acceleration_config`.
+- Гар утасны SDK (Android/Swift) нь ижил товчлууруудтай; `IrohaSwift.AccelerationSettings`
+  `connect_norito_set_acceleration_config` гэж дууддаг тул macOS/iOS бүтээгчид Металл /
+  Детерминист нөөцийг хадгалахын зэрэгцээ NEON.
+- Операторууд `IVM_DISABLE_METAL=1` эсвэл `IVM_DISABLE_CUDA=1`-г экспортлох замаар оношилгооны тусгай арын хэсгийг албадан идэвхгүй болгох боломжтой. Эдгээр орчны хүчингүй байдал нь тохиргооноос давуу бөгөөд VM-ийг тодорхойлогч CPU зам дээр байлгадаг.
 
-Durable state helpers and ABI surface
-- The durable state helper syscalls (0x50–0x5A: STATE_{GET,SET,DEL}, ENCODE/DECODE_INT, BUILD_PATH_* and JSON/SCHEMA encode/decode) are part of the V1 ABI and are included in `abi_hash` computation.
-- CoreHost wires STATE_{GET,SET,DEL} to WSV-backed durable smart-contract state; dev/test hosts may use overlays or local persistence but must preserve the same observable behavior.
+Удаан эдэлгээтэй төрийн туслахууд болон ABI гадаргуу
+- Тогтвортой төлөв байдлын туслах системийн дуудлагууд (0x50–0x5A: STATE_{GET,SET,DEL}, ENCODE/DECODE_INT, BUILD_PATH_* болон JSON/SCHEMA кодчилол/декод) нь V1 ABI-ийн нэг хэсэг бөгөөд `abi_hash` тооцоололд багтсан болно.
+- CoreHost утсыг STATE_{GET,SET,DEL} хүртэл WSV-д тулгуурласан бат бөх ухаалаг гэрээний төлөв рүү шилжүүлнэ; dev/туршилтын хостууд давхардсан эсвэл орон нутгийн тогтвортой байдлыг ашиглаж болох боловч ажиглагдаж болохуйц ижил зан төлөвийг хадгалах ёстой.
 
-Validation
-- Node admission accepts only `version_major = 1` and `version_minor = 0` headers.
-- `mode` must only contain known bits: `ZK`, `VECTOR`, `HTM` (unknown bits are rejected).
-- `vector_length` is advisory and may be non‑zero even if the `VECTOR` bit is not set; admission enforces an upper bound only.
-- Supported `abi_version` values: first release accepts only `1` (V1); other values are rejected at admission.
+Баталгаажуулалт
+- Зангилааны элсэлт нь зөвхөн `version_major = 1` болон `version_minor = 0` толгойнуудыг хүлээн авдаг.
+- `mode` зөвхөн мэдэгдэж байгаа битүүдийг агуулсан байх ёстой: `ZK`, `VECTOR`, `HTM` (үл мэдэгдэх битүүд татгалзсан).
+- `vector_length` зөвлөгөө өгөх бөгөөд `VECTOR` битийг тохируулаагүй байсан ч тэгээс өөр байж болно; элсэлт нь зөвхөн дээд хязгаарыг мөрддөг.
+- Дэмжигдсэн `abi_version` утгууд: эхний хувилбар нь зөвхөн `1` (V1)-ийг хүлээн авдаг; элсэлтийн үед бусад утгыг үгүйсгэдэг.
 
-### Policy (generated)
-The following policy summary is generated from the implementation and should not be edited manually.
-
-<!-- BEGIN GENERATED HEADER POLICY -->
-| Field | Policy |
+### Бодлого (үүсгэсэн)
+Дараах бодлогын хураангуй нь хэрэгжилтээс үүссэн бөгөөд гараар засварлаж болохгүй.<!-- BEGIN GENERATED HEADER POLICY -->
+| Талбай | Бодлого |
 |---|---|
-| version_major | 1 |
-| version_minor | 0 |
-| mode (known bits) | 0x07 (ZK=0x01, VECTOR=0x02, HTM=0x04) |
+| хувилбар_major | 1 |
+| хувилбар_бага хувилбар | 0 |
+| горим (мэдэгдэж байгаа битүүд) | 0x07 (ZK=0x01, VECTOR=0x02, HTM=0x04) |
 | abi_version | 1 |
-| vector_length | 0 or 1..=64 (advisory; independent of VECTOR bit) |
+| вектор_урт | 0 эсвэл 1..=64 (зөвлөгөө; ВЕКТОР битээс хамааралгүй) |
 <!-- END GENERATED HEADER POLICY -->
 
-### ABI Hashes (generated)
-The following table is generated from the implementation and lists canonical `abi_hash` values for supported policies.
+### ABI хэшүүд (үүсгэсэн)
+Дараах хүснэгтийг хэрэгжүүлэлтээс үүсгэсэн бөгөөд дэмжигдсэн бодлогын `abi_hash` стандартын утгыг жагсаав.
 
 <!-- BEGIN GENERATED ABI HASHES -->
-| Policy | abi_hash (hex) |
+| Бодлого | abi_hash (hex) |
 |---|---|
 | ABI v1 | ba1786031c3d0cdbd607debdae1cc611a0807bf9cf49ed349a0632855724969f |
 <!-- END GENERATED ABI HASHES -->
 
-- Minor updates may add instructions behind `feature_bits` and reserved opcode space; major updates may change encodings or remove/repurpose only together with a protocol upgrade.
-- Syscall ranges are stable; unknown for the active `abi_version` yields `E_SCALL_UNKNOWN`.
-- Gas schedules are bound to the `version` and require golden vectors on change.
+- Бага зэргийн шинэчлэлтүүд нь `feature_bits` болон нөөц кодын зайны ард заавар нэмж болно; томоохон шинэчлэлтүүд нь зөвхөн протоколын шинэчлэлийн хамт кодчилолыг өөрчлөх эсвэл устгах/дахин ашиглах боломжтой.
+- Системийн дуудлагын хүрээ тогтвортой байна; Идэвхтэй `abi_version` тодорхойгүй `E_SCALL_UNKNOWN` гарна.
+- Хийн хуваарь нь `version`-тэй холбоотой бөгөөд өөрчлөлтөд алтан вектор шаардлагатай.
 
-Inspecting artifacts
-- Use `ivm_tool inspect <file.to>` for a stable view of header fields.
-- For development, examples/ include a small Makefile target `examples-inspect` that runs inspect over built artifacts.
+Олдворуудыг шалгаж байна
+- Толгойн талбаруудыг тогтвортой харахын тулд `ivm_tool inspect <file.to>` ашиглана уу.
+- Хөгжүүлэлтийн хувьд, жишээнд/ жижиг Makefile зорилтот `examples-inspect`-г оруулаад, баригдсан олдворуудыг шалгадаг.
 
-Example (Rust): minimal magic + size check
+Жишээ (Зэв): хамгийн бага ид шид + хэмжээ шалгах
 
 ```rust
 use std::fs::File;
@@ -99,4 +98,4 @@ fn is_ivm_artifact(path: &std::path::Path) -> std::io::Result<bool> {
 }
 ```
 
-Note: The exact header layout beyond the magic is versioned and implementation‑defined; prefer `ivm_tool inspect` for stable field names and values.
+Тэмдэглэл: Шидээс гадна толгойн байршлын яг хувилбар нь хувилбар болон хэрэгжилтээр тодорхойлогддог; Тогтвортой талбарын нэр болон утгын хувьд `ivm_tool inspect`-г илүүд үздэг.

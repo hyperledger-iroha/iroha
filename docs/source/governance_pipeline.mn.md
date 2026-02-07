@@ -7,20 +7,21 @@ generator: scripts/sync_docs_i18n.py
 source_hash: f9f765fbe3170f654a9c44c3cd1afc5d82a72ff49137f32b98cf9d310faf114e
 source_last_modified: "2025-12-29T18:16:35.963528+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% Governance Pipeline (Iroha 2 and SORA Parliament)
+% Засаглалын шугам хоолой (Iroha 2 ба SORA Парламент)
 
-# Current state (v1)
-- Governance proposals run as: proposer → referendum → tally → enactment. Referendum windows and turnout/approval thresholds are enforced as described in `gov.md`; locks are extend-only and unlock on expiry.
-- Parliament selection uses VRF-based draws with deterministic ordering and term bounds; when no persisted roster exists, Torii derives a fallback using `gov.parliament_*` config. Council gating and quorum checks are exercised in `gov_parliament_bodies` / `gov_pipeline_sla` tests.
-- Voting modes: ZK (default, requires `Active` VK with inline bytes) and Plain (quadratic weight). Mode mismatches are rejected; lock creation/extension is monotonic in both modes with regression tests for ZK and plain re-votes.
-- Validator misconduct is acted on via the evidence pipeline (`/v1/sumeragi/evidence*`, CLI helpers) with joint-consensus hand-offs enforced by `NextMode` + `ModeActivationHeight`.
-- Protected namespaces, runtime-upgrade hooks, and governance manifest admission are documented in `governance_api.md` and covered by telemetry (`governance_manifest_*`, `governance_protected_namespace_total`).
+# Одоогийн төлөв (v1)
+-Засаглалын саналууд нь: санал санаачлагч → бүх нийтийн санал асуулга → тооллого → батлагдах байдлаар явагдана. Ард нийтийн санал асуулгын цонх, ирц/зөвшөөрлийн босгыг `gov.md`-д тайлбарласны дагуу мөрддөг; Түгжээг зөвхөн сунгах боломжтой бөгөөд хугацаа нь дуусмагц онгойлгох боломжтой.
+- Парламентын сонгон шалгаруулалт нь тодорхойлогч дараалал, хугацааны хязгаар бүхий VRF-д суурилсан сугалаа ашигладаг; Тогтвортой жагсаалт байхгүй үед Torii `gov.parliament_*` тохиргоог ашиглан нөөцийг гаргаж авдаг. Зөвлөлийн гарц болон чуулгын шалгалтыг `gov_parliament_bodies` / `gov_pipeline_sla` туршилтаар гүйцэтгэдэг.
+- Санал өгөх горимууд: ZK (анхдагчаар, `Active` VK доторх байттай) ба Энгийн (квадрат жин). Горим таарахгүй байхаас татгалзсан; түгжээ үүсгэх/өргөтгөл нь ZK-ийн регрессийн тест болон энгийн дахин санал хураалт бүхий хоёр горимд нэгэн хэвийн байна.
+- Баталгаажуулагчийн буруутай үйлдлийг `NextMode` + `ModeActivationHeight`-ээр баталгаажуулсан нотлох баримтын шугамаар (`/v1/sumeragi/evidence*`, CLI туслахууд) хариуцдаг.
+- Хамгаалагдсан нэрийн орон зай, ажиллах цагийн шинэчлэлтийн дэгээ болон засаглалын манифестийн зөвшөөрлийг `governance_api.md`-д баримтжуулж, телеметрийн (`governance_manifest_*`, `governance_protected_namespace_total`) хамрагдсан.
 
-# In-flight / backlog
-- Publish VRF draw artifacts (seed, proof, ordered roster, alternates) and codify replacement rules for no-shows; add golden fixtures for the draw and replacements.
-- Stage-SLA enforcement for the Parliament bodies (rules → agenda → study → review → jury → enact) needs explicit timers, escalation paths, and telemetry counters.
-- Policy-jury secret/commit–reveal voting and associated bribery-resistance audits are still to be implemented.
-- Role-bond multipliers, misconduct slashing for high-risk bodies, and cooldowns between service slots require configuration plumbing plus tests.
-- Governance lane sealing and referenda window/turnout gates are tracked in `gov.md`/`status.md`; keep the roadmap entries updated as the remaining acceptance tests land.
+# Нислэгийн / хоцрогдол
+- VRF сугалааны олдворуудыг (үр, нотлох баримт, захиалгат жагсаалт, орлуулах) нийтлэх, үзүүлээгүй тохиолдолд солих дүрмийг кодлох; сугалаа болон сэлгээнд зориулж алтан бэхэлгээ нэмнэ.
+- УИХ-ын байгууллагуудад зориулсан хууль тогтоомжийн хэрэгжилтийн үе шат (дүрэм → хэлэлцэх асуудал → судалгаа → хянан хэлэлцэх → тангарагтны шүүх → батлах) нь тодорхой цаг хэмжигч, хурдасгах зам, телеметрийн тоолууртай байх шаардлагатай.
+- Бодлого-тангарагтны нууц/хариуцах-илчлэх санал хураалт, түүнтэй холбоотой хээл хахуулийг эсэргүүцэх аудитыг хэрэгжүүлэх хэвээр байна.
+- Үйлчилгээний үүрний үржүүлэгчид, өндөр эрсдэлтэй биетүүдийн буруутай үйлдлийг таслах, үйлчилгээний үүр хоорондын хөргөлт зэрэг нь тохируулгын сантехникийн нэмэлт шалгалтыг шаарддаг.
+- Засаглалын эгнээний битүүмжлэл, санал асуулга явуулах цонх/сонголтын гарцыг `gov.md`/`status.md` дээр хянадаг; Үлдсэн хүлээн авалтын шалгалтууд буух үед замын газрын зургийн оруулгуудыг шинэчлээрэй.

@@ -7,20 +7,21 @@ generator: scripts/sync_docs_i18n.py
 source_hash: f9f765fbe3170f654a9c44c3cd1afc5d82a72ff49137f32b98cf9d310faf114e
 source_last_modified: "2025-12-29T18:16:35.963528+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% Governance Pipeline (Iroha 2 and SORA Parliament)
+% የአስተዳደር ቧንቧ (Iroha 2 እና SORA ፓርላማ)
 
-# Current state (v1)
-- Governance proposals run as: proposer → referendum → tally → enactment. Referendum windows and turnout/approval thresholds are enforced as described in `gov.md`; locks are extend-only and unlock on expiry.
-- Parliament selection uses VRF-based draws with deterministic ordering and term bounds; when no persisted roster exists, Torii derives a fallback using `gov.parliament_*` config. Council gating and quorum checks are exercised in `gov_parliament_bodies` / `gov_pipeline_sla` tests.
-- Voting modes: ZK (default, requires `Active` VK with inline bytes) and Plain (quadratic weight). Mode mismatches are rejected; lock creation/extension is monotonic in both modes with regression tests for ZK and plain re-votes.
-- Validator misconduct is acted on via the evidence pipeline (`/v1/sumeragi/evidence*`, CLI helpers) with joint-consensus hand-offs enforced by `NextMode` + `ModeActivationHeight`.
-- Protected namespaces, runtime-upgrade hooks, and governance manifest admission are documented in `governance_api.md` and covered by telemetry (`governance_manifest_*`, `governance_protected_namespace_total`).
+# የአሁኑ ሁኔታ (v1)
+- የአስተዳደር ፕሮፖዛል የሚካሄደው እንደ፡ ፕሮፖሰር → ሪፈረንደም → ድምር → አፈጻጸም ነው። በ `gov.md` እንደተገለፀው የሪፈረንደም መስኮቶች እና የመውጣት/የማጽደቂያ ገደቦች ተፈጻሚ ይሆናሉ። መቆለፊያዎች የተራዘሙ ብቻ ናቸው እና የሚከፈቱት ጊዜው ሲያበቃ ነው።
+- የፓርላማ ምርጫ በቪአርኤፍ ላይ የተመሰረቱ ስዕሎችን ከተወሰነ ቅደም ተከተል እና የጊዜ ገደቦች ጋር ይጠቀማል። ቀጣይነት ያለው የስም ዝርዝር ከሌለ፣ Torii `gov.parliament_*` ውቅርን በመጠቀም ውድቀትን ያመጣል። የምክር ቤት መግቢያ እና የምልአተ ጉባኤ ፍተሻዎች በ`gov_parliament_bodies`/`gov_pipeline_sla` ሙከራዎች ውስጥ ይከናወናሉ።
+- የድምጽ መስጫ ሁነታዎች፡ ZK (ነባሪ፣ `Active` VK ከውስጥ ባይት ጋር ይፈልጋል) እና ሜዳ (አራት ክብደት)። የሞድ አለመዛመዶች ውድቅ ናቸው; መቆለፊያ መፍጠር/ማራዘሚያ ለZK እና ግልጽ ድጋሚ ድምጾች ያለው በሁለቱም ሁነታዎች ነጠላ ነው።
+- አረጋጋጭ ጥፋት የሚካሄደው በማስረጃ መስመር (`/v1/sumeragi/evidence*`፣ CLI አጋዥዎች) በጋራ የጋራ ስምምነት በ`NextMode` + `ModeActivationHeight` ነው።
+- የተጠበቁ የስም ቦታዎች፣ የሩጫ ጊዜ ማሻሻያ መንጠቆዎች እና የአስተዳደር መግለጫ መግቢያ በ`governance_api.md` ውስጥ ተመዝግበው በቴሌሜትሪ (`governance_manifest_*`፣ `governance_protected_namespace_total`) ተሸፍነዋል።
 
-# In-flight / backlog
-- Publish VRF draw artifacts (seed, proof, ordered roster, alternates) and codify replacement rules for no-shows; add golden fixtures for the draw and replacements.
-- Stage-SLA enforcement for the Parliament bodies (rules → agenda → study → review → jury → enact) needs explicit timers, escalation paths, and telemetry counters.
-- Policy-jury secret/commit–reveal voting and associated bribery-resistance audits are still to be implemented.
-- Role-bond multipliers, misconduct slashing for high-risk bodies, and cooldowns between service slots require configuration plumbing plus tests.
-- Governance lane sealing and referenda window/turnout gates are tracked in `gov.md`/`status.md`; keep the roadmap entries updated as the remaining acceptance tests land.
+# በበረራ ውስጥ / የኋላ መዝገብ
+- የቪአርኤፍ ስዕል ቅርሶችን ማተም (ዘር ፣ማስረጃ ፣የታዘዙ ዝርዝር ፣ተለዋዋጮች) እና ያለ ትዕይንት መተኪያ ህጎችን ማተም ፣ ለመሳል እና ለመተካት ወርቃማ እቃዎችን ይጨምሩ.
+- ለፓርላማ አካላት ደረጃ-SLA ማስፈጸሚያ (ህጎች → አጀንዳ → ጥናት → ግምገማ → ዳኞች → ተግባራዊ) ግልጽ የሰዓት ቆጣሪዎች፣ የከፍታ መንገዶች እና የቴሌሜትሪ ቆጣሪዎች ያስፈልጋቸዋል።
+- የፖሊሲ-ዳኞች ሚስጥራዊ/ቁርጠኝነት-የግልፅ ድምጽ መስጠት እና ተያያዥነት ያላቸው ጉቦ-የመቋቋም ኦዲቶች አሁንም መተግበር አለባቸው።
+- የሚና ቦንድ ማባዣዎች፣ ከፍተኛ አደጋ ላለባቸው አካላት የተዛባ ስነምግባር መቆራረጥ እና በአገልግሎት መስጫ ቦታዎች መካከል ያሉ ቅዝቃዜዎች የውቅር ቧንቧዎችን እና ሙከራዎችን ይፈልጋሉ።
+- የአስተዳደር ሌይን መታተም እና የሪፈረንዳ መስኮት/የታጣቂ በሮች በ `gov.md`/`status.md` ውስጥ ይከተላሉ; ቀሪው ተቀባይነት ሲፈተሽ የፍኖተ ካርታ ግቤቶችን ማዘመን።

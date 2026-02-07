@@ -7,16 +7,17 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a3158cd70a42104bacaafc520fdcc10e20e3bc347d895be448fcb10da4f668bd
 source_last_modified: "2025-12-29T18:16:35.965528+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 # Iroha 3 Bench Suite
 
-The Iroha 3 bench suite times the hot paths we rely on during staking, fee
-charging, proof verification, scheduling, and proof endpoints. It runs as an
-`xtask` command with deterministic fixtures (fixed seeds, fixed key material,
-and stable request payloads) so results are reproducible across hosts.
+የ Iroha 3 አግዳሚ ወንበሮች በእቃ መያዢያ ጊዜ የምንታመንባቸውን ሞቃት መንገዶችን ያሳልፋሉ ፣ ክፍያ
+ኃይል መሙላት፣ የማረጋገጫ ማረጋገጫ፣ መርሐግብር ማውጣት እና የማረጋገጫ የመጨረሻ ነጥቦች። እንደ አንድ ይሰራል
+`xtask` ትእዛዝ ከሚወስኑ መገልገያዎች (ቋሚ ዘሮች ፣ ቋሚ ቁልፍ ቁሳቁስ ፣
+እና የተረጋጋ የጥያቄ ጭነት) ስለዚህ ውጤቶቹ በአስተናጋጆች ውስጥ ሊባዙ ይችላሉ።
 
-## Running the suite
+## ክፍሉን በማስኬድ ላይ
 
 ```bash
 cargo xtask i3-bench-suite \
@@ -29,41 +30,41 @@ cargo xtask i3-bench-suite \
   --allow-overwrite
 ```
 
-Flags:
+ባንዲራዎች፡
 
-- `--iterations` controls iterations per scenario sample (default: 64).
-- `--sample-count` repeats each scenario to compute the median (default: 5).
-- `--json-out|--csv-out|--markdown-out` choose output artifacts (all optional).
-- `--threshold` compares medians against the baseline bounds (set `--no-threshold`
-  to skip).
-- `--flamegraph-hint` annotates the Markdown report with the `cargo flamegraph`
-  command to profile a scenario.
+- `--iterations` ድግግሞሾችን በአንድ ሁኔታ ናሙና ይቆጣጠራል (ነባሪ፡ 64)።
+- `--sample-count` ሚዲያን ለማስላት እያንዳንዱን ሁኔታ ይደግማል (ነባሪ፡ 5)።
+- `--json-out|--csv-out|--markdown-out` የውጤት ቅርሶችን ይምረጡ (ሁሉም አማራጭ)።
+- `--threshold` ሚዲያን ከመነሻ ወሰኖች ጋር ያወዳድራል (`--no-threshold` አዘጋጅ
+  መዝለል)።
+- `--flamegraph-hint` የማርክዳውን ዘገባ በ`cargo flamegraph` ያብራራል
+  አንድ ሁኔታን ለመግለጽ ትእዛዝ።
 
-CI glue lives in `ci/i3_bench_suite.sh` and defaults to the paths above; set
-`I3_BENCH_ITERATIONS`/`I3_BENCH_SAMPLES` to tune runtime in nightlies.
+CI ሙጫ በ `ci/i3_bench_suite.sh` ውስጥ ይኖራል እና ከላይ ባሉት መንገዶች ላይ ነባሪዎች; አዘጋጅ
+`I3_BENCH_ITERATIONS`/`I3_BENCH_SAMPLES` በምሽት ምሽቶች ውስጥ የሩጫ ጊዜን ለማስተካከል።
 
-## Scenarios
+## ሁኔታዎች
 
-- `fee_payer` / `fee_sponsor` / `fee_insufficient` — payer vs sponsor debit
-  and shortfall rejection.
-- `staking_bond` / `staking_slash` — bond/unbond queue with and without
-  slashing.
-- `commit_cert_verify` / `jdg_attestation_verify` / `bridge_proof_verify` —
-  signature verification over commit certificates, JDG attestations, and bridge
-  proof payloads.
-- `commit_cert_assembly` — digest assembly for commit certificates.
-- `access_scheduler` — conflict-aware access-set scheduling.
-- `torii_proof_endpoint` — Axum proof endpoint parsing + verification round trip.
+- `fee_payer` / `fee_sponsor` / `fee_insufficient` — ከፋይ vs ስፖንሰር ዴቢት
+  እና ጉድለት አለመቀበል.
+- `staking_bond` / `staking_slash` — ማስያዣ/የማያያዝ ወረፋ ከ ጋር እና ያለ
+  መጨፍጨፍ.
+- `commit_cert_verify` / `jdg_attestation_verify` / `bridge_proof_verify` -
+  የምስክር ወረቀቶች፣ የጄዲጂ ማረጋገጫዎች እና ድልድይ ላይ የፊርማ ማረጋገጫ
+  የማረጋገጫ ጭነቶች.
+- `commit_cert_assembly` - ለቁርጠኝነት የምስክር ወረቀቶች ስብስብ።
+- `access_scheduler` - ግጭትን የሚያውቅ የመዳረሻ ስብስብ መርሐግብር።
+- `torii_proof_endpoint` — የአክሱም ማረጋገጫ የመጨረሻ ነጥብ ትንተና + የማረጋገጫ ዙር ጉዞ።
 
-Every scenario records median nanoseconds per iteration, throughput, and a
-deterministic allocation counter for quick regressions. Thresholds live in
-`benchmarks/i3/thresholds.json`; bump bounds there when hardware changes and
-commit the new artifact alongside a report.
+እያንዳንዱ ሁኔታ መካከለኛ ናኖሴኮንዶችን በየድግግሞሹ ይመዘግባል፣ ውጤቱን እና ሀ
+ለፈጣን መመለሻዎች ቆራጥ ምደባ ቆጣሪ። ገደቦች ይኖራሉ
+`benchmarks/i3/thresholds.json`; ሃርድዌር በሚቀየርበት ጊዜ እዛው ይገድባል እና
+አዲሱን ቅርስ ከሪፖርቱ ጋር ያከናውኑ።
 
-## Troubleshooting
+## መላ መፈለግ
 
-- Pin CPU frequency/governor when collecting evidence to avoid noisy regressions.
-- Use `--no-threshold` for exploratory runs, then re-enable once the baseline is
-  refreshed.
-- To profile a single scenario, set `--iterations 1` and re-run under
+- ጩኸት የሚያስከትሉ ለውጦችን ለማስወገድ ማስረጃ በሚሰበስብበት ጊዜ የሲፒዩ ድግግሞሽ/ገዥን ይሰኩ።
+- ለዳሰሳ ሩጫዎች `--no-threshold` ይጠቀሙ፣ ከዚያ የመነሻ መስመሩ ከተጠናቀቀ በኋላ እንደገና አንቃ
+  ታደሰ
+- አንድ ነጠላ ሁኔታን ለመዘርዘር `--iterations 1` ያቀናብሩ እና በስር እንደገና ያሂዱ
   `cargo flamegraph -p xtask -- i3-bench-suite --iterations 128 --sample-count 1 --no-threshold --flamegraph-hint`.

@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: cba8780bcec4ebf562dc9c5725f328b0ea2d9009517efa5b5a504e2fb6be81fe
 source_last_modified: "2026-01-11T04:52:11.136647+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Error Mapping Guide
+# Սխալների քարտեզագրման ուղեցույց
 
-Last updated: 2025-08-21
+Վերջին թարմացումը՝ 2025-08-21
 
-This guide maps common failure modes in Iroha to stable error categories surfaced by the data model. Use it to design tests and to make client error handling predictable.
+Այս ուղեցույցը քարտեզագրում է Iroha-ում ձախողման ընդհանուր ռեժիմները տվյալների մոդելի կողմից հայտնված կայուն սխալների կատեգորիաներին: Օգտագործեք այն թեստեր նախագծելու և հաճախորդի սխալների հետ կապված կանխատեսելի դարձնելու համար:
 
-Principles
-- Instruction and query paths emit structured enums. Avoid panics; report a specific category wherever possible.
-- Categories are stable, messages may evolve. Clients should match on categories, not on free‑form strings.
+Սկզբունքներ
+- Հրահանգների և հարցումների ուղիները թողարկում են կառուցվածքային թվեր: Խուսափեք խուճապից; հնարավորության դեպքում զեկուցել կոնկրետ կատեգորիայի մասին:
+- Կատեգորիաները կայուն են, հաղորդագրությունները կարող են զարգանալ: Հաճախորդները պետք է համապատասխանեն կատեգորիաներին, այլ ոչ թե ազատ ձևի տողերին:
 
-Categories
-- InstructionExecutionError::Find: Entity missing (asset, account, domain, NFT, role, trigger, permission, public key, block, transaction). Example: removing a non‑existent metadata key yields Find(MetadataKey).
-- InstructionExecutionError::Repetition: Duplicate registration or conflicting ID. Contains the instruction type and the repeated IdBox.
-- InstructionExecutionError::Mintability: Mintability invariant violated (`Once` exhausted twice, `Limited(n)` overdrawn, or attempts to disable `Infinitely`). Examples: minting an asset defined as `Once` twice yields `Mintability(MintUnmintable)`; configuring `Limited(0)` yields `Mintability(InvalidMintabilityTokens)`.
-- InstructionExecutionError::Math: Numeric domain errors (overflow, divide‑by‑zero, negative value, not enough quantity). Example: burning more than available amount yields Math(NotEnoughQuantity).
-- InstructionExecutionError::InvalidParameter: Invalid instruction parameter or configuration (e.g., time trigger in the past). Use for malformed contract payloads.
-- InstructionExecutionError::Evaluate: DSL/spec mismatch for instruction shape or types. Example: wrong numeric spec for an asset value yields Evaluate(Type(AssetNumericSpec(..))).
-- InstructionExecutionError::InvariantViolation: Violation of a system invariant that cannot be expressed in other categories. Example: attempting to remove the last signatory.
-- InstructionExecutionError::Query: Wrapping of QueryExecutionFail when a query fails during instruction execution.
+Կատեգորիաներ
+- InstructionExecutionError::Find. Կազմակերպությունը բացակայում է (ակտիվ, հաշիվ, տիրույթ, NFT, դեր, գործարկիչ, թույլտվություն, հանրային բանալին, արգելափակում, գործարք): Օրինակ. գոյություն չունեցող մետատվյալների բանալի հեռացնելով ստացվում է Find(MetadataKey):
+- InstructionExecutionError::Repetition. Կրկնվող գրանցում կամ հակասական ID: Պարունակում է հրահանգի տեսակը և կրկնվող IdBox-ը:
+- InstructionExecutionError::Mintability. Mintability invariant խախտված է (`Once` սպառվել է երկու անգամ, `Limited(n)` գերբեռնված է կամ `Infinitely` անջատելու փորձեր): Օրինակներ. `Once`-ով սահմանված ակտիվի հատումը երկու անգամ տալիս է `Mintability(MintUnmintable)`; `Limited(0)`-ի կարգավորումը տալիս է `Mintability(InvalidMintabilityTokens)`:
+- InstructionExecutionError::Math. Թվային տիրույթի սխալներ (հորդել, բաժանել զրոյի, բացասական արժեք, ոչ բավարար քանակ): Օրինակ՝ հասանելի քանակից ավելին այրելը տալիս է Math(NotEnoughQuantity):
+- InstructionExecutionError::InvalidParameter. Անվավեր հրահանգի պարամետր կամ կազմաձևում (օրինակ՝ ժամանակի գործարկումը անցյալում): Օգտագործեք անսարք պայմանագրային բեռների համար:
+- InstructionExecutionError::Evaluate. DSL/specific անհամապատասխանություն հրահանգների ձևի կամ տեսակների համար: Օրինակ. ակտիվի արժեքի սխալ թվային սպեցիֆիկացումը տալիս է Evaluate(Type(AssetNumericSpec(..))):
+- InstructionExecutionError::InvariantViolation. Համակարգի անփոփոխության խախտում, որը չի կարող արտահայտվել այլ կատեգորիաներում: Օրինակ՝ վերջին ստորագրողին հեռացնելու փորձ:
+- InstructionExecutionError::Query: QueryExecutionFail-ի փաթաթում, երբ հարցումը ձախողվում է հրահանգի կատարման ժամանակ:
 
 QueryExecutionFail
-- Find: Missing entity in query context.
-- Conversion: Wrong type expected by a query.
-- NotFound: Missing live query cursor.
-- CursorMismatch / CursorDone: Cursor protocol errors.
-- FetchSizeTooBig: Server‑enforced limit exceeded.
-- GasBudgetExceeded: Query execution exceeded the gas/materialization budget.
-- InvalidSingularParameters: Unsupported parameters for singular queries.
-- CapacityLimit: Live query store capacity reached.
+- Գտեք. հարցման համատեքստում բացակայող միավոր:
+- Փոխակերպում. հարցումը սպասվում է սխալ տեսակ:
+- Not Found. բացակայում է կենդանի հարցման կուրսորը:
+- CursorMismatch / CursorDone. Կուրսորի արձանագրության սխալներ:
+- FetchSizeTooBig. սերվերի կողմից կիրառվող սահմանաչափը գերազանցվել է:
+- GasBudget Exceeded. Հարցման կատարումը գերազանցել է գազի/նյութականացման բյուջեն:
+- InvalidSingularParameters. Չաջակցվող պարամետրեր եզակի հարցումների համար:
+- CapacityLimit. Կենդանի հարցումների խանութի հզորությունը հասել է:
 
-Testing Tips
-- Prefer unit tests close to the origin of an error. For example, asset numeric spec mismatch can be generated in data‑model tests.
-- Integration tests should cover end‑to‑end mapping for representative cases (e.g., duplicate register, missing key on remove, transfer without ownership).
-- Keep assertions resilient by matching enum variants instead of message substrings.
+Թեստավորման խորհուրդներ
+- Նախընտրեք միավորի թեստերը, որոնք մոտ են սխալի ծագմանը: Օրինակ, ակտիվների թվային բնութագրերի անհամապատասխանությունը կարող է առաջանալ տվյալների մոդելի թեստերում:
+- Ինտեգրման թեստերը պետք է ընդգրկեն ծայրից ծայր քարտեզագրում ներկայացուցչական դեպքերի համար (օրինակ՝ կրկնօրինակ գրանցամատյան, հեռացման ժամանակ բացակայող բանալին, փոխանցում առանց սեփականության):
+- Պահպանեք պնդումները ճկուն՝ հաղորդագրության ենթատողերի փոխարեն թվային տարբերակները համապատասխանեցնելով:

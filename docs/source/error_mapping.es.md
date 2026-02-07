@@ -6,40 +6,41 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: cba8780bcec4ebf562dc9c5725f328b0ea2d9009517efa5b5a504e2fb6be81fe
 source_last_modified: "2026-01-18T05:31:56.950113+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Error Mapping Guide
+# Guía de mapeo de errores
 
-Last updated: 2025-08-21
+Última actualización: 2025-08-21
 
-This guide maps common failure modes in Iroha to stable error categories surfaced by the data model. Use it to design tests and to make client error handling predictable.
+Esta guía asigna modos de falla comunes en Iroha a categorías de error estables detectadas por el modelo de datos. Úselo para diseñar pruebas y hacer que el manejo de errores del cliente sea predecible.
 
-Principles
-- Instruction and query paths emit structured enums. Avoid panics; report a specific category wherever possible.
-- Categories are stable, messages may evolve. Clients should match on categories, not on free‑form strings.
+Principios
+- Las rutas de instrucción y consulta emiten enumeraciones estructuradas. Evite los pánicos; reportar una categoría específica siempre que sea posible.
+- Las categorías son estables, los mensajes pueden evolucionar. Los clientes deben coincidir en categorías, no en cadenas de formato libre.
 
-Categories
-- InstructionExecutionError::Find: Entity missing (asset, account, domain, NFT, role, trigger, permission, public key, block, transaction). Example: removing a non‑existent metadata key yields Find(MetadataKey).
-- InstructionExecutionError::Repetition: Duplicate registration or conflicting ID. Contains the instruction type and the repeated IdBox.
-- InstructionExecutionError::Mintability: Mintability invariant violated (`Once` exhausted twice, `Limited(n)` overdrawn, or attempts to disable `Infinitely`). Examples: minting an asset defined as `Once` twice yields `Mintability(MintUnmintable)`; configuring `Limited(0)` yields `Mintability(InvalidMintabilityTokens)`.
-- InstructionExecutionError::Math: Numeric domain errors (overflow, divide‑by‑zero, negative value, not enough quantity). Example: burning more than available amount yields Math(NotEnoughQuantity).
-- InstructionExecutionError::InvalidParameter: Invalid instruction parameter or configuration (e.g., time trigger in the past). Use for malformed contract payloads.
-- InstructionExecutionError::Evaluate: DSL/spec mismatch for instruction shape or types. Example: wrong numeric spec for an asset value yields Evaluate(Type(AssetNumericSpec(..))).
-- InstructionExecutionError::InvariantViolation: Violation of a system invariant that cannot be expressed in other categories. Example: attempting to remove the last signatory.
-- InstructionExecutionError::Query: Wrapping of QueryExecutionFail when a query fails during instruction execution.
+Categorías
+- InstrucciónExecutionError::Buscar: Falta entidad (activo, cuenta, dominio, NFT, función, activador, permiso, clave pública, bloque, transacción). Ejemplo: eliminar una clave de metadatos inexistente produce Find(MetadataKey).
+- InstrucciónExecutionError::Repetición: Registro duplicado o ID en conflicto. Contiene el tipo de instrucción y el IdBox repetido.
+- InstrucciónExecutionError::Mintability: Invariante de mintability violado (`Once` agotado dos veces, `Limited(n)` sobregirado o intentos de desactivar `Infinitely`). Ejemplos: acuñar dos veces un activo definido como `Once` produce `Mintability(MintUnmintable)`; la configuración de `Limited(0)` produce `Mintability(InvalidMintabilityTokens)`.
+- InstrucciónExecutionError::Math: errores de dominio numérico (desbordamiento, división por cero, valor negativo, cantidad insuficiente). Ejemplo: quemar más cantidad de la disponible produce Math(NotEnoughQuantity).
+- InstrucciónExecutionError::InvalidParameter: parámetro o configuración de instrucción no válidos (por ejemplo, activación de tiempo en el pasado). Úselo para cargas útiles de contratos con formato incorrecto.
+- InstrucciónExecutionError::Evaluar: DSL/especificaciones no coinciden para la forma o los tipos de instrucción. Ejemplo: la especificación numérica incorrecta para el valor de un activo produce Evaluate(Type(AssetNumericSpec(..))).
+- InstrucciónExecutionError::InvariantViolation: Violación de una invariante del sistema que no se puede expresar en otras categorías. Ejemplo: intentar eliminar al último firmante.
+- InstrucciónExecutionError::Query: ajuste de QueryExecutionFail cuando una consulta falla durante la ejecución de la instrucción.
 
-QueryExecutionFail
-- Find: Missing entity in query context.
-- Conversion: Wrong type expected by a query.
-- NotFound: Missing live query cursor.
-- CursorMismatch / CursorDone: Cursor protocol errors.
-- FetchSizeTooBig: Server‑enforced limit exceeded.
-- GasBudgetExceeded: Query execution exceeded the gas/materialization budget.
-- InvalidSingularParameters: Unsupported parameters for singular queries.
-- CapacityLimit: Live query store capacity reached.
+Error de ejecución de consulta
+- Buscar: entidad faltante en el contexto de la consulta.
+- Conversión: tipo incorrecto esperado por una consulta.
+- NotFound: falta el cursor de consulta en vivo.
+- CursorMismatch / CursorDone: Errores de protocolo del cursor.
+- FetchSizeTooBig: se superó el límite impuesto por el servidor.
+- GasBudgetExceeded: la ejecución de la consulta superó el presupuesto de gas/materialización.
+- InvalidSingularParameters: parámetros no admitidos para consultas singulares.
+- CapacityLimit: se alcanzó la capacidad del almacén de consultas en vivo.
 
-Testing Tips
-- Prefer unit tests close to the origin of an error. For example, asset numeric spec mismatch can be generated in data‑model tests.
-- Integration tests should cover end‑to‑end mapping for representative cases (e.g., duplicate register, missing key on remove, transfer without ownership).
-- Keep assertions resilient by matching enum variants instead of message substrings.
+Consejos de prueba
+- Preferir pruebas unitarias cercanas al origen de un error. Por ejemplo, se puede generar una discrepancia en las especificaciones numéricas de los activos en las pruebas del modelo de datos.
+- Las pruebas de integración deben cubrir el mapeo de extremo a extremo para casos representativos (por ejemplo, registro duplicado, clave faltante al eliminar, transferencia sin propiedad).
+- Mantenga las aserciones resistentes haciendo coincidir variantes de enumeración en lugar de subcadenas de mensajes.

@@ -7,20 +7,21 @@ generator: scripts/sync_docs_i18n.py
 source_hash: f9f765fbe3170f654a9c44c3cd1afc5d82a72ff49137f32b98cf9d310faf114e
 source_last_modified: "2025-12-29T18:16:35.963528+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% Governance Pipeline (Iroha 2 and SORA Parliament)
+% İdarəetmə Boru Kəməri (Iroha 2 və SORA Parlament)
 
-# Current state (v1)
-- Governance proposals run as: proposer → referendum → tally → enactment. Referendum windows and turnout/approval thresholds are enforced as described in `gov.md`; locks are extend-only and unlock on expiry.
-- Parliament selection uses VRF-based draws with deterministic ordering and term bounds; when no persisted roster exists, Torii derives a fallback using `gov.parliament_*` config. Council gating and quorum checks are exercised in `gov_parliament_bodies` / `gov_pipeline_sla` tests.
-- Voting modes: ZK (default, requires `Active` VK with inline bytes) and Plain (quadratic weight). Mode mismatches are rejected; lock creation/extension is monotonic in both modes with regression tests for ZK and plain re-votes.
-- Validator misconduct is acted on via the evidence pipeline (`/v1/sumeragi/evidence*`, CLI helpers) with joint-consensus hand-offs enforced by `NextMode` + `ModeActivationHeight`.
-- Protected namespaces, runtime-upgrade hooks, and governance manifest admission are documented in `governance_api.md` and covered by telemetry (`governance_manifest_*`, `governance_protected_namespace_total`).
+# Cari vəziyyət (v1)
+- İdarəetmə təklifləri aşağıdakı kimi həyata keçirilir: təklifçi → referendum → tally → qüvvəyə minmə. Referendum pəncərələri və iştirak/təsdiq hədləri `gov.md`-də təsvir olunduğu kimi tətbiq edilir; kilidlər yalnız uzadılır və müddəti bitdikdən sonra kilidini açın.
+- Parlament seçimində deterministik sıralama və müddət sərhədləri ilə VRF əsaslı tirajlardan istifadə edilir; heç bir davamlı siyahı mövcud olmadıqda, Torii `gov.parliament_*` konfiqurasiyasından istifadə edərək ehtiyat əldə edir. Şura girişi və kvorum yoxlamaları `gov_parliament_bodies` / `gov_pipeline_sla` testlərində həyata keçirilir.
+- Səsvermə rejimləri: ZK (standart, daxili baytlarla `Active` VK tələb olunur) və Düz (kvadrat çəki). Rejim uyğunsuzluğu rədd edilir; kilidin yaradılması/uzatılması ZK üçün reqressiya testləri və sadə təkrar səslər ilə hər iki rejimdə monotondur.
+- Təsdiqləyicinin səhv davranışı sübut boru kəməri (`/v1/sumeragi/evidence*`, CLI köməkçiləri) vasitəsilə `NextMode` + `ModeActivationHeight` tərəfindən tətbiq edilən birgə konsensus təhvil-təslimləri ilə fəaliyyət göstərir.
+- Qorunan ad məkanları, iş vaxtını təkmilləşdirmə qarmaqları və idarəetmə manifestinin qəbulu `governance_api.md`-də sənədləşdirilib və telemetriya ilə əhatə olunub (`governance_manifest_*`, `governance_protected_namespace_total`).
 
-# In-flight / backlog
-- Publish VRF draw artifacts (seed, proof, ordered roster, alternates) and codify replacement rules for no-shows; add golden fixtures for the draw and replacements.
-- Stage-SLA enforcement for the Parliament bodies (rules → agenda → study → review → jury → enact) needs explicit timers, escalation paths, and telemetry counters.
-- Policy-jury secret/commit–reveal voting and associated bribery-resistance audits are still to be implemented.
-- Role-bond multipliers, misconduct slashing for high-risk bodies, and cooldowns between service slots require configuration plumbing plus tests.
-- Governance lane sealing and referenda window/turnout gates are tracked in `gov.md`/`status.md`; keep the roadmap entries updated as the remaining acceptance tests land.
+# Uçuş zamanı / geriləmə
+- VRF çəkiliş artefaktlarını (toxum, sübut, sifariş siyahısı, alternativlər) dərc edin və nümayişlərin olmaması üçün əvəzetmə qaydalarını kodlaşdırın; heç-heçə və dəyişdirmə üçün qızıl qurğular əlavə edin.
+- Parlament orqanları üçün mərhələ-SLA tətbiqi (qaydalar → gündəm → araşdırma → nəzərdən keçirmə → münsiflər heyəti → qüvvəyə minmə) açıq taymerlərə, eskalasiya yollarına və telemetriya sayğaclarına ehtiyac duyur.
+- Siyasət-münsiflər heyətinin məxfi/təhvil vermə-açıqlama səsverməsi və əlaqəli rüşvətxorluğa qarşı müqavimət yoxlamaları hələ də həyata keçirilməlidir.
+- Rol bağlarının çarpanları, yüksək riskli orqanlar üçün səhv davranış və xidmət yuvaları arasında soyuducu fasilələr konfiqurasiya santexnika və testlər tələb edir.
+- İdarəetmə zolağının möhürlənməsi və referendum pəncərəsi/iştirakçı qapıları `gov.md`/`status.md`-də izlənilir; Qalan qəbul testləri yerləşdikcə yol xəritəsi qeydlərini yeniləyin.

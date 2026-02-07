@@ -7,241 +7,232 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a4e8824c128b9f2a34262a5c9bc09f6b2cd790a0561aa083fa18a987accd7004
 source_last_modified: "2026-01-22T16:26:46.570053+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 # Iroha v2.0
 
-Hyperledger Iroha v2 is a deterministic, Byzantine fault tolerant distributed ledger that emphasises a
-modular architecture, strong defaults, and approachable APIs. The platform ships as a set of Rust crates
-that can be embedded into bespoke deployments or used together to operate a production blockchain network.
+Hyperledger Iroha v2 нь тодорхойлогч, Византийн алдааг тэсвэрлэх чадвартай тархсан дэвтэр бөгөөд
+модульчлагдсан архитектур, хүчтэй өгөгдмөл, хандах боломжтой API. Уг платформ нь Rust хайрцагны багц хэлбэрээр тээвэрлэгддэг
+захиалгаар байршуулах эсвэл үйлдвэрлэлийн блокчейн сүлжээг ажиллуулахад хамтад нь ашиглах боломжтой.
 
 ---
 
-## 1. Overview
+## 1. Тойм
 
-Iroha 2 continues the design philosophy introduced with Iroha 1: provide a curated collection of
-capabilities out of the box so operators can stand up a network without writing large amounts of custom
-code. The v2 release consolidates the execution environment, consensus pipeline, and data model into a
-single cohesive workspace.
+Iroha 2 нь Iroha 1-д танилцуулсан дизайны философийг үргэлжлүүлж байна: шилдэг цуглуулгатай болгох
+боломжууд нь хайрцагнаас гарч байгаа тул операторууд их хэмжээний захиалга бичихгүйгээр сүлжээг босгох боломжтой
+код. V2 хувилбар нь гүйцэтгэлийн орчин, зөвшилцлийн шугам, өгөгдлийн загварыг a-д нэгтгэдэг
+нэгдсэн нэгдмэл ажлын талбар.
 
-The v2 line is designed for organisations that want to operate their own permissioned or consortium
-blockchains. Each deployment runs its own consensus network, maintains independent governance, and can tailor
-configuration, genesis data, and upgrade cadence without depending on third parties. The shared workspace
-allows multiple independent networks to build against the exact same codebase while choosing the features and
-policies that match their use cases.
+V2 шугам нь өөрийн зөвшөөрөлтэй эсвэл консорциумыг ажиллуулах хүсэлтэй байгууллагуудад зориулагдсан
+блокчейн. Байршлуулалт бүр өөрийн зөвшилцлийн сүлжээг ажиллуулж, бие даасан засаглалыг хадгалж, тохируулах боломжтой
+гуравдагч этгээдээс хамааралгүйгээр тохиргоо, үүслийн өгөгдөл, каденсыг шинэчлэх. Хуваалцсан ажлын талбар
+онцлогуудыг сонгохдоо олон бие даасан сүлжээг яг ижил кодын баазын эсрэг бий болгох боломжийг олгодог
+тэдгээрийн хэрэглээний тохиолдлуудад тохирсон бодлого.
 
-Both Iroha 2 and SORA Nexus (Iroha 3) run the same Iroha Virtual Machine (IVM). Developers can author Kotodama
-contracts once and deploy them across self-hosted networks or the global Nexus ledger without recompiling or
-forking the execution environment.
-### 1.1 Relationship to the Hyperledger ecosystem
+Iroha 2 болон SORA Nexus (Iroha 3) хоёулаа ижил Iroha виртуал машиныг (IVM) ажиллуулдаг. Хөгжүүлэгчид Kotodama бичих боломжтой
+нэг удаа гэрээ байгуулж, тэдгээрийг дахин эмхэтгэлгүйгээр эсвэл өөрөө зохион байгуулдаг сүлжээнүүд эсвэл дэлхийн Nexus дэвтэр дээр байрлуулна.
+гүйцэтгэлийн орчныг салаа.
+### 1.1 Hyperledger экосистемтэй харилцах
 
-Iroha components are designed to interoperate with other Hyperledger projects. Consensus, data-model, and
-serialization crates can be reused in composite stacks or alongside Fabric, Sawtooth, and Besu deployments.
-Common tooling—such as Norito codecs and governance manifests—helps keep interfaces consistent across the
-ecosystem while allowing Iroha to provide an opinionated default implementation.
+Iroha бүрэлдэхүүн хэсгүүд нь бусад Hyperledger төслүүдтэй хамтран ажиллах зориулалттай. Зөвшилцөл, өгөгдлийн загвар ба
+Цувралын хайрцгийг нийлмэл стек эсвэл Fabric, Sawtooth, Besu байршуулалттай хамт дахин ашиглаж болно.
+Norito кодлогч, засаглалын манифест гэх мэт нийтлэг хэрэгслүүд нь интерфэйсийг бүх тал дээр тогтвортой байлгахад тусалдаг.
+экосистемд Iroha-д санал бодолтой өгөгдмөл хэрэгжилтийг хангахыг зөвшөөрдөг.
 
-### 1.2 Client libraries and SDKs
+### 1.2 Үйлчлүүлэгчийн номын сан ба SDK
 
-To ensure first-class mobile and web experiences, the project publishes maintained SDKs:
+Нэгдүгээр зэрэглэлийн гар утас болон вэб туршлагыг хангахын тулд төсөл нь SDK-г нийтэлдэг:
 
-- `IrohaSwift` for iOS and macOS clients, integrating Metal/NEON acceleration behind deterministic fallbacks.
-- `iroha_js` for JavaScript and TypeScript applications, including Kaigi builders and Norito helpers.
-- `iroha_python` for Python integrations, with HTTP, WebSocket, and telemetry support.
-- `iroha_cli` for terminal-driven administration and scripting.
+- `IrohaSwift` iOS болон macOS-ийн үйлчлүүлэгчдэд зориулагдсан бөгөөд металл/NEON хурдатгалыг тодорхойлогч нөхцлийн ард нэгтгэсэн.
+- JavaScript болон TypeScript програмуудад зориулсан `iroha_js`, үүнд Kaigi бүтээгчид болон Norito туслахууд багтана.
+- `iroha_python` нь HTTP, WebSocket, телеметрийн дэмжлэгтэй, Python интеграцчлалд зориулагдсан.
+- Терминал дээр суурилсан удирдлага, скрипт бичихэд зориулагдсан `iroha_cli`.
 
-languages and platforms.
+хэл, платформууд.
 
-### 1.3 Design principles
+### 1.3 Дизайн хийх зарчим- **Эхлээд детерминизм:** Зангилаа бүр ижил кодын замыг ажиллуулж, ижил өгөгдсөн үр дүнг гаргадаг.
+  оролтууд. SIMD/CUDA/NEON замууд нь онцлог шинж чанартай бөгөөд детерминист скаляр хэрэгжүүлэлт рүү буцдаг.
+- **Хийх боломжтой модулиуд:** Сүлжээ, зөвшилцөл, гүйцэтгэл, телеметр, хадгалалт тус бүр нь тусгай зориулалтын дотор байрладаг.
+  хайрцагт оруулснаар суулгагчид стекийг бүхэлд нь зөөхгүйгээр дэд олонлогуудыг хүлээн авах боломжтой.
+- **Тодорхой тохиргоо:** Зан үйлийн бариулууд нь `iroha_config`-ээр илэрдэг; орчны сэлгэгчид байдаг
+  хөгжүүлэгчийн тав тухаар хязгаарлагдсан.
+- **Аюулгүй өгөгдмөл:** Каноник кодлогч, ABI заагчийн хатуу хэрэгжилт, хувилбартай манифестууд
+  сүлжээ хоорондын шинэчлэлтийг урьдчилан таамаглах боломжтой.
 
-- **Determinism first:** Every node executes the same code paths and produces the same results given the same
-  inputs. SIMD/CUDA/NEON paths are feature-gated and fall back to deterministic scalar implementations.
-- **Composable modules:** Networking, consensus, execution, telemetry, and storage each live in dedicated
-  crates so embedders can adopt subsets without carrying the entire stack.
-- **Explicit configuration:** Behavioural knobs are surfaced through `iroha_config`; environment toggles are
-  limited to developer conveniences.
-- **Secure defaults:** Canonical codecs, strict pointer ABI enforcement, and versioned manifests make
-  cross-network upgrades predictable.
+## 2. Платформын архитектур
 
-## 2. Platform architecture
+### 2.1 Зангилааны бүтэц
 
-### 2.1 Node composition
+Iroha зангилаа нь хэд хэдэн хамтран ажилладаг үйлчилгээг ажиллуулдаг:
 
-An Iroha node runs several cooperating services:
+- **Torii (`iroha_torii`)** нь гүйлгээ, асуулга, урсгалын үйл явдал болон HTTP/WebSocket API-г ил болгодог.
+  телеметр (`/v1/...` төгсгөлийн цэгүүд).
+- **Core (`iroha_core`)** нь баталгаажуулалт, зөвшилцөл, гүйцэтгэл, засаглал, төрийн удирдлагыг зохицуулдаг.
+- **Sumeragi (`iroha_core::sumeragi`)** нь харагдах өөрчлөлттэй NPoS-д бэлэн зөвшилцлийн шугамыг хэрэгжүүлдэг.
+  өргөн нэвтрүүлгийн мэдээллийн найдвартай байдал, гэрчилгээ олгох. -г үзнэ үү
+  [Sumeragi зөвшилцлийн гарын авлага](./sumeragi.md) дэлгэрэнгүй мэдээллийг авна уу.
+- **Kura (`iroha_core::kura`)** нь дискэн дээрх каноник блокууд, сэргээх хажуугийн тэрэг болон гэрчийн мета өгөгдлийг хадгалдаг.
+- **World State View (`iroha_core::state`)** нь баталгаажуулалтад ашигласан эрх бүхий санах ойн агшин агшныг хадгалдаг.
+  болон асуулга.
+- **Iroha Виртуал машин (`ivm`)** нь Kotodama байт кодыг (`.to`) гүйцэтгэж, заагч ABI бодлогыг хэрэгжүүлдэг.
+- **Norito (`crates/norito`)** нь утсан дээрх төрөл бүрийн хувьд тодорхойлогч хоёртын болон JSON цуваачлалыг хангадаг.
+- **Телеметри (`iroha_telemetry`)** нь Prometheus хэмжигдэхүүн, бүтэцлэгдсэн бүртгэл, урсгалын үйл явдлуудыг экспортлодог.
+- **P2P (`iroha_p2p`)** нь хов жив, топологи, үе тэнгийнхэн хоорондын аюулгүй холболтыг удирддаг.
 
-- **Torii (`iroha_torii`)** exposes HTTP/WebSocket APIs for transactions, queries, streaming events, and
-  telemetry (`/v1/...` endpoints).
-- **Core (`iroha_core`)** coordinates validation, consensus, execution, governance, and state management.
-- **Sumeragi (`iroha_core::sumeragi`)** implements the NPoS-ready consensus pipeline with view changes,
-  reliable broadcast data availability, and commit certificates. See the
-  [Sumeragi consensus guide](./sumeragi.md) for details.
-- **Kura (`iroha_core::kura`)** persists canonical blocks, recovery sidecars, and witness metadata on disk.
-- **World State View (`iroha_core::state`)** stores the authoritative in-memory snapshot used for validation
-  and queries.
-- **Iroha Virtual Machine (`ivm`)** executes Kotodama bytecode (`.to`) and enforces the pointer ABI policy.
-- **Norito (`crates/norito`)** provides deterministic binary and JSON serialization for every on-wire type.
-- **Telemetry (`iroha_telemetry`)** exports Prometheus metrics, structured logging, and streaming events.
-- **P2P (`iroha_p2p`)** manages gossip, topology, and secure connections between peers.
+### 2.2 Сүлжээ ба топологи
 
-### 2.2 Networking and topology
+Iroha үе тэнгийнхэн нь хүлээсэн төлөвөөс авсан эрэмблэгдсэн топологийг хадгалдаг. Зөвшилцлийн тойрог бүр удирдагчийг сонгодог.
+баталгаажуулах багц, прокси сүүл, Set B баталгаажуулагч. Norito кодлогдсон мессежийг ашиглан гүйлгээг хов жив хийдэг.
+удирдагч тэднийг санал болгож багцлахаас өмнө. Найдвартай нэвтрүүлэг нь хаах, дэмжих баталгаа юм
+нотлох баримтууд нь бүх шударга нөхдөд хүрч, сүлжээний тасалдалтай байсан ч мэдээллийн хүртээмжийг баталгаажуулдаг. Өөрчлөлтүүдийг эргүүлэх харах
+Хугацаа алдагдсан тохиолдолд манлайлах, үүрэг хариуцлагын гэрчилгээ нь үүрэг хүлээсэн блок бүрийг дагахыг баталгаажуулдаг
+бүх үе тэнгийнхний ашигладаг каноник гарын үсгийн багц.
 
-Iroha peers maintain an ordered topology derived from committed state. Each consensus round selects a leader,
-validating set, proxy tail, and Set B validators. Transactions are gossiped using Norito-encoded messages
-before the leader bundles them into a proposal. Reliable broadcast guarantees that blocks and supporting
-evidence reach all honest peers, ensuring data availability even under network churn. View changes rotate
-leadership when deadlines are missed, and commit certificates ensure that every committed block carries the
-canonical signature set used by all peers.
+### 2.3 Криптограф
 
-### 2.3 Cryptography
+`iroha_crypto` хайрцаг нь гол удирдлага, хэш болон гарын үсгийн баталгаажуулалтыг идэвхжүүлдэг:- Ed25519 нь өгөгдмөл баталгаажуулагч түлхүүрийн схем юм.
+- Нэмэлт арын хэсэгт Secp256k1, TC26 GOST, BLS (нийт баталгаажуулалтын хувьд) болон ML-DSA туслахууд орно.
+- Дамжуулж буй сувгууд нь Ed25519 таниулбаруудыг Kyber-д суурилсан HPKE-тэй хослуулж, Norito урсгалын сессийг хамгаалдаг.
+- Бүх хэш хийх горимууд нь ажлын талбартай детерминист хэрэгжилтийг (SHA-2, SHA-3, Blake2, Poseidon2) ашигладаг.
+  `docs/source/crypto/dependency_audits.md`-д баримтжуулсан аудит.
 
-The `iroha_crypto` crate powers key management, hashing, and signature verification:
+### 2.4 Streaming болон application bridges
 
-- Ed25519 is the default validator key scheme.
-- Optional backends include Secp256k1, TC26 GOST, BLS (for aggregate attestations), and ML-DSA helpers.
-- Streaming channels pair Ed25519 identities with Kyber-based HPKE to secure Norito streaming sessions.
-- All hashing routines use deterministic implementations (SHA-2, SHA-3, Blake2, Poseidon2) with workspace
-  audits documented in `docs/source/crypto/dependency_audits.md`.
+- **Norito урсгал (`iroha_core::streaming`, `norito::streaming`)** нь тодорхойлогч, шифрлэгдсэн медиагаар хангадаг.
+  сессийн агшин зуурын зураг, HPKE товчлуурын эргэлт, телеметрийн дэгээ бүхий өгөгдлийн сувгууд. Кайги бага хурал болон
+  нууц нотолгоог шилжүүлэхдээ энэ эгнээг ашигладаг.
+- **Холбох гүүр (`connect_norito_bridge`)** платформ SDK-г идэвхжүүлдэг C ABI гадаргууг ил гаргадаг
+  (Swift, Kotlin/Android) бүрээсийн дор Rust үйлчлүүлэгчдийг дахин ашиглах үед.
+- **ISO 20022 гүүр (`iroha_torii::iso20022_bridge`)** зохицуулалттай төлбөрийн мессежийг Norito болгон хувиргадаг
+  гүйлгээ, зөвшилцөл, баталгаажуулалтыг тойрч гарахгүйгээр санхүүгийн ажлын урсгалтай харилцан ажиллах боломжийг олгодог.
+- Бүх гүүр нь Norito тодорхойлогч ачааллыг хадгалдаг тул доод урсгалын системүүд төлөвийн шилжилтийг шалгах боломжтой.
 
-### 2.4 Streaming and application bridges
+## 3. Өгөгдлийн загвар
 
-- **Norito streaming (`iroha_core::streaming`, `norito::streaming`)** provides deterministic, encrypted media
-  and data channels with session snapshots, HPKE key rotation, and telemetry hooks. Kaigi conferencing and
-  confidential evidence transfers use this lane.
-- **Connect bridge (`connect_norito_bridge`)** exposes a C ABI surface that powers platform SDKs
-  (Swift, Kotlin/Android) while reusing the Rust clients under the hood.
-- **ISO 20022 bridge (`iroha_torii::iso20022_bridge`)** converts regulated payment messages into Norito
-  transactions, enabling interoperability with financial workflows without bypassing consensus or validation.
-- All bridges preserve deterministic Norito payloads so downstream systems can verify state transitions.
+`iroha_data_model` хайрцаг нь бүртгэлийн бүх объект, заавар, асуулга, үйл явдлыг тодорхойлдог. Онцлох үйл явдал:
 
-## 3. Data model
+- **Домэйн, данс, хөрөнгө** нь каноник IH58 дансны ID-г ашигладаг (илүү тохиромжтой); `name@domain` чиглүүлэлт хэвээр байна
+  тодорхой нийлүүлсэн тохиолдолд бусад нэр. Мета өгөгдөл нь тодорхойлогддог (`Metadata` газрын зураг). Тоон хөрөнгө нь тогтмол цэгийг дэмждэг
+  үйл ажиллагаа; NFT нь дурын бүтэцтэй мета өгөгдлийг агуулдаг.
+- **Үүрэг ба зөвшөөрөл** нь Norito тоологдсон токенуудыг ашигладаг бөгөөд энэ нь гүйцэтгэгчийн шалгалттай шууд холбогддог.
+- **Триггер** (цагт суурилсан, блок дээр суурилсан эсвэл предикатад тулгуурласан) нь гинжин хэлхээгээр дамжуулан тодорхойлогч гүйлгээг гаргадаг.
+  гүйцэтгэгч.
+- **Үйл явдлын** урсгалыг Torii-ээр дамжуулж, нууц урсгал болон
+  засаглалын үйл ажиллагаа.
+- **Гүйлгээ, блок, манифест** нь Norito кодлогдсон (`SignedTransaction`, `SignedBlockWire`)
+  тодорхой хувилбарын толгой, урагш сунгах код тайлалтыг баталгаажуулдаг.
+- **Тохируулга** нь гүйцэтгэгч өгөгдлийн загвараар хийгддэг: операторууд захиалгат зааврыг бүртгэж болно,
+  Детерминизмыг хадгалахын зэрэгцээ зөвшөөрөл, параметрүүд.
+- **Репозиторууд (`RepoInstruction`)** нь тодорхойлогч шинэчлэх төлөвлөгөөг (гүйцэтгэгчид, манифестууд болон) багцлахыг зөвшөөрдөг.
+  хөрөнгө) тул олон шат дамжлагатай хувилбаруудыг засаглалын зөвшөөрөлтэйгээр гинжин хэлхээгээр удирдах боломжтой.
+- **Зөвшилцлийн олдворууд**—үйл ажиллагааны гэрчилгээ, гэрчийн жагсаалт зэрэг—өгөгдлийн загварт оршдог ба
+  `iroha_core`, Torii болон SDK-уудын хооронд нийцтэй байдлыг баталгаажуулахын тулд алтан тестээр хоёр талын аялал.
+- **Нууц бүртгэл ба үйл явдлууд** хамгаалагдсан хөрөнгийн тодорхойлогч, баталгаажуулагч түлхүүр, амлалт,
+  хүчингүй болгогчид болон үйл явдлын ачааллыг (`ConfidentialEvent::{Shielded,Transferred,Unshielded}`) нууцалдаг.
+  энгийн текст өгөгдөл алдагдуулахгүйгээр аудит хийх боломжтой хэвээр байна.
 
-The `iroha_data_model` crate defines all ledger objects, instructions, queries, and events. Highlights:
+## 4. Гүйлгээний амьдралын мөчлөг1. **Элсэлт:** Torii нь Norito ачааллын кодыг тайлж, гарын үсэг, TTL болон хэмжээ хязгаарыг шалгаад дараа нь дараалалд оруулдаг.
+   орон нутгийн гүйлгээ.
+2. **Хов жив:** Гүйлгээ нь топологи даяар тархдаг; үе тэнгийнхэн нь хэшээр давхардуулж, дахин элсэлт авдаг
+   шалгалтууд.
+3. **Сонголт:** Одоогийн удирдагч хүлээгдэж буй багцаас гүйлгээг гаргаж, харьяалалгүй баталгаажуулалт хийдэг.
+4. **Төлөв байдлын симуляци:** Нэр дэвшигчийн гүйлгээ нь түр зуурын `StateBlock` дотор хийгддэг, IVM эсвэл дууддаг.
+   суулгасан заавар. Зөрчилдөөн эсвэл дүрмийн зөрчлийг тодорхой хэмжээгээр хасдаг.
+5. **Триггерийг бодит болгох:** Тойрогт хийгдэх хуваарьт триггерүүдийг дотоод гүйлгээ болгон хувиргадаг.
+   мөн ижил дамжуулах хоолойг ашиглан баталгаажуулсан.
+6. **Саналын битүүмжлэл:** Блокийн хязгаарт хүрэх эсвэл завсарлага дуусах үед удирдагч Norito кодлогдсон дохиог гаргадаг.
+   `BlockCreated` мессеж.
+7. **Баталгаажуулалт:** Баталгаажуулах багц дахь нөхдүүд харьяалалгүй/төлөв байдлын шалгалтыг дахин хийнэ. Амжилттай үе тэнгийнхэн тэмдэг
+   `BlockSigned` мессежүүдийг илгээж, тэдгээрийг детерминист цуглуулагчийн багц руу дамжуулна.
+8. **Commit:** Цуглуулагч нь каноник гарын үсгийн багцыг цуглуулсны дараа амлалтын гэрчилгээг цуглуулдаг.
+   `BlockCommitted` цацаж, блокийг дотооддоо дуусгана.
+9. **Програм:** Бүх үе тэнгийнхэн Кура дахь блокийг бичиж, төлөвийн шинэчлэлтийг хэрэглэж, телеметрийн/үйл явдал ялгаруулж, цэвэрлэдэг.
+   mempool-аас ажил гүйлгээ хийж, топологийн үүргийг эргүүлэх.
 
-- **Domains, accounts, and assets** use canonical IH58 account IDs (preferred); `name@domain` remains a routing
-  alias when explicitly supplied. Metadata is deterministic (`Metadata` map). Numeric assets support fixed-point
-  operations; NFTs carry arbitrary structured metadata.
-- **Roles and permissions** use Norito-enumerated tokens that map directly to executor checks.
-- **Triggers** (time-based, block-based, or predicate-driven) emit deterministic transactions via the on-chain
-  executor.
-- **Events** stream via Torii and mirror committed state transitions, including confidential flows and
-  governance actions.
-- **Transactions, blocks, and manifests** are Norito-encoded (`SignedTransaction`, `SignedBlockWire`) with
-  explicit version headers, ensuring forward-extendable decoding.
-- **Customisation** happens through the executor data model: operators may register custom instructions,
-  permissions, and parameters while preserving determinism.
-- **Repositories (`RepoInstruction`)** allow bundling deterministic upgrade plans (executors, manifests, and
-  assets) so multi-step rollouts can be managed on-chain with governance approval.
-- **Consensus artifacts**—such as commit certificates and witness lists—reside in the data model and
-  round-trip through golden tests to guarantee compatibility between `iroha_core`, Torii, and SDKs.
-- **Confidential registries and events** capture shielded asset descriptors, verifier keys, commitments,
-  nullifiers, and event payloads (`ConfidentialEvent::{Shielded,Transferred,Unshielded}`) so confidential flows
-  remain auditable without leaking plaintext data.
+Сэргээх замууд нь алга болсон блокуудыг дахин дамжуулахын тулд детерминист цацалтыг ашигладаг ба өөрчлөлтийг харах манлайллыг эргүүлдэг.
+хугацаа дуусах үед. Хажуугийн тэрэг болон телеметр нь зөвшилцлийн үр дүнг өөрчлөхгүйгээр оношлогооны ойлголтыг өгдөг.
 
-## 4. Transaction lifecycle
+## 5. Ухаалаг гэрээ, гүйцэтгэл
 
-1. **Admission:** Torii decodes the Norito payload, checks signatures, TTL, and size limits, then enqueues the
-   transaction locally.
-2. **Gossip:** The transaction propagates across the topology; peers deduplicate by hash and repeat admission
-   checks.
-3. **Selection:** The current leader pulls transactions from the pending set and performs stateless validation.
-4. **Stateful simulation:** Candidate transactions execute inside a transient `StateBlock`, invoking IVM or
-   built-in instructions. Conflicts or rule violations are dropped deterministically.
-5. **Trigger materialisation:** Scheduled triggers due in the round are converted into internal transactions
-   and validated using the same pipeline.
-6. **Proposal sealing:** When block limits are reached or timeouts expire, the leader emits a Norito-encoded
-   `BlockCreated` message.
-7. **Validation:** Peers in the validating set re-run stateless/stateful checks. Successful peers sign
-   `BlockSigned` messages and forward them to the deterministic collector set.
-8. **Commit:** A collector assembles a commit certificate once it collects the canonical signature set,
-   broadcasts `BlockCommitted`, and finalises the block locally.
-9. **Application:** All peers record the block in Kura, apply state updates, emit telemetry/events, purge
-   committed transactions from the mempool, and rotate topology roles.
+Ухаалаг гэрээнүүд нь Iroha виртуал машин (IVM) дээр ажилладаг:
 
-Recovery paths use deterministic broadcast to retransmit missing blocks, and view changes rotate leadership
-when deadlines lapse. Sidecars and telemetry provide diagnostic insights without mutating consensus results.
+- **Kotodama** нь өндөр түвшний `.ko` эх сурвалжийг `.to` байт код болгон хөрвүүлдэг.
+- **Заагч ABI хэрэгжилт** нь баталгаажуулсан заагч төрлөөр дамжуулан хост санах ойтой харилцан үйлчлэлцэх гэрээг баталгаажуулдаг.
+  Syscall гадаргууг `ivm/docs/syscalls.md`-д тайлбарласан; ABI жагсаалтыг хэш болгож, хувилбар болгосон.
+- **Syscalls болон hosts** нь дэвтэрийн төлөвийн хандалт, триггерийн хуваарь, нууц командууд, Kaigi медиаг хамардаг.
+  урсгал ба детерминист санамсаргүй байдал.
+- **Баригдсан гүйцэтгэгч** нь хөрөнгө, данс, зөвшөөрөл, Iroha Тусгай зааварчилгааг (ISI) үргэлжлүүлэн дэмждэг.
+  болон засаглалын үйл ажиллагаа. Захиалгат гүйцэтгэгчид Norito схемийг дагаж мөрдөхийн зэрэгцээ зааврын багцыг сунгаж болно.
+- **Хамгаалагдсан шилжүүлэг болон баталгаажуулагчийн бүртгэл зэрэг нууц шинж чанаруудыг гүйцэтгэгчээр дамжуулан ил болгоно.
+  зааварчилгаа ба Poseidon амлалттай хостуудаар баталгаажуулсан.
 
-## 5. Smart contracts and execution
+## 6. Хадгалалт ба тогтвортой байдал- **Kura блокийн дэлгүүр** нь эцсийн блок бүрийг Norito толгойтой `SignedBlockWire` ачаа болгон бичдэг.
+  каноник толгой, гүйлгээ, гэрчилгээ, гэрчийн өгөгдлийг хамтад нь.
+- **World State View** нь эрх мэдэл бүхий төлөвийг санах ойд хадгалж, хурдан асуулга явуулах боломжтой. Тодорхойлогч хормын хувилбарууд болон
+  дамжуулах хоолойн хажуугийн машинууд (`pipeline/sidecars.norito` + `pipeline/sidecars.index`) сэргээх болон аудитыг дэмждэг.
+- **Төрийн шатлал** нь тодорхойлогчийг хадгалахын зэрэгцээ том хэмжээний байршуулалтад халуун/хүйтэн хуваахыг зөвшөөрдөг.
+  баталгаажуулалт.
+- **Синк хийх, дахин тоглуулах** баталгаажуулах ижил дүрмийн дагуу хийгдсэн блокуудыг дахин ачааллана. Детерминист
+  Нэвтрүүлэг нь үе тэнгийнхэн нь итгэмжлэгдсэн хадгалах санд найдалгүйгээр хөршөөсөө алга болсон өгөгдлийг сэргээх боломжийг олгодог.
 
-Smart contracts run on the Iroha Virtual Machine (IVM):
+## 7. Засаглал ба эдийн засаг
 
-- **Kotodama** compiles high-level `.ko` sources into deterministic `.to` bytecode.
-- **Pointer ABI enforcement** ensures contracts interact with host memory through validated pointer types.
-  Syscall surfaces are described in `ivm/docs/syscalls.md`; the ABI list is hashed and versioned.
-- **Syscalls and hosts** cover ledger state access, trigger scheduling, confidential primitives, Kaigi media
-  flows, and deterministic randomness.
-- **Built-in executor** continues to support Iroha Special Instructions (ISI) for asset, account, permission,
-  and governance operations. Custom executors can extend the instruction set while honouring Norito schemas.
-- **Confidential features**—including shielded transfers and verifier registries—are exposed via executor
-  instructions and validated by hosts with Poseidon commitments.
+- Гинжин дэх параметрүүд (`SetParameter`) зөвшилцлийн таймер, мемпулийн хязгаар, телеметрийн бариул, төлбөрийн зурвас,
+  болон онцлог тугнууд. `kagami`-ээр үүсгэгдсэн Эхлэл манифест нь анхны тохиргоог суулгана.
+- **Kaigi** заавар нь хамтын сешнүүдийг (үүсгэх/нэгдэх/ орхих/дуусгах) удирдаж, Norito дамжуулалтыг хангадаг.
+  хурлын хэрэглээний тохиолдлуудад зориулсан телеметрийн .
+- **Хижири** нь тодорхой үе тэнгийнхний болон дансны нэр хүндийг хангаж, зөвшилцөл, элсэлтийн дагуу нэгтгэдэг.
+  бодлого, хураамжийн үржүүлэгчид (16-р улирлын тогтмол цэгийн математик). Нотлох баримт, шалган нэвтрүүлэх цэг, нэр хүнд
+  Бүртгэлүүд нь гинжин хэлхээнд хийгдсэн бөгөөд ажиглагчийн профайл нь төлбөрийн баримтын гарал үүслийг зохицуулдаг.
+- **NPoS горим** (идэвхжүүлсэн үед) нь VRF-ээр дэмжигдсэн сонгуулийн цонх болон гадасны жигнэсэн хороодыг ашигладаг.
+  детерминистик тохиргооны өгөгдмөл.
+- **Нууц бүртгэлүүд** нь мэдлэггүй баталгаажуулагч түлхүүрүүд, баталгааны амьдралын мөчлөг, амлалтуудыг зохицуулдаг.
+  хамгаалагдсан урсгалууд.
 
-## 6. Storage and persistence
+## 8. Үйлчлүүлэгчийн туршлага ба багаж хэрэгсэл
 
-- **Kura block store** writes each finalised block as a `SignedBlockWire` payload with a Norito header, keeping
-  canonical headers, transactions, commit certificates, and witness data together.
-- **World State View** keeps the authoritative state in memory for fast queries. Deterministic snapshots and
-  pipeline sidecars (`pipeline/sidecars.norito` + `pipeline/sidecars.index`) support recovery and audits.
-- **State tiering** allows hot/cold partitioning for large deployments while preserving deterministic
-  validation.
-- **Sync and replay** load committed blocks back into state using the same validation rules. Deterministic
-  broadcast ensures peers can recover missing data from neighbours without relying on trusted storage.
+- **Torii API** нь гүйлгээ, асуулга, үйл явдлын урсгал, телеметр, болон REST болон WebSocket интерфейсийг санал болгодог.
+  засаглалын төгсгөлийн цэгүүд. JSON төсөөлөл нь Norito схемээс гаралтай.
+- **CLI хэрэгсэл** (`iroha_cli`, `iroha_monitor`) нь удирдлага, шууд үе тэнгийн хяналтын самбар, дамжуулах хоолойг хамарна.
+  үзлэг.
+- **Genesis tooling** (`kagami`) нь Norito кодлогдсон манифест, баталгаажуулагч түлхүүр материал болон тохиргоог үүсгэдэг.
+  загварууд.
+- **SDKs** (Swift, JS/TS, Python) нь зааварчилгаа, асуулга, триггер болон телеметрт хэлц үгээр хандах боломжийг олгодог.
+- `scripts/` доторх **скриптүүд болон CI дэгээ** нь хяналтын самбарын баталгаажуулалт, кодлогчийн нөхөн сэргэлт, утааг автоматжуулдаг.
+  туршилтууд.
 
-## 7. Governance and economics
+## 9. Гүйцэтгэл, тэсвэр хатуужил, замын зураглал- Одоогийн шугам хоолой нь таатай сүлжээний дор **2–3 секундын** блоклох хугацаатайгаар **20,000 tps**-ийг зорилтот түвшинд хүргэж байна.
+  Багцын гарын үсгийн баталгаажуулалт, тодорхойлогч хуваарь бүхий нөхцлүүд.
+- **Телеметри** нь зөвшилцлийн цаг хэмжигч, мемпулийн ачаалал, блок тархалтын эрүүл мэнд, Prometheus хэмжигдэхүүнийг харуулж байна.
+  Кайгигийн хэрэглээ, Хижирийн нэр хүндийн шинэчлэл.
+- **Уян хатан байдлын онцлогууд** нь тодорхой өгөгдөлд хүртээмжтэй байх, сэргээх туслах хэрэгсэл, топологийн эргэлт, болон
+  тохируулж болох харах/өөрчлөх босго.
+- Ирээдүйн замын зураглалын үе шатууд (`roadmap.md`-г үзнэ үү) Nexus мэдээллийн орон зай, сайжруулсан нууцлал дээр үргэлжлүүлэн ажиллана
+  багаж хэрэгсэл, детерминист гаралтыг хадгалахын зэрэгцээ илүү өргөн техник хангамжийн хурдатгал.
 
-- On-chain parameters (`SetParameter`) control consensus timers, mempool limits, telemetry knobs, fee bands,
-  and feature flags. Genesis manifests generated by `kagami` install the initial configuration.
-- **Kaigi** instructions manage collaborative sessions (create/join/leave/end) and feed Norito streaming
-  telemetry for conferencing use cases.
-- **Hijiri** provides deterministic peer and account reputation, integrating with consensus, admission
-  policies, and fee multipliers (Q16 fixed-point math). Evidence manifests, checkpoints, and reputation
-  registries are committed on-chain, and observer profiles govern receipt provenance.
-- **NPoS mode** (when enabled) uses VRF-backed election windows and stake-weighted committees while preserving
-  deterministic configuration defaults.
-- **Confidential registries** govern zero-knowledge verifier keys, proof lifecycles, and commitments for
-  shielded flows.
+## 10. Үйл ажиллагаа ба байршуулалт
 
-## 8. Client experience and tooling
+- ** Олдворууд:** Dockerfiles, Nix flake болон `cargo` ажлын урсгалууд нь хуулбарлах боломжтой бүтцийг дэмждэг. `kagami` ялгаруулдаг
+  генезис манифестууд, баталгаажуулагч түлхүүрүүд болон зөвшөөрөгдсөн болон NPoS байршуулалтын жишээ тохиргоо.
+- **Өөрийгөө зохион байгуулсан сүлжээ:** Операторууд өөрсдийн үе тэнгийн багц, элсэлтийн дүрэм, каденсыг сайжруулдаг. The
+  Ажлын талбар нь харилцан уялдаа холбоогүй олон бие даасан Iroha 2 сүлжээг дэмждэг бөгөөд зөвхөн
+  дээд талын код.
+- **Тохиргооны амьдралын мөчлөг:** `iroha_config` нь хэрэглэгчийн → бодит → давхаргыг анхдагч болгож, товчлуур бүрийг зөв тохируулдаг.
+  тодорхой ба хувилбарын хяналттай. Ажиллах цагийн өөрчлөлтүүд `SetParameter` заавраар дамждаг.
+- **Ажиглах боломжтой:** `iroha_telemetry` нь Prometheus хэмжигдэхүүн, бүтэцлэгдсэн бүртгэл, хяналтын самбарын өгөгдлийг шалгасан экспортлодог.
+  CI скриптээр (`ci/check_swift_dashboards.sh`, `scripts/render_swift_dashboards.sh`,
+  `scripts/check_swift_dashboard_data.py`). Цацалт, зөвшилцөл, Хижирийн үйл явдлуудыг үзэх боломжтой
+  WebSocket болон `scripts/sumeragi_backpressure_log_scraper.py` нь зүрхний аппаратын эсрэг даралтыг
+  алдааг олж засварлах телеметр.
+- **Туршилт:** `cargo test --workspace`, нэгтгэх тестүүд (`integration_tests/`), хэлний SDK багцууд болон
+  Norito алтан бэхэлгээ нь детерминизмыг хамгаалдаг. Заагч ABI, системийн дуудлагын жагсаалт, засаглалын манифестууд байдаг
+  тусгай зориулалтын алтан тестүүд.
+- **Сэргээх:** Кура хажуугийн тэрэг, тодорхой дахин тоглуулах, өргөн нэвтрүүлгийн синхрончлол нь зангилаануудыг дискний төлөвийг сэргээх боломжийг олгодог.
+  эсвэл үе тэнгийнхэн. Хижирийн хяналтын цэгүүд болон засаглалын манифестууд нь дагаж мөрдөх эсэхийг шалгах боломжтой агшин зуурын агшингуудыг өгдөг.
 
-- **Torii API** offers REST and WebSocket interfaces for transactions, queries, event streams, telemetry, and
-  governance endpoints. JSON projections are derived from Norito schemas.
-- **CLI tooling** (`iroha_cli`, `iroha_monitor`) covers administration, live peer dashboards, and pipeline
-  inspection.
-- **Genesis tooling** (`kagami`) generates Norito-encoded manifests, validator key material, and configuration
-  templates.
-- **SDKs** (Swift, JS/TS, Python) provide idiomatic access to instructions, queries, triggers, and telemetry.
-- **Scripts and CI hooks** inside `scripts/` automate dashboard validation, codec regeneration, and smoke
-  tests.
+# Тайлбар толь
 
-## 9. Performance, resilience, and roadmap
-
-- The current pipeline targets **20,000 tps** with **2–3 second** block times under favourable network
-  conditions, backed by batch signature verification and deterministic scheduling.
-- **Telemetry** exposes Prometheus metrics for consensus timers, mempool occupancy, block propagation health,
-  Kaigi usage, and Hijiri reputation updates.
-- **Resilience features** include deterministic data availability, recovery sidecars, topology rotation, and
-  configurable view/change thresholds.
-- Future roadmap milestones (see `roadmap.md`) continue work on Nexus data spaces, enhanced confidential
-  tooling, and broader hardware acceleration while preserving deterministic outputs.
-
-## 10. Operations and deployment
-
-- **Artifacts:** Dockerfiles, Nix flake, and `cargo` workflows support reproducible builds. `kagami` emits
-  genesis manifests, validator keys, and example configs for both permissioned and NPoS deployments.
-- **Self-hosted networks:** Operators manage their own peer sets, admission rules, and upgrade cadence. The
-  workspace supports many independent Iroha 2 networks co-existing without coordination, sharing only the
-  upstream code.
-- **Configuration lifecycle:** `iroha_config` resolves user → actual → defaults layers, ensuring every knob is
-  explicit and version-controlled. Runtime changes flow through `SetParameter` instructions.
-- **Observability:** `iroha_telemetry` exports Prometheus metrics, structured logs, and dashboard data checked
-  by CI scripts (`ci/check_swift_dashboards.sh`, `scripts/render_swift_dashboards.sh`,
-  `scripts/check_swift_dashboard_data.py`). Streaming, consensus, and Hijiri events are available over
-  WebSocket, and `scripts/sumeragi_backpressure_log_scraper.py` correlates pacemaker backpressure with
-  telemetry for troubleshooting.
-- **Testing:** `cargo test --workspace`, integration tests (`integration_tests/`), language SDK suites, and
-  Norito golden fixtures protect determinism. Pointer ABI, syscall lists, and governance manifests have
-  dedicated golden tests.
-- **Recovery:** Kura sidecars, deterministic replay, and broadcast sync allow nodes to recover state from disk
-  or peers. Hijiri checkpoints and governance manifests provide auditable snapshots for compliance.
-
-# Glossary
-
-For terminology referenced in this document, consult the project-wide glossary at
-<https://docs.iroha.tech/reference/glossary.html>.
+Энэхүү баримт бичигт дурдсан нэр томьёоны талаар төслийн ерөнхий тайлбар толь бичгээс лавлана уу
+.

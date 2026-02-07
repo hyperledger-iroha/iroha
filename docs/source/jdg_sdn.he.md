@@ -6,86 +6,85 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 1ee87ee60e2e8c9d9636b282231b33de3cf1fd7240c8d31d0a0a1673651dcef1
 source_last_modified: "2026-01-03T18:07:58.621058+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% JDG-SDN attestations and rotation
+% אישורי JDG-SDN וסיבוב
 
-This note captures the enforcement model for Secret Data Node (SDN) attestations
-used by the Jurisdiction Data Guardian (JDG) flow.
+הערה זו לוכדת את מודל האכיפה עבור אישורי צומת נתונים סודיים (SDN).
+בשימוש על ידי זרימת Data Guardian (JDG).
 
-## Commitment format
-- `JdgSdnCommitment` binds the scope (`JdgAttestationScope`), the encrypted
-  payload hash, and the SDN public key. Seals are typed signatures
-  (`SignatureOf<JdgSdnCommitmentSignable>`) over the domain-tagged payload
+## פורמט התחייבות
+- `JdgSdnCommitment` קושר את ה-scope (`JdgAttestationScope`), את המוצפן
+  Hash של מטען, והמפתח הציבורי של SDN. חותמות הן חתימות מודפסות
+  (`SignatureOf<JdgSdnCommitmentSignable>`) מעל המטען המתויג בדומיין
   `iroha:jurisdiction:sdn:commitment:v1\x00 || norito(signable)`.
-- Structural validation (`validate_basic`) enforces:
+- אימות מבני (`validate_basic`) אוכף:
   - `version == JDG_SDN_COMMITMENT_VERSION_V1`
-  - valid block ranges
-  - non-empty seals
-  - scope equality against the attestation when run via
+  - טווחי בלוק חוקיים
+  - חותמות לא ריקות
+  - שוויון היקף מול האישור בעת הפעלתו
     `JdgAttestation::validate_with_sdn`/`validate_with_sdn_registry`
-- Deduplication is handled by the attestation validator (signer+payload hash
-  uniqueness) to prevent withheld/duplicate commitments.
+- מניעת כפילויות מטופלת על ידי מאמת האישורים (חתם + מטען גיבוב
+  ייחודיות) כדי למנוע התחייבויות נמנעות/כפולות.
 
-## Registry and rotation policy
-- SDN keys live in `JdgSdnRegistry`, keyed by `(Algorithm, public_key_bytes)`.
-- `JdgSdnKeyRecord` records the activation height, optional retirement height,
-  and optional parent key.
-- Rotation is governed by `JdgSdnRotationPolicy` (currently: `dual_publish_blocks`
-  overlap window). Registering a child key updates the parent retirement to
-  `child.activation + dual_publish_blocks`, with guardrails:
-  - missing parents are rejected
-  - activations must be strictly increasing
-  - overlaps that exceed the grace window are rejected
-- Registry helpers surface the installed records (`record`, `keys`) for status
-  and API exposure.
+## מדיניות רישום ורוטציה
+- מפתחות SDN חיים ב-`JdgSdnRegistry`, עם מפתחות `(Algorithm, public_key_bytes)`.
+- `JdgSdnKeyRecord` מתעד את גובה ההפעלה, גובה פרישה אופציונלי,
+  ומפתח אב אופציונלי.
+- הסיבוב נשלט על ידי `JdgSdnRotationPolicy` (נכון לעכשיו: `dual_publish_blocks`
+  חלון חפיפה). רישום מפתח ילד מעדכן את פרישת ההורה ל
+  `child.activation + dual_publish_blocks`, עם מעקות:
+  - הורים נעדרים נדחים
+  - ההפעלה חייבת להיות מוגברת בקפדנות
+  - חפיפות החורגות מחלון החסד נדחות
+- עוזרי הרישום מציגים את הרשומות המותקנות (`record`, `keys`) לסטטוס
+  וחשיפת API.
 
-## Validation flow
-- `JdgAttestation::validate_with_sdn_registry` wraps the structural
-  attestation checks and SDN enforcement. `JdgSdnPolicy` threads:
-  - `require_commitments`: enforce presence for PII/secret payloads
-  - `rotation`: grace window used when updating parent retirement
-- Each commitment is checked for:
-  - structural validity + attestation-scope match
-  - registered key presence
-  - active window covering the attested block range (retirement bounds already
-    include the dual-publish grace)
-  - valid seal over the domain-tagged commitment body
-- Stable errors surface the index for operator evidence:
+## זרימת אימות
+- `JdgAttestation::validate_with_sdn_registry` עוטף את המבני
+  בדיקות אישור ואכיפת SDN. שרשורי `JdgSdnPolicy`:
+  - `require_commitments`: אכיפת נוכחות עבור מטענים אישיים אישיים/סודיים
+  - `rotation`: חלון חסד בשימוש בעת עדכון פרישת ההורים
+- כל התחייבות נבדקת עבור:
+  - תוקף מבני + התאמה להיקף אישור
+  - נוכחות מפתח רשומה
+  - חלון פעיל המכסה את טווח הבלוקים המאושר (כבר גבולות הפרישה
+    כולל את החסד של פרסום כפול)
+  - חותם תקף על גוף ההתחייבות המתויג בדומיין
+- שגיאות יציבות משטחות את האינדקס לראיות מפעיל:
   `MissingSdnCommitments`, `UnknownSdnKey`, `InactiveSdnKey`, `InvalidSeal`,
-  or structural `Commitment`/`ScopeMismatch` failures.
+  או כשלים מבניים של `Commitment`/`ScopeMismatch`.
 
-## Operator runbook
-- **Provision:** register the first SDN key with `activated_at` at or before the
-  first secret block height. Publish the key fingerprint to JDG operators.
-- **Rotate:** generate the successor key, register it with `rotation_parent`
-  pointing at the current key, and confirm the parent retirement equals
-  `child_activation + dual_publish_blocks`. Re-seal payload commitments with
-  the active key during the overlap window.
-- **Audit:** expose registry snapshots (`record`, `keys`) via Torii/status
-  surfaces so auditors can confirm the active key and retirement windows. Alert
-  if the attested range falls outside the active window.
-- **Recovery:** `UnknownSdnKey` → ensure the registry includes the sealing key;
-  `InactiveSdnKey` → rotate or adjust activation heights; `InvalidSeal` →
-  re-seal payloads and refresh attestations.
+## ספר הפעלה של מפעילים
+- **הגשה:** רשום את מפתח ה-SDN הראשון עם `activated_at` ב- או לפני
+  גובה הבלוק הסודי הראשון. פרסם את טביעת האצבע של המפתח למפעילי JDG.
+- **סובב:** צור את המפתח העוקב, רשום אותו עם `rotation_parent`
+  מצביע על המפתח הנוכחי, ואשר את פרישת ההורים שווה
+  `child_activation + dual_publish_blocks`. אטום מחדש התחייבויות מטען עם
+  המפתח הפעיל במהלך חלון החפיפה.
+- **ביקורת:** חשיפת תמונות מצב של הרישום (`record`, `keys`) באמצעות Torii/סטטוס
+  משטחים כך שמבקרים יכולים לאשר את המפתח הפעיל ואת חלונות הפרישה. התראה
+  אם הטווח המאושר נופל מחוץ לחלון הפעיל.
+- **שחזור:** `UnknownSdnKey` ← ודא שהרישום כולל את מפתח האיטום;
+  `InactiveSdnKey` ← לסובב או להתאים את גבהי ההפעלה; `InvalidSeal` ←
+  לאטום מחדש מטענים ולרענן אישורים.## עוזר זמן ריצה
+- `JdgSdnEnforcer` (`crates/iroha_core/src/jurisdiction.rs`) חבילות מדיניות +
+  רישום ומאמת אישורים באמצעות `validate_with_sdn_registry`.
+- ניתן לטעון רישום מחבילות `JdgSdnKeyRecord` מקודדות Norito (ראה
+  `JdgSdnEnforcer::from_reader`/`from_path`) או מורכב עם
+  `from_records`, אשר מיישם את מעקות הבטיחות הסיבוביים במהלך הרישום.
+- מפעילים יכולים להתמיד בצרור Norito כהוכחה ל-Torii/סטטוס
+  משטחים בזמן שאותו מטען מזין את האכיפה המשמש את הודאה ו
+  שומרי קונצנזוס. ניתן לאתחל אכיפה גלובלית אחת בעת ההפעלה באמצעות
+  `init_enforcer_from_path`, ו-`enforcer()`/`registry_snapshot()`/`sdn_registry_status()`
+  לחשוף את המדיניות החיה + רשומות מפתח עבור משטחי סטטוס/Torii.
 
-## Runtime helper
-- `JdgSdnEnforcer` (`crates/iroha_core/src/jurisdiction.rs`) packages a policy +
-  registry and validates attestations via `validate_with_sdn_registry`.
-- Registries can be loaded from Norito-encoded `JdgSdnKeyRecord` bundles (see
-  `JdgSdnEnforcer::from_reader`/`from_path`) or assembled with
-  `from_records`, which applies the rotation guardrails during registration.
-- Operators can persist the Norito bundle as evidence for Torii/status
-  surfacing while the same payload feeds the enforcer used by admission and
-  consensus guards. A single global enforcer can be initialised at startup via
-  `init_enforcer_from_path`, and `enforcer()`/`registry_snapshot()`/`sdn_registry_status()`
-  expose the live policy + key records for status/Torii surfaces.
-
-## Tests
-- Regression coverage in `crates/iroha_data_model/src/jurisdiction.rs`:
+## מבחנים
+- כיסוי רגרסיה ב-`crates/iroha_data_model/src/jurisdiction.rs`:
   `sdn_registry_accepts_active_commitment`, `sdn_registry_rejects_unknown_key`,
   `sdn_registry_rejects_inactive_key`, `sdn_registry_rejects_bad_signature`,
   `sdn_registry_sets_parent_retirement_window`,
-  `sdn_registry_rejects_overlap_beyond_policy`, alongside the existing
-  structural attestation/SDN validation tests.
+  `sdn_registry_rejects_overlap_beyond_policy`, לצד הקיים
+  מבחני אישור מבני/בדיקת SDN.

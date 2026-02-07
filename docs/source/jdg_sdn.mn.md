@@ -7,85 +7,84 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 1ee87ee60e2e8c9d9636b282231b33de3cf1fd7240c8d31d0a0a1673651dcef1
 source_last_modified: "2025-12-29T18:16:35.972838+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% JDG-SDN attestations and rotation
+% JDG-SDN баталгаажуулалт ба эргэлт
 
-This note captures the enforcement model for Secret Data Node (SDN) attestations
-used by the Jurisdiction Data Guardian (JDG) flow.
+Энэхүү тэмдэглэл нь Нууц Өгөгдлийн Зангилаа (SDN) баталгаажуулалтын хэрэгжилтийн загварыг агуулна
+Харъяаллын Мэдээллийн Хамгаалагч (JDG) урсгалд ашигладаг.
 
-## Commitment format
-- `JdgSdnCommitment` binds the scope (`JdgAttestationScope`), the encrypted
-  payload hash, and the SDN public key. Seals are typed signatures
-  (`SignatureOf<JdgSdnCommitmentSignable>`) over the domain-tagged payload
+## Амлалтын формат
+- `JdgSdnCommitment` нь хамрах хүрээг холбодог (`JdgAttestationScope`), шифрлэгдсэн
+  ачааллын хэш, SDN нийтийн түлхүүр. Тамга нь шивсэн гарын үсэг юм
+  (`SignatureOf<JdgSdnCommitmentSignable>`) домэйн шошготой ачааны ачаалал дээр
   `iroha:jurisdiction:sdn:commitment:v1\x00 || norito(signable)`.
-- Structural validation (`validate_basic`) enforces:
+- Бүтцийн баталгаажуулалт (`validate_basic`) нь:
   - `version == JDG_SDN_COMMITMENT_VERSION_V1`
-  - valid block ranges
-  - non-empty seals
-  - scope equality against the attestation when run via
+  - хүчинтэй блок мужууд
+  - хоосон биш лац
+  - дамжуулан ажиллуулах үед баталгаажуулалтын эсрэг хамрах хүрээний тэгш байдал
     `JdgAttestation::validate_with_sdn`/`validate_with_sdn_registry`
-- Deduplication is handled by the attestation validator (signer+payload hash
-  uniqueness) to prevent withheld/duplicate commitments.
+- Хуваарилах ажлыг баталгаажуулалтын баталгаажуулагч (гарын үсэг зурсан+ашиглалтын хэш) гүйцэтгэдэг
+  өвөрмөц байдал) хойшлуулсан/давхардсан амлалтаас сэргийлэх.
 
-## Registry and rotation policy
-- SDN keys live in `JdgSdnRegistry`, keyed by `(Algorithm, public_key_bytes)`.
-- `JdgSdnKeyRecord` records the activation height, optional retirement height,
-  and optional parent key.
-- Rotation is governed by `JdgSdnRotationPolicy` (currently: `dual_publish_blocks`
-  overlap window). Registering a child key updates the parent retirement to
-  `child.activation + dual_publish_blocks`, with guardrails:
-  - missing parents are rejected
-  - activations must be strictly increasing
-  - overlaps that exceed the grace window are rejected
-- Registry helpers surface the installed records (`record`, `keys`) for status
-  and API exposure.
+## Бүртгэл ба сэлгэн ажиллуулах бодлого
+- SDN түлхүүрүүд нь `(Algorithm, public_key_bytes)` түлхүүрээр `JdgSdnRegistry` дээр амьдардаг.
+- `JdgSdnKeyRecord` нь идэвхжүүлэлтийн өндөр, нэмэлт тэтгэвэрт гарах өндөр,
+  болон нэмэлт эх түлхүүр.
+- Эргүүлэлтийг `JdgSdnRotationPolicy` (одоогоор: `dual_publish_blocks`) зохицуулдаг
+  давхардсан цонх). Хүүхдийн түлхүүрийг бүртгүүлснээр эцэг эхийн тэтгэвэрт гарах хугацааг шинэчилнэ
+  `child.activation + dual_publish_blocks`, хашлагатай:
+  - сураггүй болсон эцэг эхээс татгалзсан
+  - идэвхжүүлэлтийг хатуу нэмэгдүүлэх ёстой
+  - өршөөлийн цонхноос давсан давхцлыг үгүйсгэдэг
+- Бүртгэлийн туслахууд суулгасан бичлэгүүдийг (`record`, `keys`) статусын хувьд харуулдаг.
+  болон API өртөлт.
 
-## Validation flow
-- `JdgAttestation::validate_with_sdn_registry` wraps the structural
-  attestation checks and SDN enforcement. `JdgSdnPolicy` threads:
-  - `require_commitments`: enforce presence for PII/secret payloads
-  - `rotation`: grace window used when updating parent retirement
-- Each commitment is checked for:
-  - structural validity + attestation-scope match
-  - registered key presence
-  - active window covering the attested block range (retirement bounds already
-    include the dual-publish grace)
-  - valid seal over the domain-tagged commitment body
-- Stable errors surface the index for operator evidence:
+## Баталгаажуулалтын урсгал
+- `JdgAttestation::validate_with_sdn_registry` нь бүтцийг ороосон
+  баталгаажуулалтын шалгалт, SDN-ийн хэрэгжилт. `JdgSdnPolicy` утаснууд:
+  - `require_commitments`: PII/нууц ачааллын хувьд байгаа эсэхийг шалгах
+  - `rotation`: эцэг эхийн тэтгэвэрт гарах хугацааг шинэчлэхэд ашигладаг тусламжийн цонх
+- Амлалт бүрийг дараах байдлаар шалгана.
+  - бүтцийн хүчин төгөлдөр байдал + баталгаажуулалт-хамрах хүрээний тохирол
+  - бүртгэгдсэн түлхүүр байгаа эсэх
+  - Баталгаажсан блокийн хүрээг хамарсан идэвхтэй цонх (тэтгэвэрт гарах хязгаар аль хэдийн
+    давхар нийтлэх ач ивээлийг оруулах)
+  - домэйн дээр тэмдэглэгдсэн амлалтын байгууллага дээр хүчинтэй тамга
+- Тогтвортой алдаа нь операторын нотолгооны индексийг харуулж байна:
   `MissingSdnCommitments`, `UnknownSdnKey`, `InactiveSdnKey`, `InvalidSeal`,
-  or structural `Commitment`/`ScopeMismatch` failures.
+  эсвэл `Commitment`/`ScopeMismatch` бүтцийн доголдол.
 
 ## Operator runbook
-- **Provision:** register the first SDN key with `activated_at` at or before the
-  first secret block height. Publish the key fingerprint to JDG operators.
-- **Rotate:** generate the successor key, register it with `rotation_parent`
-  pointing at the current key, and confirm the parent retirement equals
-  `child_activation + dual_publish_blocks`. Re-seal payload commitments with
-  the active key during the overlap window.
-- **Audit:** expose registry snapshots (`record`, `keys`) via Torii/status
-  surfaces so auditors can confirm the active key and retirement windows. Alert
-  if the attested range falls outside the active window.
-- **Recovery:** `UnknownSdnKey` → ensure the registry includes the sealing key;
-  `InactiveSdnKey` → rotate or adjust activation heights; `InvalidSeal` →
-  re-seal payloads and refresh attestations.
+- **Нөхцөл байдал:** эхний SDN түлхүүрийг `activated_at` дугаарт эсвэл өмнө нь бүртгүүлнэ үү.
+  Эхний нууц блокийн өндөр. Гол хурууны хээг JDG операторуудад нийтлэх.
+- **Эргүүлэх:** залгамжлагч түлхүүрийг үүсгээд `rotation_parent`-д бүртгүүлнэ үү
+  одоогийн түлхүүрийг зааж, эцэг эхийн тэтгэвэрт тэнцэх эсэхийг баталгаажуулна уу
+  `child_activation + dual_publish_blocks`. Ачаа даах үүргийг дахин битүүмжилнэ
+  давхардах цонхны үед идэвхтэй түлхүүр.
+- **Аудит:** Torii/status-аар бүртгэлийн агшин зуурын зургийг (`record`, `keys`) ил гаргах
+  гадаргуутай тул аудиторууд идэвхтэй түлхүүр болон тэтгэвэрт гарах цонхыг баталгаажуулах боломжтой. Анхааруулга
+  хэрэв баталгаажуулсан муж идэвхтэй цонхны гадна байвал.
+- **Сэргээх:** `UnknownSdnKey` → бүртгэлд битүүмжлэх түлхүүр байгаа эсэхийг шалгах;
+  `InactiveSdnKey` → идэвхжүүлэх өндрийг эргүүлэх эсвэл тохируулах; `InvalidSeal` →
+  ачааг дахин битүүмжлэх, гэрчилгээг сэргээх.## Ажиллах цагийн туслах
+- `JdgSdnEnforcer` (`crates/iroha_core/src/jurisdiction.rs`) бодлогыг багцалдаг +
+  `validate_with_sdn_registry`-ээр дамжуулан бүртгэл хийж, баталгаажуулалтыг баталгаажуулна.
+- Бүртгэлийг Norito кодлогдсон `JdgSdnKeyRecord` багцаас ачаалж болно (харна уу).
+  `JdgSdnEnforcer::from_reader`/`from_path`) эсвэл угсарсан
+  Бүртгэлийн үед эргүүлэх хашлага ашигладаг `from_records`.
+- Операторууд Norito багцыг Torii/статусын нотлох баримт болгон хадгалах боломжтой.
+  гадаргуутай байхад ижил даацтай хооллодог хууль сахиулагч элсэлтийн болон
+  зөвшилцлийн хамгаалагчид. Нэг глобал хэрэгжүүлэгчийг эхлүүлэх үед дамжуулан эхлүүлж болно
+  `init_enforcer_from_path`, мөн `enforcer()`/`registry_snapshot()`/`sdn_registry_status()`
+  статус/Torii гадаргуугийн шууд удирдамж + түлхүүр бичлэгүүдийг ил гарга.
 
-## Runtime helper
-- `JdgSdnEnforcer` (`crates/iroha_core/src/jurisdiction.rs`) packages a policy +
-  registry and validates attestations via `validate_with_sdn_registry`.
-- Registries can be loaded from Norito-encoded `JdgSdnKeyRecord` bundles (see
-  `JdgSdnEnforcer::from_reader`/`from_path`) or assembled with
-  `from_records`, which applies the rotation guardrails during registration.
-- Operators can persist the Norito bundle as evidence for Torii/status
-  surfacing while the same payload feeds the enforcer used by admission and
-  consensus guards. A single global enforcer can be initialised at startup via
-  `init_enforcer_from_path`, and `enforcer()`/`registry_snapshot()`/`sdn_registry_status()`
-  expose the live policy + key records for status/Torii surfaces.
-
-## Tests
-- Regression coverage in `crates/iroha_data_model/src/jurisdiction.rs`:
+## Туршилтууд
+- `crates/iroha_data_model/src/jurisdiction.rs` дахь регрессийн хамрах хүрээ:
   `sdn_registry_accepts_active_commitment`, `sdn_registry_rejects_unknown_key`,
   `sdn_registry_rejects_inactive_key`, `sdn_registry_rejects_bad_signature`,
   `sdn_registry_sets_parent_retirement_window`,
-  `sdn_registry_rejects_overlap_beyond_policy`, alongside the existing
-  structural attestation/SDN validation tests.
+  `sdn_registry_rejects_overlap_beyond_policy`, одоо байгаатай зэрэгцэн
+  бүтцийн баталгаажуулалт/SDN баталгаажуулалтын туршилтууд.

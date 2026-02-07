@@ -9,74 +9,75 @@ source_last_modified: "2025-12-29T18:16:35.982646+00:00"
 translation_last_reviewed: 2026-02-07
 title: Red-Team Drill Report Template
 summary: Copy this file for every MINFO-9 drill to capture metadata, evidence, and remediation actions.
+translator: machine-google-reviewed
 ---
 
-> **How to use:** duplicate this template to `docs/source/ministry/reports/<YYYY-MM>-mod-red-team-<scenario>.md` immediately after each drill. Keep filenames lowercase, hyphenated, and aligned with the drill ID logged in Alertmanager.
+> **İstifadə qaydası:** hər qazmadan dərhal sonra bu şablonu `docs/source/ministry/reports/<YYYY-MM>-mod-red-team-<scenario>.md`-ə kopyalayın. Fayl adlarını kiçik hərflərlə, defislə və Alertmanager-ə daxil edilmiş məlumat identifikatoru ilə uyğunlaşdırın.
 
-# Red-Team Drill Report — `<SCENARIO NAME>`
+# Qırmızı Komanda Drill Hesabatı — `<SCENARIO NAME>`
 
 - **Drill ID:** `<YYYYMMDD>-<scenario>`
-- **Date & window:** `<YYYY-MM-DD HH:MMZ – HH:MMZ>`
-- **Scenario class:** `smuggling | bribery | gateway | ...`
-- **Operators:** `<names / handles>`
-- **Dashboards frozen from commit:** `<git SHA>`
-- **Evidence bundle:** `artifacts/ministry/red-team/<YYYY-MM>/<scenario>/`
-- **SoraFS CID (optional):** `<cid>`  
-- **Related roadmap items:** `MINFO-9`, plus any linked tickets.
+- **Tarix və pəncərə:** `<YYYY-MM-DD HH:MMZ – HH:MMZ>`
+- **Ssenari sinfi:** `smuggling | bribery | gateway | ...`
+- **Operatorlar:** `<names / handles>`
+- **İdarəetmə panelləri icradan dondurulub:** `<git SHA>`
+- **Dəlil paketi:** `artifacts/ministry/red-team/<YYYY-MM>/<scenario>/`
+- **SoraFS CID (isteğe bağlı):** `<cid>`  
+- **Əlaqədar yol xəritəsi elementləri:** `MINFO-9`, üstəgəl hər hansı əlaqəli biletlər.
 
-## 1. Objectives & Entry Conditions
+## 1. Məqsədlər və Giriş Şərtləri
 
-- **Primary objectives**
+- **Əsas məqsədlər**
   - `<e.g. Verify denylist TTL enforcement under smuggling attack>`
-- **Prerequisites confirmed**
-  - `emergency_canon_policy.md` version `<tag>`
-  - `dashboards/grafana/ministry_moderation_overview.json` digest `<sha256>`
-  - Override authority on-call: `<name>`
+- **İlkin şərtlər təsdiqləndi**
+  - `emergency_canon_policy.md` versiyası `<tag>`
+  - `dashboards/grafana/ministry_moderation_overview.json` həzm `<sha256>`
+  - Zəng zamanı səlahiyyəti ləğv edin: `<name>`
 
-## 2. Execution Timeline
+## 2. İcra qrafiki
 
-| Timestamp (UTC) | Actor | Action / Command | Result / Notes |
-|-----------------|-------|------------------|----------------|
+| Vaxt möhürü (UTC) | Aktyor | Fəaliyyət / Əmr | Nəticə / Qeydlər |
+|----------------|-------|------------------|----------------|
 |  |  |  |  |
 
-> Include Torii request IDs, chunk hashes, override approvals, and Alertmanager links.
+> Torii sorğu identifikatorları, yığın hashləri, ləğvetmə təsdiqləri və Alertmanager keçidlərini daxil edin.
 
-## 3. Observations & Metrics
+## 3. Müşahidələr və Metriklər
 
-| Metric | Target | Observed | Pass/Fail | Notes |
+| Metrik | Hədəf | Müşahidə | Keçdi/Uğursuz | Qeydlər |
 |--------|--------|----------|-----------|-------|
-| Alert response latency | `<X> min` | `<Y> min` | ✅/⚠️ |  |
-| Moderation detection rate | `>= <value>` |  |  |  |
-| Gateway anomaly detection | `Alert fired` |  |  |  |
+| Xəbərdarlığa cavab gecikməsi | `<X> min` | `<Y> min` | ✅/⚠️ |  |
+| Moderasiya aşkarlama dərəcəsi | `>= <value>` |  |  |  |
+| Gateway anomaliyasının aşkarlanması | `Alert fired` |  |  |  |
 
 - `Grafana export:` `artifacts/.../dashboards/ministry_moderation_overview.json`
 - `Alert bundle:` `artifacts/.../alerts/ministry_moderation_rules.yml`
 - `Norito manifests:` `<path>`
 
-## 4. Findings & Remediation
+## 4. Tapıntılar və Təmir
 
-| Severity | Finding | Owner | Target Date | Status / Link |
+| Ciddilik | Tapmaq | Sahibi | Hədəf Tarixi | Status / Link |
 |----------|---------|-------|-------------|---------------|
-| High |  |  |  |  |
+| Yüksək |  |  |  |  |
 
-Document how calibration manifests, denylist policies, or SDK/tooling must change. Link to GitHub/Jira issues and note blocked/unblocked states.
+Kalibrləmənin necə təzahür etdiyini sənədləşdirin, ləğvetmə siyasətləri və ya SDK/alətlər dəyişməlidir. GitHub/Jira problemləri ilə əlaqə saxlayın və bloklanmış/blokdan çıxarılan vəziyyətləri qeyd edin.
 
-## 5. Governance & Approvals
+## 5. İdarəetmə və Təsdiqlər
 
-- **Incident commander sign-off:** `<name / timestamp>`
-- **Governance council review date:** `<meeting id>`
-- **Follow-up checklist:** `[ ] status.md updated`, `[ ] roadmap row updated`, `[ ] transparency packet annotated`
+- **Hadisə komandirinin imzalanması:** `<name / timestamp>`
+- **İdarəetmə şurasının nəzərdən keçirilmə tarixi:** `<meeting id>`
+- **İzləmə yoxlama siyahısı:** `[ ] status.md updated`, `[ ] roadmap row updated`, `[ ] transparency packet annotated`
 
-## 6. Attachments
+## 6. Qoşmalar
 
-- `[ ] CLI logbook (`logs/<file>.md`)`
+- `[ ] CLI logbook (`logs/.md`)`
 - `[ ] Dashboard JSON export`
 - `[ ] Alertmanager history`
 - `[ ] SoraFS manifest / CAR`
 - `[ ] Override audit log`
 
-Mark each attachment with `[x]` once uploaded to the evidence bundle and SoraFS snapshot.
+Sübut paketinə və SoraFS snapşotuna yükləndikdən sonra hər bir qoşmanı `[x]` ilə qeyd edin.
 
 ---
 
-_Last updated: {{ date | default("2026-02-20") }}_
+_Son yenilənmə: {{tarix | default("2026-02-20") }}_

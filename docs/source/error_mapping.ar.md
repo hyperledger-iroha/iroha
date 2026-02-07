@@ -6,40 +6,41 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: cba8780bcec4ebf562dc9c5725f328b0ea2d9009517efa5b5a504e2fb6be81fe
 source_last_modified: "2026-01-18T05:31:56.950113+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Error Mapping Guide
+# دليل تعيين الأخطاء
 
-Last updated: 2025-08-21
+آخر تحديث: 2025-08-21
 
-This guide maps common failure modes in Iroha to stable error categories surfaced by the data model. Use it to design tests and to make client error handling predictable.
+يقوم هذا الدليل بتعيين أوضاع الفشل الشائعة في Iroha لفئات الأخطاء الثابتة التي يظهرها نموذج البيانات. استخدمه لتصميم الاختبارات ولجعل معالجة أخطاء العميل أمرًا متوقعًا.
 
-Principles
-- Instruction and query paths emit structured enums. Avoid panics; report a specific category wherever possible.
-- Categories are stable, messages may evolve. Clients should match on categories, not on free‑form strings.
+المبادئ
+- تصدر مسارات التعليمات والاستعلام تعدادات منظمة. تجنب الذعر. الإبلاغ عن فئة معينة حيثما أمكن ذلك.
+- الفئات مستقرة، وقد تتطور الرسائل. يجب أن يتطابق العملاء على الفئات، وليس على السلاسل ذات الشكل الحر.
 
-Categories
-- InstructionExecutionError::Find: Entity missing (asset, account, domain, NFT, role, trigger, permission, public key, block, transaction). Example: removing a non‑existent metadata key yields Find(MetadataKey).
-- InstructionExecutionError::Repetition: Duplicate registration or conflicting ID. Contains the instruction type and the repeated IdBox.
-- InstructionExecutionError::Mintability: Mintability invariant violated (`Once` exhausted twice, `Limited(n)` overdrawn, or attempts to disable `Infinitely`). Examples: minting an asset defined as `Once` twice yields `Mintability(MintUnmintable)`; configuring `Limited(0)` yields `Mintability(InvalidMintabilityTokens)`.
-- InstructionExecutionError::Math: Numeric domain errors (overflow, divide‑by‑zero, negative value, not enough quantity). Example: burning more than available amount yields Math(NotEnoughQuantity).
-- InstructionExecutionError::InvalidParameter: Invalid instruction parameter or configuration (e.g., time trigger in the past). Use for malformed contract payloads.
-- InstructionExecutionError::Evaluate: DSL/spec mismatch for instruction shape or types. Example: wrong numeric spec for an asset value yields Evaluate(Type(AssetNumericSpec(..))).
-- InstructionExecutionError::InvariantViolation: Violation of a system invariant that cannot be expressed in other categories. Example: attempting to remove the last signatory.
-- InstructionExecutionError::Query: Wrapping of QueryExecutionFail when a query fails during instruction execution.
+الفئات
+- InstructionExecutionError::Find: الكيان مفقود (الأصل، الحساب، المجال، NFT، الدور، المشغل، الإذن، المفتاح العام، الحظر، المعاملة). مثال: تؤدي إزالة مفتاح بيانات تعريف غير موجود إلى الحصول على Find(MetadataKey).
+- InstructionExecutionError::Repetition: تسجيل مكرر أو معرف متعارض. يحتوي على نوع التعليمات وIdBox المتكرر.
+- InstructionExecutionError::Mintability: تم انتهاك ثبات Mintability (تم استنفاد `Once` مرتين، أو تم سحب `Limited(n)` بشكل زائد، أو محاولة تعطيل `Infinitely`). أمثلة: يؤدي سك أصل محدد على أنه `Once` مرتين إلى إنتاج `Mintability(MintUnmintable)`؛ يؤدي تكوين `Limited(0)` إلى إنتاج `Mintability(InvalidMintabilityTokens)`.
+- InstructionExecutionError::Math: أخطاء المجال الرقمي (تجاوز السعة، القسمة على صفر، القيمة السالبة، الكمية غير كافية). على سبيل المثال: يؤدي حرق كمية أكبر من الكمية المتاحة إلى الحصول على Math(NotEnoughQuantity).
+- InstructionExecutionError::InvalidParameter: معلمة تعليمات أو تكوين غير صالح (على سبيل المثال، مشغل الوقت في الماضي). يُستخدم لحمولات العقد المشوهة.
+- InstructionExecutionError::تقييم: عدم تطابق DSL/المواصفات مع شكل التعليمات أو أنواعها. مثال: المواصفات الرقمية الخاطئة لقيمة الأصل تؤدي إلى تقييم (Type(AssetNumericSpec(..))).
+- InstructionExecutionError::InvariantViolation: انتهاك لنظام ثابت لا يمكن التعبير عنه في فئات أخرى. مثال: محاولة إزالة آخر موقع.
+- InstructionExecutionError::Query: التفاف QueryExecutionFail عند فشل الاستعلام أثناء تنفيذ التعليمات.
 
 QueryExecutionFail
-- Find: Missing entity in query context.
-- Conversion: Wrong type expected by a query.
-- NotFound: Missing live query cursor.
-- CursorMismatch / CursorDone: Cursor protocol errors.
-- FetchSizeTooBig: Server‑enforced limit exceeded.
-- GasBudgetExceeded: Query execution exceeded the gas/materialization budget.
-- InvalidSingularParameters: Unsupported parameters for singular queries.
-- CapacityLimit: Live query store capacity reached.
+- بحث: كيان مفقود في سياق الاستعلام.
+- التحويل: نوع خاطئ متوقع بواسطة استعلام.
+- غير موجود: مؤشر الاستعلام المباشر مفقود.
+- CursorMismatch / CursorDone: أخطاء في بروتوكول المؤشر.
+- FetchSizeTooBig: تم تجاوز الحد الذي يفرضه الخادم.
+- GasBudgetExceeded: تجاوز تنفيذ الاستعلام ميزانية الغاز/التجسيد.
+- InvalidSingularParameters: معلمات غير مدعومة للاستعلامات الفردية.
+- حد السعة: تم الوصول إلى سعة مخزن الاستعلام المباشر.
 
-Testing Tips
-- Prefer unit tests close to the origin of an error. For example, asset numeric spec mismatch can be generated in data‑model tests.
-- Integration tests should cover end‑to‑end mapping for representative cases (e.g., duplicate register, missing key on remove, transfer without ownership).
-- Keep assertions resilient by matching enum variants instead of message substrings.
+نصائح الاختبار
+- تفضيل اختبارات الوحدة القريبة من أصل الخطأ. على سبيل المثال، يمكن إنشاء عدم تطابق المواصفات الرقمية للأصول في اختبارات نماذج البيانات.
+- ينبغي أن تغطي اختبارات التكامل التعيين الشامل للحالات التمثيلية (على سبيل المثال، السجل المكرر، المفتاح المفقود عند الإزالة، النقل بدون ملكية).
+- حافظ على مرونة التأكيدات من خلال مطابقة متغيرات التعداد بدلاً من سلاسل الرسائل الفرعية.

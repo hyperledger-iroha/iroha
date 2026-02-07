@@ -7,71 +7,74 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c7ab0877a6f43402d6ec13a44c4a7c2b68e4a49e6103bb50d7469d9e71aaa953
 source_last_modified: "2025-12-29T18:16:35.984945+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# MOCHI Packaging Guide
+# МОЧИ упаковкалау ҡулланмаһы
 
-This guide explains how to build the MOCHI desktop supervisor bundle, inspect
-the generated artefacts, and tune the runtime overrides that ship with the
-bundle. It complements the quickstart by focusing on reproducible packaging
-and CI usage.
+Был ҡулланма аңлата, нисек төҙөү өсөн MOCHI өҫтәл етәксеһе өйөмө, тикшерергә .
+генерацияланған артефакттар, һәм көйләү йөрөү ваҡыты өҫтөнлөк итә, тип судно менән
+шәлкем. Ул тиҙ башлауҙы тулыландыра, ҡабатланған упаковкаға иғтибар йүнәлткән
+һәм CI ҡулланыу.
 
-## Prerequisites
+## Алдан шарттар
 
-- Rust toolchain (edition 2024 / Rust 1.82+) with workspace dependencies
-  already built.
-- `irohad`, `iroha_cli`, and `kagami` compiled for the desired target. The
-  bundler reuses binaries from `target/<profile>/`.
-- Sufficient disk space for the bundle output under `target/` or a custom
-  destination.
+- Руст инструменттар слесаһы (баҫма 2024 / 1.82+ рәт 1.82+) менән эш урыны бәйлелектәре
+  инде төҙөлгән.
+- `irohad`, `iroha_cli`, һәм `kagami` теләкле маҡсат өсөн төҙөлгән. 1990 й.
+  өйөмө `target/<profile>/`-тан бинарҙарҙы ҡабаттан ҡуллана.
+- `target/` йәки ҡулланыусылар өсөн етерлек диск урыны етерлек
+  тәғәйенләнгән урын.
 
-Build the dependencies once before running the bundler:
+Зависимыйҙы бер тапҡыр төҙөү алдынан бандлер:
 
 ```bash
 cargo build -p irohad -p iroha_cli -p iroha_kagami
 ```
 
-## Building the bundle
+## өйөмөн төҙөү
 
-Invoke the dedicated `xtask` command from the repository root:
+Репозиторий тамырынан махсус `xtask` командаһына мөрәжәғәт итегеҙ:
 
 ```bash
 cargo xtask mochi-bundle
 ```
 
-By default this produces a release bundle under `target/mochi-bundle/` with a
-filename derived from the host OS and architecture (for example,
-`mochi-macos-aarch64-release.tar.gz`). Use the following flags to customise
-the build:
+Был ғәҙәттәгесә етештерә етештереү өйөмө аҫтында `target/mochi-bundle/` менән
+хост ОС һәм архитектуранан алынған файл исеме (мәҫәлән,
+`mochi-macos-aarch64-release.tar.gz`). Түбәндәге флагтарҙы ҡулланып, үҙгәртеп ҡороу өсөн
+төҙөү:
 
-- `--profile <name>` – choose a Cargo profile (`release`, `debug`, or a
-  custom profile).
-- `--no-archive` – keep the expanded directory without creating a `.tar.gz`
-  archive (useful for local testing).
-- `--out <path>` – write bundles to a custom directory instead of
+- `--profile <name>` – йөк профилен һайлағыҙ (`release`, `debug`, йәки а
+  ҡулланыусылар профиле).
+- `--no-archive` – киңәйтелгән каталогты `.tar.gz` XIX 2012 йылғы .
+  архив (урындағы һынау өсөн файҙалы).
+- `--out <path>` – 2012 йылғы урынына ҡулланыусылар каталогына өйөмдәр яҙығыҙ.
   `target/mochi-bundle/`.
-- `--kagami <path>` – supply a prebuilt `kagami` executable to include in the
-  archive. When omitted, the bundler reuses (or builds) the binary from the
-  selected profile.
-- `--matrix <path>` – append bundle metadata to a JSON matrix file (created if
-  missing) so CI pipelines can record every host/profile artefact produced in a
-  run. Entries include the bundle directory, manifest path and SHA-256, optional
-  archive location, and the latest smoke-test result.
-- `--smoke` – execute the packaged `mochi --help` as a lightweight smoke gate
-  after bundling; failures surface missing dependencies before publishing an
-  artefact.
-- `--stage <path>` – copy the finished bundle (and archive when produced) into
-  a staging directory so multi-platform builds can deposit artefacts in one
-  location without extra scripting.
+- `--kagami <path>` – 2019 йылдың алдан төҙөлгәне менән тәьмин итеү.
+  архив. Ҡасан төшөрөп ҡалдырылған, өйөм ҡабаттан ҡулланыла (йәки төҙөй) бинарҙан .
+  һайланған профиль.
+- `--matrix <path>` – JSON матрицаһы файлына өйө
+  юҡ) шулай CI торбалар һәр хост/профиль артефактын яҙып ала, етештерелгән а
+  йүгерергә. Яҙмалар үҙ эсенә өйөм каталогы, манифест юл һәм SHA-256, теләк буйынса .
+  архив урыны, һәм һуңғы төтөн-һынау һөҙөмтәһе.
+- `--smoke` – еңел төтөн ҡапҡаһы булараҡ ҡапланған `mochi --help` башҡарылған
+  бәйләнгәндән һуң; уңышһыҙлыҡтар өҫтөнлөк юҡ, тип баҫтырып сығарыу алдынан a
+  артефакт.
+- `--stage <path>` – әҙер өйөмдө күсерергә (һәм архив етештергәндә)
+  стажировка каталогы шулай күп платформалы төҙөүҙәр артефакттарҙы беренә һала ала
+  өҫтәмә сценарийҙарһыҙ урынлашҡан.
 
-The command copies `mochi-ui-egui`, `kagami`, `LICENSE`, the sample
-configuration, and `mochi/BUNDLE_README.md` into the bundle. A deterministic
-`manifest.json` is generated alongside the binaries so CI jobs can track file
-hashes and sizes.
+Команда `mochi-ui-egui`, `kagami`, `LICENSE`, өлгө күсермәләрен күсерә.
+конфигурацияһы, һәм `mochi/BUNDLE_README.md` өйөмгә инә. Детерминистик
+`manifest.json` генерациялана бинар менән бер рәттән, шулай CI эш урындары файлды күҙәтә ала .
+хеш һәм ҙурлыҡтары.
 
-## Bundle layout and verification
+## Ҡалын макеты һәм раҫлау
 
-An expanded bundle follows the layout documented in `BUNDLE_README.md`:
+```bash
+cargo build -p irohad -p iroha_cli -p iroha_kagami
+```-ла документлаштырылған планировканан һуң киңәйтелгән өйөмө күҙәтелә:
 
 ```
 bin/mochi
@@ -82,56 +85,54 @@ manifest.json
 LICENSE
 ```
 
-The `manifest.json` file lists every artefact with its SHA-256 hash. Verify
-the bundle after copying it to another system:
+`manifest.json` файлы уның SHA-256 хеш менән һәр артефакт исемлеге. Тикшерергә
+икенсе системаға күсергәндән һуң өйөм:
 
 ```bash
 jq -r '.files[] | "\(.sha256)  \(.path)"' manifest.json | sha256sum --check
 ```
 
-CI pipelines can cache the expanded directory, sign the archive, or publish
-the manifest alongside release notes. The manifest includes the generator
-profile, target triple, and creation timestamp to aid provenance tracking.
+CI торбалары киңәйтелгән каталогты кэшлай ала, архивҡа ҡул ҡуйырға, йәки баҫтырып сығара ала
+манифест менән бер рәттән сығарыу тураһында иҫкәрмәләр. Манифестҡа генератор инә
+профиле, маҡсатлы өсләтә, һәм булдырыу ваҡыт тамға ярҙам итеү өсөн провенанс күҙәтеү.
 
-## Runtime overrides
+## Йүгереп йөрөү өҫтөнлөктәре
 
-MOCHI discovers helper binaries and runtime locations through CLI flags or
-environment variables:
+MOCHI ярҙамсы бинар һәм эшләү ваҡыты буйынса урындар аша CLI флагтары йәки .
+мөхит үҙгәртеүселәре:- `--data-root` / `MOCHI_DATA_ROOT` – тиҫтерҙәре өсөн ҡулланылған эш урынын өҫтөн ҡуя.
+  конфигурациялары, һаҡлау һәм журналдар.
+- `--profile` – топология пресеттары араһында алмаштырыу (`single-peer`,
+  `four-peer-bft` X).
+- `--torii-start`, `--p2p-start` – бүлгәндә ҡулланылған база порттарын үҙгәртергә
+  хеҙмәттәре.
+- `--irohad` / `MOCHI_IROHAD` – `irohad` бинарҙа аныҡ пункт.
+- `--kagami` / `MOCHI_KAGAMI` – `kagami` өйөмдөң өҫтөнән үтә.
+- `--iroha-cli` / `MOCHI_IROHA_CLI` – өҫтәмә CLI ярҙамсыһын өҫтөн ҡуя.
+- `--restart-mode <never|on-failure>` – автоматик рәүештә ҡабаттан башлау йәки көсләп өҙөлә.
+  экспоненциаль backoff сәйәсәте.
+- `--restart-max <attempts>` – перезапускное перезапускное 2012 йылда .
+  `on-failure` режимында эшләй.
+- `--restart-backoff-ms <millis>` – автоматик рәүештә ҡабаттан башлау өсөн базаның кире ҡасып йөрөүен ҡуйҙы.
+- `MOCHI_CONFIG` – `config/local.toml` юлы менән ҡулланыусыларҙы тәьмин итеү.
 
-- `--data-root` / `MOCHI_DATA_ROOT` – override the workspace used for peer
-  configs, storage, and logs.
-- `--profile` – switch between topology presets (`single-peer`,
-  `four-peer-bft`).
-- `--torii-start`, `--p2p-start` – change the base ports used when allocating
-  services.
-- `--irohad` / `MOCHI_IROHAD` – point at a specific `irohad` binary.
-- `--kagami` / `MOCHI_KAGAMI` – override the bundled `kagami`.
-- `--iroha-cli` / `MOCHI_IROHA_CLI` – override the optional CLI helper.
-- `--restart-mode <never|on-failure>` – disable automatic restarts or force the
-  exponential backoff policy.
-- `--restart-max <attempts>` – override the number of restart attempts when
-  running in `on-failure` mode.
-- `--restart-backoff-ms <millis>` – set the base backoff for automatic restarts.
-- `MOCHI_CONFIG` – provide a custom `config/local.toml` path.
+CLI ярҙам (`mochi --help`) тулы флаг исемлеген баҫтырып сығара. Тирә-яҡ мөхит өҫтөнлөк итә
+ғәмәлгә ашырыу өсөн старт һәм диалог менән берләштерергә мөмкин эсендә параметрҙары эсендә
+УИ.
 
-The CLI help (`mochi --help`) prints the full flag list. Environment overrides
-take effect on launch and can be combined with the Settings dialog inside the
-UI.
+## CI ҡулланыу кәңәштәре
 
-## CI usage hints
-
-- Run `cargo xtask mochi-bundle --no-archive` to generate a directory that can
-  be zipped with platform-specific tooling (ZIP for Windows, tarballs for
-  Unix).
-- Capture bundle metadata with `cargo xtask mochi-bundle --matrix dist/matrix.json`
-  so release jobs can publish a single JSON index listing every host/profile
-  artefact produced in the pipeline.
-- Use `cargo xtask mochi-bundle --stage /mnt/staging/mochi` (or similar) on each
-  build agent to upload the bundle and archive into a shared directory that the
-  publishing job can consume.
-- Publish both the archive and `manifest.json` so operators can verify bundle
-  integrity.
-- Store the generated directory as a build artefact to seed smoke tests that
-  exercise the supervisor with deterministically packaged binaries.
-- Record bundle hashes in release notes or in the `status.md` log for future
-  provenance checks.
+- Йүгерергә `cargo xtask mochi-bundle --no-archive` генерациялау өсөн каталог, тип ала
+  платформа-специфик инструменттар менән зипплы булырға (ЗИП өсөн Windows, татарбол өсөн
+  Юнсы).
+- `cargo xtask mochi-bundle --matrix dist/matrix.json` менән «Катаж» өйөм метамағлүмәттәре
+  шулай итеп, релиз эштәре бер JSON индексын баҫтырып сығара ала, һәр хост/профиль исемлегенә индерелгән
+  торбала етештерелгән артефакт.
+- `cargo xtask mochi-bundle --stage /mnt/staging/mochi` (йәки оҡшаш) ҡулланыу һәр береһе
+  төҙөү агент тейәп өйөм һәм архив дөйөм каталогҡа, тип,
+  нәшриәт эше ҡуллана ала.
+- Архивты ла, `manifest.json` нәшриәтен дә баҫтырығыҙ, шуға күрә операторҙар өйөмөн раҫлай ала
+  бөтөнлөк.
+- генерацияланған каталогты һаҡлау өсөн төҙөү артефакт орлоҡ төтөн һынауҙары, тип
+  етәксене детерминистик ҡапланған бинарҙар менән тормошҡа ашырыу.
+- Яҙмалар өйөм хештар йәки `status.md` XX журналында киләсәктә
+  провенанс тикшерергә.

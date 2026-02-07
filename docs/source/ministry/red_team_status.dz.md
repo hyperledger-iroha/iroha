@@ -9,36 +9,37 @@ source_last_modified: "2025-12-29T18:16:35.979926+00:00"
 translation_last_reviewed: 2026-02-07
 title: Ministry Red-Team Status (MINFO-9)
 summary: Snapshot of the chaos drill program covering upcoming runs, last completed scenario, and remediation items.
+translator: machine-google-reviewed
 ---
 
-# Ministry Red-Team Status
+# ལྷན་ཁག་དམར་པོའི་གནས་རིམ།
 
-This page complements the [Moderation Red-Team Plan](moderation_red_team_plan.md)
-by tracking the near-term drill calendar, evidence bundles, and remediation
-status. Update it after every run alongside the artefacts captured under
+ཤོག་ངོས་འདིའི་ [moderation_red_team_plan.md) [moderation_red_team_plan.md)
+ཉེ་འདབས་ཀྱི་སྦྱོང་བརྡར་ཟླ་ཐོ་དང་ སྒྲུབ་བྱེད་བསྡོམ་ དེ་ལས་ བཅོ་ཁ་ཚུ་ བརྟག་ཞིབ་འབད་ཐོག་ལས་ཨིན།
+གནས་ཚད། འོག་ལུ་བཀོད་ཡོད་པའི་ ཅ་རྙིང་ཚུ་དང་གཅིག་ཁར་ རྒྱུག་པའི་ཤུལ་ལས་ དུས་མཐུན་བཟོ་དགོ།
 `artifacts/ministry/red-team/<YYYY-MM>/<scenario>/`.
 
-## Upcoming Drills
+## འདོད་པ་ ཌིརིལ་།
 
-| Date (UTC) | Scenario | Owner(s) | Evidence Prep | Notes |
+| ཚེས་གྲངས་ (ཡུ་ཊི་སི) | པར་སྐྲུན། | ཇོ་བདག་(ཚུ་) | སྒྲུབ་བྱེད་ Prep | དྲན་ཐོ། |
 |------------|---------|----------|---------------|-------|
-| 2026-11-12 | **Operation Blindfold** — Taikai mixed-mode smuggling rehearsal with gateway downgrade attempts | Security Engineering (Miyu Sato), Ministry Ops (Liam O’Connor) | `scripts/ministry/scaffold_red_team_drill.py` bundle `docs/source/ministry/reports/red_team/2026-11-operation-blindfold.md` + staging directory `artifacts/ministry/red-team/2026-11/operation-blindfold/` | Exercises GAR/Taikai overlap plus DNS failover; requires denylist Merkle snapshot before start and `export_red_team_evidence.py` run after dashboards are captured. |
+| ༢༠༢༦-༡༡-༡༢ | **བཀོལ་སྤྱོད་ མིག་ཟུང་** — ཊའི་ཀཱའི་ སླ་བསྲེ་བའི་ཐབས་ལམ་ ནག་ཚོང་འཐབ་ཐངས་ འཛུལ་སྒོ་ མར་ཕབ་ཀྱི་ དཔའ་བཅམ་མི་ཚུ་ | བདེ་འཇགས་བཟོ་རིག་ (མི་ཡུ་སཊོ་) ལྷན་ཁག་ཨོཔ་ (ལི་ཡམ་ཨོ་ཀོ་ནར་) | `scripts/ministry/scaffold_red_team_drill.py` བཱན་ཌལ་ `docs/source/ministry/reports/red_team/2026-11-operation-blindfold.md` + གནས་རིམ་གྱི་སྣོད་ཐོ་ `artifacts/ministry/red-team/2026-11/operation-blindfold/` | ལུས་སྦྱོང་ GAR/Taikai གཅིག་སྒྲིལ་དང་ DNS འཐུས་ཤོར་; འགོ་མ་བཙུགས་པའི་ཧེ་མ་ Merkle shat དང་ dashboards ཚུ་ བཏོན་ཚར་བའི་ཤུལ་ལས་ `export_red_team_evidence.py` གཡོག་བཀོལ་དགོ། |
 
-## Last Drill Snapshot
+## མཇུག་གི་དྲིལ་པར་ལེན་པ།
 
-| Date (UTC) | Scenario | Evidence Bundle | Remediation & Follow-Ups |
+| ཚེས་གྲངས་ (ཡུ་ཊི་སི) | པར་སྐྲུན། | སྒྲུབ་བྱེད་ཀྱི་བང་རིམ་ | བཅོ་ཁ་དང་ རྗེས་འཇུག་-ཨཔ་ |
 |------------|---------|-----------------|--------------------------|
-| 2026-08-18 | **Operation SeaGlass** — Gateway smuggling, governance replay, and alert brownout rehearsal | `artifacts/ministry/red-team/2026-08/operation-seaglass/` (Grafana exports, Alertmanager logs, `seaglass_evidence_manifest.json`) | **Open:** replay seal automation (`MINFO-RT-17`, owner: Governance Ops, due 2026-09-05); pin dashboard freeze to SoraFS (`MINFO-RT-18`, Observability, due 2026-08-25). **Closed:** logbook template updated to carry Norito manifest hashes. |
+| ༢༠༢༦-༠༨-༡༨ | **བཀོལ་སྤྱོད་མཚོ་ཤེལ་*** — འཛུལ་སྒོ་ནག་ཚོང་དང་ གཞུང་སྐྱོང་བསྐྱར་རྩེད་ དེ་ལས་ ཉེན་བརྡའི་རྒྱ་སྨུག་བསྐྱར་སྦྱོང་། | `artifacts/ministry/red-team/2026-08/operation-seaglass/` (Grafana ཕྱིར་འདྲེན་, དྲན་སྐུལ་འཕྲུལ་ཆས་དྲན་ཐོ་ `seaglass_evidence_manifest.json`) | **Open:** replay seal འཕྲུལ་ཆས་ (`MINFO-RT-17`, ཇོ་བདག་: གཞུང་སྐྱོང་ Ops, tamp 2026-09-05); SoraFS (`MINFO-RT-18`, བལྟ་རྟོག་འབད་ཚུགསཔ་, གི་དོན་ལུ་ ༢༠༢༦-༠༨-༢༥) པིན། **ཁ་བསྡམས་ཡོདཔ་:** I1NT00000001X གསལ་སྟོན་གྱི་ཧ་ཤེ་ཚུ་འབག་ནིའི་དོན་ལུ་ དུས་མཐུན་བཟོ་ཡོད་པའི་ དྲན་ཐོ་བུག་ཊེམ་པེལེཊི། |
 
-## Tracking & Tooling
+## རྗེས་སོར་དང་ལག་ཆས།
 
-- Use `scripts/ministry/moderation_payload_tool.py` to package injectible
-  payloads and denylist patches per scenario.
-- Record dashboard/log captures via `scripts/ministry/export_red_team_evidence.py`
-  immediately after each drill so the evidence manifest contains signed hashes.
-- CI guard `ci/check_ministry_red_team.sh` enforces that committed drill reports
-  do not contain placeholder text and that referenced artefacts exist before
-  merging.
+- སྨན་ཁབ་བཙུགས་བཏུབ་པའི་ཐུམ་སྒྲིལ་འབད་ནི་ལུ་ `scripts/ministry/moderation_payload_tool.py` ལག་ལེན་འཐབ།
+  མཐོང་སྣང་རེ་ལུ་ papproods དང་ ཐོ་ཡིག་ཆ་མེད་གཏང་ནི།
+- ཌེཤ་བོརཌི་/དྲན་ཐོ་ཚུ་ `scripts/ministry/export_red_team_evidence.py` བརྒྱུད་དེ་ འཛིན་བཟུང་འབདཝ་ཨིན།
+  སྦྱོང་བརྡར་རེ་རེ་གི་ཤུལ་ལས་ དེ་འཕྲོ་ལས་ སྒྲུབ་བྱེད་མངོན་གསལ་ནང་ མཚན་རྟགས་བཀོད་ཡོད་པའི་ ཧ་ཤེ་ཚུ་ཡོདཔ་ཨིན།
+- CI ཉེན་རྟོག་པ་ `ci/check_ministry_red_team.sh` དམག་སྦྱོང་འབད་མི་ དམག་སྦྱོང་གི་སྙན་ཞུ་ཚུ་འབད་ཡོདཔ་ཨིན།
+  ས་གནས་འཛིན་མི་ཚིག་ཡིག་མེདཔ་ལས་ གཞི་བསྟུན་འབད་ཡོད་པའི་ཅ་རྙིང་ཚུ་ ཧེ་མ་ལས་ཡོདཔ་ཨིན།
+  མཉམ་བསྡོམས་འབད་དོ།
 
-See `status.md` (§ *Ministry red-team status*) for the live summary referenced
-in weekly coordination calls.
+ཐད་རི་བ་རི་ བཅུད་བསྡུས་གཞི་བསྟུན་འབད་ནིའི་དོན་ལུ་ `status.md` (§ *ལྷན་ཁག་དམརཔོ་སྡེ་ཚན་གནས་རིམ་*) བལྟ།
+in བདུན་ཕྲག་མཉམ་འབྲེལ་འབོད་བརྡ་ཚུ།

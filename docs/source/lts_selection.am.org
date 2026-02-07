@@ -11,188 +11,187 @@
 #+TITLE: On selecting versions as LTS candidates
 #+AUTHOR: Aleksandr Petrosyan
 #+DATE: 12-08-2023
-* About
+#+TRANSLATOR: machine-google-reviewed
 
-In the interest of preserving the engineering resources, it is in our
-interests to limit the scope of post-release support. If one has
-several versions of Iroha running in parallel, they might need to
-replicate the support work as many times as there are parallel
-versions.
+#+TITLE: On selecting versions as LTS candidates
+#+AUTHOR: Aleksandr Petrosyan
+#+DATE: 12-08-2023
+* ስለ
 
-Instead of attempting to support multiple versions badly, we try to
-cater to 80% of use cases with 20% of the effort and reach a
-compromise between supporting every released version equally and only
-supporting the latest stable version.
+የምህንድስና ሀብቶችን ለመጠበቅ ፍላጎት በእኛ ውስጥ ነው።
+የድህረ-መለቀቅ ድጋፍን ወሰን ለመገደብ ፍላጎቶች። አንዱ ካለው
+በርካታ የ Iroha ስሪቶች በትይዩ እየሰሩ ነው፣ ሊያስፈልጋቸው ይችላል።
+ትይዩ የሆኑትን ያህል የድጋፍ ስራውን ብዙ ጊዜ ይድገሙት
+ስሪቶች.
 
-Specifically, we support the latest =stable= release. Often this
-release is either not as well-tested, well-documented, or
-well-supported by the SDKs, in addition to often changing in terms of
-thus have a monthly release cadence and one release per year is chosen
-to be the target of long-term support and development.
+ብዙ ስሪቶችን በመጥፎ ለመደገፍ ከመሞከር ይልቅ፣ ለማድረግ እንሞክራለን።
+80% የአጠቃቀም ጉዳዮችን በ 20% ጥረቱን ማሟላት እና ሀ
+እያንዳንዱን የተለቀቀውን ስሪት በእኩል እና ብቻ በመደገፍ መካከል ስምምነት ማድረግ
+የቅርብ ጊዜውን የተረጋጋ ስሪት መደገፍ.
 
-* LTS selection criteria
+በተለይም የቅርብ ጊዜውን የ=stable= ልቀትን እንደግፋለን። ብዙውን ጊዜ ይህ
+መልቀቅ በደንብ ያልተሞከረ፣ በደንብ የተመዘገበ ወይም
+በኤስዲኬዎች በደንብ የተደገፈ፣ ከዚህ አንፃር ብዙ ጊዜ ከመቀየር በተጨማሪ
+ስለዚህ ወርሃዊ የመልቀቂያ ማስረጃ ይኑርዎት እና በዓመት አንድ ልቀት ይመረጣል
+የረጅም ጊዜ ድጋፍ እና ልማት ኢላማ መሆን.
 
-The following is a non-exhaustive list of recommended considerations
-for selecting a particular version as an LTS candidate
+* LTS ምርጫ መስፈርቶች
 
-1. The release should be /unlikely/ to contain major /known/ issues which
-   would preclude it from being useful.
+የሚከተለው ያልተሟጠጠ የሚመከሩ የውሳኔ ሃሳቦች ዝርዝር ነው።
+እንደ LTS እጩ አንድ የተወሰነ ስሪት ለመምረጥ
 
-   More specifically, the release should have a good coverage of a
-   basic use-case, for example, (Pre-)RC-6[fn:1] was the last release which
-   contained the old consensus engine. Given that the actor-based
-   consensus had a maximum stable throughput of 10 TPS, (Pre-)RC-6 was
-   not labelled as an LTS, despite being used as one.
+1. ልቀቱ ዋና ዋና / የሚታወቁ/ ጉዳዮችን ሊይዝ / የማይመስል / የማይመስል መሆን አለበት።
+   ጠቃሚ ከመሆን ይከለክላል.
 
-   RC-9 contained all the necessary features for running an Iroha node
-   on the new consensus, some changes to the structure of the
-   configuration and a few fixes to the =p2p= subsystem. It could have
-   filled all the possible niches of any projects based on Iroha, and
-   as such it was labelled as an LTS release despite being less-well
-   tested.
+   በተለይ መለቀቅ ጥሩ ሽፋን ሊኖረው ይገባል።
+   መሠረታዊ አጠቃቀም-ኬዝ፣ ለምሳሌ፣ (ቅድመ-) RC-6[fn:1] የመጨረሻው ልቀት ነበር።
+   የድሮውን የጋራ ስምምነት ሞተር ይዟል። በተዋናይ ላይ የተመሰረተ እንደሆነ ተሰጥቷል
+   መግባባት ከፍተኛው የተረጋጋ የ 10 TPS መጠን ነበረው፣ (ቅድመ-) RC-6 ነበር።
+   እንደ አንድ ጥቅም ላይ ቢውልም እንደ LTS አልተሰየመም።
 
-   Releases RC8, RC12, RC13 and RC17 were disqualified based on this
-   criterion.
+   RC-9 የ Iroha መስቀለኛ መንገድን ለማስኬድ ሁሉንም አስፈላጊ ባህሪያት ይዟል.
+   በአዲሱ መግባባት ላይ አንዳንድ ለውጦች በ
+   ውቅረት እና ጥቂት ጥገናዎች ለ =p2p= ንዑስ ስርዓት። ሊኖረው ይችላል።
+   በ Iroha ላይ በመመስረት የማንኛውም ፕሮጀክቶች ሊሆኑ የሚችሉ ቦታዎችን ሞልተዋል።
+   ስለዚህ ምንም እንኳን ደህና ባይሆንም እንደ LTS ልቀት ተሰይሟል
+   ተፈትኗል።
 
-2. If there is a large feature that entails an API breakage, the
-   release that has the most stable version of the "old way of doing
-   things" should be prioritised as an LTS candidate.
+   የተለቀቁት RC8፣ RC12፣ RC13 እና RC17 በዚህ መሰረት ውድቅ ሆነዋል።
+   መስፈርት.
 
-   For example, RC12 and RC13, were the last versions of Iroha that
-   still used a hard-coded permission validator. Them being labelled
-   as an LTS candidate was precluded by the major known issues,
-   particularly with stability, poor coverage, and because releasing
-   an LTS after RC9 would have split the development resources off
-   from fixing the issue of rigid un-modifiable permission validators.
+2. የኤፒአይ መሰባበርን የሚያካትት ትልቅ ባህሪ ካለ፣ የ
+   በጣም የተረጋጋው የ "አሮጌው የአሰራር ዘዴ" ስሪት ያለው መልቀቅ
+   ነገሮች" እንደ LTS እጩ ቅድሚያ ሊሰጠው ይገባል.
 
-   RC14 and RC15 on the other hand, were in the process of a slow
-   migration of features. As such, the latter versions would be
-   considered direct upgrades over the previous one, having more
-   optimisations and better feature coverage.
+   ለምሳሌ፣ RC12 እና RC13፣ የ Iroha የመጨረሻ ስሪቶች ነበሩ
+   አሁንም በጠንካራ ኮድ የተደረገ የፍቃድ ማረጋገጫ ተጠቅሟል። እየተሰየሙ ነው።
+   እንደ LTS እጩ በታወቁት ዋና ዋና ጉዳዮች ተከልክሏል ፣
+   በተለይም በተረጋጋ ሁኔታ, ደካማ ሽፋን እና በመልቀቅ ምክንያት
+   LTS ከ RC9 በኋላ የልማት ሀብቱን ይከፋፍል ነበር።
+   የማይሻሻሉ የፈቃድ አረጋጋጮችን ጉዳይ ከማስተካከል።
 
-3. The release must be feature complete for a use-case.
+   በሌላ በኩል RC14 እና RC15 በዝግታ ሂደት ላይ ነበሩ።
+   ባህሪያት ፍልሰት. እንደዚያው, የመጨረሻዎቹ ስሪቶች ይሆናሉ
+   ከቀዳሚው የበለጠ ቀጥተኛ ማሻሻያዎችን ግምት ውስጥ ያስገቡ ፣ የበለጠ
+   ማመቻቸት እና የተሻለ ባህሪ ሽፋን.
 
-   This is different to point 1, because while RC10 and RC13 were free
-   from major problems, they did not offer sufficiently full coverage
-   of the features required for the major project stakeholders.
+3. ልቀቱ ለአጠቃቀም ጉዳይ የተሟላ መሆን አለበት።ይህ ከነጥብ 1 የተለየ ነው፣ ምክንያቱም RC10 እና RC13 ነጻ ሲሆኑ
+   ከዋና ዋና ችግሮች በበቂ ሁኔታ ሙሉ ሽፋን አልሰጡም
+   ለዋና ዋና የፕሮጀክት ባለድርሻ አካላት ከሚያስፈልጉት ባህሪያት.
 
-4. The release must be supported by all SDKs.
+4. ልቀቱ በሁሉም ኤስዲኬዎች መደገፍ አለበት።
 
-   While the support in Iroha Python is largely confined to LTS
-   candidates, creating a catch 22 situation, it is an exception. The
-   two other major SDKs, namely Kotlin, and TypeScript must support
-   the LTS candidate. If the SDK cannot be made to support the
-   candidate, the candidate release is disqualified.
+   በ Iroha Python ውስጥ ያለው ድጋፍ በአብዛኛው በኤል.ቲ.ኤስ
+   እጩዎች, አንድ መያዝ 22 ሁኔታ መፍጠር, አንድ ለየት ያለ ነው. የ
+   ሌሎች ሁለት ዋና ኤስዲኬዎች ማለትም Kotlin እና TypeScript መደገፍ አለባቸው
+   የ LTS እጩ. ኤስዲኬውን እንዲደግፍ ማድረግ ካልተቻለ
+   እጩ፣ እጩው መልቀቅ ተቀባይነት የለውም።
 
-5. The release must be well-tested.
+5. መልቀቂያው በደንብ መሞከር አለበት.
 
-   This point supplements point 1, in that lack of known features
-   coupled with bad test coverage does not, in fact, mean freedom from
-   major problems.
+   ይህ ነጥብ ነጥብ 1ን ይጨምራል፣ በዚያ የታወቁ ባህሪያት እጥረት
+   ከመጥፎ የሙከራ ሽፋን ጋር ተዳምሮ, በእውነቱ, ከ ነፃነት ማለት አይደለም
+   ዋና ዋና ችግሮች.
 
-   This generally applies to all releases after RC6 and until RC17, as
-   the development team was told of a way of restructuring the
-   integration tests, but the process only ended with RC17 and the
-   introduction of the =pytest= framework.
+   ይህ በአጠቃላይ ከRC6 በኋላ እና እስከ RC17 ድረስ በሚለቀቁት ሁሉም ላይ ተፈጻሚ ይሆናል።
+   ለልማት ቡድኑ መልሶ የማዋቀር ዘዴ ተነገረው።
+   የውህደት ሙከራዎች፣ ግን ሂደቱ በ RC17 እና በ
+   የ =pytest= ማዕቀፍ መግቢያ.
 
-   While passing integration tests is necessary it is not sufficient,
-   the following minimal testing is required to qualify a release as
-   an LTS candidate
+   የውህደት ፈተናዎችን ማለፍ አስፈላጊ ሆኖ ሳለ በቂ አይደለም.
+   ለመልቀቅ ብቁ ለመሆን የሚከተለው አነስተኛ ሙከራ ያስፈልጋል
+   የ LTS እጩ
 
-   1. Unit and Integration testing. One must take care to run all
-      integration tests, including the long and flaky ones. If tests
-      are unusually flaky that is indicative of a problem, and the
-      release should be disqualified (see [[../../flakyness.org]]).
+   1. የዩኒት እና ውህደት ሙከራ. ሁሉንም ለመሮጥ አንድ ሰው ጥንቃቄ ማድረግ አለበት
+      የመዋሃድ ሙከራዎች, ረጅም እና የተበላሹትን ጨምሮ. ፈተናዎች ከሆነ
+      ችግርን የሚያመለክቱ ባልተለመደ ሁኔታ የተበላሹ ናቸው፣ እና የ
+      መልቀቅ ውድቅ መሆን አለበት ([[../../flakyness.org]] ይመልከቱ)።
 
-   2. =pytest= tests, which technically qualify as integration
-      tests.
+   2. =pytest= ሙከራዎች፣ በቴክኒክ እንደ ውህደት ብቁ
+      ፈተናዎች.
 
-   3. Longevity testing. The candidate must be tested for at least two
-      weeks to qualify. If the candidate is accepted as an LTS, the
-      longevity testing should be conducted for at least four weeks.
+   3. ረጅም ዕድሜን መሞከር. እጩው ቢያንስ ለሁለት መሞከር አለበት
+      ብቁ ለመሆን ሳምንታት. እጩው እንደ LTS ተቀባይነት ካገኘ፣ እ.ኤ.አ
+      የረዥም ጊዜ ምርመራ ቢያንስ ለአራት ሳምንታት መከናወን አለበት.
 
-   4. Load testing. The LTS candidate must satisfy all of the criteria
-      set out by the QA team as operational and developmental
-      requirements under load (also known as extra-functional, and
-      mistakenly as non-functional). Failure to produce blocks in a
-      timely fashion is an automatic disqualification. Other
-      disqualifying criteria are left up to the discretion of the QA
-      team.
+   4. የመጫን ሙከራ. የ LTS እጩ ሁሉንም መስፈርቶች ማሟላት አለበት
+      በ QA ቡድን እንደ ተግባራዊ እና ልማታዊነት የተቀመጠ
+      በጭነት ውስጥ ያሉ መስፈርቶች (ተጨማሪ-ተግባራዊ በመባልም ይታወቃሉ ፣ እና
+      በስህተት የማይሰራ)። ብሎኮችን ማምረት አለመቻል ሀ
+      ወቅታዊ ፋሽን አውቶማቲክ ብቃት ማጣት ነው. ሌላ
+      የብቃት መጓደል መመዘኛዎች በ QA ውሳኔ ላይ ይቀራሉ
+      ቡድን.
 
-   5. It must be deployed as a =development= container in at least one
-      project for at least two weeks, with no major problems. RC9 did
-      not pass this test and would have been disqualified with the
-      updated criteria listed in the present document.
+   5. ቢያንስ በአንድ እንደ =development= መያዣ መሰማራት አለበት
+      ምንም ትልቅ ችግር ሳይኖር ቢያንስ ለሁለት ሳምንታት ፕሮጀክት. RC9 አድርጓል
+      ይህን ፈተና አላለፉም እና ከ ጋር ውድቅ ይደረጉ ነበር
+      አሁን ባለው ሰነድ ውስጥ የተዘረዘሩትን የተሻሻሉ መስፈርቶች.
 
-6. The release must be well-documented.
+6. የሚለቀቀው በደንብ የተመዘገበ መሆን አለበት.
 
-   It should not contain multiple new features that lack
-   documentation. Any shortfall in terms of documentation coverage
-   must be fixable within the time-frame of at most the release window
-   for the candidate. Failure to do so is an automatic disqualification.
+   የጎደሉትን በርካታ አዳዲስ ባህሪያትን መያዝ የለበትም
+   ሰነዶች. ከሰነድ ሽፋን አንፃር ማንኛውም ጉድለት
+   ቢበዛ የሚለቀቅበት መስኮት ባለው የጊዜ ገደብ ውስጥ መጠገን አለበት።
+   ለእጩው. ይህን አለማድረግ አውቶማቲክ አለመብቃት ነው።
 
-In addition to the regular release procedure outlined in
-[[release_procedure.org]], the LTS must adhere to the following additional
-steps.
+ውስጥ ከተዘረዘረው መደበኛ የመልቀቂያ ሂደት በተጨማሪ
+[[release_procedure.org]]፣ LTS የሚከተሉትን ተጨማሪ ነገሮች ማክበር አለበት።
+እርምጃዎች.በ / በተጨማሪ / መደበኛ ልቀትን ለማከናወን ፣ የተለየ PR ከ
+ርዕስ =[release]: <semver> LTS= የት =<semver>= የትርጉም ነው
+ከልማት ቅርንጫፍ የሚገኘው የኮዱ ስሪት መፈጠር አለበት። የ
+መደበኛ የፍተሻ ዝርዝሩ መተው አለበት፣ እና በምትኩ የፑል ጥያቄው የግድ መሆን አለበት።
+ገምግመው ባፀደቁት ተመሳሳይ ሰዎች ይገመገማሉ
+=stable= መለቀቅ። ሁሉንም ለማረጋገጥ ቢበዛ ሁለት ግምገማዎች ያስፈልጋሉ።
+ለውጦቹ በትክክለኛው ቅደም ተከተል ይከናወናሉ እና አይደለም
+ሰነድ አልባ ጉዳዮች ተንሸራቱ።
 
-In /addition/ to performing a regular release, a separate PR with the
-title =[release]: <semver> LTS= where =<semver>= is the semantic
-version of the code from the development branch must be created. The
-regular checklist must be eschewed, and instead the Pull Request must
-be reviewed by the same personnel that reviewed and approved the
-=stable= release. At most two reviews are needed, to ensure that all
-the changes will take place in the correct order and that no
-undocumented issues slipped through.
+አንዴ LTS ከተለቀቀ በኋላ CI የዶከር ኮንቴይነር ይሠራል
+በአልፓይን ሊኑክስ መድረክ እና በኡቡንቱ ሊኑክስ ላይ ከ LTS መለቀቅ ጋር፣
+የ =glibc= የመድረክ-ቤተኛ ስሪት በመጠቀም። CI ደግሞ ማምረት አለበት
+ሁሉንም የሚደገፉት ጥቅሎች፣ እና በየራሳቸው ያትሙ
+ማከማቻዎች. ይህ ማለት ለምሳሌ የAUR ጥቅል ተዘምኗል ማለት ነው።
+የመጎተት ጥያቄው ከተዋሃደ እና ትክክለኛውን ጥቅል ካዘጋጀ በኋላ. የ
+GitHub የሚለቀቅበት ገጽ በተለየ ልቀት መሞላት አለበት።
+LTS እና ነጠላ-ፋይሉን =AppImage= የያዘ። እነዚህ ልቀቶች የግድ መሆን አለባቸው
+ከጎን ሊጫኑ እንደማይችሉ ምልክት የተደረገባቸው እንደ የተለየ ፓኬጆች ይመጣሉ
+የተረጋጋ ስሪት.
 
-Once the LTS release is made, the CI will produce a docker container
-with the LTS release on the Alpine Linux platform and on Ubuntu Linux,
-using the platform-native version of =glibc=. The CI must also produce
-all of the supported packages, and publish them to their respective
-repositories. This means, for example, that the AUR package is updated
-after the pull request is merged and produces the correct package. The
-GitHub release page must be populated with a separate release entitled
-LTS and containing the single-file =AppImage=. These releases must
-come as separate packages that are marked as not installable alongside the
-stable version.
+* ወደ ኋላ መላክ ፖሊሲ
 
-* Back-porting policy
+በአጠቃላይ፣ ወደ LTS ወደ ኋላ መላክ አይበረታታም። የሚከተለው
+ወደ ኋላ የሚመለሱ ምክንያቶች ተቀባይነት እንዳላቸው ይቆጠራሉ፡-
+1. ከ Iroha ኤፒአይ ጋር ያልተገናኘ መጨመር፣ ለምሳሌ፣ አጠቃላይ
+   አጋዥ መሣሪያ እና/ወይም ሰነድ።
+2. ዋና የደህንነት ተጋላጭነትን ማስተካከል.
+3. ዋና ስህተትን ማስተካከል.
+4. አጠቃቀሙን የሚከለክል ዋና የንድፍ ቁጥጥርን ማስተካከል፣ ይህም ከሆነ
+   የአሁኑ LTS ቁልፍ ባለድርሻ አካላት/ተጠቃሚዎች በቃላት አላቸው።
+   የኋላ ፖርት ተመራጭ መፍትሄ መሆኑን የተረጋገጠ።
 
-Generally, back-porting into the LTS is discouraged. The following
-back-porting reasons are considered acceptable:
-1. Addition that is not tied to the Iroha API, like e.g. a general
-   helper tool and/or documentation.
-2. Fixing a major security vulnerability.
-3. Fixing a major bug.
-4. Fixing a major design oversight that precludes usage, provided that
-   the key stakeholders/users of the current LTS have verbally
-   certified that a backport is a preferable solution.
+የኋላ ወደቦች እንደተለቀቀው በተመሳሳይ ቻናሎች መታወጅ አለባቸው
+ራሱ። የሚፈለጉ ለውጦች በሁለቱም ውስጥ ወደ ኋላ እንደተመዘገቡ መሰየም አለባቸው
+የተስተካከሉበት ወደላይ የሚለቀቅበት እና ወደ የትኛው ስሪት
+ወደ ኋላ ተመልሰዋል።
 
-Back-ports must be announced through the same channels, as the release
-itself. Required changes must be labelled as backported in both the
-upstream release in which they were fixed and the version into which
-they have been back-ported.
+ማስታወቂያው ማብራራት አለበት።
+1. የጀርባው ጀርባ ለምን እንደተመረጠ (ከላይ ያሉትን ምክንያቶች ይመልከቱ)
+2. የጀርባው ተፅእኖ ምን መሆን አለበት
+3. አሁን ያለው የተግባር, ውህደት እና ሁኔታ ምንድነው
+   ጭነት / ረጅም ዕድሜ መፈተሽ.
 
-The announcement must explain
-1. Why the backport was chosen (see above reasons)
-2. What the impact of the backport must be
-3. What is the current status of functional, integration and
-   load/longevity testing.
+* ተፈጻሚነት
 
-* Applicability
+የLTS/የተረጋጋ የመልቀቂያ ፖሊሲ ልክ እንደ መጀመሪያው መከለስ አለበት።
+ባህሪ-የተሟላ የIroha ስሪት ይፋ ሆነ (v2.0.0)። ተጨማሪ አልተሰጠም።
+ንቁ ልማት፣ ዋናው የልማት ቡድን መቻል (እና መቻል አለበት)
+በተለዋዋጭ ስሪቶች ድጋፍ ላይ የበለጠ ትኩረት ለማድረግ።
 
-The LTS/stable release policy should be revised as soon as the first
-feature-complete version of Iroha is announced (v2.0.0). Given no more
-active development, the core development team can (and should) be able
-to focus more on the support of the diverging versions.
-
-* Footnotes
-
-[fn:1] The naming convention was stabilised long before any plan to
-release a version of Iroha was made.  As such calling any version of
-Iroha a release candidate has some implications.  Calling them pre
-release candidates is a similar type of misnomer, but less egregious,
-because rather than a misapplication of an existing term, this is an
-invention of a term that /could/ have subtle differences from a
-release candidate.  In reality these should have been called
-*development snapshots*.  But in order not to break continuity too
-much with the existing SDKs a compromise was chosen.
+* የግርጌ ማስታወሻዎች[fn:1] የስም አውራጃው ከማንኛውም እቅድ በፊት ተረጋግቷል።
+የ Iroha ስሪት ይልቀቁ።  እንደ ማንኛውም ስሪት በመደወል
+Iroha የሚለቀቅ እጩ አንዳንድ እንድምታዎች አሉት።  ቀደም ብለው በመጥራት
+የመልቀቅ እጩዎች ተመሳሳይ የተሳሳተ ስም ነው ፣ ግን ብዙም የማይታይ ፣
+ምክንያቱም አሁን ያለውን ቃል አላግባብ ከመጠቀም ይልቅ ይህ ነው።
+ከ ሀ ስውር ልዩነቶች ሊኖሩት የሚችል ቃል መፈልሰፍ
+የመልቀቅ እጩ.  በእውነቱ እነዚህ መጠራት ነበረባቸው
+*የልማት ቅጽበታዊ እይታዎች*።  ግን ቀጣይነትንም ላለማቋረጥ
+ከነባሩ ኤስዲኬዎች ጋር ስምምነት ተመርጧል።

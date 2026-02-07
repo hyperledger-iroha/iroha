@@ -7,184 +7,176 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 3a0c22a213e04a6a8fef94ded6ec0017531737ffd4b9418ec94286bb6759ff8a
 source_last_modified: "2026-01-08T09:53:05.148398+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# FASTPQ Rollout Playbook (Stage 7-3)
+# FASTPQ Rollout Playbook (სტადია7-3)
 
-This playbook implements the Stage 7-3 roadmap requirement: every fleet upgrade
-that enables FASTPQ GPU execution must attach a reproducible benchmark manifest,
-paired Grafana evidence, and a documented rollback drill. It complements
-`docs/source/fastpq_plan.md` (targets/architecture) and
-`docs/source/fastpq_migration_guide.md` (node-level upgrade steps) by focusing
-on the operator-facing rollout checklist.
+ეს სახელმძღვანელო ახორციელებს Stage7-3 საგზაო რუკის მოთხოვნას: ფლოტის ყოველი განახლება
+რომელიც საშუალებას აძლევს FASTPQ GPU-ს შესრულებას, უნდა დაურთოს რეპროდუცირებადი საორიენტაციო მანიფესტი,
+დაწყვილებული Grafana მტკიცებულება და დოკუმენტირებული უკან დაბრუნება. ის ავსებს
+`docs/source/fastpq_plan.md` (მიზნები/არქიტექტურა) და
+`docs/source/fastpq_migration_guide.md` (კვანძის დონის განახლების ნაბიჯები) ფოკუსირებით
+ოპერატორის წინაშე განლაგების საკონტროლო სიაში.
 
-## Scope & Roles
+## სფერო და როლები
 
-- **Release Engineering / SRE:** own benchmark captures, manifest signing, and
-  dashboard exports prior to rollout approval.
-- **Ops Guild:** runs staged rollouts, records rollback rehearsals, and stores
-  the artefact bundle under `artifacts/fastpq_rollouts/<timestamp>/`.
-- **Governance / Compliance:** verifies that evidence accompanies every change
-  request before the FASTPQ default is toggled for a fleet.
+- ** გამოშვების ინჟინერია / SRE: ** საკუთარი საორიენტაციო აღბეჭდვა, მანიფესტის ხელმოწერა და
+  დაფის ექსპორტი გაშვების დამტკიცებამდე.
+- **Ops Guild:** აწარმოებს დადგმულ გამოშვებებს, ჩაწერს რეპეტიციებს და ინახავს
+  არტეფაქტის ნაკრები `artifacts/fastpq_rollouts/<timestamp>/`-ის ქვეშ.
+- **მმართველობა / შესაბამისობა: ** ამოწმებს, რომ მტკიცებულებები თან ახლავს ყველა ცვლილებას
+  მოთხოვნა FASTPQ ნაგულისხმევი ფლოტისთვის გადართულია.
 
-## Evidence Bundle Requirements
+## მტკიცებულებათა ნაკრების მოთხოვნები
 
-Every rollout submission must contain the following artefacts. Attach all files
-to the release/upgrade ticket and keep the bundle in
-`artifacts/fastpq_rollouts/<YYYYMMDD>/<fleet>/<lane>/`.
-
-| Artefact | Purpose | How to produce |
+ყოველი წარდგენის წარდგენა უნდა შეიცავდეს შემდეგ არტეფაქტებს. მიამაგრეთ ყველა ფაილი
+გამოშვების/განახლების ბილეთამდე და შეინახეთ პაკეტი
+`artifacts/fastpq_rollouts/<YYYYMMDD>/<fleet>/<lane>/`.| არტეფაქტი | დანიშნულება | როგორ ვაწარმოოთ |
 |----------|---------|----------------|
-| `fastpq_bench_manifest.json` | Proves that the canonical 20 000-row workload stays under the `<1 s` LDE ceiling and records hashes for every wrapped benchmark.| Capture Metal/CUDA runs, wrap them, then run:<br>`cargo xtask fastpq-bench-manifest \`<br>`  --bench metal=artifacts/fastpq_benchmarks/<metal>.json \`<br>`  --bench cuda=artifacts/fastpq_benchmarks/<cuda>.json \`<br>`  --matrix artifacts/fastpq_benchmarks/matrix/matrix_manifest.json \`<br>`  --signing-key secrets/fastpq_bench.ed25519 \`<br>`  --out artifacts/fastpq_rollouts/<stamp>/fastpq_bench_manifest.json` |
-| Wrapped benchmarks (`fastpq_metal_bench_*.json`, `fastpq_cuda_bench_*.json`) | Capture host metadata, row-usage evidence, zero-fill hotspots, Poseidon microbench summaries, and kernel statistics used by dashboards/alerts.| Run `fastpq_metal_bench` / `fastpq_cuda_bench`, then wrap the raw JSON:<br>`python3 scripts/fastpq/wrap_benchmark.py --require-lde-mean-ms 950 --require-poseidon-mean-ms 1000 \`<br>`  --row-usage artifacts/fastpq_benchmarks/fastpq_row_usage_2025-05-12.json \`<br>`  --poseidon-metrics artifacts/fastpq_rollouts/<stamp>/<fleet>/<lane>/metrics_poseidon.prom \`<br>`  fastpq_metal_bench.json artifacts/fastpq_benchmarks/<metal>.json --sign-output`<br>Repeat for CUDA captures (point `--row-usage` and `--poseidon-metrics` at the relevant witness/scrape files). The helper embeds the filtered `fastpq_poseidon_pipeline_total`/`fastpq_execution_mode_total` samples so WP2-E.6 evidence is identical across Metal and CUDA. Use `scripts/fastpq/export_poseidon_microbench.py --bundle <bundle>` when you need a standalone Poseidon microbench summary (wrapped or raw inputs supported). |
-|  |  | **Stage7 label requirement:** `wrap_benchmark.py` now fails unless the resulting `metadata.labels` section contains both `device_class` and `gpu_kind`. When automatic detection cannot infer them (for example, when wrapping on a detached CI node), pass explicit overrides such as `--label device_class=xeon-rtx-sm80 --label gpu_kind=discrete`. |
-|  |  | **Acceleration telemetry:** the wrapper also captures `cargo xtask acceleration-state --format json` by default, writing `<bundle>.accel.json` and `<bundle>.accel.prom` next to the wrapped benchmark (override with `--accel-*` flags or `--skip-acceleration-state`). The capture matrix uses these files to build `acceleration_matrix.{json,md}` for fleet dashboards. |
-| Grafana export | Proves adoption telemetry and alert annotations for the rollout window.| Export the `fastpq-acceleration` dashboard:<br>`curl -s -H "Authorization: Bearer $GRAFANA_TOKEN" \`<br>`  "$GRAFANA_URL/api/dashboards/uid/fastpq-acceleration" \`<br>`  | jq '.dashboard' \`<br>`  > artifacts/fastpq_rollouts/<stamp>/grafana_fastpq_acceleration.json`<br>Annotate the board with rollout start/stop times before exporting. The release pipeline can do this automatically via `scripts/run_release_pipeline.py --export-fastpq-grafana --grafana-url <URL>` (token supplied via `GRAFANA_TOKEN`). |
-| Alert snapshot | Captures the alert rules that guarded the rollout.| Copy `dashboards/alerts/fastpq_acceleration_rules.yml` (and the `tests/` fixture) into the bundle so reviewers can re-run `promtool test rules …`. |
-| Rollback drill log | Demonstrates that operators rehearsed the forced CPU fallback and telemetry acknowledgements.| Use the procedure in [Rollback Drills](#rollback-drills) and store console logs (`rollback_drill.log`) plus the resulting Prometheus scrape (`metrics_rollback.prom`). |
-| `row_usage/fastpq_row_usage_<date>.json` | Records the ExecWitness FASTPQ row allocation that TF-5 tracks in CI and dashboards.| Download a fresh witness from Torii, decode it via `iroha_cli audit witness --decode exec.witness` (optionally add `--fastpq-parameter fastpq-lane-balanced` to assert the expected parameter set; FASTPQ batches emit by default), and copy the `row_usage` JSON into `artifacts/fastpq_rollouts/<stamp>/<fleet>/<lane>/row_usage/`. Keep filenames timestamped so reviewers can correlate them with the rollout ticket, and run `python3 scripts/fastpq/validate_row_usage_snapshot.py row_usage/*.json` (or `make check-fastpq-rollout`) so the Stage 7-3 gate verifies that every batch advertises the selector counts and `transfer_ratio = transfer_rows / total_rows` invariant before attaching the evidence. |
+| `fastpq_bench_manifest.json` | ადასტურებს, რომ კანონიკური 20000 მწკრივი დატვირთვა რჩება `<1 s` LDE ჭერის ქვეშ და აღრიცხავს ჰეშებს ყველა შეფუთული საორიენტაციო ნიშნისთვის.| გადაიღეთ Metal/CUDA გაშვებები, შეფუთეთ ისინი, შემდეგ გაუშვით:`cargo xtask fastpq-bench-manifest \``  --bench metal=artifacts/fastpq_benchmarks/<metal>.json \``  --bench cuda=artifacts/fastpq_benchmarks/<cuda>.json \``  --matrix artifacts/fastpq_benchmarks/matrix/matrix_manifest.json \`Prometheus
+| შეფუთული ბენჩმარკები (`fastpq_metal_bench_*.json`, `fastpq_cuda_bench_*.json`) | აღბეჭდეთ ჰოსტის მეტამონაცემები, მწკრივის გამოყენების მტკიცებულება, ნულოვანი შევსების ცხელი წერტილები, Poseidon microbench შეჯამებები და ბირთვის სტატისტიკა, რომელიც გამოიყენება საინფორმაციო დაფებით/გაფრთხილებებით.| გაუშვით `fastpq_metal_bench` / `fastpq_cuda_bench`, შემდეგ შეფუთეთ დაუმუშავებელი JSON:`python3 scripts/fastpq/wrap_benchmark.py --require-lde-mean-ms 950 --require-poseidon-mean-ms 1000 \``  --row-usage artifacts/fastpq_benchmarks/fastpq_row_usage_2025-05-12.json \``  --poseidon-metrics artifacts/fastpq_rollouts/<stamp>/<fleet>/<lane>/metrics_poseidon.prom \`I100Re4000-ისთვის (წერტილი `--row-usage` და `--poseidon-metrics` შესაბამის მოწმეზე/შეასწორეთ ფაილები). დამხმარე ათავსებს გაფილტრულ `fastpq_poseidon_pipeline_total`/`fastpq_execution_mode_total` ნიმუშებს, ასე რომ WP2-E.6 მტკიცებულება იდენტურია Metal-სა და CUDA-ში. გამოიყენეთ `scripts/fastpq/export_poseidon_microbench.py --bundle <bundle>`, როდესაც გჭირდებათ Poseidon-ის მიკროსკოპის დამოუკიდებელი რეზიუმე (შეფუთული ან ნედლი შეყვანის მხარდაჭერა). |
+|  |  | **Stage7 ეტიკეტის მოთხოვნა:** `wrap_benchmark.py` ახლა ვერ ხერხდება, თუ შედეგად `metadata.labels` სექცია შეიცავს `device_class` და `gpu_kind`. როდესაც ავტომატური ამოცნობა მათ ვერ გამოიტანს (მაგალითად, მოწყვეტილ CI კვანძზე შეფუთვისას), გაიარეთ აშკარა უგულებელყოფა, როგორიცაა `--label device_class=xeon-rtx-sm80 --label gpu_kind=discrete`. |
+|  |  | **აჩქარების ტელემეტრია:** შეფუთვა ასევე იჭერს `cargo xtask acceleration-state --format json` ნაგულისხმევად, წერს `<bundle>.accel.json` და `<bundle>.accel.prom` შეფუთული საორიენტაციო ნიშნის გვერდით (გადალახავს `--accel-*` დროშებით `--accel-*`500X ან I01). გადაღების მატრიცა იყენებს ამ ფაილებს ფლოტის დაფებისთვის `acceleration_matrix.{json,md}`-ის შესაქმნელად. |
+| Grafana ექსპორტი | ადასტურებს მიღების ტელემეტრიას და გაფრთხილების ანოტაციებს გაშვების ფანჯრისთვის.| ექსპორტი `fastpq-acceleration` საინფორმაციო დაფა:`curl -s -H "Authorization: Bearer $GRAFANA_TOKEN" \``  "$GRAFANA_URL/api/dashboards/uid/fastpq-acceleration" \``  | jq '.dashboard' \``  > artifacts/fastpq_rollouts/<stamp>/grafana_fastpq_acceleration.json`გაანაწილეთ დაფა ექსპორტის დაწყებამდე/ზედა ჯერ. გამოშვების მილსადენს შეუძლია ამის გაკეთება ავტომატურად `scripts/run_release_pipeline.py --export-fastpq-grafana --grafana-url <URL>`-ის მეშვეობით (ჟეტონი მოწოდებულია `GRAFANA_TOKEN`-ის მეშვეობით). |
+| Alert Snapshot | იჭერს გაფრთხილების წესებს, რომლებიც იცავდნენ გაშვებას.| დააკოპირეთ `dashboards/alerts/fastpq_acceleration_rules.yml` (და `tests/` მოწყობილობა) პაკეტში, რათა მიმომხილველებმა შეძლონ ხელახლა გაშვება `promtool test rules …`. |
+| გადაბრუნების საბურღი ჟურნალი | ადასტურებს, რომ ოპერატორებმა გაიმეორეს CPU-ის იძულებითი გამობრუნების და ტელემეტრიის აღიარება.| გამოიყენეთ პროცედურა [Rollback Drills]-ში (#rollback-drills) და შეინახეთ კონსოლის ჟურნალები (`rollback_drill.log`) პლუს მიღებული Prometheus ნაკაწრი (`metrics_rollback.prom`). || `row_usage/fastpq_row_usage_<date>.json` | ჩაწერს ExecWitness FASTPQ მწკრივის განაწილებას, რომელსაც TF-5 აკონტროლებს CI-ში და დაფებში.| ჩამოტვირთეთ ახალი მოწმობა Torii-დან, გაშიფრეთ იგი `iroha_cli audit witness --decode exec.witness`-ის საშუალებით (სურვილისამებრ დაამატეთ `--fastpq-parameter fastpq-lane-balanced` მოსალოდნელი პარამეტრის ნაკრების დასამტკიცებლად; FASTPQ სერიები ასხივებენ ნაგულისხმევად) და დააკოპირეთ Prometheus-ში. შეინახეთ ფაილების სახელები დროის შტამპით, რათა მიმომხილველებმა შეძლონ მათი კორელაცია გაშვების ბილეთთან და გაუშვან `python3 scripts/fastpq/validate_row_usage_snapshot.py row_usage/*.json` (ან `make check-fastpq-rollout`), რათა Stage7-3 კარი ამოწმებდეს, რომ ყოველი პარტია აქვეყნებს რეკლამას სელექტორის რაოდენობას და `transfer_ratio = transfer_rows / total_rows`-ს მიმაგრებამდე. |
 
-> **Tip:** `artifacts/fastpq_rollouts/README.md` documents the preferred naming
-> scheme (`<stamp>/<fleet>/<lane>`) and the required evidence files. The
-> `<stamp>` folder must encode `YYYYMMDDThhmmZ` so artefacts stay sortable
-> without consulting tickets.
+> **მინიშნება:** `artifacts/fastpq_rollouts/README.md` აფიქსირებს სასურველ დასახელებას
+> სქემა (`<stamp>/<fleet>/<lane>`) და საჭირო მტკიცებულებათა ფაილები. The
+> `<stamp>` საქაღალდეში უნდა იყოს კოდირებული `YYYYMMDDThhmmZ`, რათა არტეფაქტები დარჩეს დასალაგებლად
+> ბილეთების კონსულტაციის გარეშე.
 
-## Evidence Generation Checklist
-
-1. **Capture GPU benchmarks.**
-   - Run the canonical workload (20 000 logical rows, 32 768 padded rows) via
+## მტკიცებულებების გენერირების საკონტროლო სია1. **გადაიღეთ GPU საორიენტაციო ნიშნები.**
+   - გაუშვით კანონიკური დატვირთვა (20000 ლოგიკური მწკრივი, 32768 შეფუთული მწკრივი) მეშვეობით
      `cargo run -p fastpq_prover --bin fastpq_metal_bench -- --rows 20000 --pretty`.
-   - Wrap the result with `scripts/fastpq/wrap_benchmark.py` using `--row-usage <decoded witness>` so the bundle carries the gadget evidence alongside the GPU telemetry. Pass `--require-lde-mean-ms 950 --require-poseidon-mean-ms 1000 --sign-output` so the wrapper fails fast if either accelerator exceeds the target or if the Poseidon queue/profile telemetry is missing, and to generate the detached signature.
-   - Repeat on the CUDA host so the manifest contains both GPU families.
-   - Do **not** strip the `benchmarks.metal_dispatch_queue` or
-     `benchmarks.zero_fill_hotspots` blocks from the wrapped JSON. The CI gate
-     (`ci/check_fastpq_rollout.sh`) now reads those fields and fails when queue
-     headroom drops below one slot or when any LDE hotspot reports `mean_ms >
-     0.40 ms`, enforcing the Stage 7 telemetry guard automatically.
-2. **Generate the manifest.** Use `cargo xtask fastpq-bench-manifest …` as
-   shown in the table. Store `fastpq_bench_manifest.json` in the rollout bundle.
-3. **Export Grafana.**
-   - Annotate the `FASTPQ Acceleration Overview` board with the rollout window,
-     linking to the relevant Grafana panel IDs.
-   - Export the dashboard JSON via the Grafana API (command above) and include
-     the `annotations` section so reviewers can match adoption curves to the
-     staged rollout.
-4. **Snapshot alerts.** Copy the exact alert rules (`dashboards/alerts/…`) used
-   by the rollout into the bundle. If Prometheus rules were overridden, include
-   the override diff.
-5. **Prometheus/OTEL scrape.** Capture `fastpq_execution_mode_total{device_class="<matrix>"}` from each
-   host (before and after the stage) plus the OTEL counter
-   `fastpq.execution_mode_resolutions_total` and the paired
-   `telemetry::fastpq.execution_mode` log entries. These artefacts prove that
-   GPU adoption is stable and that forced CPU fallbacks still emit telemetry.
-6. **Archive row-usage telemetry.** After decoding the ExecWitness run for the
-   rollout, drop the resulting JSON under `row_usage/` in the bundle. The CI
-   helper (`ci/check_fastpq_row_usage.sh`) compares these snapshots against the
-   canonical baselines, and `ci/check_fastpq_rollout.sh` now requires every
-   bundle to ship at least one `row_usage` file to keep TF-5 evidence attached
-   to the release ticket.
+   - შეფუთეთ შედეგი `scripts/fastpq/wrap_benchmark.py`-ით `--row-usage <decoded witness>`-ით, რათა პაკეტმა გადაიტანოს გაჯეტის მტკიცებულება GPU ტელემეტრიასთან ერთად. გაიარეთ `--require-lde-mean-ms 950 --require-poseidon-mean-ms 1000 --sign-output` ისე, რომ შეფუთვა სწრაფად ჩავარდეს, თუ რომელიმე ამაჩქარებელი აჭარბებს მიზანს, ან თუ პოსეიდონის რიგის/პროფილის ტელემეტრია აკლია, და მოაწყვეთ ხელმოწერის გენერირება.
+   - გაიმეორეთ CUDA ჰოსტზე, რათა მანიფესტი შეიცავდეს ორივე GPU ოჯახს.
+   - ** არ მოაშოროთ `benchmarks.metal_dispatch_queue` ან
+     `benchmarks.zero_fill_hotspots` ბლოკავს შეფუთული JSON-დან. CI კარიბჭე
+     (`ci/check_fastpq_rollout.sh`) ახლა კითხულობს ამ ველებს და ვერ დგას რიგში
+     headroom ეცემა ერთ სლოტზე ქვემოთ ან როდესაც რომელიმე LDE Hotspot იტყობინება `mean_ms >
+     0.40ms`, ავტომატურად ახორციელებს Stage7 ტელემეტრიის დაცვას.
+2. ** შექმენით manifest.** გამოიყენეთ `cargo xtask fastpq-bench-manifest …` როგორც
+   ნაჩვენებია ცხრილში. შეინახეთ `fastpq_bench_manifest.json` გამოშვების პაკეტში.
+3. **ექსპორტი Grafana.**
+   - შეიტანეთ ანოტირება `FASTPQ Acceleration Overview` დაფაზე გასაშლელი ფანჯრით,
+     დაკავშირება შესაბამის Grafana პანელის ID-ებთან.
+   - JSON დაფის ექსპორტი Grafana API-ით (ზემოთ ბრძანება) და ჩართეთ
+     `annotations` განყოფილება, რათა მიმომხილველებმა შეძლონ შვილად აყვანის მრუდების შედარება
+     ეტაპობრივი გაშვება.
+4. **Snapshot-ის გაფრთხილებები.** დააკოპირეთ ზუსტი გაფრთხილების წესები (`dashboards/alerts/…`) გამოყენებული
+   პაკეტში გადატანის გზით. თუ Prometheus წესები გაუქმდა, ჩართეთ
+   გადაფარვის განსხვავება.
+5. **Prometheus/OTEL scrape.** აღბეჭდეთ `fastpq_execution_mode_total{device_class="<matrix>"}` თითოეულიდან
+   მასპინძელი (სცენის წინ და შემდეგ) პლუს OTEL-ის დახლი
+   `fastpq.execution_mode_resolutions_total` და დაწყვილებული
+   `telemetry::fastpq.execution_mode` ჟურნალის ჩანაწერები. ეს არტეფაქტები ამას ადასტურებს
+   GPU-ს მიღება სტაბილურია და CPU იძულებითი ჩანაცვლება კვლავ ასხივებს ტელემეტრიას.
+6. **დაარქივეთ მწკრივის გამოყენების ტელემეტრია.** ExecWitness-ის გაშიფვრის შემდეგ გაუშვით
+   გამოაქვეყნეთ, ჩამოაგდეთ მიღებული JSON `row_usage/` ქვეშ პაკეტში. CI
+   დამხმარე (`ci/check_fastpq_row_usage.sh`) ადარებს ამ კადრებს
+   კანონიკური საბაზისო ხაზები და `ci/check_fastpq_rollout.sh` ახლა მოითხოვს ყველა
+   შეფუთეთ მინიმუმ ერთი `row_usage` ფაილის გასაგზავნად TF-5 მტკიცებულების მიმაგრების მიზნით
+   გათავისუფლების ბილეთამდე.
 
-## Staged Rollout Flow
+## ეტაპობრივი გაშვების ნაკადი
 
-Use three deterministic phases for every fleet. Advance only after the exit
-criteria in each phase are satisfied and documented in the evidence bundle.
+გამოიყენეთ სამი დეტერმინისტული ფაზა თითოეული ფლოტისთვის. წინსვლა მხოლოდ გასვლის შემდეგ
+კრიტერიუმები თითოეულ ფაზაში დაკმაყოფილებულია და დოკუმენტირებულია მტკიცებულებათა პაკეტში.| ფაზა | ფარგლები | გასვლის კრიტერიუმები | დანართები |
+|-------|-------|--------------|-------------|
+| პილოტი (P1) | 1 საკონტროლო სიბრტყე + 1 მონაცემთა სიბრტყის კვანძი თითო რეგიონში | `fastpq_execution_mode_total{device_class="<matrix>", backend="metal"}` ≥90% 48 სთ-ისთვის, ნულოვანი Alertmanager ინციდენტები და უკან დაბრუნებული სავარჯიშო. | შეფუთვა ორივე ჰოსტიდან (მჯდარი JSON-ები, Grafana ექსპორტი საპილოტე ანოტაციით, დაბრუნების ჟურნალები). |
+| Ramp (P2) | ≥50% ვალიდატორები პლუს მინიმუმ ერთი საარქივო ხაზი თითო კლასტერზე | GPU-ს შესრულება გაგრძელდა 5 დღის განმავლობაში, არაუმეტეს 1 დაქვეითების მწვერვალი > 10 წთ. | განახლებულია Grafana ექსპორტი, რომელიც გვიჩვენებს რამპის ანოტაციას, Prometheus სკრეპის განსხვავებებს, Alertmanager ეკრანის ანაბეჭდს/ ჟურნალს. |
+| ნაგულისხმევი (P3) | დარჩენილი კვანძები; FASTPQ მონიშნულია ნაგულისხმევად `iroha_config` | ხელმოწერილი სკამზე მანიფესტი + Grafana ექსპორტი, რომელიც მიუთითებს მიღების საბოლოო მრუდზე, და დოკუმენტირებული საბურღი, რომელიც აჩვენებს კონფიგურაციის გადართვას. | საბოლოო მანიფესტი, Grafana JSON, დაბრუნების ჟურნალი, ბილეთის მითითება კონფიგურაციის ცვლილების მიმოხილვაზე. |
 
-| Phase | Scope | Exit Criteria | Attachments |
-|-------|-------|---------------|-------------|
-| Pilot (P1) | 1 control-plane + 1 data-plane node per region | `fastpq_execution_mode_total{device_class="<matrix>", backend="metal"}` ≥90% for 48 h, zero Alertmanager incidents, and a passing rollback drill. | Bundle from both hosts (bench JSONs, Grafana export with pilot annotation, rollback logs). |
-| Ramp (P2) | ≥50% of validators plus at least one archival lane per cluster | GPU execution sustained for 5 days, no more than 1 downgrade spike >10 min, and Prometheus counters prove fallbacks alert within 60 s. | Updated Grafana export showing the ramp annotation, Prometheus scrape diffs, Alertmanager screenshot/log. |
-| Default (P3) | Remaining nodes; FASTPQ marked default in `iroha_config` | Signed bench manifest + Grafana export referencing the final adoption curve, and documented rollback drill demonstrating the config toggle. | Final manifest, Grafana JSON, rollback log, ticket reference to config change review. |
+დაარეგისტრირეთ თითოეული სარეკლამო ნაბიჯი ბილეთში და პირდაპირ დაუკავშირდით მას
+`grafana_fastpq_acceleration.json` ანოტაციები, რათა რეცენზენტებმა შეძლონ მათი კორელაცია
+ვადები მტკიცებულებებით.
 
-Document each promotion step in the rollout ticket and link directly to the
-`grafana_fastpq_acceleration.json` annotations so reviewers can correlate the
-timeline with the evidence.
+## დაბრუნების სავარჯიშოები
 
-## Rollback Drills
+გაშვების ყოველი ეტაპი უნდა მოიცავდეს დაბრუნების რეპეტიციას:
 
-Every rollout stage must include a rollback rehearsal:
-
-1. Pick one node per cluster and record the current metrics:
+1. აირჩიეთ ერთი კვანძი თითო კლასტერზე და ჩაწერეთ მიმდინარე მეტრიკა:
    ```bash
    curl -s http://<host>:8180/metrics | rg 'fastpq_execution_mode_total{device_class'
    ```
-2. Force CPU mode for 10 minutes using either the config knob
-   (`zk.fastpq.execution_mode = "cpu"`) or the environment override:
+2. აიძულეთ CPU რეჟიმი 10 წუთის განმავლობაში კონფიგურაციის ღილაკის გამოყენებით
+   (`zk.fastpq.execution_mode = "cpu"`) ან გარემოს უგულებელყოფა:
    ```bash
    FASTPQ_GPU=cpu irohad --config <path> --genesis-manifest-json <path>
    ```
-3. Confirm the downgrade log
-   (`telemetry::fastpq.execution_mode resolved="cpu" requested="gpu"`) and scrape
-   the Prometheus endpoint again to show the counter increments.
-4. Restore GPU mode, verify that `telemetry::fastpq.execution_mode` now reports
-   `resolved="metal"` (or `resolved="cuda"/"opencl"` for non-Metal lanes),
-   confirm the Prometheus scrape contains both the CPU and GPU samples in
-   `fastpq_execution_mode_total{backend=…}`, and log the elapsed time to
-   detection/cleanup.
-5. Store shell transcripts, metrics, and operator acknowledgements as
-   `rollback_drill.log` and `metrics_rollback.prom` in the rollout bundle. These
-   files must illustrate the full downgrade + restore cycle because
-   `ci/check_fastpq_rollout.sh` now fails whenever the log lacks the GPU
-   recovery line or the metrics snapshot omits either the CPU or GPU counters.
+3. დაადასტურეთ შემცირების ჟურნალი
+   (`telemetry::fastpq.execution_mode resolved="cpu" requested="gpu"`) და გახეხეთ
+   ისევ Prometheus საბოლოო წერტილი მრიცხველის ნამატების საჩვენებლად.
+4. აღადგინეთ GPU რეჟიმი, დაადასტურეთ, რომ `telemetry::fastpq.execution_mode` ახლა იუწყება
+   `resolved="metal"` (ან `resolved="cuda"/"opencl"` არამეტალური ზოლებისთვის),
+   დაადასტურეთ, რომ Prometheus ნაკაწრი შეიცავს როგორც CPU, ასევე GPU ნიმუშებს
+   `fastpq_execution_mode_total{backend=…}` და დაარეგისტრირეთ გასული დრო
+   გამოვლენა/გასუფთავება.
+5. შეინახეთ გარსის ტრანსკრიპტები, მეტრიკა და ოპერატორის დადასტურება როგორც
+   `rollback_drill.log` და `metrics_rollback.prom` გამოშვების პაკეტში. ესენი
+   ფაილები უნდა ასახავდეს სრული დაქვეითების + აღდგენის ციკლს, რადგან
+   `ci/check_fastpq_rollout.sh` ახლა მარცხდება, როდესაც ჟურნალს აკლია GPU
+   აღდგენის ხაზი ან მეტრიკის სნეპშოტი გამოტოვებს CPU ან GPU მრიცხველებს.
 
-These logs prove that every cluster can degrade gracefully and that SRE teams
-know how to fall back deterministically if GPU drivers or kernels regress.
+ეს ჟურნალები ადასტურებს, რომ ყველა კლასტერს შეუძლია მოხდენილი დეგრადაცია და რომ SRE გუნდები
+იცოდეთ როგორ დაბრუნდეთ დეტერმინისტულად, თუ GPU დრაივერები ან ბირთვები რეგრესდებიან.
 
-## Mixed-mode fallback evidence (WP2-E.6)
+## შერეული რეჟიმის სარეზერვო მტკიცებულება (WP2-E.6)
 
-Whenever a host needs GPU FFT/LDE but CPU Poseidon hashing (per the Stage 7 <900 ms
-requirement), bundle the following artefacts alongside the standard rollback logs:
-
-1. **Config diff.** Check in (or attach) the host-local override that sets
-   `zk.fastpq.poseidon_mode = "cpu"` (`FASTPQ_POSEIDON_MODE=cpu`) while leaving
-   `zk.fastpq.execution_mode` untouched. Name the patch
+როდესაც მასპინძელს სჭირდება GPU FFT/LDE, მაგრამ CPU Poseidon ჰეშირება (7 ეტაპის მიხედვით <900 ms
+მოთხოვნა), შეაერთეთ შემდეგი არტეფაქტები სტანდარტული უკან დაბრუნების ჟურნალებთან ერთად:1. **Config diff.** შეამოწმეთ (ან მიამაგრეთ) ჰოსტის ლოკალური გადაფარვა, რომელიც დაყენებულია
+   `zk.fastpq.poseidon_mode = "cpu"` (`FASTPQ_POSEIDON_MODE=cpu`) გასვლისას
+   `zk.fastpq.execution_mode` ხელუხლებელი. დაასახელეთ პაჩი
    `artifacts/fastpq_rollouts/<stamp>/<fleet>/<lane>/poseidon_fallback.patch`.
-2. **Poseidon counter scrape.**
+2. **პოსეიდონის მრიცხველის საფხეკი.**
    ```bash
    curl -s http://<host>:8180/metrics \
      | rg 'fastpq_poseidon_pipeline_total{.*device_class="<label>"' \
      > artifacts/fastpq_rollouts/<stamp>/<fleet>/<lane>/metrics_poseidon.prom
    ```
-   The capture must show `path="cpu_forced"` incrementing in lock-step with the
-   GPU FFT/LDE counter for that device-class. Take a second scrape after reverting
-   back to GPU mode so reviewers can see the `path="gpu"` row resume.
+   გადაღება უნდა აჩვენოს `path="cpu_forced"` მატება დაბლოკვის საფეხურზე
+   GPU FFT/LDE მრიცხველი ამ მოწყობილობის კლასისთვის. წაიღეთ მეორე ნაკაწრი დაბრუნების შემდეგ
+   დაუბრუნდით GPU რეჟიმში, რათა მიმომხილველებმა ნახონ `path="gpu"` რიგის რეზიუმე.
 
-   Pass the resulting file to `wrap_benchmark.py --poseidon-metrics …` so the wrapped benchmark records the same counters inside its `poseidon_metrics` section; this keeps Metal and CUDA rollouts on the identical workflow and makes the fallback evidence auditable without opening separate scrape files.
-3. **Log excerpt.** Copy the `telemetry::fastpq.poseidon` entries that prove the
-   resolver flipped to CPU (`cpu_forced`) into
-   `poseidon_fallback.log`, keeping timestamps so Alertmanager timelines can be
-   correlated with the config change.
+   მიღებული ფაილი გადაიტანეთ `wrap_benchmark.py --poseidon-metrics …`-ზე, რათა შეფუთული ბენჩმარკი ჩაიწეროს იგივე მრიცხველები მის `poseidon_metrics` განყოფილებაში; ეს ინარჩუნებს Metal და CUDA rollouts-ს იდენტურ სამუშაო პროცესზე და აქცევს სარეზერვო მტკიცებულებებს აუდიტორად ცალკეული scrape ფაილების გახსნის გარეშე.
+3. ** ჟურნალის ამონაწერი.** დააკოპირეთ `telemetry::fastpq.poseidon` ჩანაწერები, რომლებიც ადასტურებენ
+   გადამწყვეტი გადატრიალდა CPU-ში (`cpu_forced`).
+   `poseidon_fallback.log`, დროის შტამპების შენახვა, რათა Alertmanager-ის ვადები იყოს
+   დაკავშირებულია კონფიგურაციის ცვლილებასთან.
 
-CI enforces the queue/zero-fill checks today; once the mixed-mode gate lands,
-`ci/check_fastpq_rollout.sh` will also insist that any bundle containing
-`poseidon_fallback.patch` ships the matching `metrics_poseidon.prom` snapshot.
-Following this workflow keeps the WP2-E.6 fallback policy auditable and tied to
-the same evidence collectors used during the default-on rollout.
+CI ახორციელებს რიგის/ნულოვანი შევსების შემოწმებებს დღეს; როგორც კი შერეული რეჟიმის კარიბჭე დაეშვება,
+`ci/check_fastpq_rollout.sh` ასევე დაჟინებით მოითხოვს ნებისმიერი პაკეტის შემცველობას
+`poseidon_fallback.patch` აგზავნის შესაბამის `metrics_poseidon.prom` სურათს.
+ამ სამუშაო პროცესის შემდეგ WP2-E.6 სარეზერვო პოლიტიკა ინარჩუნებს აუდიტს და მიბმულს
+იგივე მტკიცებულებების შემგროვებლები, რომლებიც გამოყენებული იქნა ნაგულისხმევი გაშვების დროს.
 
-## Reporting & Automation
+## მოხსენება და ავტომატიზაცია
 
-- Attach the entire `artifacts/fastpq_rollouts/<stamp>/` directory to the
-  release ticket and reference it from `status.md` once the rollout closes.
-- Run `dashboards/alerts/tests/fastpq_acceleration_rules.test.yml` (via
-  `promtool`) inside CI to ensure alert bundles bundled with the rollout still
-  compile.
-- Validate the bundle with `ci/check_fastpq_rollout.sh` (or
-  `make check-fastpq-rollout`) and pass `FASTPQ_ROLLOUT_BUNDLE=<path>` when you
-  want to target a single rollout. CI invokes the same script via
-  `.github/workflows/fastpq-rollout.yml`, so missing artefacts fail fast before a
-  release ticket can close. The release pipeline can archive validated bundles
-  alongside the signed manifests by passing
+- მიამაგრეთ მთელი `artifacts/fastpq_rollouts/<stamp>/` დირექტორია
+  გამოუშვით ბილეთი და მიმართეთ მას `status.md`-დან, როგორც კი გაშვება დაიხურება.
+- გაუშვით `dashboards/alerts/tests/fastpq_acceleration_rules.test.yml` (მეშვეობით
+  `promtool`) CI-ში, რათა უზრუნველყოს გაფრთხილების პაკეტები შეფუთული გაშვებით
+  შედგენა.
+- დაადასტურეთ პაკეტი `ci/check_fastpq_rollout.sh`-ით (ან
+  `make check-fastpq-rollout`) და გაიარეთ `FASTPQ_ROLLOUT_BUNDLE=<path>`, როცა
+  გსურთ მიზანმიმართული ერთი rollout. CI იწვევს იმავე სკრიპტს მეშვეობით
+  `.github/workflows/fastpq-rollout.yml`, ამიტომ დაკარგული არტეფაქტები სწრაფად იშლება ადრე a
+  გამოშვების ბილეთი შეიძლება დაიხუროს. გამოშვების მილსადენს შეუძლია დაარქივოს დადასტურებული პაკეტები
+  ხელმოწერილის გვერდით მანიფესტებს გავლის გზით
   `--fastpq-rollout-bundle artifacts/fastpq_rollouts/<stamp>/<fleet>/<lane>` to
-  `scripts/run_release_pipeline.py`; the helper reruns
-  `ci/check_fastpq_rollout.sh` (unless `--skip-fastpq-rollout-check` is set) and
-  copies the directory tree into `artifacts/releases/<version>/fastpq_rollouts/…`.
-  As part of this gate the script enforces the Stage 7 queue-depth and zero-fill
-  budgets by reading `benchmarks.metal_dispatch_queue` and
-  `benchmarks.zero_fill_hotspots` out of each `metal` bench JSON.
+  `scripts/run_release_pipeline.py`; დამხმარე მეორდება
+  `ci/check_fastpq_rollout.sh` (თუ `--skip-fastpq-rollout-check` არ არის დაყენებული) და
+  აკოპირებს დირექტორია ხეს `artifacts/releases/<version>/fastpq_rollouts/…`-ში.
+  როგორც ამ კარიბჭის ნაწილი, სკრიპტი ახორციელებს Stage7 რიგის სიღრმეს და ნულოვანი შევსებას
+  ბიუჯეტი `benchmarks.metal_dispatch_queue` წაკითხვით და
+  `benchmarks.zero_fill_hotspots` თითოეული `metal` JSON სკამიდან.
 
-By following this playbook we can demonstrate deterministic adoption, provide a
-single evidence bundle per rollout, and keep rollback drills audited alongside
-the signed benchmark manifests.
+ამ სახელმძღვანელოს მიყოლებით ჩვენ შეგვიძლია ვაჩვენოთ დეტერმინისტული მიღება, მივაწოდოთ ა
+ერთჯერადი მტკიცებულების ნაკრები თითო გამოშვებაში და განაგრძეთ უკან დაბრუნება სავარჯიშოების აუდიტი ერთად
+ხელმოწერილი ნიშნული ვლინდება.

@@ -7,20 +7,21 @@ generator: scripts/sync_docs_i18n.py
 source_hash: f9f765fbe3170f654a9c44c3cd1afc5d82a72ff49137f32b98cf9d310faf114e
 source_last_modified: "2025-12-29T18:16:35.963528+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% Governance Pipeline (Iroha 2 and SORA Parliament)
+% အုပ်ချုပ်မှုပိုက်လိုင်း (Iroha 2 နှင့် SORA လွှတ်တော်)
 
-# Current state (v1)
-- Governance proposals run as: proposer → referendum → tally → enactment. Referendum windows and turnout/approval thresholds are enforced as described in `gov.md`; locks are extend-only and unlock on expiry.
-- Parliament selection uses VRF-based draws with deterministic ordering and term bounds; when no persisted roster exists, Torii derives a fallback using `gov.parliament_*` config. Council gating and quorum checks are exercised in `gov_parliament_bodies` / `gov_pipeline_sla` tests.
-- Voting modes: ZK (default, requires `Active` VK with inline bytes) and Plain (quadratic weight). Mode mismatches are rejected; lock creation/extension is monotonic in both modes with regression tests for ZK and plain re-votes.
-- Validator misconduct is acted on via the evidence pipeline (`/v1/sumeragi/evidence*`, CLI helpers) with joint-consensus hand-offs enforced by `NextMode` + `ModeActivationHeight`.
-- Protected namespaces, runtime-upgrade hooks, and governance manifest admission are documented in `governance_api.md` and covered by telemetry (`governance_manifest_*`, `governance_protected_namespace_total`).
+# လက်ရှိအခြေအနေ (v1)
+- အုပ်ချုပ်မှုအဆိုပြုချက်များသည် အဆိုပြုသူ → လူထုဆန္ဒခံယူပွဲ → တာလီ → အတည်ပြုချက်အဖြစ် လုပ်ဆောင်သည်။ `gov.md` တွင် ဖော်ပြထားသည့်အတိုင်း ပြည်လုံးကျွတ်ဆန္ဒခံယူပွဲပြတင်းပေါက်များနှင့် မဲပေးသူ/အတည်ပြုမှုအဆင့်များကို ပြဌာန်းထားပါသည်။ လော့ခ်များသည် သက်တမ်းတိုးရန်သာဖြစ်ပြီး သက်တမ်းကုန်ဆုံးချိန်တွင်သော့ဖွင့်ပါသည်။
+- လွှတ်တော်ရွေးချယ်မှုသည် အဆုံးအဖြတ်ပေးသောအမိန့်စာနှင့် သက်တမ်းကန့်သတ်ချက်များဖြင့် VRF-အခြေခံဆွဲခြင်းကို အသုံးပြုသည်။ ဆက်ရှိနေသောစာရင်းဇယားမရှိသောအခါ၊ Torii သည် `gov.parliament_*` config ကိုအသုံးပြု၍ တုံ့ပြန်မှုတစ်ခုရရှိလာသည်။ `gov_parliament_bodies` / `gov_pipeline_sla` စစ်ဆေးမှုများတွင် ကောင်စီဝင်ခြင်းနှင့် အထမြောက်စစ်ဆေးမှုများကို ကျင့်သုံးသည်။
+- မဲပေးခြင်းမုဒ်များ- ZK (မူလ၊ `Active` VK လိုအပ်သည်) နှင့် ရိုးရိုး (လေးပုံတစ်ပုံအလေးချိန်)။ မုဒ်မတူညီမှုများကို ပယ်ချသည်။ သော့ခတ်ဖန်တီးမှု/တိုးချဲ့မှုသည် ZK အတွက် ဆုတ်ယုတ်မှုစမ်းသပ်မှုများနှင့် ရိုးရိုးပြန်လည်မဲပေးသည့်မုဒ်နှစ်ခုစလုံးတွင် မိုနိုတိုနီဖြစ်သည်။
+- `NextMode` + `ModeActivationHeight` မှ ပြဌာန်းထားသော ပူးတွဲသဘောတူညီမှု လက်လွှဲပေးပို့မှုများဖြင့် - အထောက်အထားစိစစ်သူ၏ မှားယွင်းသောအပြုအမူကို အထောက်အထားပိုက်လိုင်း (`/v1/sumeragi/evidence*`၊ CLI အကူအညီပေးသူများ) မှတဆင့် အရေးယူဆောင်ရွက်ပါသည်။
+- ကာကွယ်ထားသော namespaces၊ runtime-upgrade hooks နှင့် governance manifest admission ကို `governance_api.md` တွင် မှတ်တမ်းတင်ထားပြီး telemetry (`governance_manifest_*`, `governance_protected_namespace_total`) ဖြင့် ဖုံးအုပ်ထားသည်။
 
-# In-flight / backlog
-- Publish VRF draw artifacts (seed, proof, ordered roster, alternates) and codify replacement rules for no-shows; add golden fixtures for the draw and replacements.
-- Stage-SLA enforcement for the Parliament bodies (rules → agenda → study → review → jury → enact) needs explicit timers, escalation paths, and telemetry counters.
-- Policy-jury secret/commit–reveal voting and associated bribery-resistance audits are still to be implemented.
-- Role-bond multipliers, misconduct slashing for high-risk bodies, and cooldowns between service slots require configuration plumbing plus tests.
-- Governance lane sealing and referenda window/turnout gates are tracked in `gov.md`/`status.md`; keep the roadmap entries updated as the remaining acceptance tests land.
+# ပျံသန်းမှု / backlog
+- VRF ရေးဆွဲထားသော ရှေးဟောင်းပစ္စည်းများ (မျိုးစေ့၊ အထောက်အထား၊ မှာယူထားသော စာရင်းဇယား၊ အလှည့်အပြောင်းများ) ကို ထုတ်ဝေပြီး မပြသခြင်းအတွက် အစားထိုးစည်းမျဉ်းများကို ကုဒ်လုပ်ပါ။ မဲနှိုက်ခြင်းနှင့် အစားထိုးခြင်းအတွက် ရွှေရောင်ပစ္စည်းများထည့်ပါ။
+- ပါလီမန်အဖွဲ့များအတွက် Stage-SLA ပြဋ္ဌာန်းခြင်း (စည်းမျဉ်းများ → အစီအစဉ် → လေ့လာမှု → ပြန်လည်သုံးသပ်ခြင်း → ဂျူရီ → အတည်ပြုပြဋ္ဌာန်းခြင်း) သည် ရှင်းလင်းပြတ်သားသော အချိန်တိုင်းကိရိယာများ၊ တိုးမြင့်လာမှုလမ်းကြောင်းများနှင့် တယ်လီမီတာ ကောင်တာများ လိုအပ်ပါသည်။
+- ပေါ်လစီ-ခုံသမာဓိအဖွဲ့ လျှို့ဝှက်/ကတိကဝတ်-ထုတ်ဖော်မဲပေးခြင်းနှင့် ဆက်စပ်လာဘ်ပေးလာဘ်ယူမှု-ခုခံစစ်စစ်ဆေးမှုများကို အကောင်အထည်ဖော်ရန် ကျန်ရှိနေပါသည်။
+- Role-bond multipliers၊ အန္တရာယ်များသောကောင်များအတွက် အကျင့်ပျက်ခြစားမှုများ၊ နှင့် service slots များအကြား cooldowns များသည် configuration plumbing နှင့် tests များ လိုအပ်ပါသည်။
+- အုပ်ချုပ်မှုလမ်းကြောပိတ်ခြင်းနှင့် ဆန္ဒခံယူခြင်းပြတင်းပေါက်/မဲဆန္ဒရှင်ဂိတ်များကို `gov.md`/`status.md` တွင် ခြေရာခံထားပါသည်။ လက်ကျန်လက်ခံမှုစာမေးပွဲများ ပြီးဆုံးသည်နှင့်အမျှ လမ်းပြမြေပုံထည့်သွင်းမှုများကို မွမ်းမံထားပါ။

@@ -7,217 +7,199 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 7c8262bacbb15b83bd70c824990e4948832418b59f184bca353eee899e44f4d4
 source_last_modified: "2025-12-29T18:16:35.960562+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Fraud Monitoring System
+# Խարդախության մոնիտորինգի համակարգ
 
-This document captures the reference design for the shared fraud monitoring capability that will accompany the core ledger. The goal is to provide payment service providers (PSPs) with high-quality risk signals for every transaction while keeping custody, privacy, and policy decisions under the control of designated operators outside the settlement engine.
+Այս փաստաթուղթը ներառում է ընդհանուր խարդախության մոնիտորինգի հնարավորության հղման նախագիծը, որը կուղեկցի հիմնական մատյանին: Նպատակն է վճարային ծառայություններ մատուցողներին (PSP) տրամադրել բարձրորակ ռիսկային ազդանշաններ յուրաքանչյուր գործարքի համար՝ պահպանելով խնամակալության, գաղտնիության և քաղաքականության որոշումները սահմանված օպերատորների վերահսկողության ներքո՝ հաշվարկային շարժիչից դուրս:
 
-## Goals and Success Criteria
-- Deliver real-time fraud risk assessments (<120 ms 95p, <40 ms median) for every payment touching the settlement engine.
-- Preserve user privacy by ensuring the central service never processes personally identifiable information (PII) and only ingests pseudonymous identifiers and behavioral telemetry.
-- Support multi-PSP environments where each provider keeps operational autonomy but can query shared intelligence.
-- Adapt continuously to new attack patterns via supervised and unsupervised models without introducing non-deterministic ledger behavior.
-- Provide auditable decision traces for regulators and independent reviewers without exposing sensitive wallets or counterparties.
+## Նպատակներ և հաջողության չափանիշներ
+- Իրական ժամանակում տրամադրեք խարդախության ռիսկի գնահատումներ (<120 ms 95p, <40 ms միջին) հաշվարկային շարժիչին դիպչող յուրաքանչյուր վճարման համար:
+- Պահպանեք օգտատերերի գաղտնիությունը՝ ապահովելով, որ կենտրոնական ծառայությունը երբեք չի մշակում անձնապես ճանաչելի տեղեկատվությունը (PII) և ընդունում է միայն կեղծանուն նույնացուցիչներ և վարքային հեռաչափություն:
+- Աջակցեք բազմաբնույթ PSP միջավայրերին, որտեղ յուրաքանչյուր մատակարար պահպանում է գործառնական ինքնավարությունը, բայց կարող է հարցումներ կատարել ընդհանուր հետախուզության մեջ:
+- Շարունակաբար հարմարվել նոր հարձակման օրինաչափություններին վերահսկվող և չվերահսկվող մոդելների միջոցով՝ չներկայացնելով ոչ դետերմինիստական ​​վարքագիծ:
+- Տրամադրել աուդիտի ենթակա որոշումների հետքեր կարգավորիչների և անկախ վերանայողների համար՝ չբացահայտելով զգայուն դրամապանակները կամ գործընկերները:
 
-## Scope
-- **In-scope:** Transaction risk scoring, behavioral analytics, cross-PSP correlation, anomaly alerting, governance hooks, and PSP integration APIs.
-- **Out-of-scope:** Direct enforcement (remain PSP responsibility), sanctions screening (handled by existing compliance pipelines), and identity proofing (alias management covers this).
+## Շրջանակ
+- **Ընդհանուր շրջանակում. ** Գործարքների ռիսկերի գնահատում, վարքագծային վերլուծություն, խաչաձև PSP հարաբերակցություն, անոմալիաների ծանուցում, կառավարման կեռիկներ և PSP ինտեգրման API-ներ:
+- **Շրջանակից դուրս.** Ուղղակի կիրարկում (մնում է PSP-ի պատասխանատվությունը), պատժամիջոցների ստուգում (կատարվում է գործող համապատասխանության խողովակաշարերի կողմից) և ինքնության հաստատում (փոխանունի կառավարումն ընդգրկում է սա):
 
-## Functional Requirements
-1. **Transaction Scoring API**: Synchronous API that PSPs call before forwarding a payment to the settlement engine, returning a risk score, categorical verdict, and reasoning features.
-2. **Event Ingestion**: Stream of settlement outcomes, wallet lifecycle events, device fingerprints, and PSP-level fraud feedback for continuous learning.
-3. **Model Lifecycle Management**: Versioned models with offline training, shadow deployment, staged rollout, and rollback support. Deterministic fallback heuristic must exist for every feature.
-4. **Feedback Loop**: PSPs must be able to submit confirmed fraud cases, false positives, and remediation notes. System aligns feedback with risk features and updates analytics.
-5. **Privacy Controls**: All data stored and transmitted must be alias-based. Any request containing raw identity metadata is rejected and logged.
-6. **Governance Reporting**: Scheduled exports of aggregated metrics (detections per PSP, typologies, response latency) plus ad-hoc investigation APIs for authorized auditors.
-7. **Resilience**: Active-active deployment across at least two facilities with automatic queue draining and replay. If the service is degraded, PSPs fall back to local rules without blocking the ledger.
+## Ֆունկցիոնալ պահանջներ
+1. **Գործարքների գնահատման API**. համաժամանակյա API, որը PSP-ները կանչում են նախքան վճարումը հաշվարկային համակարգին փոխանցելը, ռիսկի գնահատականը, կատեգորիկ դատավճիռը և հիմնավորման առանձնահատկությունները վերադարձնելը:
+2. **Միջոցառումների ընդունում**. հաշվարկների արդյունքների հոսք, դրամապանակի կյանքի ցիկլի իրադարձություններ, սարքի մատնահետքեր և PSP մակարդակի խարդախության հետադարձ կապ՝ շարունակական ուսուցման համար:
+3. **Մոդել կյանքի ցիկլի կառավարում**. տարբերակված մոդելներ՝ անցանց ուսուցմամբ, ստվերային տեղակայմամբ, փուլային թողարկումով և հետադարձ աջակցությամբ: Դետերմինիստական ​​հետադարձ էվրիստիկա պետք է գոյություն ունենա յուրաքանչյուր հատկանիշի համար:
+4. **Հետադարձ կապ**. PSP-ները պետք է կարողանան ներկայացնել խարդախության հաստատված դեպքեր, կեղծ պոզիտիվներ և վերականգնման նշումներ: Համակարգը համապատասխանեցնում է հետադարձ կապը ռիսկի առանձնահատկությունների հետ և թարմացնում է վերլուծական տվյալները:
+5. **Գաղտնիության վերահսկում**. Պահված և փոխանցված բոլոր տվյալները պետք է հիմնված լինեն կեղծանունների վրա: Ինքնության չմշակված մետատվյալներ պարունակող ցանկացած հարցում մերժվում և գրանցվում է:
+6. **Կառավարման հաշվետվություն**. ագրեգացված չափումների պլանավորված արտահանումներ (հայտնաբերումներ ըստ PSP-ի, տիպաբանություններ, պատասխանների ուշացում) և լիազորված աուդիտորների համար հատուկ հետաքննության API-ներ:
+7. **Ճկունություն**. Ակտիվ-ակտիվ տեղակայում առնվազն երկու օբյեկտների վրա՝ հերթերի ավտոմատ ջրահեռացման և վերարտադրման միջոցով: Եթե ​​ծառայությունը վատթարացած է, PSP-ները վերադառնում են տեղական կանոններին՝ առանց մատյանն արգելափակելու:## Ոչ ֆունկցիոնալ պահանջներ
+- **Դետերմինիզմ և հետևողականություն**. Ռիսկի միավորները առաջնորդում են PSP-ի որոշումները, բայց չեն փոխում մատյանների կատարումը: Լեջերի պարտավորությունները մնում են դետերմինիստական ​​բոլոր հանգույցներում:
+- **Ծավալայնություն**. պահպանեք ≥10k ռիսկի գնահատում վայրկյանում հորիզոնական մասշտաբով և հաղորդագրությունների բաժանումով, որոնք հիմնված են կեղծ դրամապանակի նույնացուցիչներով:
+- **Դիտանելիություն**. Բացահայտեք չափումները (`fraud.scoring_latency_ms`, `fraud.risk_score_distribution`, `fraud.api_error_rate`, `fraud.model_version_active`) և կառուցվածքային տեղեկամատյաններ յուրաքանչյուր գնահատականի համար:
+- **Անվտանգություն**. փոխադարձ TLS PSP-ների և կենտրոնական ծառայության միջև, ապարատային անվտանգության մոդուլներ պատասխանների ծրարների ստորագրման համար, կեղծիքից ակնհայտ աուդիտի հետքեր:
+- **Համապատասխանություն**. Համապատասխանեցեք ՓԼ/ԱՖ դեմ պայքարի պահանջներին, տրամադրեք կարգավորելի պահպանման ժամկետներ և ինտեգրվեք ապացույցների պահպանման աշխատանքային հոսքերին:
 
-## Non-Functional Requirements
-- **Determinism & Consistency**: Risk scores guide PSP decisions but do not mutate ledger execution. Ledger commits remain deterministic across nodes.
-- **Scalability**: Sustain ≥10k risk evaluations per second with horizontal scaling and message partitioning keyed by pseudo-wallet identifiers.
-- **Observability**: Expose metrics (`fraud.scoring_latency_ms`, `fraud.risk_score_distribution`, `fraud.api_error_rate`, `fraud.model_version_active`) and structured logs for each scoring call.
-- **Security**: Mutual TLS between PSPs and the central service, hardware security modules for signing response envelopes, tamper-evident audit trails.
-- **Compliance**: Align with AML/CFT requirements, provide configurable retention periods, and integrate with evidence preservation workflows.
-
-## Architecture Overview
+## Ճարտարապետության ակնարկ
 1. **API Gateway Layer**
-  - Receives scoring and feedback requests over authenticated HTTP/JSON APIs.
-   - Performs schema validation using Norito codecs and enforces rate limits per PSP id.
+  - Ստանում է գնահատման և հետադարձ կապի հարցումներ վավերացված HTTP/JSON API-ների վերաբերյալ:
+   - Կատարում է սխեմայի վավերացում՝ օգտագործելով Norito կոդեկները և պարտադրում տոկոսադրույքի սահմանաչափերը յուրաքանչյուր PSP ID-ի համար:
 
-2. **Feature Aggregation Service**
-   - Joins incoming requests with historical aggregates (velocity, geospatial patterns, device usage) stored in a time-series feature store.
-   - Supports configurable feature windows (minutes, hours, days) using deterministic aggregation functions.
+2. **Հատկանիշների համախմբման ծառայություն**
+   - Միանում է մուտքային հարցումներին պատմական ագրեգատներով (արագություն, աշխարհատարածական օրինաչափություններ, սարքի օգտագործում), որոնք պահվում են ժամանակային շարքի առանձնահատկությունների պահեստում:
+   - Աջակցում է կարգավորելի գործառույթների պատուհաններին (րոպե, ժամ, օր), օգտագործելով դետերմինիստական ​​ագրեգացման գործառույթները:
 
-3. **Risk Engine**
-   - Executes the active model pipeline (ensemble of gradient boosted trees, anomaly detectors, rules).
-   - Includes a deterministic fallback rule-set to guarantee bounded responses when model scores are unavailable.
-   - Emits `FraudAssessment` envelopes with score, band, contributing features, and model version.
+3. **Ռիսկի շարժիչ **
+   - Իրականացնում է ակտիվ մոդելային խողովակաշարը (գրադիենտ ուժեղացված ծառերի համույթ, անոմալիաների դետեկտորներ, կանոններ):
+   - Ներառում է որոշիչ հետադարձ կանոնների հավաքածու՝ երաշխավորելու սահմանափակ պատասխաններ, երբ մոդելի միավորներն անհասանելի են:
+   - Արտադրում է `FraudAssessment` ծրարներ՝ միավորով, ժապավենով, նպաստող հատկանիշներով և մոդելային տարբերակով:## գնահատման մոդելներ և էվրիստիկա
+- **Միավորների սանդղակ և գոտիներ**. Ռիսկի միավորները նորմալացվում են մինչև 0-1000: Գոտիները սահմանվում են հետևյալ կերպ՝ `0–249` (ցածր), `250–549` (միջին), `550–749` (բարձր), `750+` (կրիտիկական): Շղթաները քարտեզագրվում են PSP-ների համար առաջարկվող գործողություններին (ավտո-հաստատում, ավելացում, վերանայման համար հերթագրում, ավտոմատ մերժում), սակայն կիրառումը մնում է հատուկ PSP-ին:
+- **Մոդելային անսամբլ**:
+  - Գրադիենտով ուժեղացված որոշումների ծառերը կլանում են կառուցվածքային առանձնահատկություններ, ինչպիսիք են գումարը, կեղծանունը/սարքի արագությունը, վաճառողի կատեգորիան, իսկորոշման ուժը, PSP վստահության մակարդակը և խաչաձև դրամապանակի գրաֆիկի առանձնահատկությունները:
+  - Ինքնակոդավորիչի վրա հիմնված անոմալիաների դետեկտորը աշխատում է ժամանակի պատուհաններով վարքագծային վեկտորների վրա (ըստ այլանունների՝ ծախսման արագություն, սարքի փոխարկում, ժամանակային էնտրոպիա): Միավորները ճշգրտվում են PSP-ի վերջին գործողությունների համեմատ՝ շեղումը սահմանափակելու համար:
+  - Սկզբում գործադրվում են դետերմինիստական ​​քաղաքականության կանոնները. դրանց արդյունքները սնուցում են վիճակագրական մոդելները որպես երկուական/շարունակական հատկանիշներ, որպեսզի անսամբլը կարողանա սովորել փոխազդեցությունները:
+- **Հետադարձ էվրիստիկա**. Երբ մոդելի կատարումը ձախողվում է, դետերմինիստական ​​շերտը դեռևս ստեղծում է սահմանափակ միավոր՝ կանոնների տույժերի համախմբմամբ: Յուրաքանչյուր կանոն տալիս է կարգավորելի կշիռ, որն ամփոփվում է, այնուհետև ամրացվում է 0-1000 սանդղակի վրա՝ երաշխավորելով վատագույն դեպքում ուշացումն ու բացատրելիությունը:
+- **Հապաղման բյուջետավորում**. Խողովակաշարերի գնահատման թիրախները <20 մվ API-ի դարպասի + վավերացման համար, <30 ms-ի համար հատկանիշի ագրեգացման համար (մատուցվում է հիշողության պահոցներից` գրառման հետևում մինչև մշտական ​​պահեստներ) և <40 ms` համույթի գնահատման համար: Դետերմինիստական ​​հետադարձ վերադարձը վերադառնում է <10 ms-ի ընթացքում, եթե ML եզրակացությունը գերազանցում է իր բյուջեն, ապահովելով ընդհանուր P95-ը 120 ms-ից ցածր:
+ - **Հապաղման բյուջետավորում**. Խողովակաշարերի գնահատման թիրախները <20 մվ API-ի դարպասի + վավերացման համար, <30 ms-ի համար հատկանիշի ագրեգացման համար (մատուցվում է հիշողության պահոցներից` գրառման հետևում մինչև մշտական ​​պահեստներ) և <40 ms` համույթի գնահատման համար: Դետերմինիստական ​​հետադարձ վերադարձը վերադառնում է <10 ms-ի ընթացքում, եթե ML եզրակացությունը գերազանցում է իր բյուջեն, ապահովելով ընդհանուր P95-ը 120 ms-ից ցածր:## Հիշողության գործառույթների քեշի ձևավորում
+- **Shard Layout**. Առանձնահատկությունների պահեստները բաժանված են 64-բիթանոց կեղծանունների միջոցով `N = 256` բեկորների մեջ: Յուրաքանչյուր բեկոր ունի.
+  - Վերջին գործարքների դելտաների համար (5 րոպե + 1 ժամ պատուհաններ) առանց կողպեքի օղակի բուֆեր, որը պահվում է որպես զանգվածների կառուցվածք՝ քեշ-գծի տեղայնությունը առավելագույնի հասցնելու համար:
+  - Սեղմված Fenwick ծառ (բիթով փաթեթավորված 16-բիթանոց դույլեր) 24 ժամ / 7 օր ագրեգատներ առանց ամբողջական վերահաշվարկի պահպանման համար:
+  - Հոփ-շոտլանդական հեշ քարտեզի քարտեզագրման գործընկերները → շարժվող վիճակագրություն (հաշվարկ, գումար, շեղում, վերջին ժամանակի դրոշմակնիք) սահմանված է 1,024 գրառումով մեկ այլ կեղծանունով:
+- **Հիշողության ռեզիդենտություն**. տաք բեկորները մնում են RAM-ում: 50 M alias տիեզերքի համար, որի ակտիվությունը 1% է վերջին ժամում, քեշի ռեզիդենտությունը կազմում է ~500k անուն: Ակտիվ մետատվյալների համար ~ 320 B-ով, աշխատանքային հավաքածուն ~160 ՄԲ է, որը բավական փոքր է ժամանակակից սերվերների վրա L3 քեշի համար:
+- **Համապատասխանություն**. ընթերցողները փոխառում են անփոփոխ հղումներ դարաշրջանի վրա հիմնված վերականգնման միջոցով. գրողները միացնում են դելտաները և թարմացնում ագրեգատները՝ օգտագործելով համեմատել և փոխանակել: Սա խուսափում է mutex վեճից և պահպանում է տաք ուղիները դեպի երկու ատոմային օպերացիա + սահմանափակ ցուցիչի հետապնդում:
+- **Նախաբեռնում**. միավորներ հավաքող աշխատողը տալիս է ձեռնարկ `prefetch_read` ակնարկներ հաջորդ կեղծանունի համար, երբ հարցումի վավերացումը ավարտվի՝ թաքցնելով հիմնական հիշողության հետաձգումը (~80 ns) առանձնահատկությունների ագրեգացման հետևում:
+- **Write-behind Log**. յուրաքանչյուր բեկորի WAL-ը դելտա է բաժանում յուրաքանչյուր 50 ms (կամ 4 ԿԲ) և լցվում է դիմացկուն պահեստ: Վերականգնման սահմանները ամուր պահելու համար անցակետերն աշխատում են 5 րոպեն մեկ:
 
-## Scoring Models and Heuristics
-- **Score Scale & Bands**: Risk scores are normalized to 0–1,000. Bands are defined as: `0–249` (low), `250–549` (medium), `550–749` (high), `750+` (critical). Bands map to recommended actions for PSPs (auto-approve, step-up, queue-for-review, auto-decline) but enforcement remains PSP-specific.
-- **Model Ensemble**:
-  - Gradient-boosted decision trees ingest structured features such as amount, alias/device velocity, merchant category, authentication strength, PSP trust tier, and cross-wallet graph features.
-  - An autoencoder-based anomaly detector runs on time-windowed behavioural vectors (per-alias spend cadence, device switching, temporal entropy). Scores are calibrated against recent PSP activity to limit drift.
-  - Deterministic policy rules execute first; their outputs feed the statistical models as binary/continuous features so the ensemble can learn interactions.
-- **Fallback Heuristics**: When model execution fails, the deterministic layer still produces a bounded score by aggregating rule penalties. Each rule contributes a configurable weight, summed then clamped to the 0–1,000 scale, guaranteeing worst-case latency and explainability.
-- **Latency Budgeting**: Scoring pipeline targets <20 ms for API gateway + validation, <30 ms for feature aggregation (served from in-memory caches with write-behind to persistent stores), and <40 ms for ensemble evaluation. Deterministic fallback returns within <10 ms if ML inference exceeds its budget, ensuring overall P95 stays under 120 ms.
- - **Latency Budgeting**: Scoring pipeline targets <20 ms for API gateway + validation, <30 ms for feature aggregation (served from in-memory caches with write-behind to persistent stores), and <40 ms for ensemble evaluation. Deterministic fallback returns within <10 ms if ML inference exceeds its budget, ensuring overall P95 stays under 120 ms.
+### Տեսական հապաղում (Intel Ice Lake-ի դասի սերվեր, 3.1 ԳՀց)
+- **Շարդի որոնում + նախնական առբերում**. 1 քեշի բացթողում (~80 ns) գումարած հեշի հաշվարկ (<10 ns):
+- **Օղակաձեւ բուֆերի կրկնություն (32 մուտք) **՝ 32 × 2 բեռնում = 64 բեռնում; 32 B քեշի տողերով և հաջորդական մուտքով սա մնում է L1 → ~20 ns-ում:
+- **Fenwick-ի թարմացումներ (log₂ 2048 ≈ 11 քայլ)**. 11 ցուցիչի թռիչք; ենթադրելով կես L1, կես L2 հարվածներ → ~ 30 ns.
+- **Hop-scotch քարտեզի զոնդ (բեռնվածության գործակից 0.75, 2 զոնդ)**. 2 քեշ գիծ, ​​~2 × 15 ns:
+- **Մոդելի առանձնահատկությունների հավաքում**. 150 սկալար օպերացիա (<0,1 ns յուրաքանչյուրը) → ~15 ns:Դրանց գումարումը տալիս է ~160 ns հաշվարկ և ~120 ns հիշողության խցիկներ յուրաքանչյուր հարցումի համար (~0,28 µs): Չորս միաժամանակյա ագրեգացիոն աշխատողներով մեկ միջուկում, բեմը հեշտությամբ բավարարում է 30 ms բյուջեն նույնիսկ պայթած ծանրաբեռնվածության դեպքում; փաստացի տեղակայումը պետք է գրանցի հիստոգրամներ՝ վավերացնելու համար (`fraud.feature_cache_lookup_ms`-ի միջոցով):
+- **Հատկանիշ Windows & Aggregation**:
+  - Կարճաժամկետ (շարժվող 5 րոպե, 1 ժամ) և երկարաժամկետ (24 ժամ, 7 օր) պատուհանները հետևում են ծախսերի արագությանը, սարքի վերօգտագործմանը և այլանունների գրաֆիկի աստիճաններին:
+  - Գրաֆիկի առանձնահատկությունները (օրինակ՝ համօգտագործվող սարքերը այլ անուններով, հանկարծակի հեռացում, նոր գործընկերներ բարձր ռիսկային կլաստերներում) հիմնված են պարբերաբար սեղմված ամփոփագրերի վրա, որպեսզի հարցումները մնան ենթամլիվայրկյան:
+  - Տեղորոշման էվրիստիկա համեմատում է կոպիտ գեոբուկետները պատմական վարքագծի հետ՝ նշելով անհավանական թռիչքները (օրինակ՝ մի քանի հեռավոր վայրերը րոպեների ընթացքում)՝ օգտագործելով Haversine-ի վրա հիմնված ռիսկի ավելացումը:
+  - Հոսքի ձևի դետեկտորները պահպանում են ներգնա/ելքային քանակությունների շարժվող հիստոգրամները և կոնտրագենտները՝ նկատելու խառնման/թափահարման նշանները (արագ օդափոխիչ, որին հաջորդում են նման օդափոխիչները, ցիկլային հոփ հաջորդականությունները, կարճատև միջնորդները):
+- **Կանոնների կատալոգ (ոչ սպառիչ)**:
+  - **Արագության խախտում**. բարձրարժեք փոխանցումների արագ շարք, որոնք գերազանցում են մեկ այլ անունի կամ մեկ սարքի շեմերը:
+  - **Ալյանսի գրաֆիկի անոմալիա**. Փոխանունը փոխազդում է կլաստերի հետ, որը կապված է հաստատված խարդախության դեպքերի կամ հայտնի ջորի օրինաչափությունների հետ:
+  - **Սարքի վերօգտագործում**. սարքի ընդհանուր մատնահետքը տարբեր PSP-ի օգտատերերի խմբերին պատկանող փոխանունների միջև՝ առանց նախնական կապի:
+  - **Առաջին անգամ բարձրարժեք**. նոր կեղծանուններ, որոնք փորձում են գումարներ PSP-ի սովորական մուտքային միջանցքից բարձր:
+  - **Նույնականացման իջեցում**. գործարքն օգտագործում է ավելի թույլ գործոններ, քան հաշվի ելակետը (օրինակ՝ հետադարձ կենսաչափականից դեպի PIN) առանց PSP-ի կողմից հայտարարված հիմնավորման:
+  - **Խառնուրդ/թափահարման օրինաչափություն**. Alias-ը մասնակցում է բարձր օդափոխիչի/հովհարով դուրս գալու շղթաներին` սերտորեն կապված ժամանակացույցով, կրկնվող շրջագայությունների քանակով կամ շրջանաձև հոսքերով բազմաթիվ այլանուններով կարճ պատուհանների միջով: Կանոնը բարձրացնում է միավորը՝ օգտագործելով գծապատկերի կենտրոնական հասկերը և հոսքի ձևի դետեկտորները; ծանր դեպքերը սեղմվում են `high` ժապավենի վրա նույնիսկ մինչև ML ելքը:
+  - **Գործարքների սև ցուցակի հիթ**. կեղծանունը կամ կոնտրագենտը հայտնվում է ընդհանուր սև ցուցակի թարմացվող բովանդակության մեջ, որը մշակվում է շղթայական կառավարման քվեարկության կամ `sudo` հսկողությամբ պատվիրակված լիազորության միջոցով (օրինակ՝ կարգավորող հրամաններ, հաստատված խարդախություն): Կպչում է `critical` ժապավենի վրա և թողարկում `BLACKLIST_MATCH` պատճառի ծածկագիրը; Աուդիտի համար PSP-ները պետք է գրանցեն անտեսումները:
+  - **Sandbox ստորագրության անհամապատասխանություն**. PSP-ն ներկայացնում է գնահատում, որը ստեղծվել է հնացած մոդելի ստորագրությամբ. միավորը մեծանում է մինչև `critical` և աուդիտի կեռիկի ձգանները:
+- **Պատճառի կոդեր**. Յուրաքանչյուր գնահատում ներառում է մեքենայական ընթեռնելի պատճառների կոդեր, որոնք դասակարգվում են ըստ ներդրման քաշի (օրինակ՝ `VELOCITY_BREACH`, `NEW_DEVICE`, `GRAPH_HIGH_RISK`, `AUTH_DOWNGRADE`): PSP-ները կարող են դրանք ներկայացնել օպերատորներին կամ դրամապանակներին՝ օգտատերերի հաղորդագրությունների համար:- **Մոդելի կառավարում**. Կալիբրացիայի և շեմերի կարգավորումները հետևում են փաստաթղթավորված գրքույկներին. եռամսյակը մեկ վերանայվում են ROC/PR կորերը, պիտակավորված խարդախության դեմ հետին փորձարկումները և մրցակցային մոդելները գործում են ստվերում մինչև կայունությունը: Ցանկացած շեմի թարմացում պահանջում է կրկնակի հաստատում (խարդախության գործառնություններ + անկախ ռիսկ):
 
-## In-Memory Feature Cache Design
-- **Shard Layout**: Feature stores are sharded by 64-bit alias hash into `N = 256` shards. Each shard owns:
-  - A lock-free ring buffer for recent transaction deltas (5 min + 1 hr windows) stored as struct-of-arrays to maximise cache-line locality.
-  - A compressed Fenwick tree (bit-packed 16-bit buckets) to maintain 24 hr / 7 day aggregates without full recomputation.
-  - A hop-scotch hash map mapping counterparties → rolling stats (count, sum, variance, last timestamp) capped at 1,024 entries per alias.
-- **Memory Residency**: Hot shards stay in RAM. For a 50 M alias universe with 1% active in the last hour, cache residency is ~500k aliases. At ~320 B per alias of active metadata, the working set is ~160 MB—small enough for L3 cache on modern servers.
-- **Concurrency**: Readers borrow immutable references via epoch-based reclamation; writers append deltas and update aggregates using compare-and-swap. This avoids mutex contention and keeps hot paths to two atomic ops + bounded pointer chasing.
-- **Prefetching**: The scoring worker issues manual `prefetch_read` hints for the next alias shard once request validation completes, hiding main-memory latency (~80 ns) behind feature aggregation.
-- **Write-behind Log**: A per-shard WAL batches deltas every 50 ms (or 4 KB) and flushes to the durable store. Checkpoints run every 5 minutes to keep recovery bounds tight.
+## Կառավարման աղբյուրների սև ցուցակի հոսք
+- **Շղթայական հեղինակում**. սև ցուցակի գրառումները ներկայացվում են կառավարման ենթահամակարգի միջոցով (`iroha_core::smartcontracts::isi::governance`) որպես `BlacklistProposal` ISI, որը թվարկում է փոխանունները, PSP ID-ները կամ սարքի մատնահետքերը՝ արգելափակելու համար: Շահագրգիռ կողմերը քվեարկում են ստանդարտ քվեաթերթիկների միջոցով. Քվորումը ապահովելուց հետո շղթան թողարկում է `GovernanceEvent::BlacklistUpdated` գրառում, որը կրում է հաստատված հավելումներ/հեռացումներ գումարած միապաղաղ աճող `blacklist_epoch`:
+- **Պատվիրակված sudo ուղի**. Արտակարգ գործողությունները կարող են իրականացվել `sudo::Execute` հրահանգի միջոցով, որը թողարկում է նույն `BlacklistUpdated` իրադարձությունը, բայց փոփոխությունը նշում է որպես `origin = Sudo`: Սա արտացոլում է շղթայի պատմությունը բացահայտ ծագմամբ, որպեսզի աուդիտորները կարողանան տարբերակել կոնսենսուսի ձայները պատվիրակված միջամտություններից:
+- **Բաշխման ալիք**. FMS կամուրջ ծառայությունը բաժանորդագրվում է `LedgerEvent` հոսքին (Norito-կոդավորված) և դիտում է `BlacklistUpdated` իրադարձությունները: Յուրաքանչյուր իրադարձություն վավերացվում է կառավարման Merkle-ի ապացույցներով և ստուգվում է բլոկային ստորագրությամբ՝ նախքան կիրառելը: Իրադարձությունները անզոր են. FMS-ը պահպանում է վերջին `blacklist_epoch`-ը՝ կրկնություններից խուսափելու համար:
+- **Հավելված FMS-ի ներսում**. Թարմացումն ընդունվելուց հետո գրառումները գրվում են դետերմինիստական ​​կանոնների պահեստում (ապահովված է միայն հավելվածի պահեստով` աուդիտի մատյաններով): Գնահատող շարժիչը տաքացնում է սև ցուցակը 30 վայրկյանի ընթացքում՝ ապահովելով, որ հետագա գնահատումները գործարկեն `BLACKLIST_MATCH` կանոնը և սեղմեն `critical`:
+- **Աուդիտ և հետադարձ**. Կառավարությունը կարող է քվեարկել նույն խողովակաշարով մուտքերը հեռացնելու օգտին: FMS-ը պահում է `blacklist_epoch`-ի կողմից հատկորոշված ​​պատմական նկարներ, որպեսզի օպերատորները կարողանան պատասխանել դատաբժշկական հարցերին կամ վերարտադրել անցյալի որոշումները հետաքննության ընթացքում:
 
-### Theoretical Latency Breakdown (Intel Ice Lake-class server, 3.1 GHz)
-- **Shard lookup + prefetch**: 1 cache miss (~80 ns) plus hash calculation (<10 ns).
-- **Ring buffer iteration (32 entries)**: 32 × 2 loads = 64 loads; with 32 B cache lines and sequential access this stays in L1 → ~20 ns.
-- **Fenwick updates (log₂ 2048 ≈ 11 steps)**: 11 pointer hops; assuming half L1, half L2 hits → ~30 ns.
-- **Hop-scotch map probe (load factor 0.75, 2 probes)**: 2 cache lines, ~2 × 15 ns.
-- **Model feature assembly**: 150 scalar ops (<0.1 ns each) → ~15 ns.
+4. **Ուսուցման և վերլուծության հարթակ**
+   - Ստանում է խարդախության հաստատված իրադարձություններ, հաշվարկների արդյունքներ և PSP հետադարձ կապ միայն հավելվածի մատյանների միջոցով (օրինակ՝ Kafka + օբյեկտների պահեստավորում):
+   - Տվյալների գիտնականներին տրամադրում է անցանց նոթատետրեր/աշխատանքներ՝ մոդելների վերապատրաստման համար: Մոդելային արտեֆակտները վերափոխվում և ստորագրվում են մինչև առաջխաղացումը:
 
-Summing these gives ~160 ns of compute and ~120 ns of memory stalls per request (~0.28 µs). With four concurrent aggregation workers per core, the stage easily meets the 30 ms budget even under burst load; actual deployment should record histograms to validate (via `fraud.feature_cache_lookup_ms`).
-- **Feature Windows & Aggregation**:
-  - Short-term (rolling 5 min, 1 hr) and long-term (24 hr, 7 day) windows track spend velocity, device reuse, and alias graph degrees.
-  - Graph features (e.g., shared devices across aliases, sudden fan-out, new counterparties in high-risk clusters) rely on regularly compacted summaries so queries stay sub-millisecond.
-  - Location heuristics compare coarse geobuckets with historical behaviour, flagging improbable jumps (e.g., multiple distant locations within minutes) using a capped Haversine-based risk increment.
-  - Flow-shape detectors maintain rolling histograms of inbound/outbound amounts and counterparties to spot mixing/tumbling signatures (rapid fan-in followed by similar fan-out, cyclical hop sequences, short-lived intermediaries).
-- **Rule Catalogue (non-exhaustive)**:
-  - **Velocity breach**: Rapid series of high-value transfers exceeding per-alias or per-device thresholds.
-  - **Alias graph anomaly**: Alias interacts with a cluster linked to confirmed fraud cases or known mule patterns.
-  - **Device reuse**: Shared device fingerprint across aliases belonging to different PSP user cohorts without prior linkage.
-  - **First-time high-value**: New alias attempting amounts above the PSP’s typical onboarding corridor.
-  - **Authentication downgrade**: Transaction uses weaker factors than the account’s baseline (e.g., fallback from biometric to PIN) without PSP-declared justification.
-  - **Mixing/tumbling pattern**: Alias participates in high fan-in/fan-out chains with tightly coupled timing, repeating round-trip amounts, or circular flows across multiple aliases within short windows. Rule boosts score using graph centrality spikes and flow-shape detectors; severe cases clamp to the `high` band even before ML output.
-  - **Transaction blacklist hit**: Alias or counterparty appears on the shared blacklist feed curated via on-chain governance voting or a delegated authority with `sudo` controls (e.g., regulatory orders, confirmed fraud). Score clamps to the `critical` band and emits `BLACKLIST_MATCH` reason code; PSPs must log overrides for audit.
-  - **Sandbox signature mismatch**: PSP submits an assessment generated with an outdated model signature; score escalates to `critical` and audit hook triggers.
-- **Reason Codes**: Every assessment includes machine-readable reason codes ranked by contribution weight (e.g., `VELOCITY_BREACH`, `NEW_DEVICE`, `GRAPH_HIGH_RISK`, `AUTH_DOWNGRADE`). PSPs can surface these to operators or wallets for user messaging.
-- **Model Governance**: Calibration and threshold setting follow documented playbooks—ROC/PR curves reviewed quarterly, back-testing against labelled fraud, and challenger models run in shadow until stable. Any threshold update requires dual approval (fraud operations + independent risk).
+5. **Կառավարման պորտալ**
+   - Սահմանափակ ինտերֆեյս աուդիտորների համար՝ վերանայելու միտումները, որոնելու պատմական գնահատականները և արտահանման միջադեպերի հաշվետվությունները:
+   - Իրականացնում է քաղաքականության ստուգումներ, որպեսզի քննիչները չկարողանան ուսումնասիրել PII առանց PSP-ի համագործակցության:
 
-## Governance-Sourced Blacklist Flow
-- **On-chain authoring**: Blacklist entries are introduced through the governance subsystem (`iroha_core::smartcontracts::isi::governance`) as a `BlacklistProposal` ISI that lists aliases, PSP ids, or device fingerprints to block. Stakeholders vote using the standard ballot pipeline; once quorum is met, the chain emits a `GovernanceEvent::BlacklistUpdated` record carrying the approved additions/removals plus a monotonically increasing `blacklist_epoch`.
-- **Delegated sudo path**: Emergency actions can be executed via the `sudo::Execute` instruction, which emits the same `BlacklistUpdated` event but flags the change as `origin = Sudo`. This mirrors on-chain history with explicit provenance so auditors can distinguish consensus votes from delegated interventions.
-- **Distribution channel**: The FMS bridge service subscribes to the `LedgerEvent` stream (Norito-encoded) and watches for `BlacklistUpdated` events. Each event is validated against the governance Merkle proof and verified with the block signature before being applied. Events are idempotent; the FMS maintains the latest `blacklist_epoch` to avoid replays.
-- **Application inside FMS**: Once an update is accepted, the entries are written to the deterministic rule store (backed by append-only storage with audit logs). The scoring engine hot-reloads the blacklist within 30 seconds, ensuring subsequent assessments trigger the `BLACKLIST_MATCH` rule and clamp to `critical`.
-- **Audit & rollback**: Governance can vote to remove entries via the same pipeline. The FMS keeps historical snapshots tagged by `blacklist_epoch` so operators can answer forensic questions or replay past decisions during investigations.
+6. **Ինտեգրման ադապտերներ**
+   - Թեթև SDK-ներ PSP-ների համար (Rust, Kotlin, Swift, TypeScript), որոնք իրականացնում են Norito հարցումներ/պատասխաններ և տեղական քեշավորում:
+   - Հաշվարկային շարժիչի կեռիկ (`iroha_core`-ի սահմաններում), որը գրանցում է ռիսկի գնահատման հղումներ, երբ PSP-ները փոխանցում են գործարքները հետստուգում:## Տվյալների հոսք
+1. PSP-ն վավերացնում է API gateway-ին և ներկայացնում `RiskQuery`, որը պարունակում է.
+   - Վճարողի/վճարողի կեղծանունների նույնացուցիչները, հաշված սարքի ID-ն, գործարքի գումարը, կատեգորիան, աշխարհագրական կոպիտ դույլը, PSP-ի վստահության դրոշները և վերջին աշխատաշրջանի մետատվյալները:
+2. Gateway-ը վավերացնում է ծանրաբեռնվածությունը, հարստացնում է PSP-ի մետատվյալներով (լիցենզիայի մակարդակ, SLA) և հերթեր՝ հատկանիշի ագրեգացման համար:
+3. Խաղարկային ծառայությունը քաշում է վերջին ագրեգատները, կառուցում է մոդելի վեկտորը և ուղարկում այն ​​ռիսկի շարժիչին:
+4. Ռիսկի շարժիչը գնահատում է հարցումը, կցում է դետերմինիստական ​​պատճառի կոդերը, ստորագրում `FraudAssessment`-ը և վերադարձնում այն ​​PSP-ին:
+5. PSP-ն միավորում է գնահատումը իր տեղական քաղաքականության հետ՝ գործարքը հաստատելու, մերժելու կամ նույնականացնելու համար:
+6. Արդյունքը (հաստատված/մերժված, խարդախությունը հաստատված/կեղծ դրական) ասինխրոն կերպով մղվում է դեպի ուսումնական հարթակ՝ շարունակական բարելավման համար:
+7. Ամենօրյա խմբաքանակի գործընթացները միավորում են կառավարման հաշվետվության չափանիշները և քաղաքականության ծանուցումները (օրինակ՝ աճող սոցիալական ինժեներական դեպքերը) դեպի PSP վահանակներ:
 
-4. **Learning & Analytics Platform**
-   - Receives confirmed fraud events, settlement outcomes, and PSP feedback via an append-only ledger (e.g., Kafka + object storage).
-   - Provides offline notebooks/jobs for data scientists to retrain models. Model artifacts are versioned and signed before promotion.
-
-5. **Governance Portal**
-   - Restricted interface for auditors to review trends, search historical assessments, and export incident reports.
-   - Implements policy checks so investigators cannot drill down to PII without PSP cooperation.
-
-6. **Integration Adapters**
-   - Lightweight SDKs for PSPs (Rust, Kotlin, Swift, TypeScript) implementing the Norito requests/responses and local caching.
-   - Settlement engine hook (within `iroha_core`) that records risk assessment references when PSPs forward transactions post-check.
-
-## Data Flow
-1. PSP authenticates to the API gateway and submits a `RiskQuery` containing:
-   - Alias identifiers for payer/payee, hashed device id, transaction amount, category, geolocation coarse bucket, PSP confidence flags, and recent session metadata.
-2. Gateway validates payload, enriches with PSP metadata (licence tier, SLA) and queues for feature aggregation.
-3. Feature service pulls the latest aggregates, constructs the model vector, and sends it to the risk engine.
-4. Risk engine evaluates the request, attaches deterministic reason codes, signs the `FraudAssessment`, and returns it to the PSP.
-5. PSP combines the assessment with its local policies to approve, decline, or step-up authenticate the transaction.
-6. Outcome (approved/declined, fraud confirmed/false positive) is pushed asynchronously to the learning platform for continuous improvement.
-7. Daily batch processes roll up metrics for governance reporting and push policy alerts (e.g., rising social-engineering cases) to PSP dashboards.
-
-## Integration with Iroha Components
-- **Core Host Hooks**: Transaction admission now enforces the `fraud_assessment_band` metadata whenever `fraud_monitoring.enabled` and `required_minimum_band` are set. The host rejects transactions missing the field or carrying a band below the configured minimum, and emits a deterministic warning when `missing_assessment_grace_secs` is non-zero (grace window scheduled for removal in milestone FM-204 once the remote verifier is wired). Assessments must also include `fraud_assessment_score_bps`; the host cross-checks the score against the declared band (0–249 ➜ low, 250–549 ➜ medium, 550–749 ➜ high, 750+ ➜ critical, with basis-point values supported up to 10 000). When `fraud_monitoring.attesters` is configured, transactions must attach a Norito-encoded `fraud_assessment_envelope` (base64) and a matching `fraud_assessment_digest` (hex). The daemon deterministically decodes the envelope, verifies the Ed25519 signature against the attester registry, recomputes the digest over the unsigned payload, and rejects mismatches so only attested assessments reach consensus.
-- **Configuration**: Add configuration entries under `iroha_config::fraud_monitoring` for the risk service endpoints, timeouts, and required assessment bands. Defaults disable enforcement for local development.
-
-  | Key | Type | Default | Notes |
+## Ինտեգրում Iroha բաղադրիչների հետ
+- **Հիմնական հյուրընկալող կեռիկներ**. գործարքի ընդունումն այժմ պարտադրում է `fraud_assessment_band` մետատվյալները, երբ սահմանվում են `fraud_monitoring.enabled` և `required_minimum_band`: Հյուրընկալողը մերժում է գործարքները, որոնք բացակայում են դաշտը կամ ընդգրկում են կազմաձևված նվազագույնից ցածր գոտի, և թողարկում է դետերմինիստական ​​նախազգուշացում, երբ `missing_assessment_grace_secs`-ը զրոյական չէ (շնորհքի պատուհանը նախատեսվում է հեռացնել FM-204 կարևոր կետում, երբ հեռակառավարվող ստուգիչը միացված է լարով): Գնահատումները պետք է ներառեն նաև `fraud_assessment_score_bps`; հյուրընկալողը խաչաձև ստուգում է միավորը հայտարարված միջակայքի նկատմամբ (0–249 ➜ ցածր, 250–549 ➜ միջին, 550–749 ➜ բարձր, 750+ ➜ կրիտիկական, մինչև 10000 բազային արժեքներով աջակցվող): Երբ `fraud_monitoring.attesters`-ը կազմաձևված է, գործարքները պետք է կցեն Norito կոդավորված `fraud_assessment_envelope` (բազային64) և համապատասխան `fraud_assessment_digest` (վեցանկյուն): Դեյմոնը վճռականորեն վերծանում է ծրարը, ստուգում է Ed25519 ստորագրությունը վավերացնող գրանցամատյանում, վերահաշվարկում է ամփոփումը չստորագրված ծանրաբեռնվածության վրա և մերժում է անհամապատասխանությունները, այնպես որ միայն վավերացված գնահատումները հասնում են համաձայնության:
+- **Կազմաձևում**. ավելացրեք կոնֆիգուրացիայի գրառումներ `iroha_config::fraud_monitoring`-ի ներքո ռիսկի ծառայության վերջնակետերի, ժամկետների և պահանջվող գնահատման տիրույթների համար: Կանխադրվածներն անջատում են տեղական զարգացման կիրառումը:| Բանալի | Տեսակ | Կանխադրված | Ծանոթագրություններ |
   | --- | --- | --- | --- |
-  | `enabled` | bool | `false` | Master switch for admission checks; without `required_minimum_band` the host logs a warning and skips enforcement. |
-  | `service_endpoints` | array<URL> | `[]` | Ordered list of fraud service base URLs. Duplicates are removed deterministically; reserved for the upcoming verifier. |
-  | `connect_timeout_ms` | duration | `500` | Milliseconds before connection attempts abort; zero values fold back to the default. |
-  | `request_timeout_ms` | duration | `1500` | Milliseconds to await a response from the risk service. |
-  | `missing_assessment_grace_secs` | duration | `0` | Grace window allowing missing assessments; non-zero values trigger a deterministic fallback that logs and allows the transaction. |
-  | `required_minimum_band` | enum (`low`, `medium`, `high`, `critical`) | `null` | When set, transactions must attach an assessment at or above this severity band; lower values are rejected. Set to `null` to disable gating even if `enabled` is true. |
-  | `attesters` | array<{ engine_id, public_key }> | `[]` | Optional registry of attestation engines. When populated, envelopes must be signed by one of the listed keys and include a matching digest. |
+  | `enabled` | բուլ | `false` | Հիմնական անջատիչ ընդունելության ստուգումների համար; առանց `required_minimum_band` հաղորդավարը գրանցում է նախազգուշացում և բաց է թողնում կատարումը: |
+  | `service_endpoints` | զանգված | `[]` | Խարդախության ծառայության բազայի URL-ների պատվիրված ցուցակ: Կրկնօրինակները հեռացվում են դետերմինիստորեն. վերապահված է գալիք ստուգիչի համար: |
+  | `connect_timeout_ms` | տեւողությունը | `500` | Միացման փորձերի ընդհատումից միլիվայրկյաններ առաջ; զրոյական արժեքները հետ են դառնում լռելյայն: |
+  | `request_timeout_ms` | տեւողությունը | `1500` | Միլիվայրկյաններ՝ սպասելու ռիսկի ծառայության պատասխանին: |
+  | `missing_assessment_grace_secs` | տեւողությունը | `0` | Grace պատուհան, որը թույլ է տալիս բացակայող գնահատականները; Ոչ զրոյական արժեքները առաջացնում են դետերմինիստական ​​հետադարձ կապ, որը գրանցում և թույլ է տալիս գործարքը: |
+  | `required_minimum_band` | enum (`low`, `medium`, `high`, `critical`) | `null` | Երբ սահմանված է, գործարքները պետք է կցեն գնահատում այս խստության սահմանաչափի կամ ավելի բարձր. ավելի ցածր արժեքները մերժվում են: Սահմանեք `null`-ը, որպեսզի անջատեք մուտքը, նույնիսկ եթե `enabled`-ը ճիշտ է: |
+  | `attesters` | զանգված | `[]` | Ատեստավորման շարժիչների կամընտիր ռեգիստր: Երբ լրացված են, ծրարները պետք է ստորագրված լինեն նշված բանալիներից մեկով և ներառեն համապատասխան ամփոփագիր: |
 
-- **Validation**: Unit tests in `crates/iroha_core/tests/fraud_monitoring.rs` cover disabled, missing, and insufficient-band paths; `integration_tests::fraud_monitoring_requires_assessment_bands` exercises the mocked-assessment flow end-to-end.
+- **Վավերացում**. `crates/iroha_core/tests/fraud_monitoring.rs`-ում միավորի թեստերը ներառում են անջատված, բացակայող և անբավարար գոտի ունեցող ուղիները. `integration_tests::fraud_monitoring_requires_assessment_bands`-ն իրականացնում է ծաղրված գնահատման հոսքը ծայրից ծայր:
 
-- **Telemetry**: `iroha_telemetry` exports PSP-facing collectors capturing assessment counts (`fraud_psp_assessments_total{tenant,band,lane,subnet}`), missing metadata (`fraud_psp_missing_assessment_total{tenant,lane,subnet,cause}`), latency histograms (`fraud_psp_latency_ms{tenant,lane,subnet}`), score distributions (`fraud_psp_score_bps{tenant,band,lane,subnet}`), invalid payloads (`fraud_psp_invalid_metadata_total{tenant,field,lane,subnet}`), attestation outcomes (`fraud_psp_attestation_total{tenant,engine,lane,subnet,status}`), and outcome mismatches (`fraud_psp_outcome_mismatch_total{tenant,direction,lane,subnet}`). Metadata keys expected on every transaction are `fraud_assessment_band`, `fraud_assessment_tenant`, `fraud_assessment_score_bps`, `fraud_assessment_latency_ms`, the attester envelope/digest pair (`fraud_assessment_envelope`, `fraud_assessment_digest`), and the post-incident `fraud_assessment_disposition` flag (values: `approved`, `declined`, `manual_review`, `confirmed_fraud`, `false_positive`, `chargeback`, `loss`).
-- **Norito Schema**: Define Norito types for `RiskQuery`, `FraudAssessment`, and governance reports. Provide roundtrip tests to guarantee codec stability.
+- **Հեռաչափություն**. `iroha_telemetry`-ն արտահանում է PSP-ին ուղղված կոլեկտորներ, որոնք ֆիքսում են գնահատման թվերը (`fraud_psp_assessments_total{tenant,band,lane,subnet}`), բացակայող մետատվյալներ (`fraud_psp_missing_assessment_total{tenant,lane,subnet,cause}`), հապաղման հիստոգրամներ (`fraud_psp_missing_assessment_total{tenant,lane,subnet,cause}`), ուշացման հիստոգրամներ (`fraud_psp_latency_ms{tenant,lane,subnet}`), օգտակար բեռներ (`fraud_psp_invalid_metadata_total{tenant,field,lane,subnet}`), ատեստավորման արդյունքներ (`fraud_psp_attestation_total{tenant,engine,lane,subnet,status}`) և արդյունքների անհամապատասխանություններ (`fraud_psp_outcome_mismatch_total{tenant,direction,lane,subnet}`): Յուրաքանչյուր գործարքի համար ակնկալվող մետատվյալների բանալիներն են՝ `fraud_assessment_band`, `fraud_assessment_tenant`, `fraud_assessment_score_bps`, `fraud_assessment_latency_ms`, ստուգիչի ծրար/դիզեստ զույգը (Norito, `fraud_assessment_envelope`, `fraud_assessment_envelope`, `fraud_assessment_envelope`, `fraud_assessment_envelope`, `fraud_assessment_envelope`, `fraud_assessment_envelope`, `fraud_assessment_envelope`, `fraud_assessment_envelope`, `fraud_assessment_score_bps`, `fraud_assessment_score_bps`, `fraud_assessment_score_bps`. `fraud_assessment_disposition` flag (values: `approved`, `declined`, `manual_review`, `confirmed_fraud`, `false_positive`, `chargeback`, `loss`).
+- **Norito սխեման**. Սահմանեք Norito տեսակները `RiskQuery`, `FraudAssessment` և կառավարման հաշվետվությունների համար: Տրամադրեք շրջադարձային թեստեր՝ կոդեկի կայունությունը երաշխավորելու համար:
 
-## Privacy & Data Minimization
-- Aliases, hashed device IDs, and coarse geolocation buckets form the entire data plane shared with the central service.
-- PSPs retain mapping from aliases to real identities; no such mapping leaves their perimeter.
-- Risk models operate only on pseudonymous behavioral signals plus PSP-submitted context (merchant category, channel, authentication strength).
-- Audit exports are aggregated (e.g., counts per PSP per day). Any drill-down requires dual control and PSP-side de-anonymization.
+## Գաղտնիություն և տվյալների նվազագույնի հասցնել
+- Անանունները, հաշված սարքերի ID-ները և կոպիտ աշխարհագրական դույլերը կազմում են կենտրոնական ծառայության հետ համօգտագործվող տվյալների ամբողջ հարթությունը:
+- PSP-ները պահպանում են կեղծանուններից իրական ինքնությունների քարտեզագրումը. ոչ մի նման քարտեզագրում չի թողնում դրանց պարագիծը:
+- Ռիսկի մոդելները գործում են միայն կեղծանուն վարքագծային ազդանշանների վրա, գումարած PSP-ի կողմից ներկայացված համատեքստը (վաճառողի կատեգորիա, ալիք, նույնականացման ուժ):
+- Աուդիտի արտահանումը ագրեգացված է (օրինակ՝ հաշվարկները մեկ PSP-ի համար մեկ օրում): Ցանկացած փորձարկում պահանջում է կրկնակի հսկողություն և PSP-ի կողմից անանունացում:## Գործողություններ և տեղակայում
+- Տեղադրեք գնահատման հարթակը որպես հատուկ ենթահամակարգ, որը կառավարվում է նշանակված օպերատորի կողմից, որը տարբերվում է կենտրոնական բանկի հանգույցի օպերատորներից:
+- Ապահովեք կապույտ/կանաչ միջավայրեր՝ `fraud-scoring-prod`, `fraud-scoring-shadow`, `fraud-lab`:
+- Իրականացնել առողջության ավտոմատացված ստուգումներ (API ուշացում, հաղորդագրությունների հետաձգում, մոդելի բեռնման հաջողություն): Եթե ​​առողջական ստուգումները ձախողվեն, PSP SDK-ները ավտոմատ կերպով անցնում են միայն տեղական ռեժիմի և ծանուցում օպերատորներին:
+- Պահպանեք պահպանման դույլեր. տաք պահեստավորում (30 օր պիտույքների պահեստում), տաք պահեստավորում (1 տարի օբյեկտի պահեստում), սառը արխիվ (5 տարի սեղմված):
 
-## Operations & Deployment
-- Deploy the scoring platform as a dedicated subsystem managed by an appointed operator distinct from the central bank node operators.
-- Provide blue/green environments: `fraud-scoring-prod`, `fraud-scoring-shadow`, `fraud-lab`.
-- Implement automated health checks (API latency, message backlog, model load success). If health checks fail, PSP SDKs automatically switch to local-only mode and notify operators.
-- Maintain retention buckets: hot storage (30 days in feature store), warm storage (1 year in object storage), cold archive (5 years compressed).
+## Հեռաչափության կոլեկցիոներներ և վահանակներ
 
-## Telemetry Collectors & Dashboards
+### Պահանջվող կոլեկցիոներներ
 
-### Required collectors
+- **Prometheus scrape**. միացրեք `/metrics`-ը PSP ինտեգրման պրոֆիլով աշխատող յուրաքանչյուր վավերացնողի վրա, որպեսզի `fraud_psp_*` սերիան արտահանվի: Կանխադրված պիտակները ներառում են տեղապահ `subnet="global"` և `lane` ID-ներ, որպեսզի վահանակները կարողանան պտտվել մի քանի ենթացանցով երթուղիներով:
+- **Գնահատման ընդհանուր գումարները**. `fraud_psp_assessments_total{tenant,band}`-ը հաշվում է ընդունված գնահատականները ըստ ծանրության խմբի; ահազանգում է հրդեհի մասին, եթե վարձակալը դադարում է հայտնել 5 րոպեով:
+- **Բացակայող մետատվյալներ**. `fraud_psp_missing_assessment_total{tenant,cause}`-ը տարբերում է կոշտ մերժումները (`cause="missing"`) շնորհի պատուհանի նպաստներից (`cause="grace"`): Դարպասի գործարքներ, որոնք բազմիցս ընկնում են շնորհի դույլի մեջ:
+- **Հապաղման հիստոգրամ**. `fraud_psp_latency_ms_bucket`-ը հետևում է PSP-ի կողմից հաղորդված գնահատման հետաձգմանը: Թիրախ <120ms P95 150ms-ով ծանուցումներով:
+- **Միավորների բաշխում**. մետաղալարերի տոկոսադրույքները կառավարման վահանակին:
+- **Արդյունքների անհամապատասխանություններ**. `fraud_psp_outcome_mismatch_total{direction}`-ը բաժանում է կեղծ պոզիտիվները (`direction="false_positive"`) բաց թողնված խարդախությունից (`"missed_fraud"`): Աճել, եթե որևէ ուղղություն շեղվում է ավելի քան 20% 30-օրյա միջինից:
+- **Սխալ մետատվյալներ**. `fraud_psp_invalid_metadata_total{field}`-ը նշում է PSP-ի օգտակար բեռնվածության ռեգրեսիաները (օրինակ՝ բացակայող վարձակալների ID-ները, սխալ ձևակերպումները), որպեսզի SDK-ի թարմացումները կարող են արագ տարածվել:
+- **Ատեստավորման կարգավիճակը**. `fraud_psp_attestation_total{tenant,engine,status}`-ը հաստատում է, որ ծրարները ստորագրվում են և համընկնում են: Զգուշացեք, եթե `status!="verified"` բարձրանում է ցանկացած վարձակալի կամ շարժիչի համար:
 
-- **Prometheus scrape**: enable `/metrics` on every validator running the PSP integration profile so `fraud_psp_*` series are exported. Default labels include placeholder `subnet="global"` and `lane` IDs so dashboards can pivot once multi-subnet routing ships.
-- **Assessment totals**: `fraud_psp_assessments_total{tenant,band}` counts accepted assessments per severity band; alerts fire if a tenant stops reporting for 5 minutes.
-- **Missing metadata**: `fraud_psp_missing_assessment_total{tenant,cause}` distinguishes hard rejections (`cause="missing"`) from grace-window allowances (`cause="grace"`). Gate transactions that repeatedly fall into the grace bucket.
-- **Latency histogram**: `fraud_psp_latency_ms_bucket` traces PSP-reported scoring latency. Target <120 ms P95 with alerts at 150 ms.
-- **Score distribution**: `fraud_psp_score_bps_bucket{band}` snapshots risk-score drift; wire percentiles to the governance dashboard.
-- **Outcome mismatches**: `fraud_psp_outcome_mismatch_total{direction}` splits false positives (`direction="false_positive"`) from missed fraud (`"missed_fraud"`). Escalate if either direction deviates >20% from trailing 30-day mean.
-- **Invalid metadata**: `fraud_psp_invalid_metadata_total{field}` flags PSP payload regressions (e.g., missing tenant IDs, malformed dispositions) so SDK updates can be rolled out quickly.
-- **Attestation status**: `fraud_psp_attestation_total{tenant,engine,status}` confirms that envelopes are being signed and digests match. Alert if `status!="verified"` spikes for any tenant or engine.
+### վահանակի ծածկույթ
 
-### Dashboard coverage
+- **Գործադիր ակնարկ**. `fraud_psp_assessments_total`-ի դասավորված տարածքի գծապատկերը ըստ խմբի յուրաքանչյուր վարձակալի, զուգորդված աղյուսակի հետ, որը ամփոփում է P95 հետաձգման և անհամապատասխանության թվերը:
+- **Գործողություններ**. `fraud_psp_latency_ms` և `fraud_psp_score_bps` հիստոգրամային վահանակներ շաբաթական համեմատությամբ, գումարած `fraud_psp_missing_assessment_total`-ի մեկ վիճակագրության հաշվիչներ՝ բաժանված `cause`-ով:
+- **Ռիսկերի մոնիտորինգ**. `fraud_psp_outcome_mismatch_total`-ի գծապատկերը յուրաքանչյուր վարձակալի համար, մանրամասն աղյուսակ, որը թվարկում է վերջին `fraud_assessment_disposition=confirmed_fraud` դեպքերը, որտեղ `band`-ը եղել է `low` կամ `medium`:
+- **Զգուշացման կանոններ**:
+  - `rate(fraud_psp_missing_assessment_total{cause="missing"}[5m]) > 0` → էջերի ծանուցում (PSP տրաֆիկը մերժող ընդունելություն):
+  - `histogram_quantile(0.95, sum(rate(fraud_psp_latency_ms_bucket[10m])) by (le,tenant)) > 150` → ուշացման SLO խախտում:
+  - `sum by (tenant) (rate(fraud_psp_outcome_mismatch_total{direction="missed_fraud"}[1h])) > 0.01` → մոդելի դրեյֆ / քաղաքականության բացը:
 
-- **Executive overview**: stacked area chart of `fraud_psp_assessments_total` by band per tenant, coupled with a table summarising P95 latency and mismatch counts.
-- **Operations**: histogram panels for `fraud_psp_latency_ms` and `fraud_psp_score_bps` with week-over-week comparison, plus single-stat counters for `fraud_psp_missing_assessment_total` split by `cause`.
-- **Risk monitoring**: bar chart of `fraud_psp_outcome_mismatch_total` per tenant, drill-down table listing recent `fraud_assessment_disposition=confirmed_fraud` cases where `band` was `low` or `medium`.
-- **Alert rules**:
-  - `rate(fraud_psp_missing_assessment_total{cause="missing"}[5m]) > 0` → paging alert (admission rejecting PSP traffic).
-  - `histogram_quantile(0.95, sum(rate(fraud_psp_latency_ms_bucket[10m])) by (le,tenant)) > 150` → latency SLO breach.
-  - `sum by (tenant) (rate(fraud_psp_outcome_mismatch_total{direction="missed_fraud"}[1h])) > 0.01` → model drift / policy gap.
+### Անհաջող ակնկալիքներ- PSP SDK-ները պետք է պահպանեն երկու ակտիվ գնահատման վերջնակետեր և ձախողվեն 15 վայրկյանի ընթացքում՝ տրանսպորտային սխալները կամ հետաձգման ավելի քան 200 ms հայտնաբերելուց հետո: Գրացուցակը հանդուրժում է շնորհի տրաֆիկը առավելագույնը `fraud_monitoring.missing_assessment_grace_secs`; օպերատորները արտադրության մեջ պետք է պահեն կոճակը <=30 վայրկյանում:
+- Վալիդատորները գրանցում են `fraud_psp_missing_assessment_total{cause="grace"}`, երբ գտնվում են հետադարձ ռեժիմում; եթե վարձակալը պահպանում է շնորհը ավելի քան 5 րոպե, PSP-ն պետք է անցնի ձեռքով վերանայման և բացի Sev2 միջադեպ ընդհանուր խարդախության գործառնությունների թիմի հետ:
+- Ակտիվ-ակտիվ տեղակայումները պետք է ցույց տան հերթերի արտահոսք/կրկնօրինակում աղետների վերականգնման զորավարժությունների ժամանակ: Կրկնվող չափումները պետք է պահեն `fraud_psp_latency_ms` P99-ը 400 մվ-ից ցածր՝ կրկնվող պատուհանի համար:
 
-### Failover expectations
+## PSP տվյալների փոխանակման ստուգաթերթ
 
-- PSP SDKs must maintain two active scoring endpoints and fail over within 15 seconds of detecting transport errors or latency spikes >200 ms. The ledger tolerates grace traffic for at most `fraud_monitoring.missing_assessment_grace_secs`; operators should keep the knob at <=30 seconds in production.
-- Validators record `fraud_psp_missing_assessment_total{cause="grace"}` while in fallback; if a tenant stays in grace for >5 minutes, the PSP must switch to manual review and open a Sev2 incident with the shared fraud operations team.
-- Active-active deployments must demonstrate queue drain/replay during disaster recovery drills. Replay metrics should keep `fraud_psp_latency_ms` P99 under 400 ms for the replay window.
+1. **Telemetry Plumbing**. ցուցադրեք վերը նշված մետատվյալների բանալիները մատյանին հանձնված յուրաքանչյուր գործարքի համար. վարձակալի նույնացուցիչները պետք է լինեն կեղծանուն և համապատասխանեն PSP պայմանագրին:
+2. **Անանունացում**. հաստատեք, որ սարքի հեշերը, կեղծանունների նույնացուցիչները և դիսպոզիցիաները կեղծված են մինչև PSP պարագծից դուրս գալը. ոչ մի PII չի կարող ներառվել Norito մետատվյալներում:
+3. **Հապաղման հաշվետվություն**. լրացրեք `fraud_assessment_latency_ms`-ը վերջից մինչև վերջ ժամանակացույցով (մուտք դեպի PSP), որպեսզի SLA ռեգրեսիաները անմիջապես հայտնվեն:
+4. **Արդյունքների համաձայնեցում**. թարմացրեք `fraud_assessment_disposition`-ը, երբ հաստատվեն խարդախության դեպքերը (օրինակ՝ փակցված գումարի վերադարձը)՝ անհամապատասխանության չափանիշները ճշգրիտ պահելու համար:
+5. **Ձախողման վարժություններ**. փորձեք եռամսյակը մեկ՝ օգտագործելով ընդհանուր ստուգաթերթը. ստուգեք վերջնակետի ավտոմատ ձախողումը, ապահովեք գրեյս պատուհանի գրանցումը և կցեք վարժական նշումներ `scripts/ci/schedule_fraud_scoring.sh`-ի կողմից ներկայացված հետագա առաջադրանքին:
+6. **Dashboard-ի վավերացում**. PSP-ի գործառնական թիմերը պետք է վերանայեն Prometheus վահանակները ներբեռնումից և կարմիր թիմի յուրաքանչյուր վարժությունից հետո՝ հաստատելու համար, որ չափումները հոսում են վարձակալների սպասվող պիտակներով:
 
-## PSP Data-Sharing Checklist
+## Անվտանգության նկատառումներ
+- Բոլոր պատասխանները ստորագրված են ապարատային ապահովման բանալիներով; PSP-ները վավերացնում են ստորագրությունները նախքան միավորները վստահելը:
+- Մոդելի սահմանները սովորելու նպատակով զոնդավորման հարձակումները մեղմելու համար փոխանվան/սարքի սահմանաչափը:
+- Ներդրեք ջրի մակարդակի նշագիծը գնահատումների ներսում՝ հետևելու արտահոսող պատասխաններին՝ առանց PSP-ի ինքնությունը հրապարակայնորեն բացահայտելու:
+- Կարմիր թիմի եռամսյակային վարժություններ կատարեք Անվտանգության WG-ի հետ համաձայնեցված (Milestone 0) և ստացված արդյունքները ներառեք ճանապարհային քարտեզի թարմացումների մեջ:## Իրականացման փուլեր
+1. **Փուլ 0 – Հիմնադրամներ**
+   - Վերջնականացրեք Norito սխեմաները, PSP SDK փայտամածները, կոնֆիգուրացիայի լարերը և գրանցամատյանում գտնվող ստուգման կոճակը:
+   - Կառուցեք դետերմինիստական ​​կանոնների շարժիչ, որը ծածկում է պարտադիր ռիսկերի ստուգումները (արագություն, արագություն մեկ անունի զույգի համար, սարքի վերօգտագործում):
+2. **Փուլ 1 – Կենտրոնական միավորի MVP**
+   - Տեղադրեք առանձնահատկությունների խանութ, գնահատման ծառայություն և հեռաչափության վահանակներ:
+   - Ինտեգրել իրական ժամանակի միավորները սահմանափակ PSP խմբի հետ; գրավել հետաձգման և որակի չափանիշները:
+3. **Փուլ 2 – Ընդլայնված վերլուծություն **
+   - Ներդրեք անոմալիաների հայտնաբերումը, գրաֆիկի վրա հիմնված կապի վերլուծությունը և հարմարվողական շեմերը:
+   - Գործարկել կառավարման պորտալը և խմբաքանակի հաշվետվությունների խողովակաշարերը:
+4. **Փուլ 3 – Շարունակական ուսուցում և ավտոմատացում **
+   - Ավտոմատացրեք մոդելի ուսուցման/վավերացման խողովակաշարերը, ավելացրեք դեղձանիկների տեղակայումները և ընդլայնեք SDK ծածկույթը:
+   - Համապատասխանեցեք միջիրավասության տվյալների փոխանակման համաձայնագրերին և միացրեք ապագա բազմաշերտ կամուրջներին:
 
-1. **Telemetry plumbing**: expose the metadata keys listed above for every transaction handed to the ledger; tenant identifiers must be pseudonymous and scoped to the PSP contract.
-2. **Anonymisation**: confirm that device hashes, alias identifiers, and dispositions are pseudonymised before leaving the PSP perimeter; no PII can be embedded in Norito metadata.
-3. **Latency reporting**: populate `fraud_assessment_latency_ms` with end-to-end timing (gateway to PSP) so SLA regressions surface immediately.
-4. **Outcome reconciliation**: update `fraud_assessment_disposition` once fraud cases are confirmed (e.g., chargeback posted) to keep mismatch metrics accurate.
-5. **Failover drills**: rehearse quarterly using the shared checklist—verify automatic endpoint failover, ensure grace-window logging, and attach drill notes to the follow-up task filed by `scripts/ci/schedule_fraud_scoring.sh`.
-6. **Dashboard validation**: PSP operations teams must review Prometheus dashboards after onboarding and after every red-team exercise to confirm metrics are flowing with expected tenant labels.
-
-## Security Considerations
-- All responses are signed with hardware-backed keys; PSPs validate signatures before trusting scores.
-- Rate-limit by alias/device to mitigate probing attacks aiming to learn model boundaries.
-- Embed watermarking inside assessments to trace leaked responses without revealing PSP identity publicly.
-- Run quarterly red-team exercises in coordination with the Security WG (Milestone 0) and feed findings into roadmap updates.
-
-## Implementation Phases
-1. **Phase 0 – Foundations**
-   - Finalize Norito schemas, PSP SDK scaffolding, configuration wiring, and ledger-side verification stub.
-   - Build deterministic rule engine covering mandatory risk checks (velocity, velocity per alias pair, device reuse).
-2. **Phase 1 – Central Scoring MVP**
-   - Deploy feature store, scoring service, and telemetry dashboards.
-   - Integrate real-time scoring with a limited PSP cohort; capture latency and quality metrics.
-3. **Phase 2 – Advanced Analytics**
-   - Introduce anomaly detection, graph-based link analysis, and adaptive thresholds.
-   - Launch governance portal and batch reporting pipelines.
-4. **Phase 3 – Continuous Learning & Automation**
-   - Automate model training/validation pipelines, add canary deployments, and expand SDK coverage.
-   - Align with cross-jurisdiction data-sharing agreements and plug into future multi-subnet bridges.
-
-## Open Questions
-- What regulatory body will charter the operator of the fraud service, and how are oversight responsibilities shared?
-- How do PSPs expose end-user challenge flows while maintaining consistent UX across providers?
-- Which privacy-enhancing technologies (e.g., secure enclaves, homomorphic aggregation) should be prioritized once baseline service is stable?
+## Բաց Հարցեր
+- Կարգավորող ո՞ր մարմինն է վարձակալելու խարդախության ծառայության օպերատորին, և ինչպե՞ս են բաշխվում վերահսկողության պարտականությունները:
+- Ինչպե՞ս են PSP-ները բացահայտում վերջնական օգտատերերի մարտահրավերների հոսքերը՝ միաժամանակ պահպանելով կայուն UX մատակարարների միջև:
+- Գաղտնիության բարելավման ո՞ր տեխնոլոգիաները (օրինակ՝ անվտանգ անկլավներ, հոմոմորֆ ագրեգացիա) պետք է առաջնահերթ լինեն, երբ բազային ծառայությունը կայուն լինի:

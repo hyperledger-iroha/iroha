@@ -6,125 +6,121 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: bcf280df1e00065199d386e07b9fd67d8f94c4046d73cfa3b63d1eec18228cd8
 source_last_modified: "2026-01-22T16:01:14.866000+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 # IVM Syscall ABI
 
-This document defines the IVM syscall numbers, pointer-ABI calling conventions, reserved number ranges, and the canonical table of contract-facing syscalls used by Kotodama lowering. It complements `ivm.md` (architecture) and `kotodama_grammar.md` (language).
+يحدد هذا المستند أرقام syscall IVM، واصطلاحات استدعاء المؤشر-ABI، ونطاقات الأرقام المحجوزة، والجدول المتعارف عليه لمكالمات النظام التي تواجه العقد والتي يستخدمها خفض Kotodama. وهو يكمل `ivm.md` (الهندسة المعمارية) و`kotodama_grammar.md` (اللغة).
 
-Versioning
-- The set of recognized syscalls depends on the bytecode header `abi_version` field. The first release accepts only `abi_version = 1`; other values are rejected at admission. Unknown numbers for the active `abi_version` deterministically trap with `E_SCALL_UNKNOWN`.
-- Runtime upgrades keep `abi_version = 1` and do not expand syscall or pointer‑ABI surfaces.
-- Syscall gas costs are part of the versioned gas schedule bound to the bytecode header version. See `ivm.md` (Gas policy).
+الإصدار
+- تعتمد مجموعة مكالمات النظام المعترف بها على حقل رأس الرمز الثانوي `abi_version`. يقبل الإصدار الأول `abi_version = 1` فقط؛ يتم رفض القيم الأخرى عند القبول. الأرقام غير المعروفة لـ `abi_version` النشطة تتوافق بشكل حتمي مع `E_SCALL_UNKNOWN`.
+- تحافظ ترقيات وقت التشغيل على `abi_version = 1` ولا تعمل على توسيع أسطح syscall أو المؤشر-ABI.
+- تعد تكاليف غاز Syscall جزءًا من جدول الغاز المُصدر والمرتبط بإصدار رأس الرمز الثانوي. راجع `ivm.md` (سياسة الغاز).
 
-Numbering ranges
-- `0x00..=0x1F`: VM core/utility (debug/exit helpers are available under `CoreHost`; remaining dev helpers are mock-host only).
-- `0x20..=0x5F`: Iroha core ISI bridge (stable in ABI v1).
-- `0x60..=0x7F`: extension ISIs gated by protocol features (still part of ABI v1 when enabled).
-- `0x80..=0xFF`: host/crypto helpers and reserved slots; only numbers present in the ABI v1 allowlist are accepted.
+نطاقات الترقيم
+- `0x00..=0x1F`: VM core/Utility (تتوفر مساعدات تصحيح الأخطاء/الخروج ضمن `CoreHost`؛ أما مساعدو التطوير المتبقيون فهم مضيفون وهميون فقط).
+- `0x20..=0x5F`: جسر Iroha الأساسي لـ ISI (مستقر في ABI v1).
+- `0x60..=0x7F`: امتداد ISIs مسور بميزات البروتوكول (لا يزال جزءًا من ABI v1 عند التمكين).
+- `0x80..=0xFF`: مساعدو المضيف/التشفير والفتحات المحجوزة؛ يتم قبول الأرقام الموجودة في القائمة المسموح بها لـ ABI v1 فقط.
 
-Durable helpers (ABI v1)
-- The durable state helper syscalls (0x50–0x5A: STATE_{GET,SET,DEL}, ENCODE/DECODE_INT, BUILD_PATH_*, JSON/SCHEMA encode/decode) are part of the V1 ABI and included in `abi_hash` computation.
-- CoreHost wires STATE_{GET,SET,DEL} to WSV-backed durable smart-contract state; dev/test hosts may persist locally but must preserve identical syscall semantics.
+المساعدات الدائمة (ABI v1)
+- تعد استدعاءات النظام المساعدة للحالة الدائمة (0x50–0x5A: STATE_{GET,SET,DEL}, ENCODE/DECODE_INT, BUILD_PATH_*, JSON/SCHEMA encode/decode) جزءًا من V1 ABI ومضمنة في حساب `abi_hash`.
+- يقوم CoreHost بتوصيل STATE_{GET,SET,DEL} إلى حالة العقد الذكي المتين المدعومة من WSV؛ قد يستمر مضيفو dev/test محليًا ولكن يجب أن يحافظوا على دلالات syscall متطابقة.
 
-Pointer‑ABI calling convention (smart‑contract syscalls)
-- Arguments are placed in registers `r10+` as raw `u64` values or as pointers into the INPUT region to immutable Norito TLV envelopes (e.g., `AccountId`, `AssetDefinitionId`, `Name`, `Json`, `NftId`).
-- Scalar return values are the `u64` returned from the host. Pointer results are written by the host into `r10`.
+اصطلاح استدعاء Pointer-ABI (مكالمات نظام العقد الذكي)
+- يتم وضع الوسائط في السجلات `r10+` كقيم `u64` أولية أو كمؤشرات في منطقة INPUT إلى مظاريف Norito TLV غير القابلة للتغيير (على سبيل المثال، `AccountId`، `AssetDefinitionId`، `Name`، `Json`، `NftId`).
+- قيم الإرجاع العددية هي `u64` التي تم إرجاعها من المضيف. تتم كتابة نتائج المؤشر بواسطة المضيف في `r10`.
 
-Canonical syscall table (subset)
+جدول syscall الكنسي (مجموعة فرعية)| عرافة | الاسم | الوسائط (في `r10+`) | عوائد | غاز (قاعدي + متغير) | ملاحظات |
+|------|-------------------------------------------|--------------------------------------------------------------------------|-------------|------------------------------|-------|
+| 0x1A | SET_ACCOUNT_DETAIL | `&AccountId`، `&Name`، `&Json` | `u64=0` | `G_set_detail + bytes(val)` | يكتب تفاصيل الحساب |
+| 0x22 | MINT_ASSET | `&AccountId`، `&AssetDefinitionId`، `&NoritoBytes(Numeric)` | `u64=0` | `G_mint` | النعناع `amount` من الأصول إلى الحساب |
+| 0x23 | حرق_الأصول | `&AccountId`، `&AssetDefinitionId`، `&NoritoBytes(Numeric)` | `u64=0` | `G_burn` | يحرق `amount` من الحساب |
+| 0x24 | تحويل_الأصول | `&AccountId(from)`، `&AccountId(to)`، `&AssetDefinitionId`، `&NoritoBytes(Numeric)` | `u64=0` | `G_transfer` | التحويلات `amount` بين الحسابات |
+| 0x29 | TRANSFER_V1_BATCH_BEGIN | – | `u64=0` | `G_transfer` | بدء نطاق دفعة نقل FASTPQ |
+| 0x2A | TRANSFER_V1_BATCH_END | – | `u64=0` | `G_transfer` | تدفق دفعة نقل FASTPQ المتراكمة |
+| 0x2B | TRANSFER_V1_BATCH_APPLY | `r10=&NoritoBytes(TransferAssetBatch)` | `u64=0` | `G_transfer` | تطبيق دفعة مشفرة بـ Norito في مكالمة نظام واحدة |
+| 0x25 | NFT_MINT_ASSET | `&NftId`، `&AccountId(owner)` | `u64=0` | `G_nft_mint_asset` | يسجل NFT جديد |
+| 0x26 | NFT_TRANSFER_ASSET | `&AccountId(from)`، `&NftId`، `&AccountId(to)` | `u64=0` | `G_nft_transfer_asset` | ينقل ملكية NFT |
+| 0x27 | NFT_SET_METADATA | `&NftId`، `&Json` | `u64=0` | `G_nft_set_metadata` | تحديثات البيانات التعريفية NFT |
+| 0x28 | NFT_BURN_ASSET | `&NftId` | `u64=0` | `G_nft_burn_asset` | بيرنز (يدمر) NFT |
+| 0xA1 | SMARTCONTRACT_EXECUTE_QUERY| `r10=&NoritoBytes(QueryRequest)` | `r10=ptr (&NoritoBytes(QueryResponse))` | `G_scq + per_item*items + per_byte*bytes(resp)` | يتم تشغيل الاستعلامات القابلة للتكرار بشكل سريع الزوال؛ تم رفض `QueryRequest::Continue` |
+| 0xA2 | CREATE_NFTS_FOR_ALL_USERS | – | `u64=count` | `G_create_nfts_for_all` | المساعد؛ ميزة بوابات || 0xA3 | SET_SMARTCONTRACT_EXECUTION_DEPTH | `depth:u64` | `u64=prev` | `G_set_depth` | مسؤل؛ ميزة بوابات |
+| 0xA4 | الحصول على السلطة | – (المضيف يكتب النتيجة) | `&AccountId`| `G_get_auth` | يكتب المضيف المؤشر إلى السلطة الحالية في `r10` |
+| 0xF7 | GET_MERKLE_PATH | `addr:u64`، `out_ptr:u64`، اختياري `root_out:u64` | `u64=len` | `G_mpath + len` | يكتب المسار (leaf → root) وبايتات الجذر الاختيارية |
+| 0xFA | GET_MERKLE_COMPACT | `addr:u64`، `out_ptr:u64`، اختياري `depth_cap:u64`، اختياري `root_out:u64` | `u64=depth` | `G_mpath + depth` | `[u8 depth][u32 dirs_le][u32 count][count*32 siblings]` |
+| 0xFF | GET_REGISTER_MERKLE_COMPACT| `reg_index:u64`، `out_ptr:u64`، اختياري `depth_cap:u64`، اختياري `root_out:u64` | `u64=depth` | `G_mpath + depth` | نفس التخطيط المضغوط لالتزام التسجيل |
 
-| Hex  | Name                       | Arguments (in `r10+`)                                                   | Returns     | Gas (base + variable)        | Notes |
-|------|----------------------------|-------------------------------------------------------------------------|-------------|------------------------------|-------|
-| 0x1A | SET_ACCOUNT_DETAIL         | `&AccountId`, `&Name`, `&Json`                                          | `u64=0`     | `G_set_detail + bytes(val)`  | Writes a detail for the account |
-| 0x22 | MINT_ASSET                 | `&AccountId`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)`             | `u64=0`     | `G_mint`                     | Mints `amount` of asset to account |
-| 0x23 | BURN_ASSET                 | `&AccountId`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)`             | `u64=0`     | `G_burn`                     | Burns `amount` from account |
-| 0x24 | TRANSFER_ASSET             | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)` | `u64=0`     | `G_transfer`                 | Transfers `amount` between accounts |
-| 0x29 | TRANSFER_V1_BATCH_BEGIN    | –                                                                       | `u64=0`     | `G_transfer`                 | Begin FASTPQ transfer batch scope |
-| 0x2A | TRANSFER_V1_BATCH_END      | –                                                                       | `u64=0`     | `G_transfer`                 | Flush accumulated FASTPQ transfer batch |
-| 0x2B | TRANSFER_V1_BATCH_APPLY    | `r10=&NoritoBytes(TransferAssetBatch)`                                  | `u64=0`     | `G_transfer`                 | Apply a Norito-encoded batch in a single syscall |
-| 0x25 | NFT_MINT_ASSET             | `&NftId`, `&AccountId(owner)`                                           | `u64=0`     | `G_nft_mint_asset`           | Registers a new NFT |
-| 0x26 | NFT_TRANSFER_ASSET         | `&AccountId(from)`, `&NftId`, `&AccountId(to)`                          | `u64=0`     | `G_nft_transfer_asset`       | Transfers ownership of NFT |
-| 0x27 | NFT_SET_METADATA           | `&NftId`, `&Json`                                                       | `u64=0`     | `G_nft_set_metadata`         | Updates NFT metadata |
-| 0x28 | NFT_BURN_ASSET             | `&NftId`                                                                | `u64=0`     | `G_nft_burn_asset`           | Burns (destroys) an NFT |
-| 0xA1 | SMARTCONTRACT_EXECUTE_QUERY| `r10=&NoritoBytes(QueryRequest)`                                        | `r10=ptr (&NoritoBytes(QueryResponse))` | `G_scq + per_item*items + per_byte*bytes(resp)` | Iterable queries run ephemerally; `QueryRequest::Continue` rejected |
-| 0xA2 | CREATE_NFTS_FOR_ALL_USERS  | –                                                                       | `u64=count` | `G_create_nfts_for_all`      | Helper; feature‑gated |
-| 0xA3 | SET_SMARTCONTRACT_EXECUTION_DEPTH | `depth:u64`                                                         | `u64=prev`  | `G_set_depth`                | Admin; feature‑gated |
-| 0xA4 | GET_AUTHORITY              | – (host writes result)                                                  | `&AccountId`| `G_get_auth`                 | Host writes pointer to current authority into `r10` |
-| 0xF7 | GET_MERKLE_PATH            | `addr:u64`, `out_ptr:u64`, optional `root_out:u64`                      | `u64=len`   | `G_mpath + len`             | Writes path (leaf→root) and optional root bytes |
-| 0xFA | GET_MERKLE_COMPACT         | `addr:u64`, `out_ptr:u64`, optional `depth_cap:u64`, optional `root_out:u64` | `u64=depth` | `G_mpath + depth`           | `[u8 depth][u32 dirs_le][u32 count][count*32 siblings]` |
-| 0xFF | GET_REGISTER_MERKLE_COMPACT| `reg_index:u64`, `out_ptr:u64`, optional `depth_cap:u64`, optional `root_out:u64` | `u64=depth` | `G_mpath + depth`           | Same compact layout for register commitment |
+إنفاذ الغاز
+- يقوم CoreHost بفرض رسوم إضافية على مكالمات نظام ISI باستخدام جدول ISI الأصلي؛ يتم فرض رسوم على عمليات نقل دفعة FASTPQ لكل إدخال.
+- تقوم مكالمات نظام ZK_VERIFY بإعادة استخدام جدول غاز التحقق السري (حجم القاعدة + الإثبات).
+- SMARTCONTRACT_EXECUTE_QUERY يفرض رسومًا أساسية + لكل عنصر + لكل بايت؛ يضاعف الفرز تكلفة كل عنصر وتضيف الإزاحات غير المصنفة عقوبة لكل عنصر.
 
-Gas enforcement
-- CoreHost charges extra gas for ISI syscalls using the native ISI schedule; FASTPQ batch transfers are charged per entry.
-- ZK_VERIFY syscalls reuse the confidential verification gas schedule (base + proof size).
-- SMARTCONTRACT_EXECUTE_QUERY charges base + per-item + per-byte; sorting multiplies per-item cost and unsorted offsets add a per-item penalty.
+ملاحظات
+- تشير كافة وسيطات المؤشر إلى مظاريف Norito TLV في منطقة INPUT ويتم التحقق من صحتها عند إلغاء المرجع الأول (`E_NORITO_INVALID` عند حدوث خطأ).
+- يتم تطبيق جميع الطفرات عبر المنفذ القياسي لـ Iroha (من خلال `CoreHost`)، وليس مباشرة بواسطة VM.
+- يتم تحديد ثوابت الغاز الدقيقة (`G_*`) من خلال جدول الغاز النشط؛ راجع `ivm.md`.
 
-Notes
-- All pointer arguments reference Norito TLV envelopes in the INPUT region and are validated on first dereference (`E_NORITO_INVALID` on error).
-- All mutations are applied via Iroha’s standard executor (through `CoreHost`), not directly by the VM.
-- Exact gas constants (`G_*`) are defined by the active gas schedule; see `ivm.md`.
+أخطاء
+- `E_SCALL_UNKNOWN`: لم يتم التعرف على رقم syscall لـ `abi_version` النشط.
+- تنتشر أخطاء التحقق من صحة الإدخال كمصائد VM (على سبيل المثال، `E_NORITO_INVALID` لـ TLVs المشوهة).
 
-Errors
-- `E_SCALL_UNKNOWN`: syscall number not recognized for the active `abi_version`.
-- Input validation errors propagate as VM traps (e.g., `E_NORITO_INVALID` for malformed TLVs).
+المراجع الترافقية
+- دلالات الهندسة المعمارية والجهاز الظاهري: `ivm.md`
+- اللغة ورسم الخرائط المدمج: `docs/source/kotodama_grammar.md`
 
-Cross‑references
-- Architecture and VM semantics: `ivm.md`
-- Language and builtin mapping: `docs/source/kotodama_grammar.md`
+مذكرة الجيل
+- يمكن إنشاء قائمة كاملة بثوابت syscall من المصدر باستخدام:
+  - `make docs-syscalls` → يكتب `docs/source/ivm_syscalls_generated.md`
+  - `make check-docs` → يتحقق من أن الجدول الذي تم إنشاؤه محدث (مفيد في CI)
+- تظل المجموعة الفرعية أعلاه عبارة عن جدول ثابت ومنظم لمكالمات النظام التي تواجه العقد.
 
-Generation note
-- A complete list of syscall constants can be generated from source with:
-  - `make docs-syscalls` → writes `docs/source/ivm_syscalls_generated.md`
-  - `make check-docs` → verifies the generated table is up to date (useful in CI)
-- The subset above remains a curated, stable table for contract-facing syscalls.
+## أمثلة على TLV للمسؤول/الدور (مضيف وهمي)
 
-## Admin/Role TLV Examples (Mock Host)
-
-This section documents the TLV shapes and minimal JSON payloads accepted by the mock WSV host for admin‑style syscalls used in tests. All pointer arguments follow the pointer‑ABI (Norito TLV envelopes placed in INPUT). Production hosts may use richer schemas; these examples aim to clarify types and basic shapes.
-
-- REGISTER_PEER / UNREGISTER_PEER
-  - Args: `r10=&Json`
-  - Example JSON: `{ "peer": "peer-id-or-info" }`
-  - CoreHost note: `REGISTER_PEER` expects a `RegisterPeerWithPop` JSON object with `peer` + `pop` bytes (optional `activation_at`, `expiry_at`, `hsm`); `UNREGISTER_PEER` accepts a peer-id string or `{ "peer": "..." }`.
+يوثق هذا القسم أشكال TLV والحد الأدنى من حمولات JSON التي يقبلها مضيف WSV الوهمي لاستدعاءات النظام على نمط المسؤول المستخدمة في الاختبارات. تتبع كافة وسيطات المؤشر المؤشر-ABI (مغلفات Norito TLV الموضوعة في INPUT). قد يستخدم مضيفو الإنتاج مخططات أكثر ثراءً؛ تهدف هذه الأمثلة إلى توضيح الأنواع والأشكال الأساسية.- REGISTER_PEER / UNREGISTER_PEER
+  - الوسيطات: `r10=&Json`
+  - مثال JSON: `{ "peer": "peer-id-or-info" }`
+  - ملاحظة CoreHost: `REGISTER_PEER` يتوقع كائن `RegisterPeerWithPop` JSON مع `peer` + `pop` بايت (`activation_at` اختياري، `expiry_at`، `hsm`)؛ يقبل `UNREGISTER_PEER` سلسلة معرف النظير أو `{ "peer": "..." }`.
 
 - CREATE_TRIGGER / REMOVE_TRIGGER / SET_TRIGGER_ENABLED
-  - CREATE_TRIGGER:
-    - Args: `r10=&Json`
-    - Minimal JSON: `{ "name": "t1" }` (additional fields ignored by the mock)
+  - إنشاء_TRIGGER:
+    - الوسيطات: `r10=&Json`
+    - الحد الأدنى من JSON: `{ "name": "t1" }` (تم تجاهل الحقول الإضافية بواسطة النموذج الوهمي)
   - REMOVE_TRIGGER:
-    - Args: `r10=&Name` (trigger name)
+    - الوسائط: `r10=&Name` (اسم المشغل)
   - SET_TRIGGER_ENABLED:
-    - Args: `r10=&Name`, `r11=enabled:u64` (0 = disabled, non‑zero = enabled)
-  - CoreHost note: `CREATE_TRIGGER` expects a full trigger spec (base64 Norito `Trigger` string or
-    `{ "id": "<trigger_id>", "action": ... }` with `action` as a base64 Norito `Action` string or
-    a JSON object), and `SET_TRIGGER_ENABLED` toggles the trigger metadata key `__enabled` (missing
-    defaults to enabled).
+    - الوسائط: `r10=&Name`، `r11=enabled:u64` (0 = معطل، غير صفر = ممكّن)
+  - ملاحظة CoreHost: يتوقع `CREATE_TRIGGER` مواصفات تشغيل كاملة (سلسلة base64 Norito `Trigger` أو
+    `{ "id": "<trigger_id>", "action": ... }` مع `action` كسلسلة أساسية64 Norito `Action` أو
+    كائن JSON)، ويقوم `SET_TRIGGER_ENABLED` بتبديل مفتاح بيانات تعريف المشغل `__enabled` (مفقود
+    الإعدادات الافتراضية للتمكين).
 
-- Roles: CREATE_ROLE / DELETE_ROLE / GRANT_ROLE / REVOKE_ROLE
-  - CREATE_ROLE:
-    - Args: `r10=&Name` (role name), `r11=&Json` (permissions set)
-    - JSON accepts either key `"perms"` or `"permissions"`, each a string array of permission names.
-    - Examples:
-      - `{ "perms": [ "mint_asset:rose#wonder" ] }`
-      - `{ "permissions": [ "read_assets:ih58...", "transfer_asset:rose#wonder" ] }`
-    - Supported permission name prefixes in the mock:
-      - `register_domain`, `register_account`, `register_asset_definition`
-      - `read_assets:<account_id>`
-      - `mint_asset:<asset_definition_id>`
-      - `burn_asset:<asset_definition_id>`
-      - `transfer_asset:<asset_definition_id>`
+- الأدوار: CREATE_ROLE / DELETE_ROLE / GRANT_ROLE / REVOKE_ROLE
+  - إنشاء_دور:
+    - الوسائط: `r10=&Name` (اسم الدور)، `r11=&Json` (مجموعة الأذونات)
+    - يقبل JSON إما المفتاح `"perms"` أو `"permissions"`، وكل منهما عبارة عن مجموعة سلسلة من أسماء الأذونات.
+    - أمثلة:
+      -`{ "perms": [ "mint_asset:rose#wonder" ] }`
+      -`{ "permissions": [ "read_assets:ih58...", "transfer_asset:rose#wonder" ] }`
+    - بادئات اسم الإذن المدعومة في النسخة الوهمية:
+      - `register_domain`، `register_account`، `register_asset_definition`
+      -`read_assets:<account_id>`
+      -`mint_asset:<asset_definition_id>`
+      -`burn_asset:<asset_definition_id>`
+      -`transfer_asset:<asset_definition_id>`
   - DELETE_ROLE:
-    - Args: `r10=&Name`
-    - Fails if any account is still assigned this role.
+    - الوسيطات: `r10=&Name`
+    - يفشل إذا كان لا يزال يتم تعيين هذا الدور لأي حساب.
   - GRANT_ROLE / REVOKE_ROLE:
-    - Args: `r10=&AccountId` (subject), `r11=&Name` (role name)
-  - CoreHost note: permission JSON may be a full `Permission` object (`{ "name": "...", "payload": ... }`) or a string (payload defaults to `null`); `GRANT_PERMISSION`/`REVOKE_PERMISSION` accept `&Name` or `&Json(Permission)`.
+    - الوسائط: `r10=&AccountId` (الموضوع)، `r11=&Name` (اسم الدور)
+  - ملاحظة CoreHost: قد يكون إذن JSON عبارة عن كائن `Permission` كامل (`{ "name": "...", "payload": ... }`) أو سلسلة (الإعدادات الافتراضية للحمولة هي `null`)؛ `GRANT_PERMISSION`/`REVOKE_PERMISSION` يقبل `&Name` أو `&Json(Permission)`.
 
-- Unregister ops (domain/account/asset): invariants (mock)
-  - UNREGISTER_DOMAIN (`r10=&DomainId`) fails if accounts or asset definitions exist in the domain.
-  - UNREGISTER_ACCOUNT (`r10=&AccountId`) fails if the account has non‑zero balances or owns NFTs.
-  - UNREGISTER_ASSET (`r10=&AssetDefinitionId`) fails if any balances exist for the asset.
+- إلغاء تسجيل العمليات (المجال/الحساب/الأصول): الثوابت (وهمية)
+  - يفشل UNREGISTER_DOMAIN (`r10=&DomainId`) في حالة وجود حسابات أو تعريفات أصول في المجال.
+  - يفشل UNREGISTER_ACCOUNT (`r10=&AccountId`) إذا كان الحساب يحتوي على أرصدة غير صفرية أو يمتلك NFTs.
+  - يفشل UNREGISTER_ASSET (`r10=&AssetDefinitionId`) في حالة وجود أي أرصدة للأصل.
 
-Notes
-- These examples reflect the mock WSV host used in tests; real node hosts may expose richer admin schemas or require additional validation. The pointer‑ABI rules still apply: TLVs must be in INPUT, version=1, type IDs must match, and payload hashes must validate.
+ملاحظات
+- تعكس هذه الأمثلة مضيف WSV الوهمي المستخدم في الاختبارات؛ قد يعرض مضيفو العقدة الحقيقية مخططات إدارية أكثر ثراءً أو يحتاجون إلى تحقق إضافي. لا تزال قواعد المؤشر-ABI سارية: يجب أن تكون TLVs في INPUT، الإصدار=1، ويجب أن تتطابق معرفات النوع، ويجب التحقق من صحة تجزئات الحمولة.

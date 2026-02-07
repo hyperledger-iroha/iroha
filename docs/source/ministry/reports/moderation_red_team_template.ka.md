@@ -9,74 +9,75 @@ source_last_modified: "2025-12-29T18:16:35.982646+00:00"
 translation_last_reviewed: 2026-02-07
 title: Red-Team Drill Report Template
 summary: Copy this file for every MINFO-9 drill to capture metadata, evidence, and remediation actions.
+translator: machine-google-reviewed
 ---
 
-> **How to use:** duplicate this template to `docs/source/ministry/reports/<YYYY-MM>-mod-red-team-<scenario>.md` immediately after each drill. Keep filenames lowercase, hyphenated, and aligned with the drill ID logged in Alertmanager.
+> **როგორ გამოვიყენოთ:** დააკოპირეთ ეს შაბლონი `docs/source/ministry/reports/<YYYY-MM>-mod-red-team-<scenario>.md`-ზე ყოველი სწავლის შემდეგ დაუყოვნებლივ. შეინახეთ ფაილების სახელები მცირე ასოებით, დეფისით და გასწორებული საბურღი ID-სთან, რომელიც შესულია Alertmanager-ში.
 
 # Red-Team Drill Report — `<SCENARIO NAME>`
 
-- **Drill ID:** `<YYYYMMDD>-<scenario>`
-- **Date & window:** `<YYYY-MM-DD HH:MMZ – HH:MMZ>`
-- **Scenario class:** `smuggling | bribery | gateway | ...`
-- **Operators:** `<names / handles>`
-- **Dashboards frozen from commit:** `<git SHA>`
-- **Evidence bundle:** `artifacts/ministry/red-team/<YYYY-MM>/<scenario>/`
-- **SoraFS CID (optional):** `<cid>`  
-- **Related roadmap items:** `MINFO-9`, plus any linked tickets.
+- **საბურღი ID:** `<YYYYMMDD>-<scenario>`
+- **თარიღი და ფანჯარა:** `<YYYY-MM-DD HH:MMZ – HH:MMZ>`
+- **სცენარის კლასი:** `smuggling | bribery | gateway | ...`
+- **ოპერატორები:** `<names / handles>`
+- ** დაფები გაყინულია ჩადენისგან:** `<git SHA>`
+- **მტკიცებულებების ნაკრები:** `artifacts/ministry/red-team/<YYYY-MM>/<scenario>/`
+- **SoraFS CID (არასავალდებულო):** `<cid>`  
+- ** დაკავშირებული საგზაო რუქის ელემენტები:** `MINFO-9`, პლუს ნებისმიერი დაკავშირებული ბილეთი.
 
-## 1. Objectives & Entry Conditions
+## 1. მიზნები და შესვლის პირობები
 
-- **Primary objectives**
+- **პირველადი მიზნები**
   - `<e.g. Verify denylist TTL enforcement under smuggling attack>`
-- **Prerequisites confirmed**
-  - `emergency_canon_policy.md` version `<tag>`
-  - `dashboards/grafana/ministry_moderation_overview.json` digest `<sha256>`
-  - Override authority on-call: `<name>`
+- ** წინაპირობები დადასტურებულია **
+  - `emergency_canon_policy.md` ვერსია `<tag>`
+  - `dashboards/grafana/ministry_moderation_overview.json` დაიჯესტი `<sha256>`
+  - გამოძახების უფლებამოსილების უგულებელყოფა: `<name>`
 
-## 2. Execution Timeline
+## 2. შესრულების ვადები
 
-| Timestamp (UTC) | Actor | Action / Command | Result / Notes |
-|-----------------|-------|------------------|----------------|
+| დროის ანაბეჭდი (UTC) | მსახიობი | მოქმედება / ბრძანება | შედეგი / შენიშვნები |
+|-------------------------|-----------------|---------------|
 |  |  |  |  |
 
-> Include Torii request IDs, chunk hashes, override approvals, and Alertmanager links.
+> ჩართეთ Torii მოთხოვნის პირადობის მოწმობები, ნაჭრების ჰეშები, დამტკიცებების უგულებელყოფა და Alertmanager ბმულები.
 
-## 3. Observations & Metrics
+## 3. დაკვირვებები და მეტრიკა
 
-| Metric | Target | Observed | Pass/Fail | Notes |
-|--------|--------|----------|-----------|-------|
-| Alert response latency | `<X> min` | `<Y> min` | ✅/⚠️ |  |
-| Moderation detection rate | `>= <value>` |  |  |  |
-| Gateway anomaly detection | `Alert fired` |  |  |  |
+| მეტრული | სამიზნე | დაკვირვებული | გავლა/ჩავარდნა | შენიშვნები |
+|--------|--------|----------|----------|------|
+| გაფრთხილების პასუხის შეყოვნება | `<X> min` | `<Y> min` | ✅/⚠️ |  |
+| ზომიერების გამოვლენის მაჩვენებელი | `>= <value>` |  |  |  |
+| კარიბჭის ანომალიის გამოვლენა | `Alert fired` |  |  |  |
 
 - `Grafana export:` `artifacts/.../dashboards/ministry_moderation_overview.json`
 - `Alert bundle:` `artifacts/.../alerts/ministry_moderation_rules.yml`
 - `Norito manifests:` `<path>`
 
-## 4. Findings & Remediation
+## 4. დასკვნები და გამოსწორება
 
-| Severity | Finding | Owner | Target Date | Status / Link |
-|----------|---------|-------|-------------|---------------|
-| High |  |  |  |  |
+| სიმძიმე | მოძიება | მფლობელი | სამიზნე თარიღი | სტატუსი / ბმული |
+|----------|---------|-------|------------|--------------|
+| მაღალი |  |  |  |  |
 
-Document how calibration manifests, denylist policies, or SDK/tooling must change. Link to GitHub/Jira issues and note blocked/unblocked states.
+დაასაბუთეთ, თუ როგორ ვლინდება კალიბრაცია, უნდა შეიცვალოს უარყოფის წესები ან SDK/ინსტრუმენტები. დაუკავშირდით GitHub/Jira-ს საკითხებს და შენიშნეთ დაბლოკილი/განბლოკილი მდგომარეობები.
 
-## 5. Governance & Approvals
+## 5. მმართველობა და დამტკიცებები
 
-- **Incident commander sign-off:** `<name / timestamp>`
-- **Governance council review date:** `<meeting id>`
-- **Follow-up checklist:** `[ ] status.md updated`, `[ ] roadmap row updated`, `[ ] transparency packet annotated`
+- ** ინციდენტის მეთაურის გაფორმება:** `<name / timestamp>`
+- **მმართველობის საბჭოს განხილვის თარიღი:** `<meeting id>`
+- **შემდეგი საკონტროლო სია:** `[ ] status.md updated`, `[ ] roadmap row updated`, `[ ] transparency packet annotated`
 
-## 6. Attachments
+## 6. დანართები
 
-- `[ ] CLI logbook (`logs/<file>.md`)`
+- `[ ] CLI logbook (`logs/.md`)`
 - `[ ] Dashboard JSON export`
 - `[ ] Alertmanager history`
 - `[ ] SoraFS manifest / CAR`
 - `[ ] Override audit log`
 
-Mark each attachment with `[x]` once uploaded to the evidence bundle and SoraFS snapshot.
+მონიშნეთ თითოეული დანართი `[x]` ერთხელ ატვირთული მტკიცებულებების პაკეტში და SoraFS სნეპშოტით.
 
 ---
 
-_Last updated: {{ date | default("2026-02-20") }}_
+_ბოლო განახლება: {{ თარიღი | ნაგულისხმევი ("2026-02-20") }}_

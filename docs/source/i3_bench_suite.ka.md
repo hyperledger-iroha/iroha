@@ -7,16 +7,17 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a3158cd70a42104bacaafc520fdcc10e20e3bc347d895be448fcb10da4f668bd
 source_last_modified: "2025-12-29T18:16:35.965528+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Iroha 3 Bench Suite
+# Iroha 3 სკამიანი ლუქსი
 
-The Iroha 3 bench suite times the hot paths we rely on during staking, fee
-charging, proof verification, scheduling, and proof endpoints. It runs as an
-`xtask` command with deterministic fixtures (fixed seeds, fixed key material,
-and stable request payloads) so results are reproducible across hosts.
+Iroha 3 სკამიანი კომპლექტი აორმაგებს ცხელ ბილიკებს, რომლებსაც ჩვენ ვეყრდნობით ფსონების დროს, საფასური
+დატენვის, მტკიცებულების დადასტურების, დაგეგმვისა და მტკიცებულების საბოლოო წერტილები. ის მუშაობს როგორც
+`xtask` ბრძანება დეტერმინისტული მოწყობილობებით (ფიქსირებული თესლი, ფიქსირებული გასაღები მასალა,
+და სტაბილური მოთხოვნის დატვირთვა) ასე რომ, შედეგები რეპროდუცირებადია ჰოსტებში.
 
-## Running the suite
+## ლუქსის გაშვება
 
 ```bash
 cargo xtask i3-bench-suite \
@@ -29,41 +30,41 @@ cargo xtask i3-bench-suite \
   --allow-overwrite
 ```
 
-Flags:
+დროშები:
 
-- `--iterations` controls iterations per scenario sample (default: 64).
-- `--sample-count` repeats each scenario to compute the median (default: 5).
-- `--json-out|--csv-out|--markdown-out` choose output artifacts (all optional).
-- `--threshold` compares medians against the baseline bounds (set `--no-threshold`
-  to skip).
-- `--flamegraph-hint` annotates the Markdown report with the `cargo flamegraph`
-  command to profile a scenario.
+- `--iterations` აკონტროლებს გამეორებას თითო სცენარის ნიმუშზე (ნაგულისხმევი: 64).
+- `--sample-count` იმეორებს თითოეულ სცენარს მედიანას გამოსათვლელად (ნაგულისხმევი: 5).
+- `--json-out|--csv-out|--markdown-out` აირჩიეთ გამომავალი არტეფაქტები (ყველა სურვილისამებრ).
+- `--threshold` ადარებს მედიანებს საბაზისო საზღვრებთან (კომპლექტი `--no-threshold`
+  გამოტოვება).
+- `--flamegraph-hint` ანოტირებს Markdown ანგარიშს `cargo flamegraph`-ით
+  სცენარის პროფილის ბრძანება.
 
-CI glue lives in `ci/i3_bench_suite.sh` and defaults to the paths above; set
-`I3_BENCH_ITERATIONS`/`I3_BENCH_SAMPLES` to tune runtime in nightlies.
+CI წებო ცხოვრობს `ci/i3_bench_suite.sh`-ში და ნაგულისხმევია ზემოთ მოცემულ ბილიკებზე; კომპლექტი
+`I3_BENCH_ITERATIONS`/`I3_BENCH_SAMPLES` ღამის გასაშვებად.
 
-## Scenarios
+## სცენარები
 
-- `fee_payer` / `fee_sponsor` / `fee_insufficient` — payer vs sponsor debit
-  and shortfall rejection.
-- `staking_bond` / `staking_slash` — bond/unbond queue with and without
-  slashing.
+- `fee_payer` / `fee_sponsor` / `fee_insufficient` — გადამხდელი და სპონსორის დებეტი
+  და დეფიციტის უარყოფა.
+- `staking_bond` / `staking_slash` — ობლიგაციების/გაუქმების რიგში და მის გარეშე
+  ჭრის.
 - `commit_cert_verify` / `jdg_attestation_verify` / `bridge_proof_verify` —
-  signature verification over commit certificates, JDG attestations, and bridge
-  proof payloads.
-- `commit_cert_assembly` — digest assembly for commit certificates.
-- `access_scheduler` — conflict-aware access-set scheduling.
-- `torii_proof_endpoint` — Axum proof endpoint parsing + verification round trip.
+  ხელმოწერის გადამოწმება ვალდებულების სერტიფიკატების, JDG ატესტაციებისა და ხიდის შესახებ
+  მტკიცებულების ტვირთამწეობა.
+- `commit_cert_assembly` — დაიჯესტის ასამბლეა ვალდებულების სერთიფიკატებისთვის.
+- `access_scheduler` — კონფლიქტის გაცნობიერებული წვდომის კომპლექტის დაგეგმვა.
+- `torii_proof_endpoint` — Axum proof ბოლო წერტილის ანალიზი + გადამოწმების ორმხრივი მოგზაურობა.
 
-Every scenario records median nanoseconds per iteration, throughput, and a
-deterministic allocation counter for quick regressions. Thresholds live in
-`benchmarks/i3/thresholds.json`; bump bounds there when hardware changes and
-commit the new artifact alongside a report.
+ყველა სცენარი აღრიცხავს მედიანურ ნანოწამებს თითო გამეორებაზე, გამტარუნარიანობაზე და ა
+განმსაზღვრელი განაწილების მრიცხველი სწრაფი რეგრესიებისთვის. ზღურბლები ცხოვრობენ
+`benchmarks/i3/thresholds.json`; bump საზღვრები იქ, როდესაც ტექნიკა იცვლება და
+შეიტანეთ ახალი არტეფაქტი მოხსენებასთან ერთად.
 
-## Troubleshooting
+## პრობლემების მოგვარება
 
-- Pin CPU frequency/governor when collecting evidence to avoid noisy regressions.
-- Use `--no-threshold` for exploratory runs, then re-enable once the baseline is
-  refreshed.
-- To profile a single scenario, set `--iterations 1` and re-run under
+- დაამაგრეთ CPU სიხშირე/გუბერნატორი მტკიცებულებების შეგროვებისას, რათა თავიდან აიცილოთ ხმაურიანი რეგრესი.
+- გამოიყენეთ `--no-threshold` საძიებო სირბილებისთვის, შემდეგ ხელახლა ჩართეთ, როგორც კი საბაზისო იქნება
+  განახლებული.
+- ერთი სცენარის პროფილისთვის დააყენეთ `--iterations 1` და ხელახლა გაუშვით
   `cargo flamegraph -p xtask -- i3-bench-suite --iterations 128 --sample-count 1 --no-threshold --flamegraph-hint`.

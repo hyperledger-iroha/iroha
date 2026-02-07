@@ -6,40 +6,41 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: cba8780bcec4ebf562dc9c5725f328b0ea2d9009517efa5b5a504e2fb6be81fe
 source_last_modified: "2026-01-18T05:31:56.950113+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Error Mapping Guide
+# غلطی میپنگ گائیڈ
 
-Last updated: 2025-08-21
+آخری تازہ کاری: 2025-08-21
 
-This guide maps common failure modes in Iroha to stable error categories surfaced by the data model. Use it to design tests and to make client error handling predictable.
+یہ گائیڈ Iroha میں عام ناکامی کے طریقوں کو اعداد و شمار کے ماڈل کے ذریعہ منظر عام پر آنے والی مستحکم غلطی کے زمرے میں نقشہ دیتا ہے۔ ٹیسٹوں کو ڈیزائن کرنے اور کلائنٹ کی غلطی سے نمٹنے کے لئے پیش گوئی کرنے کے لئے اس کا استعمال کریں۔
 
-Principles
-- Instruction and query paths emit structured enums. Avoid panics; report a specific category wherever possible.
-- Categories are stable, messages may evolve. Clients should match on categories, not on free‑form strings.
+اصول
+- ہدایات اور استفسار کے راستے ساختی انومز کو خارج کرتے ہیں۔ گھبراہٹ سے پرہیز ؛ جہاں بھی ممکن ہو کسی مخصوص زمرے کی اطلاع دیں۔
+- زمرے مستحکم ہیں ، پیغامات تیار ہوسکتے ہیں۔ کلائنٹ کو زمرہ جات پر میچ کرنا چاہئے ، مفت - فارم کے تاروں پر نہیں۔
 
-Categories
-- InstructionExecutionError::Find: Entity missing (asset, account, domain, NFT, role, trigger, permission, public key, block, transaction). Example: removing a non‑existent metadata key yields Find(MetadataKey).
-- InstructionExecutionError::Repetition: Duplicate registration or conflicting ID. Contains the instruction type and the repeated IdBox.
-- InstructionExecutionError::Mintability: Mintability invariant violated (`Once` exhausted twice, `Limited(n)` overdrawn, or attempts to disable `Infinitely`). Examples: minting an asset defined as `Once` twice yields `Mintability(MintUnmintable)`; configuring `Limited(0)` yields `Mintability(InvalidMintabilityTokens)`.
-- InstructionExecutionError::Math: Numeric domain errors (overflow, divide‑by‑zero, negative value, not enough quantity). Example: burning more than available amount yields Math(NotEnoughQuantity).
-- InstructionExecutionError::InvalidParameter: Invalid instruction parameter or configuration (e.g., time trigger in the past). Use for malformed contract payloads.
-- InstructionExecutionError::Evaluate: DSL/spec mismatch for instruction shape or types. Example: wrong numeric spec for an asset value yields Evaluate(Type(AssetNumericSpec(..))).
-- InstructionExecutionError::InvariantViolation: Violation of a system invariant that cannot be expressed in other categories. Example: attempting to remove the last signatory.
-- InstructionExecutionError::Query: Wrapping of QueryExecutionFail when a query fails during instruction execution.
+زمرے
+- انسٹرکشن ایکسیکیشن ایرر :: تلاش کریں: ہستی غائب (اثاثہ ، اکاؤنٹ ، ڈومین ، این ایف ٹی ، کردار ، ٹرگر ، اجازت ، عوامی کلید ، بلاک ، لین دین)۔ مثال کے طور پر: غیر مشمول میٹا ڈیٹا کی کلیدی پیداوار کو ختم کرنا (میٹا ڈیٹاکی)۔
+- انسٹرکشن ایکسیکیشن ایرر :: تکرار: ڈپلیکیٹ رجسٹریشن یا متضاد ID۔ ہدایات کی قسم اور بار بار آئی ڈی بکس پر مشتمل ہے۔
+- انسٹرکشن ایکسیکیشن ایرر :: اجزاء: اجزاء کی ناگوار خلاف ورزی کی خلاف ورزی کی گئی (`Once` دو بار ختم ، `Limited(n)` حد سے زیادہ ، یا `Infinitely` کو غیر فعال کرنے کی کوششیں)۔ مثال کے طور پر: `Once` کے طور پر بیان کردہ ایک اثاثہ کو دو بار پیداوار `Mintability(MintUnmintable)` کی تقویت دینا ؛ `Limited(0)` کی تشکیل `Mintability(InvalidMintabilityTokens)` کی تشکیل۔
+- انسٹرکشن ایکسیکیشن ایرر :: ریاضی: عددی ڈومین کی غلطیاں (اوور فلو ، تقسیم - بائی - صفر ، منفی قدر ، کافی مقدار نہیں)۔ مثال کے طور پر: دستیاب رقم سے زیادہ جلانے سے ریاضی (notenofsquantity) کی پیداوار ہوتی ہے۔
+- انسٹرکشن ایکسیکیشن ایرر :: انولڈ پیرا میٹر: غلط انسٹرکشن پیرامیٹر یا ترتیب (جیسے ، ماضی میں ٹائم ٹرگر)۔ خراب معاہدے کے پے لوڈ کے لئے استعمال کریں۔
+- انسٹرکشن ایکسیکیشن ایرر :: تشخیص: ہدایات کی شکل یا اقسام کے لئے DSL/مخصوص مماثلت۔ مثال کے طور پر: اثاثہ ویلیو کی پیداوار کے لئے غلط عددی قیاس (قسم (اثاثہ (اثاثہ نمبر ())))۔
+- انسٹرکشن ایکسٹیکیشن ایرر :: انوورینٹ ویولیشن: ایک ایسے نظام کی ناگوار کی خلاف ورزی جس کا اظہار دوسری قسموں میں نہیں کیا جاسکتا۔ مثال: آخری دستخطی کو دور کرنے کی کوشش کرنا۔
+- انسٹرکشن ایکسیکیشن ایرر :: استفسار: جب ہدایات پر عمل درآمد کے دوران کوئی استفسار ناکام ہوجاتا ہے تو استفسار ایکسیکیشنفیل کو لپیٹنا۔
 
-QueryExecutionFail
-- Find: Missing entity in query context.
-- Conversion: Wrong type expected by a query.
-- NotFound: Missing live query cursor.
-- CursorMismatch / CursorDone: Cursor protocol errors.
-- FetchSizeTooBig: Server‑enforced limit exceeded.
-- GasBudgetExceeded: Query execution exceeded the gas/materialization budget.
-- InvalidSingularParameters: Unsupported parameters for singular queries.
-- CapacityLimit: Live query store capacity reached.
+کوئری ایکسیکیشنفیل
+- تلاش کریں: استفسار کے تناظر میں گمشدہ ہستی۔
+- تبادلوں: غلط قسم کی ایک استفسار کے ذریعہ متوقع ہے۔
+- نوٹ فاؤنڈ: لاپتہ براہ راست استفسار کرسر۔
+- کرسمرمیچ / کرسورڈون: کرسر پروٹوکول کی غلطیاں۔
+۔
+- گیس بڈجٹ ایکسیڈڈ: استفسار پر عمل درآمد گیس/مادیت سازی کے بجٹ سے تجاوز کر گیا۔
+۔
+- گنجائش لمیٹ: براہ راست استفسار اسٹور کی گنجائش تک پہنچ گئی۔
 
-Testing Tips
-- Prefer unit tests close to the origin of an error. For example, asset numeric spec mismatch can be generated in data‑model tests.
-- Integration tests should cover end‑to‑end mapping for representative cases (e.g., duplicate register, missing key on remove, transfer without ownership).
-- Keep assertions resilient by matching enum variants instead of message substrings.
+جانچ کے نکات
+- کسی غلطی کی اصل کے قریب یونٹ ٹیسٹ کو ترجیح دیں۔ مثال کے طور پر ، ڈیٹا - ماڈل ٹیسٹ میں اثاثہ عددی مخصوص مماثلت پیدا کی جاسکتی ہے۔
+- انضمام کے ٹیسٹوں میں نمائندوں کے معاملات (جیسے ، ڈپلیکیٹ رجسٹر ، ہٹانے میں کلید گمشدہ ، ملکیت کے بغیر منتقلی) کے لئے میپنگ کے اختتام - سے - میپنگ کا احاطہ کرنا چاہئے۔
+- میسج سبسٹرنگز کے بجائے اینوم مختلف حالتوں سے مل کر دعووں کو لچکدار رکھیں۔

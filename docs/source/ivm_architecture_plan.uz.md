@@ -7,82 +7,81 @@ generator: scripts/sync_docs_i18n.py
 source_hash: da8a99adbbcf1d8b209a25da32e256c0dad2860633f373d7410a3a91d790c938
 source_last_modified: "2026-01-21T19:17:13.236818+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# IVM Architecture Refactor Plan
+# IVM arxitektura refaktor rejasi
 
-This plan captures the short-term milestones for reshaping the Iroha Virtual Machine
-(IVM) into clearer layers while preserving security and performance characteristics.
-It focuses on isolating responsibilities, making host integrations safer, and
-preparing the Kotodama language stack for extraction into a standalone crate.
+Ushbu reja Iroha virtual mashinasini qayta shakllantirish uchun qisqa muddatli bosqichlarni o'z ichiga oladi.
+(IVM) xavfsizlik va ishlash xususiyatlarini saqlab, aniqroq qatlamlarga.
+U mas'uliyatni ajratishga, xost integratsiyasini xavfsizroq qilishga va
+Kotodama til to'plamini mustaqil qutiga chiqarish uchun tayyorlash.
 
-## Goals
+## Maqsadlar
 
-1. **Layered runtime façade** – introduce an explicit runtime interface so the VM
-   core can be embedded behind a narrow trait and alternative front-ends can evolve
-   without touching internal modules.
-2. **Host/syscall boundary  hardening** – route syscall dispatch through a
-   dedicated adapter that enforces ABI policy and pointer validation before any host
-   code executes.
-3. **Language/tooling separation** – move Kotodama specific code to a new crate and
-   keep only the bytecode execution surface in `ivm`.
-4. **Configuration cohesion** – unify acceleration and feature toggles so they are
-   driven through `iroha_config`, removing environment-based knobs in production
-   paths.
+1. **Qatlamli ish vaqti fasad** – VM uchun aniq ish vaqti interfeysini joriy qiling
+   yadro tor belgi orqasida joylashtirilishi mumkin va muqobil front-uchlar rivojlanishi mumkin
+   ichki modullarga tegmasdan.
+2. **Xost/tizim qo‘ng‘irog‘i chegarasini mustahkamlash** – tizim qo‘ng‘irog‘i orqali marshrutni jo‘natish
+   har qanday xostdan oldin ABI siyosati va ko'rsatgichni tekshirishni amalga oshiradigan maxsus adapter
+   kod bajariladi.
+3. **Til/asboblarni ajratish** – Kotodama maxsus kodini yangi qutiga o'tkazing va
+   `ivm` da faqat bayt-kodni bajarish yuzasini saqlang.
+4. **Konfiguratsiya uyg‘unligi** – tezlashtirish va funksiya almashuvlarini bir xil bo‘lishi uchun birlashtiradi
+   `iroha_config` orqali boshqariladi, ishlab chiqarishda atrof-muhitga asoslangan tugmachalarni olib tashlaydi
+   yo'llar.
 
-## Phase Breakdown
+## Fazalarni ajratish
 
-### Phase 1 – Runtime façade (in progress)
-- Add a `runtime` module that defines a `VmEngine` trait describing lifecycle
-  operations (`load_program`, `execute`, host plumbing).
-- Teach `IVM` to implement the trait.  This keeps the existing struct but allows
-  consumers (and future tests) to depend on the interface instead of concrete
-  types.
-- Start shedding direct module re-exports from `lib.rs` so callers import via the
-  façade when possible.
+### 1-bosqich – Fasadning ish vaqti (davom etmoqda)
+- Hayotiy tsiklni tavsiflovchi `VmEngine` xususiyatini belgilaydigan `runtime` modulini qo'shing
+  operatsiyalar (`load_program`, `execute`, asosiy sanitariya-tesisat).
+- `IVM` xususiyatini amalga oshirishga o'rgating.  Bu mavjud tuzilmani saqlaydi, lekin ruxsat beradi
+  iste'molchilar (va kelajakdagi testlar) beton o'rniga interfeysga bog'liq
+  turlari.
+- `lib.rs` dan to'g'ridan-to'g'ri modulni qayta eksport qilishni boshlang, shunda qo'ng'iroq qiluvchilar ushbu orqali import qilinadi.
+  iloji bo'lsa, fasad.
 
-**Security / performance impact**: The façade restricts direct access to internal
-state; only safe entry points are exposed.  This makes it easier to audit host
-interactions and reason about gas or TLV handling.
+**Xavfsizlik / ishlash ta'siri**: Fasad ichki qismga to'g'ridan-to'g'ri kirishni cheklaydi
+davlat; faqat xavfsiz kirish nuqtalari ochiladi.  Bu xostni tekshirishni osonlashtiradi
+o'zaro ta'sirlar va gaz yoki TLV bilan ishlash sabablari.
 
-### Phase 2 – Syscall dispatcher
-- Introduce a `SyscallDispatcher` component that wraps `IVMHost` and enforces ABI
-  policy and pointer validation once, in one location.
-- Migrate the default host and mock hosts to use the dispatcher, removing
-  duplicated validation logic.
-- Make dispatcher pluggable so hosts can supply custom instrumentation without
-  bypassing safety checks.
-- Provide a `SyscallDispatcher::shared(...)` helper so cloned VMs can forward
-  syscalls through a shared `Arc<Mutex<..>>` host without each worker building
-  bespoke wrappers.
+### 2-bosqich - Syscall dispetcheri
+- `SyscallDispatcher` komponentini kiriting, u `IVMHost`ni o'rab oladi va ABIni qo'llaydi.
+  siyosat va ko'rsatgichni bir marta, bir joyda tekshirish.
+- Dispetcherdan foydalanish uchun standart xost va soxta xostlarni ko'chiring, olib tashlang
+  takrorlangan tekshirish mantig'i.
+- Dispetcherni ulanadigan qilib qo'ying, shunda xostlar moslashtirilgan asboblarsiz yetkazib bera oladi
+  xavfsizlik tekshiruvlarini chetlab o'tish.
+- `SyscallDispatcher::shared(...)` yordamchisini taqdim eting, shunda klonlangan VMlar yo'naltirilishi mumkin
+  har bir ishchi binosisiz umumiy `Arc<Mutex<..>>` xost orqali tizim chaqiruvlari
+  buyurtma bo'yicha o'ramlar.
 
-**Security / performance impact**: Centralised gating protects against hosts that
-forget to call `is_syscall_allowed`, and it allows future caching of pointer
-validations for repeated syscalls.
+**Xavfsizlik / ishlash ta'siri**: Markazlashtirilgan eshiklar xostlardan himoya qiladi
+`is_syscall_allowed` ga qo'ng'iroq qilishni unuting va bu kelajakda ko'rsatgichni keshlash imkonini beradi
+takroriy tizim chaqiruvlari uchun tekshiruvlar.
 
-### Phase 3 – Kotodama extraction
-- Kotodama compiler extracted to `crates/kotodama_lang` (from `crates/ivm/src/kotodama`).
-- Provide a minimal bytecode API that the VM consumes (`compile_to_ivm_bytecode`).
+### 3-bosqich - Kotodama ekstraktsiyasi
+- Kotodama kompilyatori `crates/kotodama_lang` ga chiqarilgan (`crates/ivm/src/kotodama` dan).
+- VM iste'mol qiladigan minimal bayt-kod API-ni taqdim eting (`compile_to_ivm_bytecode`).
 
-**Security / performance impact**: Decoupling lowers the attack surface of the VM
-core and allows language innovation without risking interpreter regressions.
+**Xavfsizlik / ishlash ta'siri**: ajratish VMning hujum yuzasini pasaytiradi
+asosiy va tarjimon regressiyalarini xavf ostiga qo'ymasdan til innovatsiyasiga imkon beradi.### 4-bosqich - Konfiguratsiyani birlashtirish
+- `iroha_config` oldindan o'rnatilgan (masalan, GPU orqa uchlarini yoqish) orqali ipni tezlashtirish opsiyalari, mavjud muhitni bekor qilish (`IVM_DISABLE_CUDA`, `IVM_DISABLE_METAL`) ish vaqtini o'chirish kalitlari sifatida saqlangan.
+- `RuntimeConfig` ob'ektini yangi fasad orqali ko'rsating, shunda xostlar tanlashadi
+  aniq deterministik tezlashtirish siyosati.
 
-### Phase 4 – Configuration consolidation
-- Thread acceleration options through `iroha_config` presets (e.g., enabling GPU backends) while keeping the existing environment overrides (`IVM_DISABLE_CUDA`, `IVM_DISABLE_METAL`) as runtime kill switches.
-- Expose a `RuntimeConfig` object through the new façade so hosts select
-  deterministic acceleration policies explicitly.
+**Xavfsizlik / ishlash ta'siri**: Env-ga asoslangan o'zgartirishlarni yo'q qilish jim turishdan qochadi
+konfiguratsiya o'zgarishi va joylashtirishlar bo'ylab deterministik xatti-harakatni ta'minlaydi.
 
-**Security / performance impact**: Eliminating env-based toggles avoids silent
-configuration drift and ensures deterministic behaviour across deployments.
+## Darhol keyingi qadamlar
 
-## Immediate next steps
+- Fasad xususiyatini qo'shish va yuqori darajadagi qo'ng'iroqlar saytlarini yangilash orqali 1-bosqichni yakunlang
+  unga bog'liq.
+- Ommaviy reeksportlarni faqat fasad va ataylab ommaviy APIlarni ta'minlash uchun audit qiling
+  qutidan oqib chiqish.
+- Syscall dispetcher API prototipini alohida modulda yarating va uni ko'chiring
+  bir marta tasdiqlangan standart xost.
 
-- Finish Phase 1 by adding the façade trait and updating high-level call sites to
-  depend on it.
-- Audit public re-exports to ensure only the façade and deliberately public APIs
-  leak out of the crate.
-- Prototype the syscall dispatcher API in a separate module and migrate the
-  default host once validated.
-
-Progress on each phase will be tracked in `status.md` once the implementation is
-underway.
+Har bir bosqich bo'yicha taraqqiyot amalga oshirilgandan so'ng `status.md` da kuzatiladi
+davom etmoqda.

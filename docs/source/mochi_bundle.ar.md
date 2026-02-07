@@ -6,48 +6,49 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: f2dd292b7d15b449f3cec1b79343387a8c23beef3a163367bd5fa8ced8593aae
 source_last_modified: "2026-01-03T18:08:00.656311+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# MOCHI Bundle Tooling
+# أدوات حزمة MOCHI
 
-MOCHI ships with a lightweight packaging workflow so developers can produce a
-portable desktop bundle without wiring bespoke CI scripts. The `xtask`
-subcommand handles compilation, layout, hashing, and (optionally) archive
-creation in one shot.
+يأتي MOCHI مزودًا بسير عمل تغليف خفيف الوزن حتى يتمكن المطورون من إنتاج ملف
+حزمة سطح المكتب المحمولة بدون أسلاك نصوص CI مخصصة. `xtask`
+يعالج الأمر الفرعي التجميع والتخطيط والتجزئة والأرشيف (اختياريًا).
+الخلق في طلقة واحدة.
 
-## Generating a bundle
+## توليد حزمة
 
 ```bash
 cargo xtask mochi-bundle
 ```
 
-By default the command builds release binaries, assembles the bundle under
-`target/mochi-bundle/`, and emits a `mochi-<os>-<arch>-release.tar.gz` archive
-alongside a deterministic `manifest.json`. The manifest lists every file with
-its size and SHA-256 hash so CI pipelines can re-run verification or publish
-attestations. The helper ensures both the `mochi` desktop shell and the
-workspace `kagami` binary are present so genesis generation works out of the
-box.
+بشكل افتراضي، ينشئ الأمر ثنائيات الإصدار، ويجمع الحزمة الموجودة أسفلها
+`target/mochi-bundle/`، ويصدر أرشيف `mochi-<os>-<arch>-release.tar.gz`
+جنبًا إلى جنب مع `manifest.json` الحتمية. يسرد البيان كل ملف به
+حجمه وتجزئة SHA-256 حتى تتمكن خطوط أنابيب CI من إعادة تشغيل عملية التحقق أو النشر
+الشهادات. يضمن المساعد وجود غلاف سطح المكتب `mochi` و
+مساحة العمل `kagami` الثنائية موجودة لذا فإن إنشاء التكوين يعمل خارج نطاق
+مربع.
 
-### Flags
+### الأعلام
 
-| Flag                | Description                                                                 |
+| علم | الوصف |
 |---------------------|-----------------------------------------------------------------------------|
-| `--out <dir>`       | Override the output directory (defaults to `target/mochi-bundle`).         |
-| `--profile <name>`  | Build with a specific Cargo profile (e.g., `debug` for tests).              |
-| `--no-archive`      | Skip the `.tar.gz` archive, leaving only the prepared folder.               |
-| `--kagami <path>`   | Use an explicit `kagami` binary instead of building `iroha_kagami`.         |
-| `--matrix <path>`   | Append bundle metadata to a JSON matrix for CI provenance tracking.         |
-| `--smoke`           | Run `mochi --help` from the packaged bundle as a basic execution gate.      |
-| `--stage <dir>`     | Copy the finished bundle (and archive, when present) into a staging folder. |
+| `--out <dir>` | تجاوز دليل الإخراج (الإعداد الافتراضي هو `target/mochi-bundle`).         |
+| `--profile <name>` | البناء باستخدام ملف تعريف شحن محدد (على سبيل المثال، `debug` للاختبارات).              |
+| `--no-archive` | تخطي أرشيف `.tar.gz`، ولم يتبق سوى المجلد المجهز.               |
+| `--kagami <path>` | استخدم `kagami` ثنائيًا صريحًا بدلاً من إنشاء `iroha_kagami`.         |
+| `--matrix <path>` | إلحاق بيانات تعريف الحزمة بمصفوفة JSON لتتبع مصدر CI.         |
+| `--smoke` | قم بتشغيل `mochi --help` من الحزمة المعبأة كبوابة تنفيذ أساسية.      |
+| `--stage <dir>` | انسخ الحزمة النهائية (وأرشيفها، في حالة وجودها) إلى مجلد مرحلي. |
 
-`--stage` is intended for CI pipelines where each build agent uploads its
-artefacts to a shared location. The helper recreates the bundle directory and
-copies the generated archive into the staging directory so publish jobs can
-collect platform-specific outputs without shell scripting.
+`--stage` مخصص لخطوط أنابيب CI حيث يقوم كل وكيل بناء بتحميل ملفاته
+القطع الأثرية إلى موقع مشترك. يقوم المساعد بإعادة إنشاء دليل الحزمة و
+انسخ الأرشيف الذي تم إنشاؤه إلى الدليل المرحلي حتى تتمكن من نشر المهام
+جمع المخرجات الخاصة بالنظام الأساسي بدون البرمجة النصية لـ Shell.
 
-The layout inside the bundle is intentionally simple:
+التصميم داخل الحزمة بسيط عن عمد:
 
 ```
 bin/mochi              # egui desktop executable
@@ -58,11 +59,11 @@ LICENSE                # repository licence
 manifest.json          # generated file manifest with SHA-256 digests
 ```
 
-### Runtime overrides
+### تجاوزات وقت التشغيل
 
-The packaged `mochi` executable accepts command-line overrides for the most
-common supervisor settings. Use these flags instead of editing
-`config/local.toml` when experimenting:
+يقبل الملف القابل للتنفيذ `mochi` تجاوزات سطر الأوامر لمعظم
+إعدادات المشرف المشتركة استخدم هذه العلامات بدلاً من التحرير
+`config/local.toml` عند التجربة:
 
 ```
 ./bin/mochi --data-root ./data --profile four-peer-bft \
@@ -70,16 +71,16 @@ common supervisor settings. Use these flags instead of editing
     --irohad /path/to/irohad --kagami /path/to/kagami
 ```
 
-Any CLI value takes precedence over `config/local.toml` entries and environment
-variables.
+أي قيمة لـ CLI لها الأسبقية على إدخالات `config/local.toml` والبيئة
+المتغيرات.
 
-## Snapshot automation
+## أتمتة اللقطات
 
-`manifest.json` records the generation timestamp, target triple, Cargo profile,
-and the complete file inventory. Pipelines can diff the manifest to detect when
-new artefacts appear, upload the JSON alongside release assets, or audit the
-hashes before promoting a bundle to operators.
+يسجل `manifest.json` الطابع الزمني للجيل، والهدف الثلاثي، وملف تعريف الشحن،
+وجرد الملف الكامل. يمكن أن تختلف خطوط الأنابيب في البيان لاكتشاف متى
+ظهور عناصر جديدة، أو تحميل JSON إلى جانب أصول الإصدار، أو تدقيق ملف
+التجزئة قبل الترويج للحزمة للمشغلين.
 
-The helper is idempotent: re-running the command updates the manifest and
-overwrites the previous archive, keeping `target/mochi-bundle/` as the single
-source of truth for the latest bundle on the current machine.
+المساعد غير فعال: إعادة تشغيل الأمر يؤدي إلى تحديث البيان و
+يقوم بالكتابة فوق الأرشيف السابق، مع الاحتفاظ بـ `target/mochi-bundle/` باعتباره الملف الفردي
+مصدر الحقيقة لأحدث حزمة على الجهاز الحالي.

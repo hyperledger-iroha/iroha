@@ -7,241 +7,232 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a4e8824c128b9f2a34262a5c9bc09f6b2cd790a0561aa083fa18a987accd7004
 source_last_modified: "2026-01-22T16:26:46.570053+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 # Iroha v2.0
 
-Hyperledger Iroha v2 is a deterministic, Byzantine fault tolerant distributed ledger that emphasises a
-modular architecture, strong defaults, and approachable APIs. The platform ships as a set of Rust crates
-that can be embedded into bespoke deployments or used together to operate a production blockchain network.
+Hyperledger Iroha v2 是一个确定性、拜占庭容错的分布式账本，强调
+模块化架构、强大的默认设置和易于使用的 API。该平台作为一组 Rust 板条箱发货
+可以嵌入到定制部署中或一起使用来操作生产区块链网络。
 
 ---
 
-## 1. Overview
+## 1. 概述
 
-Iroha 2 continues the design philosophy introduced with Iroha 1: provide a curated collection of
-capabilities out of the box so operators can stand up a network without writing large amounts of custom
-code. The v2 release consolidates the execution environment, consensus pipeline, and data model into a
-single cohesive workspace.
+Iroha 2 延续了 Iroha 1 引入的设计理念：提供精选的集合
+开箱即用的功能，使运营商无需编写大量自定义内容即可建立网络
+代码。 v2版本将执行环境、共识管道和数据模型整合为一个
+单一有凝聚力的工作空间。
 
-The v2 line is designed for organisations that want to operate their own permissioned or consortium
-blockchains. Each deployment runs its own consensus network, maintains independent governance, and can tailor
-configuration, genesis data, and upgrade cadence without depending on third parties. The shared workspace
-allows multiple independent networks to build against the exact same codebase while choosing the features and
-policies that match their use cases.
+v2 系列专为想要运营自己的许可或联盟的组织而设计
+区块链。每个部署都运行自己的共识网络，保持独立治理，并且可以定制
+配置、创世数据和升级节奏，无需依赖第三方。共享工作区
+允许多个独立网络针对完全相同的代码库构建，同时选择功能和
+与其用例相匹配的策略。
 
-Both Iroha 2 and SORA Nexus (Iroha 3) run the same Iroha Virtual Machine (IVM). Developers can author Kotodama
-contracts once and deploy them across self-hosted networks or the global Nexus ledger without recompiling or
-forking the execution environment.
-### 1.1 Relationship to the Hyperledger ecosystem
+Iroha 2 和 SORA Nexus (Iroha 3) 都运行相同的 Iroha 虚拟机 (IVM)。开发者可以编写 Kotodama
+合约一次并将其部署在自托管网络或全局 Nexus 分类账上，无需重新编译或
+分叉执行环境。
+### 1.1 与 Hyperledger 生态系统的关系
 
-Iroha components are designed to interoperate with other Hyperledger projects. Consensus, data-model, and
-serialization crates can be reused in composite stacks or alongside Fabric, Sawtooth, and Besu deployments.
-Common tooling—such as Norito codecs and governance manifests—helps keep interfaces consistent across the
-ecosystem while allowing Iroha to provide an opinionated default implementation.
+Iroha 组件旨在与其他 Hyperledger 项目互操作。共识、数据模型和
+序列化包可以在复合堆栈中或与 Fabric、Sawtooth 和 Besu 部署一起重复使用。
+通用工具（例如 Norito 编解码器和治理清单）有助于保持接口在整个系统中的一致
+生态系统，同时允许 Iroha 提供固执己见的默认实现。
 
-### 1.2 Client libraries and SDKs
+### 1.2 客户端库和 SDK
 
-To ensure first-class mobile and web experiences, the project publishes maintained SDKs:
+为了确保一流的移动和网络体验，该项目发布了维护的 SDK：
 
-- `IrohaSwift` for iOS and macOS clients, integrating Metal/NEON acceleration behind deterministic fallbacks.
-- `iroha_js` for JavaScript and TypeScript applications, including Kaigi builders and Norito helpers.
-- `iroha_python` for Python integrations, with HTTP, WebSocket, and telemetry support.
-- `iroha_cli` for terminal-driven administration and scripting.
+- `IrohaSwift` 适用于 iOS 和 macOS 客户端，在确定性回退后集成 Metal/NEON 加速。
+- `iroha_js` 适用于 JavaScript 和 TypeScript 应用程序，包括 Kaigi 构建器和 Norito 帮助器。
+- `iroha_python` 用于 Python 集成，具有 HTTP、WebSocket 和遥测支持。
+- `iroha_cli` 用于终端驱动的管理和脚本编写。
 
-languages and platforms.
+语言和平台。
 
-### 1.3 Design principles
+### 1.3 设计原则- **确定性第一：** 每个节点执行相同的代码路径并在给定相同的情况下产生相同的结果
+  输入。 SIMD/CUDA/NEON 路径是功能门控的，并回退到确定性标量实现。
+- **可组合模块：** 网络、共识、执行、遥测和存储均位于专用的模块中
+  板条箱，因此嵌入器可以采用子集，而无需携带整个堆栈。
+- **显式配置：** 行为旋钮通过 `iroha_config` 呈现；环境切换是
+  仅限于开发人员的便利。
+- **安全默认值：** 规范编解码器、严格的指针 ABI 实施和版本化清单使
+  跨网络升级可预测。
 
-- **Determinism first:** Every node executes the same code paths and produces the same results given the same
-  inputs. SIMD/CUDA/NEON paths are feature-gated and fall back to deterministic scalar implementations.
-- **Composable modules:** Networking, consensus, execution, telemetry, and storage each live in dedicated
-  crates so embedders can adopt subsets without carrying the entire stack.
-- **Explicit configuration:** Behavioural knobs are surfaced through `iroha_config`; environment toggles are
-  limited to developer conveniences.
-- **Secure defaults:** Canonical codecs, strict pointer ABI enforcement, and versioned manifests make
-  cross-network upgrades predictable.
+## 2. 平台架构
 
-## 2. Platform architecture
+### 2.1 节点组成
 
-### 2.1 Node composition
+Iroha 节点运行多个协作服务：
 
-An Iroha node runs several cooperating services:
+- **Torii (`iroha_torii`)** 公开用于事务、查询、流事件和
+  遥测（`/v1/...` 端点）。
+- **核心 (`iroha_core`)** 协调验证、共识、执行、治理和状态管理。
+- **Sumeragi (`iroha_core::sumeragi`)** 通过视图更改实现 NPoS 就绪共识管道，
+  可靠的广播数据可用性和提交证书。请参阅
+  详情请参阅[Sumeragi共识指南](./sumeragi.md)。
+- **Kura (`iroha_core::kura`)** 在磁盘上保留规范块、恢复 sidecar 和见证元数据。
+- **世界状态视图 (`iroha_core::state`)** 存储用于验证的权威内存快照
+  和查询。
+- **Iroha 虚拟机 (`ivm`)** 执行 Kotodama 字节码 (`.to`) 并强制执行指针 ABI 策略。
+- **Norito (`crates/norito`)** 为每种在线类型提供确定性二进制和 JSON 序列化。
+- **遥测 (`iroha_telemetry`)** 导出 Prometheus 指标、结构化日志记录和流事件。
+- **P2P (`iroha_p2p`)** 管理对等点之间的八卦、拓扑和安全连接。
 
-- **Torii (`iroha_torii`)** exposes HTTP/WebSocket APIs for transactions, queries, streaming events, and
-  telemetry (`/v1/...` endpoints).
-- **Core (`iroha_core`)** coordinates validation, consensus, execution, governance, and state management.
-- **Sumeragi (`iroha_core::sumeragi`)** implements the NPoS-ready consensus pipeline with view changes,
-  reliable broadcast data availability, and commit certificates. See the
-  [Sumeragi consensus guide](./sumeragi.md) for details.
-- **Kura (`iroha_core::kura`)** persists canonical blocks, recovery sidecars, and witness metadata on disk.
-- **World State View (`iroha_core::state`)** stores the authoritative in-memory snapshot used for validation
-  and queries.
-- **Iroha Virtual Machine (`ivm`)** executes Kotodama bytecode (`.to`) and enforces the pointer ABI policy.
-- **Norito (`crates/norito`)** provides deterministic binary and JSON serialization for every on-wire type.
-- **Telemetry (`iroha_telemetry`)** exports Prometheus metrics, structured logging, and streaming events.
-- **P2P (`iroha_p2p`)** manages gossip, topology, and secure connections between peers.
+### 2.2 组网和拓扑
 
-### 2.2 Networking and topology
+Iroha 对等点维护从提交状态派生的有序拓扑。每轮共识都会选出一位领导者，
+验证集、代理尾部和集 B 验证器。交易使用 Norito 编码消息进行八卦
+在领导者将它们捆绑成提案之前。可靠的广播保证了阻塞和支持
+证据到达所有诚实的同行，即使在网络混乱的情况下也确保数据可用性。视图更改旋转
+当错过最后期限时的领导力，提交证书确保每个提交的块都带有
+所有对等方使用的规范签名集。
 
-Iroha peers maintain an ordered topology derived from committed state. Each consensus round selects a leader,
-validating set, proxy tail, and Set B validators. Transactions are gossiped using Norito-encoded messages
-before the leader bundles them into a proposal. Reliable broadcast guarantees that blocks and supporting
-evidence reach all honest peers, ensuring data availability even under network churn. View changes rotate
-leadership when deadlines are missed, and commit certificates ensure that every committed block carries the
-canonical signature set used by all peers.
+### 2.3 密码学
 
-### 2.3 Cryptography
+`iroha_crypto` crate 支持密钥管理、散列和签名验证：- Ed25519 是默认的验证器密钥方案。
+- 可选后端包括 Secp256k1、TC26 GOST、BLS（用于聚合证明）和 ML-DSA 帮助程序。
+- 流媒体通道将 Ed25519 身份与基于 Kyber 的 HPKE 配对，以保护 Norito 流媒体会话。
+- 所有散列例程都使用确定性实现（SHA-2、SHA-3、Blake2、Poseidon2）和工作区
+  审核记录在 `docs/source/crypto/dependency_audits.md` 中。
 
-The `iroha_crypto` crate powers key management, hashing, and signature verification:
+### 2.4 流媒体和应用程序桥
 
-- Ed25519 is the default validator key scheme.
-- Optional backends include Secp256k1, TC26 GOST, BLS (for aggregate attestations), and ML-DSA helpers.
-- Streaming channels pair Ed25519 identities with Kyber-based HPKE to secure Norito streaming sessions.
-- All hashing routines use deterministic implementations (SHA-2, SHA-3, Blake2, Poseidon2) with workspace
-  audits documented in `docs/source/crypto/dependency_audits.md`.
+- **Norito 流式传输（`iroha_core::streaming`、`norito::streaming`）** 提供确定性加密媒体
+  以及带有会话快照、HPKE 密钥轮换和遥测挂钩的数据通道。 Kaigi 会议和
+  机密证据传输使用此通道。
+- **连接桥 (`connect_norito_bridge`)** 公开为平台 SDK 提供支持的 C ABI 表面
+  （Swift、Kotlin/Android），同时在底层重用 Rust 客户端。
+- **ISO 20022 桥 (`iroha_torii::iso20022_bridge`)** 将受监管的支付消息转换为 Norito
+  交易，实现与财务工作流程的互操作性，而无需绕过共识或验证。
+- 所有网桥都保留确定性 Norito 有效负载，以便下游系统可以验证状态转换。
 
-### 2.4 Streaming and application bridges
+## 3.数据模型
 
-- **Norito streaming (`iroha_core::streaming`, `norito::streaming`)** provides deterministic, encrypted media
-  and data channels with session snapshots, HPKE key rotation, and telemetry hooks. Kaigi conferencing and
-  confidential evidence transfers use this lane.
-- **Connect bridge (`connect_norito_bridge`)** exposes a C ABI surface that powers platform SDKs
-  (Swift, Kotlin/Android) while reusing the Rust clients under the hood.
-- **ISO 20022 bridge (`iroha_torii::iso20022_bridge`)** converts regulated payment messages into Norito
-  transactions, enabling interoperability with financial workflows without bypassing consensus or validation.
-- All bridges preserve deterministic Norito payloads so downstream systems can verify state transitions.
+`iroha_data_model` 包定义了所有账本对象、指令、查询和事件。亮点：
 
-## 3. Data model
+- **域名、账户和资产**使用规范的 IH58 账户 ID（首选）； `name@domain` 仍然是路由
+  明确提供时的别名。元数据是确定性的（`Metadata` 地图）。数字资产支持定点
+  运营； NFT 携带任意结构化元数据。
+- **角色和权限** 使用直接映射到执行程序检查的 Norito 枚举令牌。
+- **触发器**（基于时间、基于块或谓词驱动）通过链上发出确定性交易
+  执行人。
+- **事件**通过 Torii 流并镜像提交的状态转换，包括机密流和
+  治理行动。
+- **交易、区块和清单**采用 Norito 编码（`SignedTransaction`、`SignedBlockWire`）
+  显式版本标头，确保可前向扩展的解码。
+- **定制**通过执行器数据模型进行：操作员可以注册定制指令，
+  权限和参数，同时保留确定性。
+- **存储库 (`RepoInstruction`)** 允许捆绑确定性升级计划（执行程序、清单和
+  资产），因此可以在治理批准的情况下在链上管理多步部署。
+- **共识工件**——例如提交证书和见证人列表——驻留在数据模型中并且
+  通过黄金测试来保证 `iroha_core`、Torii 和 SDK 之间的兼容性。
+- **机密注册表和事件**捕获受保护的资产描述符、验证者密钥、承诺、
+  无效符和事件有效负载 (`ConfidentialEvent::{Shielded,Transferred,Unshielded}`)，因此机密流
+  在不泄露明文数据的情况下保持可审计性。
 
-The `iroha_data_model` crate defines all ledger objects, instructions, queries, and events. Highlights:
+## 4. 交易生命周期1. **准入：** Torii 解码 Norito 有效负载，检查签名、TTL 和大小限制，然后将
+   本地交易。
+2. **Gossip：** 事务在拓扑中传播；对等点通过哈希和重复接纳进行重复数据删除
+   检查。
+3. **选择：** 当前领导者从待处理集中拉取交易并执行无状态验证。
+4. **有状态模拟：** 候选事务在瞬态 `StateBlock` 内执行，调用 IVM 或
+   内置说明。冲突或违反规则的行为会被确定性地丢弃。
+5. **触发实现：** 本轮到期的预定触发将转换为内部交易
+   并使用相同的管道进行验证。
+6. **提案密封：** 当达到区块限制或超时到期时，领导者会发出 Norito 编码的
+   `BlockCreated` 消息。
+7. **验证：** 验证集中的节点重新运行无状态/有状态检查。成功同行签名
+   `BlockSigned` 消息并将其转发到确定性收集器集。
+8. **提交：**收集器一旦收集到规范签名集，就会组装提交证书，
+   广播 `BlockCommitted`，并在本地完成该块。
+9. **应用：** 所有节点在 Kura 中记录区块，应用状态更新，发出遥测/事件，清除
+   从内存池提交交易，并轮换拓扑角色。
 
-- **Domains, accounts, and assets** use canonical IH58 account IDs (preferred); `name@domain` remains a routing
-  alias when explicitly supplied. Metadata is deterministic (`Metadata` map). Numeric assets support fixed-point
-  operations; NFTs carry arbitrary structured metadata.
-- **Roles and permissions** use Norito-enumerated tokens that map directly to executor checks.
-- **Triggers** (time-based, block-based, or predicate-driven) emit deterministic transactions via the on-chain
-  executor.
-- **Events** stream via Torii and mirror committed state transitions, including confidential flows and
-  governance actions.
-- **Transactions, blocks, and manifests** are Norito-encoded (`SignedTransaction`, `SignedBlockWire`) with
-  explicit version headers, ensuring forward-extendable decoding.
-- **Customisation** happens through the executor data model: operators may register custom instructions,
-  permissions, and parameters while preserving determinism.
-- **Repositories (`RepoInstruction`)** allow bundling deterministic upgrade plans (executors, manifests, and
-  assets) so multi-step rollouts can be managed on-chain with governance approval.
-- **Consensus artifacts**—such as commit certificates and witness lists—reside in the data model and
-  round-trip through golden tests to guarantee compatibility between `iroha_core`, Torii, and SDKs.
-- **Confidential registries and events** capture shielded asset descriptors, verifier keys, commitments,
-  nullifiers, and event payloads (`ConfidentialEvent::{Shielded,Transferred,Unshielded}`) so confidential flows
-  remain auditable without leaking plaintext data.
+恢复路径使用确定性广播来重新传输丢失的块，并查看更改轮换领导力
+当最后期限到期时。 Sidecar 和遥测技术提供诊断见解，而不会改变共识结果。
 
-## 4. Transaction lifecycle
+## 5. 智能合约和执行
 
-1. **Admission:** Torii decodes the Norito payload, checks signatures, TTL, and size limits, then enqueues the
-   transaction locally.
-2. **Gossip:** The transaction propagates across the topology; peers deduplicate by hash and repeat admission
-   checks.
-3. **Selection:** The current leader pulls transactions from the pending set and performs stateless validation.
-4. **Stateful simulation:** Candidate transactions execute inside a transient `StateBlock`, invoking IVM or
-   built-in instructions. Conflicts or rule violations are dropped deterministically.
-5. **Trigger materialisation:** Scheduled triggers due in the round are converted into internal transactions
-   and validated using the same pipeline.
-6. **Proposal sealing:** When block limits are reached or timeouts expire, the leader emits a Norito-encoded
-   `BlockCreated` message.
-7. **Validation:** Peers in the validating set re-run stateless/stateful checks. Successful peers sign
-   `BlockSigned` messages and forward them to the deterministic collector set.
-8. **Commit:** A collector assembles a commit certificate once it collects the canonical signature set,
-   broadcasts `BlockCommitted`, and finalises the block locally.
-9. **Application:** All peers record the block in Kura, apply state updates, emit telemetry/events, purge
-   committed transactions from the mempool, and rotate topology roles.
+智能合约在 Iroha 虚拟机 (IVM) 上运行：
 
-Recovery paths use deterministic broadcast to retransmit missing blocks, and view changes rotate leadership
-when deadlines lapse. Sidecars and telemetry provide diagnostic insights without mutating consensus results.
+- **Kotodama** 将高级 `.ko` 源编译为确定性 `.to` 字节码。
+- **指针 ABI 强制执行**确保合约通过经过验证的指针类型与主机内存交互。
+  系统调用表面在 `ivm/docs/syscalls.md` 中描述； ABI 列表经过哈希处理和版本控制。
+- **系统调用和主机**涵盖账本状态访问、触发器调度、机密原语、Kaigi 媒体
+  流动性和确定性随机性。
+- **内置执行器**继续支持资产、账户、权限的Iroha特殊指令（ISI）
+  和治理运作。自定义执行器可以扩展指令集，同时遵循 Norito 模式。
+- **机密功能**——包括屏蔽传输和验证者注册表——通过执行器公开
+  指令并由具有波塞冬承诺的主机进行验证。
 
-## 5. Smart contracts and execution
+## 6. 存储和持久化- **Kura 块存储** 将每个最终块写入为带有 Norito 标头的 `SignedBlockWire` 有效负载，保持
+  规范标头、交易、提交证书和见证数据在一起。
+- **世界状态视图** 将权威状态保留在内存中以进行快速查询。确定性快照和
+  pipeline sidecar (`pipeline/sidecars.norito` + `pipeline/sidecars.index`) 支持恢复和审计。
+- **状态分层**允许对大型部署进行热/冷分区，同时保持确定性
+  验证。
+- **同步和重放**使用相同的验证规则将提交的块加载回状态。确定性
+  广播确保对等方可以从邻居处恢复丢失的数据，而无需依赖可信存储。
 
-Smart contracts run on the Iroha Virtual Machine (IVM):
+## 7. 治理和经济
 
-- **Kotodama** compiles high-level `.ko` sources into deterministic `.to` bytecode.
-- **Pointer ABI enforcement** ensures contracts interact with host memory through validated pointer types.
-  Syscall surfaces are described in `ivm/docs/syscalls.md`; the ABI list is hashed and versioned.
-- **Syscalls and hosts** cover ledger state access, trigger scheduling, confidential primitives, Kaigi media
-  flows, and deterministic randomness.
-- **Built-in executor** continues to support Iroha Special Instructions (ISI) for asset, account, permission,
-  and governance operations. Custom executors can extend the instruction set while honouring Norito schemas.
-- **Confidential features**—including shielded transfers and verifier registries—are exposed via executor
-  instructions and validated by hosts with Poseidon commitments.
+- 链上参数（`SetParameter`）控制共识计时器、内存池限制、遥测旋钮、费用带、
+  和功能标志。 `kagami` 生成的 Genesis 清单安装初始配置。
+- **Kaigi** 指令管理协作会话（创建/加入/离开/结束）并提供 Norito 流媒体
+  会议用例的遥测。
+- **Hijiri** 提供确定性的同行和账户声誉，与共识、准入相结合
+  政策和费用乘数（第 16 题定点数学）。证据清单、检查点和声誉
+  注册表在链上提交，观察者资料管理收据来源。
+- **NPoS 模式**（启用后）使用 VRF 支持的选举窗口和权益加权委员会，同时保留
+  确定性配置默认值。
+- **机密注册表**管理零知识验证者密钥、证明生命周期和承诺
+  屏蔽流。
 
-## 6. Storage and persistence
+## 8. 客户端体验和工具
 
-- **Kura block store** writes each finalised block as a `SignedBlockWire` payload with a Norito header, keeping
-  canonical headers, transactions, commit certificates, and witness data together.
-- **World State View** keeps the authoritative state in memory for fast queries. Deterministic snapshots and
-  pipeline sidecars (`pipeline/sidecars.norito` + `pipeline/sidecars.index`) support recovery and audits.
-- **State tiering** allows hot/cold partitioning for large deployments while preserving deterministic
-  validation.
-- **Sync and replay** load committed blocks back into state using the same validation rules. Deterministic
-  broadcast ensures peers can recover missing data from neighbours without relying on trusted storage.
+- **Torii API** 提供 REST 和 WebSocket 接口，用于事务、查询、事件流、遥测和
+  治理端点。 JSON 投影源自 Norito 模式。
+- **CLI 工具**（`iroha_cli`、`iroha_monitor`）涵盖管理、实时对等仪表板和管道
+  检查。
+- **Genesis 工具** (`kagami`) 生成 Norito 编码的清单、验证器密钥材料和配置
+  模板。
+- **SD​​K**（Swift、JS/TS、Python）提供对指令、查询、触发器和遥测的惯用访问。
+- `scripts/` 内的 **脚本和 CI 挂钩** 自动执行仪表板验证、编解码器重新生成和烟雾
+  测试。
 
-## 7. Governance and economics
+## 9. 性能、弹性和路线图- 当前管道的目标是**20,000 tps**，在有利的网络下具有**2-3秒**的区块时间
+  条件，由批量签名验证和确定性调度支持。
+- **遥测**公开 Prometheus 共识计时器、内存池占用率、区块传播健康状况的指标，
+  Kaigi 使用情况和 Hijiri 声誉更新。
+- **弹性功能**包括确定性数据可用性、恢复边车、拓扑旋转和
+  可配置的查看/更改阈值。
+- 未来路线图里程碑（参见 `roadmap.md`）继续在 Nexus 数据空间上开展工作，增强保密性
+  工具和更广泛的硬件加速，同时保留确定性的输出。
 
-- On-chain parameters (`SetParameter`) control consensus timers, mempool limits, telemetry knobs, fee bands,
-  and feature flags. Genesis manifests generated by `kagami` install the initial configuration.
-- **Kaigi** instructions manage collaborative sessions (create/join/leave/end) and feed Norito streaming
-  telemetry for conferencing use cases.
-- **Hijiri** provides deterministic peer and account reputation, integrating with consensus, admission
-  policies, and fee multipliers (Q16 fixed-point math). Evidence manifests, checkpoints, and reputation
-  registries are committed on-chain, and observer profiles govern receipt provenance.
-- **NPoS mode** (when enabled) uses VRF-backed election windows and stake-weighted committees while preserving
-  deterministic configuration defaults.
-- **Confidential registries** govern zero-knowledge verifier keys, proof lifecycles, and commitments for
-  shielded flows.
+## 10. 操作和部署
 
-## 8. Client experience and tooling
+- **工件：** Dockerfiles、Nix flake 和 `cargo` 工作流程支持可重现的构建。 `kagami` 发出
+  创世清单、验证器密钥以及许可部署和 NPoS 部署的示例配置。
+- **自托管网络：**运营商管理自己的对等集、准入规则和升级节奏。的
+  工作区支持多个独立的 Iroha 2 网络共存，无需协调，仅共享
+  上游代码。
+- **配置生命周期：** `iroha_config` 解析用户→实际→默认层，确保每个旋钮都是
+  显式且受版本控制。运行时更改通过 `SetParameter` 指令流动。
+- **可观察性：** `iroha_telemetry` 导出已检查的 Prometheus 指标、结构化日志和仪表板数据
+  通过 CI 脚本（`ci/check_swift_dashboards.sh`、`scripts/render_swift_dashboards.sh`、
+  `scripts/check_swift_dashboard_data.py`）。流媒体、共识和 Hijiri 事件可通过
+  WebSocket 和 `scripts/sumeragi_backpressure_log_scraper.py` 将起搏器背压与
+  遥测以排除故障。
+- **测试：** `cargo test --workspace`、集成测试 (`integration_tests/`)、语言 SDK 套件和
+  Norito 黄金装置保护确定性。指针 ABI、系统调用列表和治理清单
+  专门的黄金测试。
+- **恢复：** Kura sidecar、确定性重播和广播同步允许节点从磁盘恢复状态
+  或同龄人。 Hijiri 检查点和治理清单提供了可审计的合规性快照。
 
-- **Torii API** offers REST and WebSocket interfaces for transactions, queries, event streams, telemetry, and
-  governance endpoints. JSON projections are derived from Norito schemas.
-- **CLI tooling** (`iroha_cli`, `iroha_monitor`) covers administration, live peer dashboards, and pipeline
-  inspection.
-- **Genesis tooling** (`kagami`) generates Norito-encoded manifests, validator key material, and configuration
-  templates.
-- **SDKs** (Swift, JS/TS, Python) provide idiomatic access to instructions, queries, triggers, and telemetry.
-- **Scripts and CI hooks** inside `scripts/` automate dashboard validation, codec regeneration, and smoke
-  tests.
+# 术语表
 
-## 9. Performance, resilience, and roadmap
-
-- The current pipeline targets **20,000 tps** with **2–3 second** block times under favourable network
-  conditions, backed by batch signature verification and deterministic scheduling.
-- **Telemetry** exposes Prometheus metrics for consensus timers, mempool occupancy, block propagation health,
-  Kaigi usage, and Hijiri reputation updates.
-- **Resilience features** include deterministic data availability, recovery sidecars, topology rotation, and
-  configurable view/change thresholds.
-- Future roadmap milestones (see `roadmap.md`) continue work on Nexus data spaces, enhanced confidential
-  tooling, and broader hardware acceleration while preserving deterministic outputs.
-
-## 10. Operations and deployment
-
-- **Artifacts:** Dockerfiles, Nix flake, and `cargo` workflows support reproducible builds. `kagami` emits
-  genesis manifests, validator keys, and example configs for both permissioned and NPoS deployments.
-- **Self-hosted networks:** Operators manage their own peer sets, admission rules, and upgrade cadence. The
-  workspace supports many independent Iroha 2 networks co-existing without coordination, sharing only the
-  upstream code.
-- **Configuration lifecycle:** `iroha_config` resolves user → actual → defaults layers, ensuring every knob is
-  explicit and version-controlled. Runtime changes flow through `SetParameter` instructions.
-- **Observability:** `iroha_telemetry` exports Prometheus metrics, structured logs, and dashboard data checked
-  by CI scripts (`ci/check_swift_dashboards.sh`, `scripts/render_swift_dashboards.sh`,
-  `scripts/check_swift_dashboard_data.py`). Streaming, consensus, and Hijiri events are available over
-  WebSocket, and `scripts/sumeragi_backpressure_log_scraper.py` correlates pacemaker backpressure with
-  telemetry for troubleshooting.
-- **Testing:** `cargo test --workspace`, integration tests (`integration_tests/`), language SDK suites, and
-  Norito golden fixtures protect determinism. Pointer ABI, syscall lists, and governance manifests have
-  dedicated golden tests.
-- **Recovery:** Kura sidecars, deterministic replay, and broadcast sync allow nodes to recover state from disk
-  or peers. Hijiri checkpoints and governance manifests provide auditable snapshots for compliance.
-
-# Glossary
-
-For terminology referenced in this document, consult the project-wide glossary at
-<https://docs.iroha.tech/reference/glossary.html>.
+有关本文档中引用的术语，请参阅项目范围的术语表：
+。

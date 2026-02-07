@@ -7,62 +7,63 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 44f1c681730f1c94d9d00e8f829a0134374ce6cb29f21727a27685e096f0da40
 source_last_modified: "2026-01-17T06:10:29.077000+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Merge Ledger Design — Lane Finality and Global Reduction
+# လယ်ဂျာပုံစံကို ပေါင်းစည်းခြင်း — လမ်းသွားနောက်ဆုံးနှင့် ကမ္ဘာလုံးဆိုင်ရာ လျှော့ချရေး
 
-This note finalises the merge-ledger design for Milestone 5. It explains the
-non-empty block policy, cross-lane QC merge semantics, and the finality workflow
-that binds lane-level execution to the global world state commitment.
+ဤမှတ်စုသည် Milestone 5 အတွက် ပေါင်းစပ်-လယ်ဂျာ ဒီဇိုင်းကို အပြီးသတ်သည်။ ၎င်းကို ရှင်းပြသည်။
+အချည်းနှီးမဟုတ်သော ဘလောက်မူဝါဒ၊ လမ်းကြောဖြတ်ကျော် QC ပေါင်းစပ်မှု နှင့် နောက်ဆုံးအဆင့် အလုပ်အသွားအလာ
+ယင်းသည် ကမ္ဘာလုံးဆိုင်ရာ ကမ္ဘာ့နိုင်ငံတော် ကတိကဝတ်နှင့် လမ်းကြောင်းအဆင့် ကတိကဝတ်ကို ချည်နှောင်ထားသည်။
 
-The design extends the Nexus architecture described in `nexus.md`. Terms such as
-"lane block", "lane QC", "merge hint", and "merge ledger" inherit their
-definition from that document; this note focuses on behavioural rules and
-implementation guidance that must be enforced by the runtime, storage, and WSV
-layers.
+ဒီဇိုင်းသည် `nexus.md` တွင်ဖော်ပြထားသော Nexus ဗိသုကာကို တိုးချဲ့သည်။ အစရှိတဲ့ စည်းကမ်းချက်များ၊
+"လမ်းကြောပိတ်ဆို့ခြင်း", "လမ်းသွား QC", "ပေါင်းစပ်အရိပ်အမြွက်", နှင့် "စာရင်းပေါင်းစည်းခြင်း" တို့သည် ၎င်းတို့၏အမွေဆက်ခံသည်။
+ထိုစာတမ်းမှ အဓိပ္ပါယ်ဖွင့်ဆိုချက်၊ ဤမှတ်စုသည် အပြုအမူဆိုင်ရာ စည်းမျဉ်းများနှင့် အလေးပေးထားသည်။
+runtime၊ storage နှင့် WSV တို့က လိုက်နာရမည့် အကောင်အထည်ဖော်မှုလမ်းညွှန်
+အလွှာများ။
 
-## 1. Non-Empty Block Policy
+## 1. အချည်းနှီးမဟုတ်သော ပိတ်ဆို့ရေးမူဝါဒ
 
-**Rule (MUST):** A lane proposer issues a block only when the block contains at
-least one executed transaction fragment, time-based trigger, or deterministic
-artifact update (e.g., DA artifact roll-up). Empty blocks are forbidden.
+** စည်းမျဉ်း ( မဖြစ်မနေ ) :** လမ်းကြော အဆိုပြုသူသည် ဘလောက်တွင် ပါ၀င်မှသာ ပိတ်ဆို့ခြင်းကို ထုတ်ပေးပါသည်။
+အနည်းဆုံးလုပ်ဆောင်ပြီးသော ငွေပေးငွေယူအပိုင်းအစ၊ အချိန်အခြေခံအစပျိုးမှု သို့မဟုတ် ဆုံးဖြတ်သတ်မှတ်မှု
+artifact အပ်ဒိတ် (ဥပမာ၊ DA artifact roll-up)။ ဗလာတုံးတွေကို တားမြစ်ထားတယ်။
 
-**Implications:**
+**သက်ရောက်မှုများ**
 
-- Slot keep-alive: when no transaction meets its deterministic commit window,
-the lane emits no block and simply advances to the next slot. The merge ledger
-remains on the previous tip for that lane.
-- Trigger batching: background triggers that produce no state transition (e.g.,
-cron that reaffirms invariants) are considered empty and MUST be skipped or
-bundled with other work before producing a block.
-- Telemetry: `pipeline_detached_merged` and follow-up metrics treat skipped
-slots explicitly—operators can distinguish "no work" from "pipeline stalled".
-- Replay: block storage does not insert synthetic empty placeholders. The Kura
-replay loop simply observes the same parent hash for consecutive slots if no
-block was emitted.
+- Slot keep-alive- မည်သည့်ငွေပေးငွေယူမျှ ၎င်း၏ အဆုံးအဖြတ်ပေးသော commit window နှင့် မကိုက်ညီသောအခါ၊
+လမ်းကြောသည် ပိတ်ဆို့ခြင်းမရှိဘဲ ထွက်လာပြီး နောက်အထိုင်သို့ ရိုးရှင်းစွာ တိုးလာသည်။ လယ်ဂျာပေါင်းစည်းသည်။
+ထိုလမ်းကြောအတွက် ယခင်ထိပ်ဖျားတွင် ရှိနေသည်။
+- Trigger batching- ပြည်နယ်အကူးအပြောင်းကို မထုတ်လုပ်နိုင်သော နောက်ခံအစပျိုးမှုများ (ဥပမာ၊
+ကွဲလွဲမှုကိုအတည်ပြုသော cron) ကို ဗလာဟုယူဆပြီး ကျော်သွားရမည် သို့မဟုတ် ဖြတ်သွားရမည်။
+ဘလောက်တစ်ခုမထုတ်မီ အခြားအလုပ်များနှင့် စုစည်းထားသည်။
+- Telemetry- `pipeline_detached_merged` နှင့် နောက်ဆက်တွဲ တိုင်းတာမှုများကို ကျော်သွားသည်
+slots များကို ပြတ်သားစွာ—အော်ပရေတာများသည် "ပိုက်လိုင်းရပ်တန့်ခြင်း" နှင့် "အလုပ်မရှိ" ကို ခွဲခြားနိုင်သည်။
+- ပြန်လည်ဖွင့်ခြင်း- ဘလောက်သိုလှောင်မှုတွင် ဓာတုဗလာကျင်းထားသူများကို ထည့်သွင်းခြင်းမပြုပါ။ Kura
+replay loop သည် မရှိပါက ဆက်တိုက် slot များအတွက် တူညီသော parent hash ကို စောင့်ကြည့်သည်။
+ပိတ်ဆို့ခြင်းကို ထုတ်လွှတ်ခဲ့သည်။
 
-**Canonical Check:** During block proposal and validation, `ValidBlock::commit`
-asserts that the associated `StateBlock` carries at least one committed overlay
-(delta, artifact, trigger). This aligns with the `StateBlock::is_empty` guard
-that already ensures no-op writes are elided. Enforcement happens before
-signatures are requested so committees never vote on empty payloads.
+** Canonical စစ်ဆေးခြင်း-** ပိတ်ဆို့ခြင်း အဆိုပြုချက်နှင့် အတည်ပြုစဉ်အတွင်း `ValidBlock::commit`
+ဆက်စပ် `StateBlock` သည် အနည်းဆုံး ကျူးလွန်ထပ်ဆင့်မှုတစ်ခု သယ်ဆောင်ထားကြောင်း အခိုင်အမာဆိုသည်။
+(မြစ်ဝကျွန်းပေါ်၊ ရှေးဟောင်းပစ္စည်း၊ အစပျိုး)။ ၎င်းသည် `StateBlock::is_empty` အစောင့်နှင့် ကိုက်ညီသည်။
+၎င်းသည် no-op ရေးသားမှုများကို ဖယ်ထုတ်ရန် သေချာနေပြီဖြစ်သည်။ အရင်ကတည်းက ပြဋ္ဌာန်းထားတာ
+လက်မှတ်များ တောင်းခံထားသောကြောင့် ကော်မတီများသည် အချည်းနှီးသော ဝန်ထုပ်ဝန်ပိုးများကို မည်သည့်အခါမျှ မဲမပေးပါ။
 
-## 2. Cross-Lane QC Merge Semantics
+## 2. Cross-Lane QC ပေါင်းစပ် Semantics
 
-Each lane block `B_i` finalised by its committee produces:
+လမ်းသွားဘလောက်တစ်ခုစီသည် `B_i` ကို ၎င်း၏ကော်မတီမှ အပြီးသတ်ထုတ်လုပ်သည်-
 
-- `lane_state_root_i`: Poseidon2-SMT commitment over per-DS state roots touched
-in the block.
-- `merge_hint_root_i`: rolling candidate for the merge ledger (`tag =
-"iroha:merge:candidate:v1\0"`).
-- `lane_qc_i`: aggregated signatures from the lane committee over the
-  execution-vote preimage (block hash, `parent_state_root`,
-  `post_state_root`, height/view/epoch, chain_id, and mode tag).
+- `lane_state_root_i`- Poseidon2-SMT ကတိက၀တ်တစ်ခုလျှင် DS ပြည်နယ်၏အမြစ်များကို ထိမိသည်
+block ထဲမှာ။
+- `merge_hint_root_i`- စာရင်းဇယားပေါင်းစည်းမှုအတွက် ကိုယ်စားလှယ်လောင်း (`tag =
+"iroha:merge:candidate:v1\0"`)။
+- `lane_qc_i`- လမ်းသွယ်ကော်မတီမှ စုစည်းထားသော လက်မှတ်များ၊
+  အကောင်အထည်ဖော်မှု-မဲပေးကြိုတင်မဲ (block hash၊ `parent_state_root`၊
+  `post_state_root`၊ အမြင့်/မြင်ကွင်း/အပိုင်း၊ chain_id နှင့် မုဒ်တက်ဂ်)။
 
-Merge nodes collect the latest tips `{(B_i, lane_qc_i, merge_hint_root_i)}` for
-all lanes `i ∈ [0, K)`.
+ပေါင်းစည်းခြင်းအတွက် နောက်ဆုံးပေါ်အကြံပြုချက်များ `{(B_i, lane_qc_i, merge_hint_root_i)}` ကို စုဆောင်းပါ။
+`i ∈ [0, K)` လမ်းကြောင်းများအားလုံး။
 
-**Merge Entry (MUST):**
+** ပေါင်းစည်းခြင်း ( မဖြစ်မနေ ) :**
 
 ```
 MergeLedgerEntry {
@@ -72,23 +73,21 @@ MergeLedgerEntry {
     global_state_root: Hash32,
     merge_qc: QuorumCertificate,
 }
-```
+```- `lane_tips[i]` သည် လမ်းကြောပိတ်ဆို့ခြင်း၏ သင်္ကေတဖြစ်ပြီး လမ်းသွားများအတွက် ပေါင်းစည်းထားသော ဝင်ပေါက်တံဆိပ်များ
+  `i`။ ယခင် ပေါင်းစည်းခြင်းမှ စတင်၍ လမ်းကြောတစ်ခုမှ ပိတ်ဆို့ခြင်းမရှိပါက၊ ဤတန်ဖိုးဖြစ်သည်။
+  ထပ်ခါထပ်ခါ။
+- `merge_hint_root[i]` သည် သက်ဆိုင်ရာလမ်းကြောမှ `merge_hint_root` ဖြစ်သည်
+  ဘလောက်။ `lane_tips[i]` ထပ်ခါထပ်ခါလုပ်သည်။
+- `global_state_root` သည် `ReduceMergeHints(merge_hint_root[0..K-1])`၊ a
+  Poseidon2 ကို ဒိုမိန်း ခြားနားခြင်း tag ဖြင့် ခေါက်ပါ။
+  `"iroha:merge:reduce:v1\0"`။ လျှော့ချခြင်းသည် အဆုံးအဖြတ်ဖြစ်ပြီး လိုအပ်သည်။
+  ရွယ်တူများအကြား တူညီသောတန်ဖိုးကို ပြန်လည်တည်ဆောက်ပါ။
+- `merge_qc` သည် ပေါင်းစည်းခြင်းကော်မတီမှ BFT အထမြောက်ခြင်း လက်မှတ်တစ်ခုဖြစ်သည်။
+  အမှတ်စဉ် ရေးသွင်းခြင်း
 
-- `lane_tips[i]` is the hash of the lane block the merge entry seals for lane
-  `i`. If a lane emitted no block since the previous merge entry, this value is
-  repeated.
-- `merge_hint_root[i]` is the `merge_hint_root` from the corresponding lane
-  block. It is repeated when `lane_tips[i]` repeats.
-- `global_state_root` equals `ReduceMergeHints(merge_hint_root[0..K-1])`, a
-  Poseidon2 fold with domain separation tag
-  `"iroha:merge:reduce:v1\0"`. The reduction is deterministic and MUST
-  reconstruct the same value across peers.
-- `merge_qc` is a BFT quorum certificate from the merge committee over the
-  serialized entry.
+** QC ပေးချေမှုအား ပေါင်းစည်းခြင်း ( မဖြစ်မနေ ) :**
 
-**Merge QC Payload (MUST):**
-
-Merge committee members sign a deterministic digest:
+ကော်မတီအဖွဲ့ဝင်များ ပေါင်းစည်းရန် အဆုံးအဖြတ်အကျဉ်းချုပ်ကို လက်မှတ်ရေးထိုးသည်-
 
 ```
 merge_qc_digest = blake2b32(
@@ -104,110 +103,106 @@ merge_qc_digest = blake2b32(
 )
 ```
 
-- `view` is the merge-committee view derived from the lane tips (max
-  `view_change_index` across the lane headers sealed by the entry).
-- `chain_id` is the configured chain identifier string (UTF-8 bytes).
-- The payload uses Norito encoding with the field order shown above.
+- `view` သည် လမ်းကြောဆိုင်ရာ အကြံပြုချက်များမှ ဆင်းသက်လာသော ပေါင်းစည်းမှုကော်မတီမြင်ကွင်း (အမြင့်ဆုံး
+  `view_change_index` သည် ဝင်ပေါက်ဖြင့် အလုံပိတ်ထားသော လမ်းသွားခေါင်းပေါက်များတစ်လျှောက်)။
+- `chain_id` သည် configured chain identifier string (UTF-8 bytes) ဖြစ်သည်။
+- payload သည် အထက်ဖော်ပြပါ အကွက်အမှာစာဖြင့် Norito ကုဒ်နံပါတ်ကို အသုံးပြုသည်။
 
-The resulting digest is stored in `merge_qc.message_digest` and is the message
-verified by BLS signatures.
+ရရှိလာသော ရလဒ်ကို `merge_qc.message_digest` တွင် သိမ်းဆည်းထားပြီး မက်ဆေ့ချ်ဖြစ်သည်။
+BLS လက်မှတ်များဖြင့် အတည်ပြုထားသည်။
 
-**Merge QC Construction (MUST):**
+** QC တည်ဆောက်မှု ပေါင်းစည်းခြင်း (လိုအပ်သည်) :**
 
-- The merge committee roster is the current commit-topology validator set.
-- Required quorum = `commit_quorum_from_len(roster_len)`.
-- `merge_qc.signers_bitmap` encodes participating validator indices (LSB-first)
-  in commit-topology order.
-- `merge_qc.aggregate_signature` is the BLS-normal aggregate for the digest
-  above.
+- ပေါင်းစည်းရေးကော်မတီစာရင်းသည် လက်ရှိ commit-topology validator set ဖြစ်သည်။
+- လိုအပ်သော အထရမ် = `commit_quorum_from_len(roster_len)`။
+- `merge_qc.signers_bitmap` သည် ပါ၀င်သော validator indices (LSB-first) ကို ကုဒ်လုပ်သည်
+  commit-topology အစီအစဥ်တွင်။
+- `merge_qc.aggregate_signature` သည် အချေအတင်အတွက် BLS-ပုံမှန်စုစည်းမှုဖြစ်သည်
+  အထက်။
 
-**Validation (MUST):**
+**အတည်ပြုချက် (ရှိရမည်):**
 
-1. Verify each `lane_qc_i` against `lane_tips[i]` and confirm the block headers
-   include the matching `merge_hint_root_i`.
-2. Ensure no `lane_qc_i` points to an `Invalid` or unexecuted block. The
-   non-empty policy above ensures the header includes state overlays.
-3. Recompute `ReduceMergeHints` and compare with `global_state_root`.
-4. Recompute the merge QC digest and verify the signer bitmap, quorum threshold,
-   and aggregate signature against the commit-topology roster.
+1. `lane_qc_i` တစ်ခုစီကို `lane_tips[i]` ကိုစစ်ဆေးပြီး ပိတ်ဆို့ခေါင်းစီးများကို အတည်ပြုပါ
+   ကိုက်ညီသော `merge_hint_root_i` ပါဝင်သည်။
+2. `lane_qc_i` သည် `Invalid` သို့မဟုတ် မလုပ်ဆောင်ရသေးသော ပိတ်ဆို့ခြင်းကို ညွှန်ပြခြင်းမရှိကြောင်း သေချာပါစေ။ ဟိ
+   အထက်ဖော်ပြပါ အချည်းနှီးမဟုတ်သောမူဝါဒသည် ခေါင်းစီးတွင် ပြည်နယ်ထပ်ဆင့်များပါ၀င်ကြောင်း သေချာစေသည်။
+3. `ReduceMergeHints` ကို ပြန်လည်တွက်ချက်ပြီး `global_state_root` နှင့် နှိုင်းယှဉ်ပါ။
+4. ပေါင်းစပ် QC ချေဖျက်မှုကို ပြန်လည်တွက်ချက်ပြီး လက်မှတ်ထိုးသူ ဘစ်မြေပုံ၊
+   နှင့် commit-topology တန်းစီဇယားနှင့် ပေါင်းစပ်လက်မှတ်။
 
-**Observability:** Merge nodes emit Prometheus counters for
-`merge_entry_lane_repeats_total{i}` to highlight lanes that skipped slots for
-operational visibility.
+**ကြည့်ရှုနိုင်မှု-** Merge nodes များအတွက် Prometheus ကောင်တာများကို ထုတ်လွှတ်သည်
+အကွက်များကို ကျော်သွားသော လမ်းကြောများကို မီးမောင်းထိုးပြရန် `merge_entry_lane_repeats_total{i}`
+လည်ပတ်မြင်နိုင်စွမ်း။
 
-## 3. Finality Workflow
+## 3. နောက်ဆုံးအဆင့် အလုပ်အသွားအလာ
 
-### 3.1 Lane-Level Finality
+### 3.1 Lane-Level နောက်ဆုံးအဆင့်
 
-1. Transactions are scheduled per lane in deterministic slots.
-2. The executor applies overlays into `StateBlock`, producing deltas and
-artifacts.
-3. Upon validation, the lane committee signs the execution-vote preimage that
-   binds the block hash, state roots, and height/view/epoch. The tuple
-   `(block_hash, lane_qc_i, merge_hint_root_i)` is considered lane-final.
-4. Light clients MAY treat the lane tip as final for DS-limited proofs, but
-must record the associated `merge_hint_root` to reconcile with the merge ledger
-later.
+1. ငွေပေးငွေယူများကို အဆုံးအဖြတ်ပေးသည့်နေရာများတွင် လမ်းသွားတစ်ခုစီကို စီစဉ်ထားသည်။
+2. executor သည် `StateBlock` တွင် ထပ်ဆင့်များပါ၀င်ပြီး မြစ်ဝကျွန်းပေါ်ဒေသများကို ထုတ်လုပ်ပေးပြီး၊
+ရှေးဟောင်းပစ္စည်း။
+3. အတည်ပြုပြီးပါက၊ လမ်းကော်မတီသည် အကောင်အထည်ဖော်ရေး-မဲအကြိုအမှတ်အသားကို လက်မှတ်ရေးထိုးသည်။
+   block hash၊ state roots နှင့် height/view/epoch ကို ချည်နှောင်သည်။ tuple
+   `(block_hash, lane_qc_i, merge_hint_root_i)` ကို လမ်းသွား-နောက်ဆုံးအဖြစ် သတ်မှတ်သည်။
+4. Light clients များသည် DS-limited အထောက်အထားများအတွက် နောက်ဆုံးအနေဖြင့် လမ်းသွားအဖျားကို ဆက်ဆံနိုင်သော်လည်း၊
+ပေါင်းစည်းထားသော လယ်ဂျာနှင့် ညှိနှိုင်းရန် ဆက်စပ် `merge_hint_root` ကို မှတ်တမ်းတင်ရပါမည်
+နောက်ပိုင်းလမ်းကြောကော်မတီများသည် ဒေတာအာကာသတစ်ခုစီဖြစ်ပြီး ကမ္ဘာလုံးဆိုင်ရာကော်မတီကို အစားမထိုးပါ။
+topology ကော်မတီအရွယ်အစားကို `3f+1` တွင် ပုံသေသတ်မှတ်ထားပြီး `f` မှ ဆင်းသက်လာခြင်းဖြစ်သည်။
+dataspace catalog (`fault_tolerance`)။ validator pool သည် dataspace ဖြစ်သည်
+တရားဝင်သူများ (စီမံအုပ်ချုပ်မှုစီမံခန့်ခွဲသည့်လမ်းများအတွက် သို့မဟုတ် အများသူငှာ လမ်းကြောများအတွက် လမ်းကြောဆိုင်ရာ အုပ်ချုပ်မှုဖော်ပြချက်များ
+လောင်းကြေးအရွေးခံရသောလမ်းများအတွက် လောင်းကြေးမှတ်တမ်းများ)။ ကော်မတီအဖွဲ့ဝင်ဖြစ် သည်။
+VRF အပိုင်းနှင့် ချည်နှောင်ထားသော မျိုးစေ့ကို အသုံးပြု၍ ကာလတစ်ခုလျှင် တစ်ကြိမ် တိကျသေချာစွာ နမူနာယူသည်။
+`dataspace_id` နှင့် `lane_id`။ ရေကူးကန်သည် `3f+1` ထက်ငယ်ပါက လမ်းသွားနောက်ဆုံးဖြစ်သည်။
+အထမြောက်သည်အထိ ခေတ္တရပ်ပါ (အရေးပေါ်ပြန်လည်ရယူခြင်းကို သီးခြားကိုင်တွယ်သည်)။
 
-Lane committees are per-dataspace and do not replace the global commit
-topology. Committee size is fixed at `3f+1`, where `f` comes from the
-dataspace catalog (`fault_tolerance`). The validator pool is the dataspace's
-validators (lane governance manifests for admin-managed lanes, or public-lane
-staking records for stake-elected lanes). Committee membership is
-deterministically sampled once per epoch using the VRF epoch seed bound with
-`dataspace_id` and `lane_id`. If the pool is smaller than `3f+1`, lane finality
-pauses until quorum is restored (emergency recovery is handled separately).
+### 3.2 Merge-Ledger နောက်ဆုံးအဆင့်
 
-### 3.2 Merge-Ledger Finality
+1. ပေါင်းစည်းရေးကော်မတီသည် နောက်ဆုံးလမ်းကြောဆိုင်ရာ အကြံပြုချက်များကို စုဆောင်းပြီး၊ `lane_qc_i` တစ်ခုစီကို စစ်ဆေးပြီး၊
+အထက်ဖော်ပြပါအတိုင်း `MergeLedgerEntry` ကို တည်ဆောက်သည်။
+2. အဆုံးအဖြတ် လျှော့ချခြင်းကို စိစစ်ပြီးနောက် ပေါင်းစည်းရေး ကော်မတီက လက်မှတ်ရေးထိုးသည်။
+ဝင်ခွင့် (`merge_qc`)။
+3. Nodes များသည် ပေါင်းစည်းထားသော လယ်ဂျာ မှတ်တမ်းသို့ ဝင်ရောက်မှုကို ပေါင်းထည့်ကာ ၎င်းကို တွဲလျက် ဆက်လက်တည်ရှိနေပါသည်။
+လမ်းသွားပိတ်ဆို့ ကိုးကား။
+4. `global_state_root` သည် တရားဝင်သော ကမ္ဘာ့နိုင်ငံတော် ကတိကဝတ် ဖြစ်လာသည်။
+အပိုင်း/အထိုင်။ ဤအရာကို ထင်ဟပ်စေရန်အတွက် အပြည့်အဝ node များသည် ၎င်းတို့၏ WSV စစ်ဆေးရေးဂိတ် မက်တာဒေတာကို အပ်ဒိတ်လုပ်ပါသည်။
+တန်ဖိုး; deterministic replay ကိုပဲ reproduce လျော့ရပါမယ်။
 
-1. Merge committee collects the latest lane tips, verifies each `lane_qc_i`, and
-constructs the `MergeLedgerEntry` as defined above.
-2. After verifying the deterministic reduction, the merge committee signs the
-entry (`merge_qc`).
-3. Nodes append the entry to the merge ledger log and persist it alongside the
-lane block references.
-4. `global_state_root` becomes the authoritative world state commitment for the
-epoch/slot. Full nodes update their WSV checkpoint metadata to mirror this
-value; deterministic replay must reproduce the same reduction.
+### 3.3 WSV နှင့် သိုလှောင်မှုပေါင်းစည်းခြင်း။
 
-### 3.3 WSV and Storage Integration
+- `State::commit_merge_entry` သည် per-lane state roots နှင့် တို့ကို မှတ်တမ်းတင်သည်။
+  နောက်ဆုံး `global_state_root`၊ ကမ္ဘာလုံးဆိုင်ရာ checksum ဖြင့် လမ်းသွားလုပ်ဆောင်မှုကို ပေါင်းကူးထားသည်။
+- Kura သည် `MergeLedgerEntry` ကို လမ်းကြောပိတ်ဆို့သည့် ပစ္စည်းများနှင့် ကပ်လျက် ဆက်ရှိနေသည် ။
+  ပြန်လည်ကစားခြင်းသည် လမ်းသွားအဆင့်နှင့် ကမ္ဘာလုံးဆိုင်ရာ နောက်ဆုံးအဆင့် နှစ်ခုလုံးကို ပြန်လည်တည်ဆောက်နိုင်သည်။
+- လမ်းသွားတစ်ခုသည် အပေါက်တစ်ခုကို ကျော်သွားသောအခါ၊ သိုလှောင်မှုသည် ယခင်အစွန်အဖျားကို ရိုးရှင်းစွာ ထိန်းသိမ်းထားသည်။ မဟုတ်ဘူး
+  အနည်းဆုံး လမ်းကြောတစ်ခုမှ အသစ်တစ်ခု မဖန်တီးမချင်း နေရာယူသူ ပေါင်းစပ်ထည့်သွင်းမှုများကို ဖန်တီးထားသည်။
+  ဘလောက်။
+- API မျက်နှာပြင်များ (Torii၊ telemetry) နှစ်ခုစလုံးသည် လမ်းသွားအကြံပြုချက်များနှင့် နောက်ဆုံးပေါ်ပေါင်းစည်းမှုကို ဖော်ထုတ်နိုင်သည်
+  သို့မှသာ အော်ပရေတာများနှင့် ဖောက်သည်များသည် တစ်လမ်းသွားနှင့် ကမ္ဘာလုံးဆိုင်ရာ အမြင်များကို ညှိနှိုင်းနိုင်မည်ဖြစ်သည်။
 
-- `State::commit_merge_entry` records the per-lane state roots and the
-  final `global_state_root`, bridging lane execution with the global checksum.
-- Kura persists `MergeLedgerEntry` adjacent to the lane block artifacts so a
-  replay can reconstruct both lane-level and global finality sequences.
-- When a lane skips a slot, storage simply retains the previous tip; no
-  placeholder merge entries are created until at least one lane produces a new
-  block.
-- API surfaces (Torii, telemetry) expose both lane tips and the latest merge
-  entry so operators and clients can reconcile per-lane and global views.
-
-## 4. Implementation Notes
-
-- `crates/iroha_core/src/state.rs`: `State::commit_merge_entry` validates the
-  reduction and wires the lane/global metadata into the world state so queries
-  and observers can access the merge hints and the authoritative global hash.
-- `crates/iroha_core/src/kura.rs`: `Kura::store_block_with_merge_entry` enqueues
-  the block and persists the associated merge entry in one step, rolling back
-  the in-memory block when the append fails so storage never records a block
-  without its sealing metadata. The merge-ledger log is pruned in lock-step
-  with the validated block height during startup recovery, and cached in memory
-  with a bounded window (`kura.merge_ledger_cache_capacity`, default 256) to
-  avoid unbounded growth on long-running nodes. Recovery truncates partial or
-  oversized merge-ledger tail entries, and append rejects entries above the
-  maximum payload size guard to cap allocations.
-- `crates/iroha_core/src/block.rs`: block validation rejects blocks without
-  entrypoints (external transactions or time triggers) and without deterministic
-  artifacts such as DA bundles (`BlockValidationError::EmptyBlock`), ensuring
-  the non-empty policy is enforced before signatures are requested and carried
-  into the merge ledger.
-- Deterministic reduction helper lives in the merge service: `reduce_merge_hint_roots`
-  (`crates/iroha_core/src/merge.rs`) implements the Poseidon2 fold described above.
-  Hardware acceleration hooks remain future work, but the scalar path now enforces
-  the canonical reduction deterministically.
-- Telemetry integration: exposing per-lane merge repeats and the
-  `global_state_root` gauge remains tracked in the observability backlog so the
-  dashboard work can ship alongside the merge service rollout.
-- Cross-component tests: golden replay coverage for the merge reduction is
-  tracked with the integration-test backlog to ensure future changes to
-  `reduce_merge_hint_roots` keep the recorded roots stable.
+## 4. အကောင်အထည်ဖော်ရေးမှတ်စုများ- `crates/iroha_core/src/state.rs`: `State::commit_merge_entry` သည် အတည်ပြုသည်
+  လျှော့ချပြီး လမ်းကြော/ကမ္ဘာလုံးဆိုင်ရာ မက်တာဒေတာကို ကမ္ဘာ့အခြေအနေသို့ သွယ်တန်းခိုင်းပါ။
+  နှင့် လေ့လာသူများသည် ပေါင်းစပ်အရိပ်အမြွက်များနှင့် တရားဝင်သော ကမ္ဘာလုံးဆိုင်ရာ hash ကို ဝင်ရောက်ကြည့်ရှုနိုင်ပါသည်။
+- `crates/iroha_core/src/kura.rs`- `Kura::store_block_with_merge_entry` စာရင်းများ
+  ပိတ်ဆို့ပြီး ဆက်စပ်ပေါင်းစည်းခြင်းအား ခြေလှမ်းတစ်လှမ်းတွင် ဆက်လက်တည်ရှိစေပြီး နောက်ပြန်လှည့်ပါ။
+  နောက်ဆက်တွဲ ပျက်သွားသောအခါ သိုလှောင်မှုတွင် ဘလောက်ကို ဘယ်သောအခါမှ မမှတ်ယူပါ။
+  ၎င်း၏ တံဆိပ်ခတ်ခြင်း metadata မပါဘဲ ပေါင်းစည်း-လယ်ဂျာမှတ်တမ်းကို လော့ခ်ချသည့်အဆင့်တွင် ဖြတ်တောက်ထားသည်။
+  ပြန်လည်ရယူစဉ်တွင် အတည်ပြုထားသော ဘလောက်အမြင့်နှင့်အတူ၊ မှတ်ဉာဏ်တွင် သိမ်းဆည်းထားသည်။
+  ဘောင်ခတ်ထားသောဝင်းဒိုး (`kura.merge_ledger_cache_capacity`၊ ပုံသေ 256) သို့
+  ရေရှည်လည်ပတ်နေသော node များတွင် အကန့်အသတ်မရှိ ကြီးထွားမှုကို ရှောင်ကြဉ်ပါ။ ပြန်လည်ရယူခြင်းသည် တစ်စိတ်တစ်ပိုင်း သို့မဟုတ် ဖြတ်တောက်သည်။
+  အရွယ်အစားကြီးသော ပေါင်းစည်း-လယ်ဂျာအမြီးတွင် ထည့်သွင်းမှုများ၊ အထက်တွင် ထည့်သွင်းမှုများကို ပယ်ချသည်။
+  ခွဲဝေထုပ်လုပ်ရန်အတွက် အမြင့်ဆုံး payload size guard။
+- `crates/iroha_core/src/block.rs`: block validation သည် blocks မပါဘဲ ငြင်းပယ်သည်။
+  entrypoints (ပြင်ပငွေပေးငွေယူများ သို့မဟုတ် အချိန်အစပျိုးမှုများ) နှင့် အဆုံးအဖြတ်မရှိဘဲ
+  DA အစုအဝေး (`BlockValidationError::EmptyBlock`) ကဲ့သို့သော ရှေးဟောင်းပစ္စည်းများကို သေချာစေရန်၊
+  လက်မှတ်များတောင်းဆိုပြီး သယ်ဆောင်ခြင်းမပြုမီ အချည်းနှီးမဟုတ်သောမူဝါဒကို ကျင့်သုံးသည်။
+  ပေါင်းစည်းစာရင်းထဲသို့။
+- အဆုံးအဖြတ်ပေးသော လျော့ချပေးသူသည် ပေါင်းစည်းခြင်းဝန်ဆောင်မှုတွင် နေထိုင်သည်- `reduce_merge_hint_roots`
+  (`crates/iroha_core/src/merge.rs`) သည် အထက်တွင်ဖော်ပြထားသော Poseidon2 ခေါက်ကို အကောင်အထည်ဖော်သည်။
+  ဟာ့ဒ်ဝဲ အရှိန်မြှင့်ချိတ်များသည် အနာဂတ်တွင် အလုပ်ကျန်ရှိနေသော်လည်း scalar လမ်းကြောင်းကို ယခု ပြဌာန်းထားသည်။
+  canonical လျှော့ချရေးကို အဆုံးအဖြတ်ပေးသည်။
+- Telemetry ပေါင်းစည်းခြင်း- တစ်လမ်းသွား တစ်လမ်းသွား ပေါင်းစပ်မှု ထပ်ခါထပ်ခါ နှင့် တို့ကို ဖော်ထုတ်ခြင်း။
+  `global_state_root` gauge သည် observability backlog တွင် ခြေရာခံထားဆဲဖြစ်သောကြောင့်၊
+  ဒက်ရှ်ဘုတ်အလုပ်သည် ပေါင်းစည်းခြင်းဝန်ဆောင်မှုကို စတင်ခြင်းနှင့်အတူ ပို့ဆောင်နိုင်သည်။
+- Cross-component စမ်းသပ်မှုများ- ပေါင်းစည်းခြင်းကို လျှော့ချရန်အတွက် ရွှေရောင်ပြန်လည်ပြသမှု လွှမ်းခြုံထားသည်။
+  အနာဂတ်တွင် ပြောင်းလဲမှုများကို သေချာစေရန် ပေါင်းစပ်-စမ်းသပ်မှု backlog ဖြင့် ခြေရာခံထားသည်။
+  `reduce_merge_hint_roots` မှတ်တမ်းတင်ထားသော အမြစ်များကို တည်ငြိမ်အောင်ထားပါ။

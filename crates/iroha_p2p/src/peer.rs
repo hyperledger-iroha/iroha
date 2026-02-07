@@ -2168,7 +2168,7 @@ mod run {
     /// This reader supports "batched frames": a single encrypted frame may
     /// contain multiple Norito-framed messages concatenated back-to-back.
     /// This reduces the encrypted frame rate and therefore lowers Tokio IO
-    /// driver overhead under high message volumes (e.g. NPoS consensus).
+    /// driver overhead under high message volumes (e.g. `NPoS` consensus).
     struct MessageReader<E: Enc, M: Pload> {
         read: Box<dyn AsyncRead + Send + Unpin>,
         buffer: bytes::BytesMut,
@@ -2602,7 +2602,7 @@ mod run {
                 } else {
                     &mut self.queue_low
                 };
-                let frame_len = queue.front().map(BytesMut::len).unwrap_or(0);
+                let frame_len = queue.front().map_or(0, BytesMut::len);
                 if frames_added > 0
                     && self.batch.len().saturating_add(frame_len) > Self::MAX_BATCH_BYTES
                 {
@@ -2736,12 +2736,24 @@ mod run {
             }
         }
 
+        impl ClassifyTopic for Dummy {
+            fn topic(&self) -> Topic {
+                Topic::Other
+            }
+        }
+
         #[derive(Encode, Decode, Clone, Debug)]
         struct Blob(Vec<u8>);
 
         impl<'a> ncore::DecodeFromSlice<'a> for Blob {
             fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
                 ncore::decode_field_canonical::<Self>(bytes)
+            }
+        }
+
+        impl ClassifyTopic for Blob {
+            fn topic(&self) -> Topic {
+                Topic::Other
             }
         }
         #[derive(Default)]
@@ -2891,15 +2903,16 @@ mod run {
                 Bytes::from(buffer.clone())
             };
             let read: Box<dyn AsyncRead + Send + Unpin> = Box::new(FakeRead { data, pos: 0 });
-            let mut reader = MessageReader::new(read, reader_cryptographer, 1024);
+            let mut reader: MessageReader<ChaCha20Poly1305, Message<Blob>> =
+                MessageReader::new(read, reader_cryptographer, 1024);
 
             let (first, _) = reader
-                .read_message::<Message<Blob>>()
+                .read_message()
                 .await
                 .expect("read first")
                 .expect("first frame");
             let (second, _) = reader
-                .read_message::<Message<Blob>>()
+                .read_message()
                 .await
                 .expect("read second")
                 .expect("second frame");
@@ -3101,10 +3114,11 @@ mod run {
                     &[1u8; 32],
                 )
                 .expect("valid key length");
-            let mut mr = MessageReader::new(read, crypt, 1024);
+            let mut mr: MessageReader<ChaCha20Poly1305, Dummy> =
+                MessageReader::new(read, crypt, 1024);
 
             // First attempt should yield an error due to malformed/cannot decrypt frame
-            let err = mr.read_message::<Dummy>().await.err();
+            let err = mr.read_message().await.err();
             assert!(err.is_some(), "expected read error from malformed frame");
 
             // Now simulate a flood of such errors and ensure our sampler would emit at most once
@@ -3136,8 +3150,9 @@ mod run {
                     &[2u8; 32],
                 )
                 .expect("valid key length");
-            let mut mr = MessageReader::new(read, crypt, 1024); // max_frame_bytes=1024
-            let err = mr.read_message::<Dummy>().await.err();
+            let mut mr: MessageReader<ChaCha20Poly1305, Dummy> =
+                MessageReader::new(read, crypt, 1024); // max_frame_bytes=1024
+            let err = mr.read_message().await.err();
             assert!(matches!(err, Some(Error::FrameTooLarge)));
         }
 
@@ -3149,12 +3164,13 @@ mod run {
                     &[3u8; 32],
                 )
                 .expect("valid key length");
-            let mut mr = MessageReader::new(read, crypt, 8192);
+            let mut mr: MessageReader<ChaCha20Poly1305, Dummy> =
+                MessageReader::new(read, crypt, 8192);
             let declared: u32 = 4096;
             mr.buffer.extend_from_slice(&declared.to_be_bytes());
             let before = mr.buffer.capacity();
             mr.reserve_for_frame().expect("reserve");
-            let needed = (declared as usize) + MessageReader::<ChaCha20Poly1305>::U32_SIZE;
+            let needed = (declared as usize) + MessageReader::<ChaCha20Poly1305, Dummy>::U32_SIZE;
             assert!(mr.buffer.capacity() >= needed);
             assert!(mr.buffer.capacity() >= before);
         }

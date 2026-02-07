@@ -7,82 +7,81 @@ generator: scripts/sync_docs_i18n.py
 source_hash: da8a99adbbcf1d8b209a25da32e256c0dad2860633f373d7410a3a91d790c938
 source_last_modified: "2026-01-21T19:17:13.236818+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# IVM Architecture Refactor Plan
+# IVM བཟོ་བཀོད་བསྐྱར་བཟོ་འཆར་གཞི།
 
-This plan captures the short-term milestones for reshaping the Iroha Virtual Machine
-(IVM) into clearer layers while preserving security and performance characteristics.
-It focuses on isolating responsibilities, making host integrations safer, and
-preparing the Kotodama language stack for extraction into a standalone crate.
+འཆར་གཞི་འདི་གིས་ Iroha Virtual Machine བསྐྱར་བཟོ་འབད་ནིའི་དོན་ལུ་ ཡུན་ཐུང་གི་ མཐོ་ཚད་ཚུ་ བཏོན་ཡོདཔ་ཨིན།
+(IVM) ཉེན་སྲུང་དང་ལཱ་འགན་ཁྱད་ཆོས་ཚུ་ ཉམས་སྲུང་འབད་བའི་སྐབས་ བང་རིམ་གསལ་ཏོག་ཏོ་ནང་ཨིན།
+འདི་གིས་ འགན་ཁུར་ཚུ་ སོ་སོ་སྦེ་བཞག་ནི་དང་ ཧོསཊི་མཉམ་བསྡོམས་ཚུ་ ཉེན་སྲུང་དང་ལྡནམ་སྦེ་བཟོ་ནི་ལུ་ གཙོ་བོར་བསྟེནམ་ཨིན།
+ཕྱིར་འཐེན་གྱི་དོན་ལུ་ Kotodama སྐད་ཡིག་བང་རིམ་འདི་ stonge one create ནང་ལུ་གྲ་སྒྲིག་འབད་དོ།
 
-## Goals
+## རིལ་ཚང
 
-1. **Layered runtime façade** – introduce an explicit runtime interface so the VM
-   core can be embedded behind a narrow trait and alternative front-ends can evolve
-   without touching internal modules.
-2. **Host/syscall boundary  hardening** – route syscall dispatch through a
-   dedicated adapter that enforces ABI policy and pointer validation before any host
-   code executes.
-3. **Language/tooling separation** – move Kotodama specific code to a new crate and
-   keep only the bytecode execution surface in `ivm`.
-4. **Configuration cohesion** – unify acceleration and feature toggles so they are
-   driven through `iroha_config`, removing environment-based knobs in production
-   paths.
+1. **བང་རིམ་ཅན་གྱི་རན་ཊའིམ་གདོང་ཕྱོགས་** – གསལ་རི་རི་རན་དུས་ཚོད་ཀྱི་ངོས་འདྲ་བ་ཅིག་ངོ་སྤྲོད་འབདཝ་ལས་ ཝི་ཨེམ་འདི་ཨིན།
+   ལྟེ་བ་འདི་ རང་གཤིས་དོག་པོ་ཅིག་གི་རྒྱབ་ཁར་ བཙུགས་ཚུགསཔ་ཨིནམ་དང་ གདོང་ཕྱོགས་ཐབས་ཤེས་གཞན་གྱི་ གོང་འཕེལ་གཏང་ཚུགས།
+   ནང་འཁོད་ཚད་གཞི་ཚུ་ ལགཔ་མ་རྐྱབ་པར་།
+2.*ཧོསིཊི་/སི་ཀཱལ་ས་མཚམས་ཀྱི་ཧརཌི་ནིང་** – ལམ་གྱི་སི་ཀཱལ་གཏང་ནི།
+   ABI སྲིད་བྱུས་དང་ དཔག་བྱེད་བདེན་བཤད་འདི་ གཙོ་བོ་གང་རུང་ཅིག་གི་ཧེ་མ་ བསྟར་སྤྱོད་འབད་མི་ བརྩོན་ཤུགས་ཅན་གྱི་མཐུན་རྐྱེན།
+   གསང་གྲངས་ བཀོལ་སྤྱོད་འབདཝ་ཨིན།
+3. **ལྕུག་གུ་/ལག་ཆས་དབྱེ་འབྱེད་** – Kotodama དམིགས་བསལ་གསང་གྲངས་ ཀེརེཊ་གསརཔ་ལུ་ དང་།
+   `ivm` ནང་ལུ་ བཱའིཊི་ཀོཌ་ ལག་ལེན་འཐབ་ཐངས་འདི་རྐྱངམ་ཅིག་བཞག་དགོ།
+4. **རིམ་སྒྲིག་གཅིག་མཐུན་** – གཅིག་མཐུན་མགྱོགས་ཚད་དང་ཁྱད་རྣམ་སོར་བསྒྱུར་ཚུ་ དེ་ལས་ དེ་ཚུ་ཨིན།
+   འདྲེན་བྱེད་ `iroha_config`, ཐོན་སྐྱེད་ནང་མཐའ་འཁོར་གཞི་བཞག་པའི་མཛུབ་མོ་བཏོན་པ།
+   །།ལམ་དག་དང་།
 
-## Phase Breakdown
+## རིམ་པ་བསྡམས་པ།
 
-### Phase 1 – Runtime façade (in progress)
-- Add a `runtime` module that defines a `VmEngine` trait describing lifecycle
-  operations (`load_program`, `execute`, host plumbing).
-- Teach `IVM` to implement the trait.  This keeps the existing struct but allows
-  consumers (and future tests) to depend on the interface instead of concrete
-  types.
-- Start shedding direct module re-exports from `lib.rs` so callers import via the
-  façade when possible.
+### གོ་རིམ་༡ པ་ – གཡོག་བཀོལ་བའི་དུས་རིམ། (འཕེལ་རྒྱས་ནང་)
+- མི་ཚེ་འཁོར་རིམ་གསལ་བཀོད་འབད་མི་ `VmEngine` ངེས་ཚིག་བཀོད་མི་ `runtime` ཚད་གཞི་ཅིག་ཁ་སྐོང་རྐྱབས།
+  བཀོལ་སྤྱོད་ (`load_program`, `execute`, ཧོསིཊི་ཆུ་གཡུར་)།
+- རང་གཤིས་ལག་ལེན་འཐབ་ནིའི་དོན་ལུ་ `IVM` སློབ་སྟོན་འབད།  འདི་གིས་ ད་ལྟོ་ཡོད་པའི་ གཞི་བཀོད་འདི་བཞག་ཨིན་རུང་ ཆོག་ཐམ་བྱིནམ་ཨིན།
+  ཉོ་སྤྱོད་པ་ (དང་མ་འོངས་པའི་བརྟག་དཔྱད་) བརྟན་བརྟན་གྱི་ཚབ་ལུ་ ངོས་འདྲ་བ་ལུ་རག་ལསཔ་ཨིན།
+  དབྱེ་བ།
+- `lib.rs` ལས་ ཐད་ཀར་གྱི་ཚད་གཞི་ཚུ་ ལོག་ཕྱིར་ཚོང་འབད་ནི་འགོ་བཙུགས་ཏེ་ ཁ་པར་བཏང་མི་ཚུ་ བརྒྱུད་དེ་ ནང་འདྲེན་འབད།
+  འབད་ཚུགས་པའི་སྐབས་ གདོང་ཁར་ལུ།
 
-**Security / performance impact**: The façade restricts direct access to internal
-state; only safe entry points are exposed.  This makes it easier to audit host
-interactions and reason about gas or TLV handling.
+**ཉེན་སྲུང་ / ལས་ཀའི་ཕན་གནོད་***: གདོང་ཕྱོགས་འདི་གིས་ ནང་འཁོད་ལུ་ཐད་ཀར་དུ་འཛུལ་སྤྱོད་འབད་ནི་བཀག་ཆ་འབདཝ་ཨིན།
+གནས་སྟངས; ཉེན་སྲུང་ཅན་གྱི་འཛུལ་སྒོ་ཚུ་རྐྱངམ་ཅིག་ ཕྱི་ཁར་ཐོན་ཡོདཔ་ཨིན།  འདི་གིས་ ཧོསཊི་རྩིས་ཞིབ་འབད་ནི་ལུ་འཇམ་ཏོང་ཏོ་བཟོཝ་ཨིན།
+རླངས་རྫས་ཡང་ན་ ཊི་ཨེལ་ཝི་འཛིན་སྐྱོང་གི་སྐོར་ལས་ འབྲེལ་བ་འཐབ་ནི་དང་ རྒྱུ་མཚན་ཚུ།
 
-### Phase 2 – Syscall dispatcher
-- Introduce a `SyscallDispatcher` component that wraps `IVMHost` and enforces ABI
-  policy and pointer validation once, in one location.
-- Migrate the default host and mock hosts to use the dispatcher, removing
-  duplicated validation logic.
-- Make dispatcher pluggable so hosts can supply custom instrumentation without
-  bypassing safety checks.
-- Provide a `SyscallDispatcher::shared(...)` helper so cloned VMs can forward
-  syscalls through a shared `Arc<Mutex<..>>` host without each worker building
+### རིམ་པ་ ༢ – སི་ཀཱལ་གཏང་མི།
+- `SyscallDispatcher` ཆ་ཤས་ཅིག་ངོ་སྤྲོད་འབད་དེ་ `IVMHost` དང་ ABI བསྟར་སྤྱོད་འབདཝ་ཨིན།
+  སྲིད་བྱུས་དང་དཔག་བྱེད་བདེན་བཤད་ཐེངས་གཅིག་ས་གནས་གཅིག་ནང་།
+- བཏོན་གཏང་མི་འདི་ལག་ལེན་འཐབ་ནིའི་དོན་ལུ་ སྔོན་སྒྲིག་ཧོསིཊི་དང་ མོ་ཀ་ཧོསིཊི་ཚུ་ སྤོ་བཤུད་འབད་ བཏོན་གཏང་།
+  བདེན་དཔྱད་ཀྱི་ཚད་མ་གཉིས་པ།
+- ཧོསིཊི་ཚུ་གིས་ རང་བཞིན་སྲོལ་སྒྲིག་ལག་ཆས་ཚུ་ མེད་པར་ བཀྲམ་སྤེལ་འབད་ཚུགས།
+  ཉེན་སྲུང་ཞིབ་དཔྱད་ཚུ་བརྒལ་ནི།
+- `SyscallDispatcher::shared(...)` གྲོགས་རམ་པ་ཅིག་བྱིན་ཏེ་ ཝི་ཨེམ་ཚུ་གིས་ གོང་འཕེལ་གཏང་ཚུགས།
+  ལས་བྱེད་པ་རེ་རེ་བཞིན་མེད་པར་ `Arc<Mutex<..>>` གི་གཙོ་བོ་བརྒྱུད་དེ་ syscalls
   bespoke wrappers.
 
-**Security / performance impact**: Centralised gating protects against hosts that
-forget to call `is_syscall_allowed`, and it allows future caching of pointer
-validations for repeated syscalls.
+**ཉེན་སྲུང་ / ལས་ཀའི་ཕན་གནོད་**: དབུས་སྒྲིག་སྒོ་སྒྲིག་ཚུ་གིས་ ཧོསཊི་ཚུ་ལས་སྲུང་སྐྱོབ་འབདཝ་ཨིན།
+`is_syscall_allowed` ལུ་འབོ་ནི་བརྗེད་ཞིནམ་ལས་ དེ་གིས་ མ་འོངས་པའི་ནང་ དཔག་བྱེད་ཀྱི་ དཔག་བྱེད་འདི་ འབད་བཅུགཔ་ཨིན།
+བསྐྱར་ལོག་སི་སི་ཀཱལ་གྱི་དོན་ལུ་ བདེན་དཔྱད།
 
-### Phase 3 – Kotodama extraction
-- Kotodama compiler extracted to `crates/kotodama_lang` (from `crates/ivm/src/kotodama`).
-- Provide a minimal bytecode API that the VM consumes (`compile_to_ivm_bytecode`).
+### གོ་རིམ་༣ པ་ – Kotodama འདོན་ཁར།
+- Kotodama བསྡུ་སྒྲིག་འབད་མི་འདི་ `crates/kotodama_lang` ལུ་བཏོན་ཡོདཔ་ཨིན། (Kotodama ལས་)
+- ཝི་ཨེམ་གྱིས་ (`compile_to_ivm_bytecode`) ཟ་སྤྱོད་འབད་མི་ བཱའིཊི་ཀོཌི་ཨེ་པི་ཨའི་ ཉུང་མཐའ་ཅིག་བྱིནམ་ཨིན།
 
-**Security / performance impact**: Decoupling lowers the attack surface of the VM
-core and allows language innovation without risking interpreter regressions.
+**ཉེན་སྲུང་ / ལས་ཀའི་ཕན་གནོད་**: ཝི་ཨེམ་གྱི་འཇབ་རྒོལ་གྱི་ཁ་ཐོག་མར་ཕབ་འབདཝ་ཨིན།
+core དང་ སྐད་ཡིག་གསར་གཏོད་ཀྱིས་ བསྐྱར་དུ་འགྱུར་ནི་གི་ཉེན་ཁ་མེད་པར་ འབད་བཅུགཔ་ཨིན།### གོ་རིམ་༤ པ་ – རིམ་སྒྲིག་མཉམ་སྡེབ།
+- ད་ལྟོ་ཡོད་པའི་མཐའ་འཁོར་འདི་ མཚམས་འཇོག་འབད་བཞག་པའི་སྐབས་ `iroha_config` སྔོན་སྒྲིག་ཚུ་བརྒྱུད་དེ་ ཐགསཔ་མགྱོགས་ཚད་གདམ་ཁ་ཚུ་བརྒྱུད་དེ་ ཐགསཔ་མགྱོགས་ཚད་གདམ་ཁ་ཚུ་ (དཔེར་ན་ ཇི་པི་ཡུ་རྒྱབ་རྟེན་ཚུ་ ལྕོགས་ཅན་བཟོ་ནི་) ༼`IVM_DISABLE_CUDA`, `IVM_DISABLE_METAL`༽ རན་དུས་ཀྱི་ བསད་བསྒྱུར་འབད་ནི།
+- གདོང་ཕྱོགས་གསརཔ་བརྒྱུད་དེ་ `RuntimeConfig` དངོས་པོ་ཅིག་ ཕྱིར་བཏོན་འབད་ དེ་འབདཝ་ལས་ ཧོསིཊི་ཚུ་སེལ་འཐུ་འབད།
+  determistic མགྱོགས་ཚད་ཀྱི་གྲོས་ཆོད་གསལ་ཏོག་ཏོ་སྦེ་ཡོདཔ་ཨིན།
 
-### Phase 4 – Configuration consolidation
-- Thread acceleration options through `iroha_config` presets (e.g., enabling GPU backends) while keeping the existing environment overrides (`IVM_DISABLE_CUDA`, `IVM_DISABLE_METAL`) as runtime kill switches.
-- Expose a `RuntimeConfig` object through the new façade so hosts select
-  deterministic acceleration policies explicitly.
+**ཉེན་སྲུང་ / ལས་ཀའི་ཕན་གནོད་**: env-གཞི་བཞག་པའི་ སོར་བསྒྱུར་ཚུ་ ཁུ་སིམ་སིམ་སྦེ་ ཁུ་སིམ་སིམ་འབད་དོ།
+རིམ་སྒྲིག་འཕྱེལ་འགྱོ་སྟེ་ བཀྲམ་སྤེལ་ཚུ་གི་བར་ན་ ཐག་བཅད་སྤྱོད་ལམ་ཚུ་ ངེས་གཏན་བཟོཝ་ཨིན།
 
-**Security / performance impact**: Eliminating env-based toggles avoids silent
-configuration drift and ensures deterministic behaviour across deployments.
+## ཤུལ་མམ་གྱི་རིམ་པ་ནི།
 
-## Immediate next steps
+- གདོང་ཁའི་རང་གཤིས་ཁ་སྐོང་འབད་དེ་ མཐོ་རིམ་གྱི་འབོད་བརྡ་ཚུ་ ལུ་དུས་མཐུན་བཟོ་སྟེ་ མཇུག་བསྡུ་ནི།
+  དེ་ལུ་བརྟེན་དགོ།
+- མི་མང་ལོག་སྟེ་ཕྱིར་ཚོང་འཐབ་སྟེ་ གདོང་ཕྱོགས་དང་ ཤེས་བཞིན་དུ་ མི་མང་ཨེ་པི་ཨའི་ཚུ་རྐྱངམ་ཅིག་ ངེས་གཏན་བཟོ་ནི།
+  ཀྲེཊ་ལས་ཐོན་འོང་།
+- སི་སི་ཀཱལ་གཏང་མི་ཨེ་པི་ཨའི་ མཐུན་གྲོས་སོ་སོ་ཅིག་ནང་ མཐུན་སྒྲིག་འབད་ཞིནམ་ལས་ འདི་སྤོ་བཤུད་འབད།
+  སྔོན་སྒྲིག་ཧོསཊི་ཅིག་ ཚར་གཅིག་བདེན་དཔྱད་འབད་ཡོདཔ་ཨིན།
 
-- Finish Phase 1 by adding the façade trait and updating high-level call sites to
-  depend on it.
-- Audit public re-exports to ensure only the façade and deliberately public APIs
-  leak out of the crate.
-- Prototype the syscall dispatcher API in a separate module and migrate the
-  default host once validated.
-
-Progress on each phase will be tracked in `status.md` once the implementation is
-underway.
+གནས་རིམ་རེ་རེ་གི་ཡར་འཕེལ་འདི་ ལག་ལེན་འཐབ་ཐངས་འདི་ ༢ གི་ཤུལ་ལས་ `status.md` ནང་ལུ་ བརྟག་ཞིབ་འབད་ནི་ཨིན།
+འབྲེལ༌ལམ༌

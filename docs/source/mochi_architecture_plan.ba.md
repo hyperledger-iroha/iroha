@@ -9,82 +9,79 @@ source_last_modified: "2026-01-05T09:28:12.023255+00:00"
 translation_last_reviewed: 2026-02-07
 title: MOCHI Architecture Plan
 description: High-level design for the MOCHI local-network GUI supervisor.
+translator: machine-google-reviewed
 ---
 
-# MOCHI Architecture Plan
+# МОХИ архитектура планы
 
 
-## Goals
+## Маҡсаттар
 
-- Bootstrap single-peer or multi-peer (four-node BFT) local networks quickly.
-- Wrap `kagami`, `irohad`, and supporting binaries in a friendly GUI workflow.
-- Surface live block, event, and state data through Torii HTTP/WebSocket endpoints.
-- Provide structured builders for transactions and Iroha Special Instructions (ISI), with local signing and submission.
-- Manage snapshots, re-genesis flows, and configuration tweaks without editing files manually.
-- Ship as a single cross-platform Rust binary with no webview or Docker dependency.
+- Bootstrap бер тиңдәш йәки күп тиңдәш (дүрт төйөнлө BFT) урындағы селтәрҙәр тиҙ.
+- Wrap `kagami`, `irohad`, һәм ярҙам бинарҙары дуҫ GUI эш ағымында.
+- Ер өҫтө йәшәй блок, ваҡиға, һәм дәүләт мәғлүмәттәре аша Torii HTTP/WebSocket ос нөктәләре.
+- транзакциялар өсөн структуралы төҙөүселәр һәм Iroha Махсус инструкциялар (ISI), урындағы ҡул ҡуйыу һәм тапшырыу менән тәьмин итеү.
+- Идара итеү снимоктары, яңынан генез ағымдары, һәм конфигурация твиктар ҡул менән файлдарҙы мөхәррирләү.
+- Бер генә платформа кросс-платформаһы булараҡ, веб-визуаль йәки Docker бәйлелек менән судно.
 
-## Architecture Overview
+## Архитектура дөйөмләштереү
 
-MOCHI is split into two primary crates housed in a new `/mochi` directory (see the
-[MOCHI Quickstart](mochi/quickstart.md) for build and usage instructions):
+MOCHI ике төп йәшниккә бүленә, яңы `/mochi` каталогында урынлашҡан (ҡара:
+[МОХИ Quickstart](mochi/quickstart.md) төҙөү һәм ҡулланыу өсөн күрһәтмәләр):
 
-1. `mochi-core`: a headless library responsible for configuration templating, key and genesis material generation, supervising child processes, driving Torii clients, and managing filesystem state.
-2. `mochi-ui-egui`: a desktop application built on `egui`/`eframe` that renders the user interface and delegates all orchestration through the `mochi-core` API.
+.
+.
 
-Additional front ends (for example a Tauri shell) can hook into `mochi-core` later without reworking the supervisor logic.
+Өҫтәмә алғы остары (мәҫәлән, Таури ҡабығы) `mochi-core` һуңыраҡ етәксе логикаһын ҡайтанан эшләмәйенсә, ҡармаҡлай ала.
 
-## Process Model
+## Процесс моделе
 
-- Peer nodes run as separate `irohad` child processes. MOCHI never links the peer as a library, avoiding unstable internal APIs and matching production deployment topologies.
-- Genesis and key material are created through `kagami` invocations with user provided inputs (chain ID, initial accounts, assets).
-- Configuration files are generated from TOML templates, filling in Torii and P2P ports, storage paths, snapshot settings, and trusted peer lists. Generated configs are stored beneath a per-network workspace directory.
-- The supervisor tracks process lifecycles, streams stdout/stderr for log surfaces, and polls `/status`, `/metrics`, and `/configuration` endpoints for health.
-- A thin Torii client layer wraps HTTP and WebSocket calls, leaning on the Iroha Rust client crates where possible to avoid reimplementing SCALE encoding/decoding.
+- тиҫтерҙәре төйөндәре айырым `irohad` бала процестары булараҡ эшләй. MOCHI бер ҡасан да тиңдәште китапхана булараҡ бәйләй, тотороҡһоҙ эске API-лар һәм етештереүҙе таратыу топологияларын тап килтереүҙән ҡасмай.
+- Genesis һәм төп материал аша булдырылған `kagami` инводкалар менән ҡулланыусы бирелгән индереүҙәр (сылбыр идентификаторы, башланғыс иҫәптәр, активтар).
+- Конфигурация файлдары TOML ҡалыптарынан генерациялана, Torii һәм P2P порттары, һаҡлау юлдары, снимок параметрҙары һәм ышаныслы тиҫтерҙәр исемлегендә тултырыу. Генерацияланған конфигуралдар селтәр буйынса эш урыны каталогы аҫтында һаҡлана.
+- Етәксе тректар тормош циклдарын, ағымдар stdout/stderr өсөн лог өҫтө, һәм һорау алыуҙар `/status`, `/metrics`, һәм `/configuration` осонда һаулыҡ өсөн.
+- нәҙек Torii клиент ҡатламы HTTP һәм WebSocket шылтыратыуҙарын урап, Iroha клиент йәшниктәренә таянып, мөмкин булғанда, SCALE кодлау/декодлауҙы ҡабаттан тормошҡа ашырыуҙан ҡотолоу өсөн.
 
-## User Flows Backed by `mochi-core`
+## Ҡулланыусы ағымдары `mochi-core` тарафынан Артҡы- **Селтәр булдырыу тылсымсыһы**: бер йәки дүрт тиңдәш профиль һайларға, каталогтар йыйыу, һәм шылтыратыу `kagami` генерациялау өсөн шәхестәр плюс генез.
+- **Лифецикл контроле**: старт, туҡта, тиҫтерҙәрен яңынан эшләтеп ебәрергә; ер өҫтө тере метрикаһы; бүрәнә ҡойроҡтарын фашлай; переключатель эшләү ваҡыты конфигурацияһы остары (мәҫәлән, лог кимәлдәре).
+- **Блок һәм ваҡиға ағымдары**: `/block/stream` һәм `/events`-ҡа яҙылырға, UI панелдәре өсөн хәтерҙәге роллинг буферын һаҡлағыҙ.
+- **Дәүләт Explorer**: Norito-ға ярҙам итеү `/query` шылтыратыуҙары домендарҙы, иҫәп-хисап, активтарҙы һәм активтарҙы билдәләү өсөн ярҙамсылар һәм метамағлүмәттәр резюмеларын исемлеккә индереү өсөн.
+- **Трансланыу Композитор**: сәхнә монтаж/тапшырыу инструкция проекттары, уларҙы ҡул ҡуйылған операцияларға партия, Norito файҙалы йөктө алдан ҡарау, `/transaction` аша тапшырырға, һөҙөмтәлә барған ваҡиғаларҙы күҙәтеп; стеллаж ҡул ҡуйыу ҡармаҡтар киләсәктә итерацион булып ҡала.
+- **Снимоктар һәм ҡабаттан генезис**: оркестрлаштырыу Кура снимок экспорт/импорт, протокол магазиндары, һәм тиҙ сброс өсөн генезис материалын тергеҙеү.
 
-- **Network Creation Wizard**: choose single or four-peer profile, pick directories, and call `kagami` to generate identities plus genesis.
-- **Lifecycle Controls**: start, stop, restart peers; surface live metrics; expose log tails; toggle runtime configuration endpoints (e.g., log levels).
-- **Block and Event Streams**: subscribe to `/block/stream` and `/events`, storing an in-memory rolling buffer for UI panels.
-- **State Explorer**: run Norito-backed `/query` calls to list domains, accounts, assets, and asset definitions with pagination helpers and metadata summaries.
-- **Transaction Composer**: stage mint/transfer instruction drafts, batch them into signed transactions, preview the Norito payload, submit via `/transaction`, and monitor the resulting events; vault signing hooks remain a future iteration.
-- **Snapshots and Re-Genesis**: orchestrate Kura snapshot export/import, wipe stores, and regenerate genesis material for quick resets.
+## UI ҡатламы (`mochi-ui-egui`)
 
-## UI Layer (`mochi-ui-egui`)
+- Ҡулланыу `egui`/`eframe` тышҡы эшләү ваҡытыһыҙ бер туған башҡарыла торған йөк ташыу өсөн.
+- Макетҡа:
+  - **Селтәр таҡтаһы** тиҫтерҙәре карточкалары, һаулыҡ күрһәткестәре һәм тиҙ ғәмәлдәре менән.
+  - **Блоктар** панель потоковый һуңғы коммиттар һәм бейеклек эҙләү мөмкинлеге бирә.
+  - **Вашиналар** панель фильтрлау транзакция статустары хеш йәки иҫәп яҙмаһы.
+  - **Доменниктар, иҫәп, активтар һәм активтар билдәләмәләре өсөн домендар өсөн дәүләт Explorer** өлөшсәләре менән paginated Norito һөҙөмтәләре плюс сеймал сүп-сар тикшерергә.
+- **Композитор** формаһы менән пакетлы мәтрүшкә/тапшырыу палитралары, сират менән идара итеү (өҫтәү/сөттә/асыҡ), сеймал Norito алдан ҡарау, һәм тапшырыу кире бәйләнеше ярҙамында ҡул ҡуйыусы сейфы шулай операторҙар араһында алмаштырырға мөмкин dev һәм реаль власть.
+- **Genesis & Snapshots** идара итеү ҡараш.
+- **Параметрҙар** өсөн эшләү ваҡыты переключатели һәм мәғлүмәттәр каталогы ярлыҡтар.
+- UI каналдар аша `mochi-core`-тан асинхрон яңыртыуҙарға яҙыла; ядро Norito-не фашлай, ул структуралы ваҡиғаларҙы һыу ағымы менән ҡарай (тиңдәш статусы, блок башлыҡтары, транзакцияны яңыртыу).
 
-- Uses `egui`/`eframe` to ship a single native executable without external runtimes.
-- Layout includes:
-  - **Network Dashboard** with peer cards, health indicators, and quick actions.
-  - **Blocks** panel streaming recent commits and allowing height search.
-  - **Events** panel filtering transaction statuses by hash or account.
-  - **State Explorer** tabs for domains, accounts, assets, and asset definitions with paginated Norito results plus raw dumps for inspection.
-- **Composer** form with batchable mint/transfer palettes, queue management (add/remove/clear), raw Norito preview, and submission feedback backed by the signer vault so operators can swap between dev and real authorities.
-- **Genesis & Snapshots** management view.
-- **Settings** for runtime toggles and data directory shortcuts.
-- UI subscribes to asynchronous updates from `mochi-core` via channels; the core exposes a `SupervisorHandle` that streams structured events (peer status, block headers, transaction updates).
+## Урындағы үҫеш иҫкәрмәләре
 
-## Local Development Notes
+- Эш урыны конфигында `ZSTD_SYS_USE_PKG_CONFIG=1` шулай итеп, `libzstd` хостингына ҡаршы `zstd-sys` һылтанмалар урынына һатылған архивтар. Был офлайн йәки ҡом йәшникле мөхиттәр эсендә эшләгән pqcriltysryscy-ға бәйле төҙөүҙәрҙе (һәм MOCHI һынауҙары) һаҡлай.
 
-- The workspace config sets `ZSTD_SYS_USE_PKG_CONFIG=1` so `zstd-sys` links against the host `libzstd` instead of fetching vendored archives. This keeps pqcrypto-dependent builds (and MOCHI tests) running inside offline or sandboxed environments.
+## Ҡаплау һәм таратыу
 
-## Packaging and Distribution
+- MOCHI өйөмдәре (йәки `PATH`-та асыла) `irohad`, `iroha_cli`, `kagami` бинарҙары.
+- `rustls` ҡулланыу өсөн сығыу HTTPS өсөн ҡотолоу өсөн OpenSSL бәйлелек.
+- Бөтә генерацияланған артефакттарҙы махсус ҡушымта мәғлүмәттәре тамырында һаҡлай (мәҫәлән, `~/.local/share/mochi` йәки платформа эквиваленты) селтәр подкаталогтары менән. GUI тәьмин итә “асыу Finder/Explorer” ярҙамсылары.
+- Авто-асыҡлауҙар һәм запастар Torii (8080+) һәм P2P (1337+) порттары тиҫтерҙәрен башлап ебәрер алдынан конфликттарҙы иҫкәртергә.
 
-- MOCHI bundles (or discovers on `PATH`) the `irohad`, `iroha_cli`, and `kagami` binaries.
-- Uses `rustls` for outbound HTTPS to avoid OpenSSL dependencies.
-- Stores all generated artifacts in a dedicated application data root (e.g., `~/.local/share/mochi` or platform equivalent) with per-network subdirectories. GUI provides “reveal in Finder/Explorer” helpers.
-- Auto-detects and reserves Torii (8080+) and P2P (1337+) ports before launching peers to prevent conflicts.
+## Киләсәктә киңәйтеүҙәр (МВП өсөн масштабтан сығып)- Алтернатив алғы остары (Таури, CLI башһыҙ режимы) `mochi-core` менән бүлешә.
+- Таратылған һынау кластерҙары өсөн күп хужалы оркестрлаштырыу.
+- Консенсус эскесе өсөн визуизерҙар (Sumeragi түңәрәк штаттары, ғәйбәт ваҡыттары).
+- Автоматлаштырылған эфемер селтәр снимоктары өсөн CI торбалары менән интеграция.
+- Ҡулланыусылар өсөн приборҙар таҡталары йәки доменға хас инспекторҙар өсөн плагин системаһы.
 
-## Future Extensions (Out of Scope for MVP)
+## Һылтанмалар
 
-- Alternate front ends (Tauri, CLI headless mode) sharing `mochi-core`.
-- Multi-host orchestration for distributed testing clusters.
-- Visualizers for consensus internals (Sumeragi round states, gossip timings).
-- Integration with CI pipelines for automated ephemeral network snapshots.
-- Plug-in system for custom dashboards or domain-specific inspectors.
-
-## References
-
-- [Torii Endpoints](https://docs.iroha.tech/reference/torii-endpoints.html)
-- [Peer Configuration Parameters](https://docs.iroha.tech/reference/peer-config/params.html)
-- [`kagami` repository documentation](https://github.com/hyperledger-iroha/iroha)
-- [Iroha Special Instructions](https://iroha-test.readthedocs.io/en/iroha2-dev/references/isi/)
+- [Torii остары] (https://docs.iroha.tech/reference/torii-endpoints.html)
+- [Пер конфигурация параметрҙары] (https://docs.iroha.tech/reference/peer-config/params.html)
+- [Docker репозиторий документацияһы] (https://github.com/hyperledger-iroha/iroha)
+- [Iroha махсус күрһәтмәләр] (https://iroha-test.readthedocs.io/en/iroha2-dev/references/isi/)

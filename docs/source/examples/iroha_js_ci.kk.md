@@ -7,6 +7,7 @@ generator: scripts/sync_docs_i18n.py
 source_hash: d21afd33da5ee459b1f6ffb6ac7c42adc0852ed7929e69993f81914637b5e6b5
 source_last_modified: "2025-12-29T18:16:35.953373+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
@@ -14,35 +15,35 @@ translation_last_reviewed: 2026-02-07
   This document provides guidance for running @iroha/iroha-js in CI systems.
 -->
 
-# Iroha JS CI Reference
+# Iroha JS CI анықтамасы
 
-The `@iroha/iroha-js` package bundles native bindings via `iroha_js_host`. Any
-CI pipeline that executes tests or builds must provide both a Node.js runtime
-and the Rust toolchain so the native bundle can be compiled before the tests
-run.
+`@iroha/iroha-js` бумасы `iroha_js_host` арқылы жергілікті байланыстыруларды жинақтайды. Кез келген
+Сынақтарды немесе құрастыруды орындайтын CI құбыры Node.js орындалу уақытының екеуін де қамтамасыз етуі керек
+және Rust құралдар тізбегі, осылайша жергілікті буманы сынақтар алдында құрастыруға болады
+жүгіру.
 
-## Recommended Steps
+## Ұсынылатын қадамдар
 
-1. Use a Node LTS release (18 or 20) via `actions/setup-node` or your CI
-   equivalent.
-2. Install the Rust toolchain listed in `rust-toolchain.toml`. We recommend
-   `dtolnay/rust-toolchain@v1` in GitHub Actions.
-3. Cache the cargo registry/git indexes and the `target/` directory to avoid
-   rebuilding the native addon in every job.
-4. Run `npm install`, then `npm run lint:test`. The combined script enforces
-   ESLint with zero warnings, builds the native addon, and runs the Node test
-   suite so CI matches the release gating workflow.
-5. Optionally run `node --test` as a fast smoke step once `npm run build:native`
-   has produced the addon (for example, presubmit quick-check lanes that reuse
-   cached artifacts).
-6. Layer any additional linting or formatting checks from your consumer
-   project on top of `npm run lint:test` when stricter policies are required.
-7. When sharing configuration across services, load `iroha_config` and pass the
-   parsed document to `resolveToriiClientConfig({ config })` so Node clients
-   reuse the same timeout/retry/token policy as the rest of the deployment (see
-   `docs/source/sdk/js/quickstart.md` for a full example).
+1. `actions/setup-node` немесе CI арқылы Node LTS шығарылымын (18 немесе 20) пайдаланыңыз.
+   эквивалент.
+2. `rust-toolchain.toml` тізімінде берілген Rust құралдар тізбегін орнатыңыз. Біз ұсынамыз
+   GitHub әрекеттеріндегі `dtolnay/rust-toolchain@v1`.
+3. болдырмау үшін жүк тізілімін/git индекстерін және `target/` каталогын кэштеңіз.
+   әрбір жұмыста жергілікті қосымшаны қайта құру.
+4. `npm install`, содан кейін `npm run lint:test` іске қосыңыз. Біріктірілген сценарий орындалады
+   Нөлдік ескертулері бар ESLint, жергілікті қосымшаны құрастырады және Түйін сынағын іске қосады
+   жиынтығы, сондықтан CI шығару шлюзінің жұмыс үрдісіне сәйкес келеді.
+5. Қосымша `node --test` жылдам түтін шығару қадамы ретінде `npm run build:native` бір рет іске қосыңыз
+   қосымшаны жасады (мысалы, қайта пайдаланылатын жылдам тексеру жолақтарын алдын ала жіберу
+   кэштелген артефактілер).
+6. Тұтынушының кез келген қосымша линтинг немесе пішімдеу тексерулерін қабаттаңыз
+   қатаңырақ саясат қажет болғанда `npm run lint:test` жобасының үстіне.
+7. Конфигурацияны қызметтерде ортақ пайдаланған кезде, `iroha_config` жүктеңіз және
+   құжат `resolveToriiClientConfig({ config })`, сондықтан Түйін клиенттеріне талданды
+   орналастырудың қалған бөлігімен бірдей күту/қайталау/таңбалауыш саясатын қайта пайдаланыңыз (қараңыз
+   Толық мысал үшін `docs/source/sdk/js/quickstart.md`).
 
-## GitHub Actions Template
+## GitHub әрекеттер үлгісі
 
 ```yaml
 name: iroha-js-ci
@@ -86,11 +87,11 @@ jobs:
       - run: npm run lint:test
 ```
 
-## Fast Smoke Job (Optional)
+## Жылдам түтін шығару жұмысы (қосымша)
 
-For pull requests that only touch documentation or TypeScript definitions, a
-minimal job can reuse cached artifacts, rebuild the native module, and run the
-Node test runner directly:
+Тек құжаттаманы немесе TypeScript анықтамаларын түртетін тарту сұраулары үшін, a
+ең аз тапсырма кэштелген артефактілерді қайта пайдалана алады, жергілікті модульді қайта құра алады және іске қоса алады
+Түйіннің сынақ жүгірткісі тікелей:
 
 ```yaml
 jobs:
@@ -109,9 +110,9 @@ jobs:
       - run: node --test
 ```
 
-This job completes quickly while still verifying that the native addon compiles
-and that the Node test suite passes.
+Бұл тапсырма жергілікті қосымшаның құрастыруын тексеру кезінде тез аяқталады
+және Түйін сынақ жинағы өтеді.
 
-> **Reference implementation:** the repository includes
-> `.github/workflows/javascript-sdk.yml`, which wires the steps above into a
-> Node 18/20 matrix with cargo caching.
+> **Анықтаманы орындау:** репозиторий қамтиды
+> `.github/workflows/javascript-sdk.yml`, ол жоғарыдағы қадамдарды a
+> Жүк кэштеуімен түйін 18/20 матрицасы.

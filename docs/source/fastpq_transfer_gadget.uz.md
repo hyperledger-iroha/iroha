@@ -7,18 +7,19 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 084add6296c5b884a6d6dc07425aeca9966576f0643f6a7cf555da3fc8586466
 source_last_modified: "2026-01-08T12:24:34.985909+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% FastPQ Transfer Gadget Design
+% FastPQ Transfer Gadget Dizayni
 
-# Overview
+# Umumiy ko'rinish
 
-The current FASTPQ planner records every primitive operation involved in a `TransferAsset` instruction, which means each transfer pays for balance arithmetic, hash rounds, and SMT updates separately. To reduce trace rows per transfer we introduce a dedicated gadget that verifies only the minimal arithmetic/commitment checks while the host continues to execute the canonical state transition.
+Joriy FASTPQ rejalashtiruvchisi `TransferAsset` ko'rsatmasi bilan bog'liq har bir ibtidoiy operatsiyani qayd qiladi, ya'ni har bir transfer balans arifmetikasi, xesh-raundlar va SMT yangilanishlari uchun alohida to'lanadi. Har bir o'tkazmada kuzatuv qatorlarini kamaytirish uchun biz xost kanonik holatga o'tishni davom ettirayotganda faqat minimal arifmetik/majburiyat tekshiruvlarini tekshiradigan maxsus gadjetni taqdim etamiz.
 
-- **Scope**: single transfers and small batches emitted via the existing Kotodama/IVM `TransferAsset` syscall surface.
-- **Goal**: cut FFT/LDE column footprint for high-volume transfers by sharing lookup tables and collapsing per-transfer arithmetic into a compact constraint block.
+- **Qoʻllanish doirasi**: mavjud Kotodama/IVM `TransferAsset` tizimli qoʻngʻiroq yuzasi orqali chiqariladigan yagona oʻtkazmalar va kichik partiyalar.
+- **Maqsad**: qidiruv jadvallarini almashish va har bir transfer arifmetikasini ixcham cheklov blokiga yig‘ish orqali katta hajmli o‘tkazmalar uchun FFT/LDE ustun izini qisqartirish.
 
-# Architecture
+#Arxitektura
 
 ```
 Kotodama builder → IVM syscall (transfer_v1 / transfer_v1_batch)
@@ -33,9 +34,9 @@ Kotodama builder → IVM syscall (transfer_v1 / transfer_v1_batch)
                         └─ Authority digest equality
 ```
 
-## Transcript Format
+## Transkript formati
 
-The host emits a `TransferTranscript` per syscall invocation:
+Xost har bir tizim chaqiruvi uchun `TransferTranscript` chiqaradi:
 
 ```rust
 struct TransferTranscript {
@@ -59,55 +60,51 @@ struct TransferDeltaTranscript {
 }
 ```
 
-- `batch_hash` ties the transcript to the transaction entrypoint hash for replay protection.
-- `authority_digest` is the host’s hash over sorted signers/quorum data; the gadget checks equality but does not redo signature verification. Concretely the host Norito-encodes the `AccountId` (which already embeds the canonical multisig controller) and hashes `b"iroha:fastpq:v1:authority|" || encoded_account` with Blake2b-256, storing the resulting `Hash`.
-- `poseidon_preimage_digest` = Poseidon(account_from || account_to || asset || amount || batch_hash); ensures the gadget recomputes the same digest as the host. The preimage bytes are constructed as `norito(from_account) || norito(to_account) || norito(asset_definition) || norito(amount) || batch_hash` using bare Norito encoding before passing them through the shared Poseidon2 helper. This digest is present for single-delta transcripts and omitted for multi-delta batches.
+- `batch_hash` takroriy himoya qilish uchun transkriptni tranzaksiya kirish nuqtasi xeshiga bog'laydi.
+- `authority_digest` - tartiblangan imzolovchilar/kvorum ma'lumotlari ustidan xostning xeshi; gadjet tenglikni tekshiradi, lekin imzoni tekshirishni takrorlamaydi. Konkret Norito xost `AccountId`-ni kodlaydi (u allaqachon kanonik multisig kontrollerni o'rnatgan) va `b"iroha:fastpq:v1:authority|" || encoded_account`-ni Blake2b-256 bilan xeshlaydi, natijada olingan Kotodama-ni saqlaydi.
+- `poseidon_preimage_digest` = Poseidon(|| hisobdan_hisobdan || aktivga || summa || to'plamli_xesh); gadget xost bilan bir xil dayjestni qayta hisoblashini ta'minlaydi. Preimage baytlari umumiy Poseidon2 yordamchisi orqali o'tishdan oldin yalang'och Norito kodlash yordamida `norito(from_account) || norito(to_account) || norito(asset_definition) || norito(amount) || batch_hash` sifatida tuzilgan. Ushbu dayjest bir deltali transkriptlar uchun mavjud va ko'p deltali to'plamlar uchun olib tashlanmaydi.
 
-All fields are serialized via Norito so existing determinism guarantees hold.
-Both `from_path` and `to_path` are emitted as Norito blobs using the
-`TransferMerkleProofV1` schema: `{ version: 1, path_bits: Vec<u8>, siblings: Vec<Hash> }`.
-Future versions can extend the schema while the prover enforces the version tag
-before decoding. `TransitionBatch` metadata embeds the Norito-encoded transcript
-vector under the `transfer_transcripts` key so the prover can decode the witness
-without performing out-of-band queries. Public inputs (`dsid`, `slot`, roots,
-`perm_root`, `tx_set_hash`) are carried in `FastpqTransitionBatch.public_inputs`,
-leaving metadata for entry hash/transcript count bookkeeping. Until host plumbing
-lands, the prover synthetically derives proofs from the key/balance pairs so rows
-always include a deterministic SMT path even when the transcript omits the optional fields.
+Barcha maydonlar Norito orqali ketma-ketlashtiriladi, shuning uchun mavjud determinizm kafolatlari saqlanib qoladi.
+`from_path` va `to_path` ikkalasi ham Norito bloblari sifatida chiqariladi.
+`TransferMerkleProofV1` sxemasi: `{ version: 1, path_bits: Vec<u8>, siblings: Vec<Hash> }`.
+Kelgusi versiyalar sxemani kengaytirishi mumkin, prover esa versiya yorlig'ini qo'llaydi
+dekodlashdan oldin. `TransitionBatch` metama'lumotlari Norito kodli transkriptni o'z ichiga oladi
+`transfer_transcripts` kaliti ostida vektor, shuning uchun prover guvohni dekodlashi mumkin
+tarmoqdan tashqari so'rovlarni bajarmasdan. Umumiy kirishlar (`dsid`, `slot`, ildizlar,
+`perm_root`, `tx_set_hash`) `FastpqTransitionBatch.public_inputs` da tashiladi,
+kirish xesh/transkript hisobini yuritish uchun metama'lumotlarni qoldirib. Xost sanitariya-tesisatiga qadar
+lands, prover sintetik ravishda kalit/balans juftliklaridan dalillarni oladi, shuning uchun qatorlar
+transkript ixtiyoriy maydonlarni o'tkazib yuborsa ham har doim deterministik SMT yo'lini o'z ichiga oladi.
 
-## Gadget Layout
+## Gadjet tartibi
 
-1. **Balance Arithmetic Block**
-   - Inputs: `from_balance_before`, `amount`, `to_balance_before`.
-   - Checks:
-     - `from_balance_before >= amount` (range gadget with shared RNS decomposition).
+1. **Balans arifmetik bloki**
+   - Kirishlar: `from_balance_before`, `amount`, `to_balance_before`.
+   - Tekshiruvlar:
+     - `from_balance_before >= amount` (umumiy RNS dekompozitsiyasiga ega diapazonli gadjet).
      - `from_balance_after = from_balance_before - amount`.
      - `to_balance_after = to_balance_before + amount`.
-   - Packed into a custom gate so all three equations consume one row group.
-
-2. **Poseidon Commitment Block**
-   - Recomputes `poseidon_preimage_digest` using the shared Poseidon lookup table already used in other gadgets. No per-transfer Poseidon rounds in the trace.
+   - Barcha uchta tenglamalar bitta qatorli guruhni iste'mol qilish uchun maxsus darvoza ichiga o'rnatilgan.2. **Poseidon majburiyat bloki**
+   - `poseidon_preimage_digest` ni boshqa gadjetlarda allaqachon qo‘llanilgan Poseidon qidiruv jadvali yordamida qayta hisoblaydi. Izda har bir transfer Poseidon raundlari yo'q.
 
 3. **Merkle Path Block**
-   - Extends the existing Kaigi SMT gadget with a "paired update" mode. Two leaves (sender, receiver) share the same column for sibling hashes, reducing duplicated rows.
+   - Mavjud Kaigi SMT gadjetini "juftlangan yangilash" rejimi bilan kengaytiradi. Ikki barg (yuboruvchi, qabul qiluvchi) birodarlar xeshlari uchun bir xil ustunni bo'lishadi, bu esa takrorlangan qatorlarni kamaytiradi.
 
 4. **Authority Digest Check**
-   - Simple equality constraint between the host-provided digest and the witness value. Signatures remain in their dedicated gadget.
+   - Xost tomonidan taqdim etilgan dayjest va guvoh qiymati o'rtasidagi oddiy tenglik cheklovi. Imzolar maxsus gadjetida qoladi.
 
-5. **Batch Loop**
-   - Programs call `transfer_v1_batch_begin()` before a loop of `transfer_asset` builders and `transfer_v1_batch_end()` afterwards. While the scope is active the host buffers each transfer and replays them as a single `TransferAssetBatch`, reusing the Poseidon/SMT context once per batch. Each additional delta adds only the arithmetic and two leaf checks. The transcript decoder now accepts multi-delta batches and surfaces them as `TransferGadgetInput::deltas` so the planner can fold witnesses without re-reading Norito. Contracts that already have a Norito payload handy (e.g., CLI/SDKs) can skip the scope entirely by calling `transfer_v1_batch_apply(&NoritoBytes<TransferAssetBatch>)`, which hands the host a fully encoded batch in one syscall.
+5. **To‘plamli tsikl**
+   - Dasturlar `transfer_asset` quruvchilardan oldin `transfer_v1_batch_begin()` ni va keyin `transfer_v1_batch_end()` ni chaqiradi. Qo'llanish doirasi faol bo'lsa, xost har bir uzatishni buferlaydi va ularni bitta `TransferAssetBatch` sifatida takrorlaydi, Poseidon/SMT kontekstini har bir to'plamda bir marta qayta ishlatadi. Har bir qo'shimcha delta faqat arifmetik va ikkita barg tekshiruvini qo'shadi. Transkript dekoderi endi ko'p deltali partiyalarni qabul qiladi va ularni `TransferGadgetInput::deltas` sifatida ko'rsatadi, shuning uchun rejalashtiruvchi Norito ni qayta o'qimasdan guvohlarni yig'ishi mumkin. Norito foydali yukiga ega bo'lgan shartnomalar (masalan, CLI/SDK) `transfer_v1_batch_apply(&NoritoBytes<TransferAssetBatch>)` raqamiga qo'ng'iroq qilish orqali ko'lamni butunlay o'tkazib yuborishi mumkin, bu esa xostga bitta tizimda to'liq kodlangan to'plamni beradi.
 
-# Host & Prover Changes
-
-| Layer | Changes |
+# Xost va prover o'zgarishlari| Qatlam | O'zgarishlar |
 |-------|---------|
-| `ivm::syscalls` | Add `transfer_v1_batch_begin` (`0x29`) / `transfer_v1_batch_end` (`0x2A`) so programs can bracket multiple `transfer_v1` syscalls without emitting intermediate ISIs, plus `transfer_v1_batch_apply` (`0x2B`) for pre-encoded batches. |
-| `ivm::host` & tests | Core/Default hosts treat `transfer_v1` as a batch append while the scope is active, surface `SYSCALL_TRANSFER_V1_BATCH_{BEGIN,END,APPLY}`, and the mock WSV host buffers entries before committing so regression tests can assert deterministic balance updates.【crates/ivm/src/core_host.rs:1001】【crates/ivm/src/host.rs:451】【crates/ivm/src/mock_wsv.rs:3713】【crates/ivm/tests/wsv_host_pointer_tlv.rs:219】【crates/ivm/tests/wsv_host_pointer_tlv.rs:287】
-| `iroha_core` | Emit `TransferTranscript` after the state transition, build `FastpqTransitionBatch` records with explicit `public_inputs` during `StateBlock::capture_exec_witness`, and run the FASTPQ prover lane so both Torii/CLI tooling and the Stage 6 backend receive canonical `TransitionBatch` inputs. `TransferAssetBatch` groups sequential transfers into a single transcript, omitting the poseidon digest for multi-delta batches so the gadget can iterate across entries deterministically. |
-| `fastpq_prover` | `gadgets::transfer` now validates multi-delta transcripts (balance arithmetic + Poseidon digest) and surfaces structured witnesses (including placeholder paired SMT blobs) for the planner (`crates/fastpq_prover/src/gadgets/transfer.rs`). `trace::build_trace` decodes those transcripts out of batch metadata, rejects transfer batches missing the `transfer_transcripts` payload, attaches the validated witnesses to `Trace::transfer_witnesses`, and `TracePolynomialData::transfer_plan()` keeps the aggregated plan alive until the planner consumes the gadget (`crates/fastpq_prover/src/trace.rs`). The row-count regression harness now ships via `fastpq_row_bench` (`crates/fastpq_prover/src/bin/fastpq_row_bench.rs:1`), covering scenarios up to 65 536 padded rows, while the paired SMT wiring remains behind the TF-3 batch-helper milestone (placeholders keep the trace layout stable until that swap lands). |
-| Kotodama | Lowers the `transfer_batch((from,to,asset,amount), …)` helper into `transfer_v1_batch_begin`, sequential `transfer_asset` calls, and `transfer_v1_batch_end`. Each tuple argument must follow the `(AccountId, AccountId, AssetDefinitionId, int)` shape; single transfers keep the existing builder. |
+| `ivm::syscalls` | `transfer_v1_batch_begin` (`0x29`) / `transfer_v1_batch_end` (`0x2A`) qo'shing, shunda dasturlar oraliq ISI0NI0, plus IIS0604 chiqarmasdan bir nechta `transfer_v1` tizim qo'ng'iroqlarini qavslashi mumkin. (`0x2B`) oldindan kodlangan partiyalar uchun. |
+| `ivm::host` & testlar | Asosiy/Standart xostlar `transfer_v1` ni qamrov faol bo‘lganda, `SYSCALL_TRANSFER_V1_BATCH_{BEGIN,END,APPLY}` yuzasida va soxta WSV xostlari regressiya testlari deterministik muvozanatni ta’minlashi mumkin bo‘lgan yozuvlarni bajarishdan oldin bufer sifatida ko‘radi. yangilanishlar.【crates/ivm/src/core_host.rs:1001】【crates/ivm/src/host.rs:451】【crates/ivm/src/mock_wsv.rs :3713】【crates/ivm/tests/wsv_host_pointer_tlv.rs:219】【crates/ivm/tests/wsv_host_pointer_tlv.rs:287】
+| `iroha_core` | Holatga o'tgandan so'ng `TransferTranscript` chiqaring, `StateBlock::capture_exec_witness` davrida `FastpqTransitionBatch` yozuvlarini aniq `public_inputs` bilan tuzing va FASTPQ prover chizig'ini ishga tushiring, shunda Torii va St. `TransitionBatch` kirishlari. `TransferAssetBatch` ketma-ket oʻtkazmalarni bitta transkriptga guruhlaydi, koʻp deltali toʻplamlar uchun poseidon digestini oʻtkazib yuboradi, shuning uchun gadjet yozuvlar boʻylab deterministik tarzda takrorlanishi mumkin. |
+| `fastpq_prover` | `gadgets::transfer` endi rejalashtiruvchi (`crates/fastpq_prover/src/gadgets/transfer.rs`) uchun koʻp deltali transkriptlarni (balans arifmetikasi + Poseidon digesti) va tuzilgan guvohlarni (jumladan, oʻrin tutuvchi bilan bogʻlangan SMT bloblarini) tasdiqlaydi. `trace::build_trace` ushbu transkriptlarni metama'lumotlarning to'plamidan dekodlaydi, `transfer_transcripts` foydali yuki bo'lmagan uzatish partiyalarini rad etadi, tasdiqlangan guvohlarni `Trace::transfer_witnesses` ga biriktiradi va `TracePolynomialData::transfer_plan()` yakuniy reja tuzilmaguncha davom etadi. (`crates/fastpq_prover/src/trace.rs`). Qatorlarni hisoblash regressiya jabduqlari endi `fastpq_row_bench` (`crates/fastpq_prover/src/bin/fastpq_row_bench.rs:1`) orqali jo'natiladi va 65536 ta to'ldirilgan qatorgacha bo'lgan stsenariylarni qamrab oladi, birlashtirilgan SMT simlari esa TF-3 to'plami-yordamchi bosqichning orqasida qoladi (o'rin tutqichlari o'sha joyni o'zgartirish jadvalini ushlab turadi). |
+| Kotodama | `transfer_batch((from,to,asset,amount), …)` yordamchisini `transfer_v1_batch_begin`, ketma-ket `transfer_asset` va `transfer_v1_batch_end` ga tushiradi. Har bir kortej argumenti `(AccountId, AccountId, AssetDefinitionId, int)` shakliga mos kelishi kerak; yagona transferlar mavjud quruvchini saqlab qoladi. |
 
-Example Kotodama usage:
+Kotodama foydalanish misoli:
 
 ```text
 fn pay(a: AccountId, b: AccountId, asset: AssetDefinitionId, x: int) {
@@ -115,11 +112,11 @@ fn pay(a: AccountId, b: AccountId, asset: AssetDefinitionId, x: int) {
 }
 ```
 
-`TransferAssetBatch` executes the same permission and arithmetic checks as individual `Transfer::asset_numeric` calls, but records all deltas inside a single `TransferTranscript`. Multi-delta transcripts elide the poseidon digest until per-delta commitments land in a follow-up. The Kotodama builder now emits the begin/end syscalls automatically, so contracts can deploy batched transfers without hand-encoding Norito payloads.
+`TransferAssetBatch` individual `Transfer::asset_numeric` qo'ng'iroqlari bilan bir xil ruxsat va arifmetik tekshiruvlarni amalga oshiradi, lekin bitta `TransferTranscript` ichidagi barcha deltalarni yozib oladi. Ko'p deltali transkriptlar delta bo'yicha majburiyatlar keyingi kuzatuvga kelguniga qadar poseydon hazmini yo'q qiladi. Kotodama quruvchisi endi avtomatik ravishda boshlash/tugash tizimi chaqiruvlarini chiqaradi, shuning uchun kontraktlar Norito foydali yuklarini qo'lda kodlamasdan paketli o'tkazmalarni o'rnatishi mumkin.
 
-## Row-count Regression Harness
+## Qatorlar soni regressiyasi
 
-`fastpq_row_bench` (`crates/fastpq_prover/src/bin/fastpq_row_bench.rs:1`) synthesizes FASTPQ transition batches with configurable selector counts and reports the resulting `row_usage` summary (`total_rows`, per-selector counts, ratio) alongside the padded length/log₂. Capture benchmarks for the 65 536-row ceiling with:
+`fastpq_row_bench` (`crates/fastpq_prover/src/bin/fastpq_row_bench.rs:1`) FASTPQ o'tish partiyalarini sozlanishi mumkin bo'lgan selektor hisoblari bilan sintez qiladi va natijada `row_usage` xulosasi haqida hisobot beradi (`total_rows`, har bir tanlovchi soni, ₂ nisbati bilan birga). 65536 qatorli shiftlar uchun ko'rsatkichlarni suratga oling:
 
 ```bash
 cargo run -p fastpq_prover --bin fastpq_row_bench -- \
@@ -128,22 +125,20 @@ cargo run -p fastpq_prover --bin fastpq_row_bench -- \
   --burn-rows 128 \
   --pretty \
   --output fastpq_row_usage_max.json
-```
+```Chiqarilgan JSON hozirda sukut bo'yicha `iroha_cli audit witness` chiqaradigan FASTPQ to'plam artefaktlarini aks ettiradi (ularni bostirish uchun `--no-fastpq-batches` dan o'ting), shuning uchun `scripts/fastpq/check_row_usage.py` va CI gatesi sintetik tortishishlarni oldingi o'zgarishlarni rejalashtirishda farq qilishi mumkin.
 
-The emitted JSON mirrors the FASTPQ batch artifacts that `iroha_cli audit witness` now emits by default (pass `--no-fastpq-batches` to suppress them), so `scripts/fastpq/check_row_usage.py` and the CI gate can diff the synthetic runs against prior snapshots when validating planner changes.
+# Chiqarish rejasi
 
-# Rollout Plan
+1. **TF-1 (Transkript sanitariya-tesisat)**: ✅ `StateTransaction::record_transfer_transcripts` endi har bir `TransferAsset`/to‘plam uchun Norito transkriptlarini chiqaradi, `sumeragi::witness::record_fastpq_transcript` ularni global guvohlik tizimida saqlaydi va I1NI80000 `fastpq_batches` operatorlar uchun aniq `public_inputs` va prover chizig'i (agar sizga ingichka bo'lsa, `--no-fastpq-batches` dan foydalaning) chiqish).【crates/iroha_core/src/state.rs:8801】【crates/iroha_core/src/sumeragi/witness.rs:280】【crates/iroha_core/src/fastpq/mod.rs:157】【crates/157】【crates/iro.
+2. **TF-2 (Gadjetni amalga oshirish)**: ✅ `gadgets::transfer` endi ko‘p deltali transkriptlarni tasdiqlaydi (balans arifmetikasi + Poseidon digesti), xostlar ularni o‘tkazib yuborganida juftlashtirilgan SMT isbotlarini sintez qiladi, Kotodama va Kotodama orqali tuzilgan guvohlarni fosh qiladi. dalillardan SMT ustunlarini to'ldirishda o'sha guvohlar `Trace::transfer_witnesses` ga. `fastpq_row_bench` 65536 qatorli regressiya jabduqlarini ushlaydi, shuning uchun rejalashtiruvchilar Norito ni takrorlamasdan qatordan foydalanishni kuzatib boradilar. foydali yuklar.【crates/fastpq_prover/src/gadgets/transfer.rs:1】【crates/fastpq_prover/src/trace.rs:1】【crates/fastpq_prover/src/bin/fastpq_row_bench.rs:1】
+3. **TF-3 (To‘plam yordamchisi)**: To‘plamli tizim qo‘ng‘irog‘ini + Kotodama quruvchisini, jumladan, xost darajasidagi ketma-ket ilova va gadjet siklini yoqing.
+4. **TF-4 (Telemetriya va hujjatlar)**: `fastpq_plan.md`, `fastpq_migration_guide.md` va asboblar paneli sxemalarini boshqa gadjetlarga nisbatan uzatish qatorlarini sirt taqsimlash uchun yangilang.
 
-1. **TF-1 (Transcript plumbing)**: ✅ `StateTransaction::record_transfer_transcripts` now emits Norito transcripts for every `TransferAsset`/batch, `sumeragi::witness::record_fastpq_transcript` stores them inside the global witness, and `StateBlock::capture_exec_witness` builds `fastpq_batches` with explicit `public_inputs` for operators and the prover lane (use `--no-fastpq-batches` if you need a slimmer output).【crates/iroha_core/src/state.rs:8801】【crates/iroha_core/src/sumeragi/witness.rs:280】【crates/iroha_core/src/fastpq/mod.rs:157】【crates/iroha_cli/src/audit.rs:185】
-2. **TF-2 (Gadget implementation)**: ✅ `gadgets::transfer` now validates multi-delta transcripts (balance arithmetic + Poseidon digest), synthesises paired SMT proofs when hosts omit them, exposes structured witnesses via `TransferGadgetPlan`, and `trace::build_trace` threads those witnesses into `Trace::transfer_witnesses` while populating SMT columns from the proofs. `fastpq_row_bench` captures the 65 536-row regression harness so planners track row usage without replaying Norito payloads.【crates/fastpq_prover/src/gadgets/transfer.rs:1】【crates/fastpq_prover/src/trace.rs:1】【crates/fastpq_prover/src/bin/fastpq_row_bench.rs:1】
-3. **TF-3 (Batch helper)**: Enable the batch syscall + Kotodama builder, including host-level sequential application and gadget loop.
-4. **TF-4 (Telemetry & docs)**: Update `fastpq_plan.md`, `fastpq_migration_guide.md`, and dashboard schemas to surface allocation of transfer rows vs other gadgets.
+# Ochiq savollar
 
-# Open Questions
-
-- **Domain limits**: current FFT planner panics for traces beyond 2¹⁴ rows. TF-2 should either raise the domain size or document a reduced benchmark target.
-- **Multi-asset batches**: initial gadget assumes the same asset ID per delta. If we need heterogeneous batches, we must ensure the Poseidon witness includes the asset each time to prevent cross-asset replay.
-- **Authority digest reuse**: long term we can reuse the same digest for other permissioned operations to avoid recomputing signer lists per syscall.
+- **Domen chegaralari**: joriy FFT rejalashtiruvchisi 2¹⁴ qatordan keyingi izlar uchun vahima. TF-2 domen hajmini oshirishi yoki qisqartirilgan benchmark maqsadini hujjatlashtirishi kerak.
+- **Ko‘p aktivli partiyalar**: dastlabki gadjet har delta uchun bir xil aktiv identifikatorini qabul qiladi. Agar bizga heterojen partiyalar kerak bo'lsa, biz o'zaro aktivlar takrorlanishining oldini olish uchun har safar Poseidon guvohiga aktivni kiritishiga ishonch hosil qilishimiz kerak.
+- **Authority dayjestidan qayta foydalanish**: har bir tizim qo‘ng‘irog‘i uchun imzolovchilar ro‘yxatini qayta hisoblashning oldini olish uchun biz bir xil dayjestdan boshqa ruxsat berilgan operatsiyalar uchun uzoq muddat foydalanishimiz mumkin.
 
 
-This document tracks design decisions; keep it in sync with roadmap entries when milestones land.
+Ushbu hujjat dizayn qarorlarini kuzatib boradi; marralar qo'nganda uni yo'l xaritasi yozuvlari bilan sinxronlashtiring.

@@ -9,76 +9,75 @@ source_last_modified: "2026-01-22T16:26:46.567961+00:00"
 translation_last_reviewed: 2026-02-07
 title: Repo Operations & Evidence Guide
 summary: Governance, lifecycle, and audit requirements for repo/reverse-repo flows (roadmap F1).
+translator: machine-google-reviewed
 ---
 
-# Repo Operations & Evidence Guide (Roadmap F1)
+# 回购操作和证据指南（路线图 F1）
 
-The repo program unlocks bilateral and tri-party financing with deterministic
-Norito instructions, CLI/SDK helpers, and ISO 20022 parity. This note captures
-the operational contract required to satisfy roadmap milestone **F1 — repo
-lifecycle documentation & tooling**. It complements the workflow-oriented
-[`repo_runbook.md`](./repo_runbook.md) by articulating:
+回购计划以确定性方式解锁双边和三方融资
+Norito 指令、CLI/SDK 帮助程序和 ISO 20022 奇偶校验。这篇笔记捕捉到了
+满足路线图里程碑 **F1 — 回购协议所需的运营合同
+生命周期文档和工具**。它补充了面向工作流程的
+[`repo_runbook.md`](./repo_runbook.md) 通过阐明：
 
-- lifecycle surfaces across CLI/SDKs/runtime (`crates/iroha_cli/src/main.rs:3821`,
-  `python/iroha_python/iroha_python_rs/src/lib.rs:2216`,
+- 跨 CLI/SDK/运行时的生命周期表面（`crates/iroha_cli/src/main.rs:3821`，
+  `python/iroha_python/iroha_python_rs/src/lib.rs:2216`，
   `crates/iroha_core/src/smartcontracts/isi/repo.rs:1`);
-- deterministic proof/evidence capture (`integration_tests/tests/repo.rs:1`);
-- tri-party custody & collateral substitution behaviour; and
-- governance expectations (dual-control, audit trails, rollback playbooks).
+- 确定性证明/证据捕获（`integration_tests/tests/repo.rs:1`）；
+- 三方托管和抵押品替代行为；和
+- 治理期望（双重控制、审计跟踪、回滚手册）。
 
-## 1. Scope & Acceptance Criteria
+## 1. 范围和验收标准
 
-Roadmap item F1 remains gated on four themes; this document enumerates the
-required artefacts and links to the code/tests that already satisfy them:
+路线图项目 F1 仍然有四个主题；该文件列举了
+所需的工件以及已满足它们的代码/测试的链接：
 
-| Requirement | Evidence |
-|-------------|----------|
-| Deterministic settlement proofs covering repo → reverse repo → substitution | `integration_tests/tests/repo.rs` captures end-to-end flows, duplicate-ID guards, margin cadence checks, and collateral substitution success/failure cases. The suite runs as part of `cargo test --workspace`. The deterministic lifecycle digest harness at `crates/iroha_core/src/smartcontracts/isi/repo.rs` (`repo_deterministic_lifecycle_proof_matches_fixture`) snapshots initiation → margin → substitution frames so auditors can diff the canonical payloads. |
-| Tri-party coverage | Runtime enforces custodian-aware flows: `RepoAgreement::custodian` + `RepoAccountRole::Custodian` events (`crates/iroha_data_model/src/repo.rs:74`, `crates/iroha_data_model/src/events/data/events.rs:742`). |
-| Collateral substitution tests | Reverse-leg invariants reject under-collateralised substitutions (`crates/iroha_core/src/smartcontracts/isi/repo.rs:417`) and integration tests assert the ledger clears correctly after a substitution roundtrip (`integration_tests/tests/repo.rs:261`). |
-| Margin-call cadence & participant enforcement | `integration_tests/tests/repo.rs::repo_margin_call_enforces_cadence_and_participant_rules` exercises `RepoMarginCallIsi`, proving cadence-aligned scheduling, rejection of premature calls, and participant-only authorisation. |
-| Governance-approved runbooks | This guide and `repo_runbook.md` provide CLI/SDK procedures, fraud/rollback steps, and evidence capture instructions for audits. |
+|要求 |证据|
+|----------|----------|
+|回购→逆回购→替代的确定性结算证明 | `integration_tests/tests/repo.rs` 捕获端到端流程、重复 ID 防护、保证金节奏检查以及抵押品替代成功/失败案例。该套件作为 `cargo test --workspace` 的一部分运行。 `crates/iroha_core/src/smartcontracts/isi/repo.rs` (`repo_deterministic_lifecycle_proof_matches_fixture`) 上的确定性生命周期摘要工具可快照启动 → 余量 → 替换帧，以便审核员可以区分规范的有效负载。 |
+|三方报道|运行时强制执行托管人感知流：`RepoAgreement::custodian` + `RepoAccountRole::Custodian` 事件（`crates/iroha_data_model/src/repo.rs:74`、`crates/iroha_data_model/src/events/data/events.rs:742`）。 |
+|抵押替代测试|反向腿不变量拒绝抵押不足的替代（`crates/iroha_core/src/smartcontracts/isi/repo.rs:417`），并且集成测试断言在替代往返后账本正确清除（`integration_tests/tests/repo.rs:261`）。 |
+|追加保证金节奏和参与者执行 | `integration_tests/tests/repo.rs::repo_margin_call_enforces_cadence_and_participant_rules` 练习 `RepoMarginCallIsi`，证明节奏一致的调度、拒绝过早调用以及仅限参与者授权。 |
+|治理批准的操作手册 |本指南和 `repo_runbook.md` 提供 CLI/SDK 程序、欺诈/回滚步骤以及用于审计的证据捕获说明。 |
 
-## 2. Lifecycle Surfaces
+## 2. 生命周期表面
 
-### 2.1 CLI & Norito builders
+### 2.1 CLI 和 Norito 构建器
 
-- `iroha app repo initiate|unwind|margin|margin-call` wrap `RepoIsi`,
-  `ReverseRepoIsi`, and `RepoMarginCallIsi`
-  (`crates/iroha_cli/src/main.rs:3821`). Each subcommand supports `--input` /
-  `--output` so desks can stage instruction payloads for dual approval before
-  submission. Custodian routing is expressed via `--custodian`.
-- `repo query list|get` uses `FindRepoAgreements` to snapshot agreements and can
-  be redirected into JSON artefacts for evidence bundles.
-- The CLI smoke tests under `crates/iroha_cli/tests/cli_smoke.rs:2637` ensure
-  the emit-to-file path stays stable for auditors.
+- `iroha app repo initiate|unwind|margin|margin-call` 包裹 `RepoIsi`，
+  `ReverseRepoIsi` 和 `RepoMarginCallIsi`
+  （`crates/iroha_cli/src/main.rs:3821`）。每个子命令支持 `--input` /
+  `--output`，因此服务台可以在之前暂存指令有效负载以进行双重批准
+  提交。托管人路由通过 `--custodian` 表示。
+- `repo query list|get` 使用 `FindRepoAgreements` 来快照协议并且可以
+  被重定向到 JSON 工件以获取证据包。
+- `crates/iroha_cli/tests/cli_smoke.rs:2637`下的CLI烟雾测试确保
+  对于审核员来说，发送到文件的路径保持稳定。
 
-### 2.2 SDKs & automation hooks
+### 2.2 SDK 和自动化挂钩- Python 绑定公开 `RepoAgreementRecord`、`RepoCashLeg`、
+  `RepoCollateralLeg`，以及便利建设者
+  (`python/iroha_python/iroha_python_rs/src/lib.rs:2216`) 因此自动化可以
+  在本地组装交易并评估 `next_margin_check_after`。
+- JS/Swift 助手通过以下方式重用相同的 Norito 布局
+  `javascript/iroha_js/src/instructionBuilders.js` 和
+  `IrohaSwift/Sources/IrohaSwift/ConfidentialEncryptedPayload.swift` 用于备注
+  处理； SDK 在线程化存储库治理旋钮时应参考此文档。
 
-- Python bindings expose `RepoAgreementRecord`, `RepoCashLeg`,
-  `RepoCollateralLeg`, and convenience builders
-  (`python/iroha_python/iroha_python_rs/src/lib.rs:2216`) so automation can
-  assemble transactions and evaluate `next_margin_check_after` locally.
-- JS/Swift helpers reuse the same Norito layouts via
-  `javascript/iroha_js/src/instructionBuilders.js` and
-  `IrohaSwift/Sources/IrohaSwift/ConfidentialEncryptedPayload.swift` for memo
-  handling; SDKs should refer to this doc when threading repo governance knobs.
+### 2.3 账本事件和遥测
 
-### 2.3 Ledger events & telemetry
+每个生命周期操作都会发出 `AccountEvent::Repo(...)` 记录，其中包含
+`RepoAccountEvent::{Initiated,Settled,MarginCalled}` 有效负载范围为
+参与者角色 (`crates/iroha_data_model/src/events/data/events.rs:742`)。推
+将这些事件放入您的 SIEM/日志聚合器中以获得防篡改的审核日志
+用于桌面操作、追加保证金通知和托管人通知。
 
-Every lifecycle action emits `AccountEvent::Repo(...)` records containing
-`RepoAccountEvent::{Initiated,Settled,MarginCalled}` payloads scoped to the
-participant role (`crates/iroha_data_model/src/events/data/events.rs:742`). Push
-those events into your SIEM/log aggregator to obtain a tamper-evident audit log
-for desk actions, margin calls, and custodian notifications.
+### 2.4 配置传播和验证
 
-### 2.4 Configuration propagation & verification
-
-Nodes ingest repo governance knobs from the `[settlement.repo]` stanza in
-`iroha_config` (`crates/iroha_config/src/parameters/user.rs:4071`). Treat that
-snippet as part of the governance evidence contract—stage it in version control
-alongside the repo packet and hash it before pushing the change through your
-automation or ConfigMap. A minimal profile looks like:
+节点从 `[settlement.repo]` 节中摄取回购治理旋钮
+`iroha_config` (`crates/iroha_config/src/parameters/user.rs:4071`)。对待那个
+作为治理证据合约的一部分的片段——将其放入版本控制中
+与存储库数据包一起并对其进行哈希处理，然后再将更改推送到您的
+自动化或 ConfigMap。最小的配置文件如下所示：
 
 ```toml
 [settlement.repo]
@@ -90,100 +89,98 @@ eligible_collateral = ["bond#wonderland", "note#wonderland"]
 "bond#wonderland" = ["note#wonderland", "bill#wonderland"]
 ```
 
-Operational checklist:
+操作清单：
 
-1. Commit the snippet above (or your production variant) into the config repo
-   that feeds `irohad` and record its SHA-256 inside the governance packet so
-   reviewers can diff the bytes you plan to deploy.
-2. Roll the change across the fleet (systemd unit, Kubernetes ConfigMap, etc.)
-   and restart each node. Immediately after rollout, capture the Torii
-   configuration snapshot for provenance:
+1. 将上面的代码片段（或您的生产变体）提交到配置存储库中
+   提供 `irohad` 并将其 SHA-256 记录在治理数据包中，以便
+   审阅者可以区分您计划部署的字节。
+2. 在整个队列中滚动更改（systemd 单元、Kubernetes ConfigMap 等）
+   并重新启动每个节点。推出后立即捕获 Torii
+   出处的配置快照：
 
    ```bash
    curl -sS "${TORII_URL}/v1/configuration" \
      -H "Authorization: Bearer ${TOKEN}" | jq .
    ```
 
-   `ToriiClient.get_configuration()` is available in the Python SDK for the same
-   purpose when automation needs typed evidence.【python/iroha_python/src/iroha_python/client.py:5791】
-3. Prove that the runtime now enforces the requested cadence/haircut by querying
-   `FindRepoAgreements` (or `iroha app repo margin --agreement-id ...`) and
-   inspecting the embedded `RepoGovernance` values. Store the JSON responses
-   under `artifacts/finance/repo/<agreement>/agreements_after.json`; those values
-   are derived from `[settlement.repo]`, so they act as a secondary witness when
-   Torii’s `/v1/configuration` snapshot is insufficient.
-4. Keep both artefacts—the TOML snippet and the Torii/CLI snapshots—in the
-   evidence bundle before filing a governance request. Auditors must be able to
-   replay the snippet, verify its hash, and correlate it with the runtime view.
+   `ToriiClient.get_configuration()` 在 Python SDK 中可用，用于相同的
+   自动化需要输入证据时的目的。【python/iroha_python/src/iroha_python/client.py:5791】
+3. 通过查询证明运行时现在强制执行所请求的节奏/发型
+   `FindRepoAgreements`（或 `iroha app repo margin --agreement-id ...`）和
+   检查嵌入的 `RepoGovernance` 值。存储 JSON 响应
+   在 `artifacts/finance/repo/<agreement>/agreements_after.json` 下；那些价值观
+   源自 `[settlement.repo]`，因此当
+   Torii 的 `/v1/configuration` 快照不足。
+4. 将两个工件（TOML 片段和 Torii/CLI 快照）保留在
+   在提交治理请求之前收集证据。审核员必须能够
+   重放该代码片段，验证其哈希值，并将其与运行时视图关联起来。
 
-This workflow ensures repo desks never rely on ad-hoc environment variables, the
-configuration path stays deterministic, and every governance ticket carries the
-same set of `iroha_config` proofs expected in roadmap F1.
+此工作流程确保存储库台永远不会依赖临时环境变量，即
+配置路径保持确定性，每个治理票证都带有
+路线图 F1 中预计有相同的 `iroha_config` 样张集。
 
-### 2.5 Deterministic proof harness
+### 2.5 确定性证明工具
 
-The unit test `repo_deterministic_lifecycle_proof_matches_fixture` (see
-`crates/iroha_core/src/smartcontracts/isi/repo.rs`) serializes each stage of the
-repo lifecycle into a Norito JSON frame, compares it to the canonical fixture at
-`crates/iroha_core/tests/fixtures/repo_lifecycle_proof.json`, and hashes the
-bundle (fixture digest tracked at
-`crates/iroha_core/tests/fixtures/repo_lifecycle_proof.digest`). Run it locally via:
+单元测试 `repo_deterministic_lifecycle_proof_matches_fixture`（参见
+`crates/iroha_core/src/smartcontracts/isi/repo.rs`）序列化每个阶段
+将 repo 生命周期转换为 Norito JSON 框架，将其与规范的固定装置进行比较
+`crates/iroha_core/tests/fixtures/repo_lifecycle_proof.json`，并散列
+捆绑（夹具摘要跟踪
+`crates/iroha_core/tests/fixtures/repo_lifecycle_proof.digest`）。通过以下方式在本地运行：
 
 ```bash
 cargo test -p iroha_core \
   -- --exact smartcontracts::isi::repo::tests::repo_deterministic_lifecycle_proof_matches_fixture
-```
-
-This test now runs as part of the default `cargo test -p iroha_core` suite, so CI
-guards the snapshot automatically. Whenever repo semantics or fixtures change,
-refresh both the JSON and digest with:
+```该测试现在作为默认 `cargo test -p iroha_core` 套件的一部分运行，因此 CI
+自动保护快照。每当回购语义或固定装置发生变化时，
+使用以下命令刷新 JSON 和摘要：
 
 ```bash
 scripts/regen_repo_proof_fixture.sh
 ```
 
-The helper uses the pinned `rust-toolchain.toml` channel, rewrites the fixtures
-under `crates/iroha_core/tests/fixtures/`, and reruns the deterministic harness
-so the checked-in snapshot/digest stay in sync with the runtime behaviour
-auditors will replay.
+助手使用固定的 `rust-toolchain.toml` 通道，重写灯具
+在 `crates/iroha_core/tests/fixtures/` 下，并重新运行确定性工具
+因此签入的快照/摘要与运行时行为保持同步
+审核员将重播。
 
-### 2.4 Torii API surfaces
+### 2.4 Torii API 表面
 
-- `GET /v1/repo/agreements` returns the active agreements with optional pagination, filtering
-  (`filter={...}`), sorting, and address-formatting parameters. Use this for quick audits or
-  dashboards when the raw JSON payloads are sufficient.
-- `POST /v1/repo/agreements/query` accepts the structured query envelope (pagination, sort,
-  `FilterExpr`, `fetch_size`) so downstream services can page through the ledger deterministically.
-- The JavaScript SDK now exposes `listRepoAgreements`, `queryRepoAgreements`, and the iterator
-  helpers so browser/Node.js tooling receives the same typed DTOs as Rust/Python.
+- `GET /v1/repo/agreements` 返回带有可选分页、过滤的活动协议
+  (`filter={...}`)、排序和地址格式化参数。使用它进行快速审核或
+  当原始 JSON 有效负载足够时，仪表板。
+- `POST /v1/repo/agreements/query` 接受结构化查询信封（分页、排序、
+  `FilterExpr`、`fetch_size`），因此下游服务可以确定性地翻阅账本。
+- JavaScript SDK 现在公开 `listRepoAgreements`、`queryRepoAgreements` 和迭代器
+  帮助器，以便 browser/Node.js 工具接收与 Rust/Python 相同类型的 DTO。
 
-### 2.4 Configuration defaults
+### 2.4 配置默认值
 
-Nodes read `[settlement.repo]` into
-`iroha_config::parameters::actual::Repo` during start-up; any repo instruction
-that leaves a parameter at zero is normalised against those defaults before it
-is recorded on-chain.【crates/iroha_core/src/smartcontracts/isi/repo.rs:40】 This
-lets governance raise (or lower) baseline policy without touching every SDK
-call-site, provided the policy change is fully documented.
+节点将 `[settlement.repo]` 读入
+启动期间`iroha_config::parameters::actual::Repo`；任何回购指令
+使参数为零，并根据之前的默认值进行归一化
+记录在链上。【crates/iroha_core/src/smartcontracts/isi/repo.rs:40】这个
+让治理在不触及每个 SDK 的情况下提高（或降低）基准政策
+呼叫站点，前提是政策变更已完整记录。
 
-- `default_haircut_bps` – fallback haircut when `RepoGovernance::haircut_bps()`
-  equals zero. The runtime clamps it to the hard 10 000 bps ceiling to keep
-  configs sane.【crates/iroha_core/src/smartcontracts/isi/repo.rs:44】
-- `margin_frequency_secs` – cadence for `RepoMarginCallIsi`. Zeroed requests
-  inherit this value, so shortening the cadence forces desks to margin more
-  frequently by default.【crates/iroha_core/src/smartcontracts/isi/repo.rs:49】
-- `eligible_collateral` – optional allow-list of `AssetDefinitionId`s. When the
-  list is non-empty `RepoIsi` rejects any pledge outside the set, preventing
-  accidental onboarding of unvetted bonds.【crates/iroha_core/src/smartcontracts/isi/repo.rs:57】
-- `collateral_substitution_matrix` – map of original collateral →
-  permitted substitutes. `ReverseRepoIsi` only accepts a substitution when the
-  matrix contains the recorded definition as a key and the replacement in its
-  value array; otherwise the unwind fails, proving that governance approved the
-  ladder.【crates/iroha_core/src/smartcontracts/isi/repo.rs:74】
+- `default_haircut_bps` – `RepoGovernance::haircut_bps()` 时的后备理发
+  等于零。运行时将其限制在 10000bps 的硬上限以保持
+  配置正常。【crates/iroha_core/src/smartcontracts/isi/repo.rs:44】
+- `margin_frequency_secs` – `RepoMarginCallIsi` 的节奏。清零请求
+  继承这个值，因此缩短节奏迫使办公桌留出更多余量
+  默认情况下经常发生。【crates/iroha_core/src/smartcontracts/isi/repo.rs:49】
+- `eligible_collateral` – `AssetDefinitionId` 的可选允许列表。当
+  列表非空 `RepoIsi` 拒绝集合之外的任何质押，防止
+  意外加入未经审查的债券。【crates/iroha_core/src/smartcontracts/isi/repo.rs:57】
+- `collateral_substitution_matrix` – 原始抵押品地图 →
+  允许的替代品。 `ReverseRepoIsi` 仅在以下情况下接受替换
+  矩阵包含记录的定义作为键以及其替换
+  值数组；否则，平仓失败，证明治理批准了
+  梯子。【crates/iroha_core/src/smartcontracts/isi/repo.rs:74】
 
-These knobs live under `[settlement.repo]` in the node configuration and are
-parsed via `iroha_config::parameters::user::Repo`, so they should be captured in
-every governance evidence bundle.【crates/iroha_config/src/parameters/user.rs:3956】
+这些旋钮位于节点配置中的 `[settlement.repo]` 下，并且是
+通过 `iroha_config::parameters::user::Repo` 解析，因此它们应该被捕获在
+每个治理证据包。【crates/iroha_config/src/parameters/user.rs:3956】
 
 ```toml
 [settlement.repo]
@@ -195,36 +192,34 @@ eligible_collateral = ["bond#wonderland", "note#wonderland"]
 "bond#wonderland" = ["note#wonderland", "bill#wonderland"]
 ```
 
-**Change-management checklist**
+**变更管理清单**1. 暂存提议的 TOML 片段（包括替换矩阵增量）、哈希
+   使用 SHA-256，并将代码片段和哈希值附加到治理中
+   票证，以便审阅者可以逐字重现字节。
+2. 引用提案/公投中的片段（例如通过
+   治理 CLI 上的 `--notes` 字段）并收集所需的批准
+   对于F1。保留已签名的批准数据包并附加片段。
+3. 在整个机群中滚动更改：更新 `[settlement.repo]`，重新启动每个
+   节点，然后捕获 `GET /v1/configuration` 快照（或
+   `ToriiClient.getConfiguration`) 证明每个对等点的应用值。
+4.重新运行`integration_tests/tests/repo.rs` plus
+   `repo_deterministic_lifecycle_proof_matches_fixture` 并接下来存储日志
+   到配置差异，以便审核员可以看到新的默认值保留
+   决定论。
 
-1. Stage the proposed TOML snippet (including substitution matrix deltas), hash
-   it with SHA-256, and attach both the snippet and hash to the governance
-   ticket so reviewers can reproduce the bytes verbatim.
-2. Reference the snippet inside the proposal/referendum (for example via the
-   `--notes` field on the governance CLI) and collect the required approvals
-   for F1. Keep the signed approval packet with the snippet attached.
-3. Roll the change across the fleet: update `[settlement.repo]`, restart each
-   node, then capture a `GET /v1/configuration` snapshot (or
-   `ToriiClient.getConfiguration`) proving the applied values per peer.
-4. Re-run `integration_tests/tests/repo.rs` plus
-   `repo_deterministic_lifecycle_proof_matches_fixture` and store the logs next
-   to the config diff so auditors can see that the new defaults preserve
-   determinism.
+如果没有矩阵条目，运行时将拒绝更改资产的替换
+定义，即使通用 `eligible_collateral` 列表允许；提交
+配置快照和回购证据，以便审计员可以重现准确的
+预订回购时强制执行的政策。
 
-Without a matrix entry the runtime rejects substitutions that change the asset
-definition, even if the general `eligible_collateral` list permits it; commit
-config snapshots alongside repo evidence so auditors can reproduce the exact
-policy enforced when a repo was booked.
+### 2.5 配置证据和漂移检测
 
-### 2.5 Configuration evidence & drift detection
+Norito/`iroha_config` 管道现在公开已解决的回购策略
+`iroha_config::parameters::actual::Repo`，因此治理数据包必须证明
+每个同行应用的值——不仅仅是提议的 TOML。捕获已解决的
+每次推出后的配置及其摘要：
 
-The Norito/`iroha_config` plumbing now exposes the resolved repo policy under
-`iroha_config::parameters::actual::Repo`, so governance packets must prove the
-applied values per peer—not just the proposed TOML. Capture the resolved
-configuration and its digest after every rollout:
-
-1. Fetch the configuration from each peer (`GET /v1/configuration` or
-   `ToriiClient.getConfiguration`) and isolate the repo stanza:
+1. 从每个对等方获取配置（`GET /v1/configuration` 或
+   `ToriiClient.getConfiguration`) 并隔离存储库节：
 
    ```bash
    curl -s http://<torii-host>/v1/configuration \
@@ -232,115 +227,111 @@ configuration and its digest after every rollout:
      > artifacts/finance/repo/<agreement-id>/config/repo_config_actual.json
    ```
 
-2. Hash the canonical JSON and record it in the evidence manifest. When the
-   fleet is healthy the hash should match across peers because `actual`
-   combines defaults with the staged `[settlement.repo]` snippet:
+2. 对规范 JSON 进行哈希处理并将其记录在证据清单中。当
+   舰队运行状况良好，哈希值应该在对等点之间匹配，因为 `actual`
+   将默认值与暂存的 `[settlement.repo]` 片段相结合：
 
    ```bash
    shasum -a 256 artifacts/finance/repo/<agreement-id>/config/repo_config_actual.json
    ```
 
-3. Attach the JSON + hash to the governance packet and mirror the entry in the
-   manifest uploaded to the governance DAG. If any peer reports a divergent
-   digest, halt the rollout and reconcile the config/state drift before
-   proceeding.
+3. 将 JSON + hash 附加到治理数据包中，并将该条目镜像到
+   清单已上传到治理 DAG。如果任何同行报告有分歧
+   消化、停止推出并协调之前的配置/状态漂移
+   进行中。
 
-### 2.6 Governance approvals & evidence pack
+### 2.6 治理批准和证据包
 
-Roadmap F1 closes only when repo desks feed a deterministic packet into the
-governance DAG, so every change (new haircut, custodian policy, or collateral
-matrix) must ship the same artefacts before a vote is scheduled.【docs/source/governance_playbook.md:1】
+仅当存储库台将确定性数据包馈送到路线图 F1 时，路线图 F1 才会关闭
+治理 DAG，因此每次更改（新的理发、托管政策或抵押品）
+矩阵）必须在安排投票之前运送相同的物品。【docs/source/governance_playbook.md:1】
 
-**Intake packet**
+**摄入包**1. **跟踪模板** – 副本
+   `docs/examples/finance/repo_governance_packet_template.md` 进入你的证据
+   目录（例如
+   `artifacts/finance/repo/<agreement-id>/packet.md`) 并填写元数据
+   在开始对工件进行哈希处理之前进行阻止。模板保留治理
+   理事会的节奏通过列出文件路径、SHA-256 摘要和
+   审稿人致谢集中在一处。
+2. **指令有效负载** – 阶段启动、平仓和追加保证金
+   带有 `iroha app repo ... --output` 的说明，以便双控审批者审核
+   字节相同的有效负载。散列每个文件并将其存储在
+   `artifacts/finance/repo/<agreement-id>/` 位于桌子证据包旁边
+   本笔记其他地方引用。【crates/iroha_cli/src/main.rs:3821】
+3. **配置差异** – 包括确切的 `[settlement.repo]` TOML 片段
+   （默认加上替换矩阵）及其 SHA-256。这证明了哪个
+   一旦投票通过并反映结果，`iroha_config` 旋钮将被激活
+   在准入时标准化回购指令的运行时字段。【crates/iroha_config/src/parameters/user.rs:3956】
+4. **确定性测试** – 附上最新的
+   `integration_tests/tests/repo.rs` 日志和输出
+   `repo_deterministic_lifecycle_proof_matches_fixture` 所以审阅者看到
+   与分阶段指令对应的生命周期证明哈希。【integration_tests/tests/repo.rs:1】【crates/iroha_core/src/smartcontracts/isi/repo.rs:1450】
+5. **事件/遥测快照** – 导出最近的 `AccountEvent::Repo(*)`
+   范围内的服务台以及理事会需要的任何仪表板/指标的流
+   判断风险（例如，保证金漂移）。这给了审计师同样的
+   他们稍后会从 Torii 重建防篡改日志。【crates/iroha_data_model/src/events/data/events.rs:742】
 
-1. **Tracking template** – copy
-   `docs/examples/finance/repo_governance_packet_template.md` into your evidence
-   directory (for example
-   `artifacts/finance/repo/<agreement-id>/packet.md`) and fill the metadata
-   block before you start hashing artefacts. The template keeps the governance
-   council’s cadence deterministic by listing file paths, SHA-256 digests, and
-   reviewer acknowledgements in one place.
-2. **Instruction payloads** – stage the initiation, unwind, and margin-call
-   instructions with `iroha app repo ... --output` so dual-control approvers review
-   byte-identical payloads. Hash each file and store it under
-   `artifacts/finance/repo/<agreement-id>/` next to the desk’s evidence bundle
-   referenced elsewhere in this note.【crates/iroha_cli/src/main.rs:3821】
-3. **Configuration diff** – include the exact `[settlement.repo]` TOML snippet
-   (defaults plus substitution matrix) and its SHA-256. This proves which
-   `iroha_config` knobs will be active once the vote passes and mirrors the
-   runtime fields that normalise repo instructions at admission time.【crates/iroha_config/src/parameters/user.rs:3956】
-4. **Deterministic tests** – attach the latest
-   `integration_tests/tests/repo.rs` log and the output from
-   `repo_deterministic_lifecycle_proof_matches_fixture` so reviewers see the
-   lifecycle proof hash that corresponds to the staged instructions.【integration_tests/tests/repo.rs:1】【crates/iroha_core/src/smartcontracts/isi/repo.rs:1450】
-5. **Event/telemetry snapshot** – export the recent `AccountEvent::Repo(*)`
-   stream for the desks in scope plus any dashboards/metrics the council needs
-   to judge risk (for example, margin drift). This gives auditors the same
-   tamper-evident log they would reconstruct from Torii later.【crates/iroha_data_model/src/events/data/events.rs:742】
+**批准和记录**
 
-**Approval & logging**
+- 参考治理票证或公投中的人工制品哈希值，以及
+  链接到分阶段的数据包，以便理事会可以遵循标准仪式
+  治理手册中概述，无需追逐临时路径。【docs/source/governance_playbook.md:8】
+- 捕获哪些双重控制签名者审查了分阶段的指令文件并
+  将他们的确认存储在哈希值旁边；这是链上证明
+  回购台满足“两人规则”，尽管运行时也
+  强制仅参与者执行。
+- 当理事会发布治理批准记录 (GAR) 时，反映
+  在证据目录中签署会议记录，以便将来替换或
+  发型更新可以引用确切的决策包，而不是重述
+  理由。
 
-- Reference the artefact hashes inside the governance ticket or referendum and
-  link to the staged packet so the council can follow the standard ceremony
-  outlined in the governance playbook without chasing ad-hoc paths.【docs/source/governance_playbook.md:8】
-- Capture which dual-control signers reviewed the staged instruction files and
-  store their acknowledgements next to the hashes; this is the on-chain proof
-  that repo desks satisfied the “two-person rule” even though the runtime also
-  enforces participant-only execution.
-- When the council publishes the Governance Approval Record (GAR), mirror the
-  signed minutes inside the evidence directory so future substitutions or
-  haircut updates can cite the exact decision packet instead of restating the
-  rationale.
+**批准后推出**1. 应用批准的 `[settlement.repo]` 配置并重新启动每个节点（或滚动
+   通过您的自动化）。立即拨打 `GET /v1/configuration` 并存档
+   每个节点的响应，以便治理包显示哪些对等点接受了
+   改变。【crates/iroha_torii/src/lib.rs:3225】
+2. 重新运行确定性存储库测试并附加新日志和构建
+   元数据（git commit、工具链），以便审计员可以重现结算结果
+   推出后的证明。
+3. 使用证据存档路径、哈希值和更新治理跟踪器
+   观察者联系，以便以后的回购台可以继承相同的流程，而不是
+   重新导出清单。
 
-**Post-approval rollouts**
+**治理 DAG 出版物（必需）**
 
-1. Apply the approved `[settlement.repo]` config and restart each node (or roll
-   it via your automation). Immediately call `GET /v1/configuration` and archive
-   the response per node so the governance bundle shows which peers accepted the
-   change.【crates/iroha_torii/src/lib.rs:3225】
-2. Re-run the deterministic repo tests and attach the fresh logs plus build
-   metadata (git commit, toolchain) so auditors can reproduce the settlement
-   proof after the rollout.
-3. Update the governance tracker with the evidence archive path, hashes, and
-   observer contact so later repo desks can inherit the same process instead of
-   re-deriving the checklist.
+1. Tar 证据目录（配置片段、指令负载、证明日志、
+   GAR/分钟）并将其作为治理 DAG 管道
+   `GovernancePayloadKind::PolicyUpdate` 有效负载，带有注释
+   `agreement_id`、`iso_week` 以及建议的折扣/保证金值；的
+   管道规范和 CLI 界面位于
+   `docs/source/sorafs_governance_dag_plan.md`。
+2.发布者更新IPNS头后，记录块CID和头CID
+   在治理跟踪器和 GAR 中，这样任何人都可以获取不可变的数据
+   稍后包。 `sorafs governance dag head` 和 `sorafs governance dag list`
+   让您在投票开始前确认节点已固定。
+3. 将 CAR 文件或块有效负载存储在回购证据存档旁边，以便
+   审计员可以将链上治理决策与确切的情况进行协调
+   已批准的链外数据包。
 
-**Governance DAG publication (required)**
+### 2.7 生命周期快照刷新
 
-1. Tar the evidence directory (config snippet, instruction payloads, proof logs,
-   GAR/minutes) and hand it to the governance DAG pipeline as a
-   `GovernancePayloadKind::PolicyUpdate` payload with annotations for
-   `agreement_id`, `iso_week`, and the proposed haircut/margin values; the
-   pipeline spec and CLI surfaces live in
-   `docs/source/sorafs_governance_dag_plan.md`.
-2. After the publisher updates the IPNS head, record the block CID and head CID
-   in the governance tracker and in the GAR so anyone can fetch the immutable
-   packet later. `sorafs governance dag head` and `sorafs governance dag list`
-   let you confirm the node was pinned before the vote opens.
-3. Store the CAR file or block payload next to the repo evidence archive so
-   auditors can reconcile the on-chain governance decision with the exact
-   off-chain packet that was approved.
+每当回购语义发生变化（利率、结算数学、托管逻辑或
+默认配置），刷新确定性生命周期快照，以便治理可以
+引用新的摘要，无需对证明工具进行逆向工程。
 
-### 2.7 Lifecycle snapshot refresh
-
-Whenever repo semantics change (rates, settlement maths, custody logic, or
-default config), refresh the deterministic lifecycle snapshot so governance can
-cite the new digest without reverse engineering the proof harness.
-
-1. Refresh the fixtures under the pinned toolchain:
+1. 刷新固定工具链下的夹具：
 
    ```bash
    scripts/regen_repo_proof_fixture.sh --toolchain <toolchain> \
      --bundle-dir artifacts/finance/repo/<agreement>
    ```
 
-   The helper stages outputs in a temp directory, updates the tracked fixtures
-   at `crates/iroha_core/tests/fixtures/repo_lifecycle_proof.{json,digest}`,
-   reruns the proof test for verification, and (when `--bundle-dir` is set)
-   drops `repo_proof_snapshot.json` and `repo_proof_digest.txt` into the bundle
-   directory for auditors.
-2. To export artefacts without touching the tracked fixtures (e.g., dry-run
-   evidence), set the env helpers directly:
+   助手将输出暂存在临时目录中，更新跟踪的装置
+   在 `crates/iroha_core/tests/fixtures/repo_lifecycle_proof.{json,digest}`，
+   重新运行验证测试以进行验证，并且（当设置 `--bundle-dir` 时）
+   将 `repo_proof_snapshot.json` 和 `repo_proof_digest.txt` 放入捆绑包中
+   审计员目录。
+2. 在不接触跟踪固定装置的情况下导出工件（例如，试运行
+   证据），直接设置环境助手：
 
    ```bash
    REPO_PROOF_SNAPSHOT_OUT=artifacts/finance/repo/<agreement>/repo_proof_snapshot.json \
@@ -349,36 +340,34 @@ cite the new digest without reverse engineering the proof harness.
      -- --exact smartcontracts::isi::repo::tests::repo_deterministic_lifecycle_proof_matches_fixture
    ```
 
-   `REPO_PROOF_SNAPSHOT_OUT` receives the prettified Norito JSON from the proof
-   harness while `REPO_PROOF_DIGEST_OUT` stores the uppercase hex digest (with a
-   trailing newline for convenience). The helper refuses to overwrite files when
-   the parent directory does not exist, so build the `artifacts/...` tree first.
-3. Attach both exported files to the agreement bundle (see §3) and regenerate
-   the manifest via `scripts/repo_evidence_manifest.py` so the governance packet
-   references the refreshed proof artefacts explicitly. The in-repo fixtures
-   remain the source of truth for CI.
+   `REPO_PROOF_SNAPSHOT_OUT` 从证明中接收美化后的 Norito JSON
+   线束，而 `REPO_PROOF_DIGEST_OUT` 存储大写十六进制摘要（带有
+   为了方便起见，尾随换行符）。当以下情况时，助手拒绝覆盖文件
+   父目录不存在，因此首先构建 `artifacts/...` 树。
+3. 将两个导出的文件附加到协议包（参见§3）并重新生成
+   通过 `scripts/repo_evidence_manifest.py` 的清单，因此治理数据包
+   明确引用刷新的证据工件。回购内固定装置
+   仍然是 CI 的真相来源。
 
-### 2.8 Interest accrual & maturity governance
-
-**Deterministic interest math.** `RepoIsi` and `ReverseRepoIsi` derive the cash
-owed at unwind time from the ACT/360 helper
+### 2.8 应计利息和到期日治理**确定性利息数学。** `RepoIsi` 和 `ReverseRepoIsi` 得出现金
+在放松时间欠 ACT/360 助手的
 `compute_accrued_interest()`【crates/iroha_core/src/smartcontracts/isi/repo.rs:100】
-and the guard inside `expected_cash_settlement()` that rejects repayment legs
-which return less than *principal + interest*.【crates/iroha_core/src/smartcontracts/isi/repo.rs:132】
-The helper normalises `rate_bps` into a four-decimal fraction, multiplies it by
-`elapsed_ms / (360 * 24h)` using 18 decimal places, and finally rounds to the
-scale declared by the cash leg’s `NumericSpec`. To keep the governance packet
-reproducible, capture the four values that feed the helper:
+以及 `expected_cash_settlement()` 内拒绝还款腿的守卫
+其回报小于*本金+利息*。【crates/iroha_core/src/smartcontracts/isi/repo.rs:132】
+帮助器将 `rate_bps` 标准化为四位小数分数，并将其乘以
+`elapsed_ms / (360 * 24h)` 使用 18 位小数，最后四舍五入到
+现金支线的 `NumericSpec` 声明的规模。保留治理包
+可重现，捕获为助手提供的四个值：
 
-1. `cash_leg.quantity` (principal),
-2. `rate_bps`,
-3. `initiated_timestamp_ms`, and
-4. the unwind timestamp you intend to use (for planned GL entries this is
-   usually `maturity_timestamp_ms`, but emergency unwinds record the actual
-   `ReverseRepoIsi::settlement_timestamp_ms`).
+1. `cash_leg.quantity`（本金），
+2.`rate_bps`，
+3. `initiated_timestamp_ms`，以及
+4. 您打算使用的展开时间戳（对于计划的总帐条目，这是
+   通常为 `maturity_timestamp_ms`，但紧急展开会记录实际的
+   `ReverseRepoIsi::settlement_timestamp_ms`）。
 
-Store the tuple alongside the staged unwind instruction and attach a short proof
-snippet such as:
+将元组存储在分阶段展开指令旁边并附上简短的证明
+片段如：
 
 ```python
 from decimal import Decimal
@@ -391,158 +380,152 @@ interest = principal * (rate_bps / Decimal(10_000)) * (elapsed_ms / Decimal(ACT_
 expected_cash = principal + interest.quantize(Decimal("0.01"))
 ```
 
-The rounded `expected_cash` must match the `quantity` encoded in the reverse
-repo instruction. Keep the script output (or calculator worksheet) in
-`artifacts/finance/repo/<agreement>/interest.json` so auditors can recompute the
-figure without interpreting your trading spreadsheet. The integration suite
-already enforces the same invariant
-(`repo_roundtrip_transfers_balances_and_clears_agreement`), but ops evidence
-should cite the exact values that will be unwound.【integration_tests/tests/repo.rs:1】
+舍入的 `expected_cash` 必须与反向编码的 `quantity` 匹配
+回购指令。将脚本输出（或计算器工作表）保存在
+`artifacts/finance/repo/<agreement>/interest.json`，以便审核员可以重新计算
+无需解释您的交易电子表格即可得出数据。集成套件
+已经强制执行相同的不变量
+(`repo_roundtrip_transfers_balances_and_clears_agreement`)，但是操作证据
+应该引用将要展开的确切值。【integration_tests/tests/repo.rs:1】
 
-**Margin & accrual cadence.** Every agreement exposes the cadence helpers
-`RepoAgreement::next_margin_check_after()` and the cached
-`last_margin_check_timestamp_ms`, enabling desks to prove that margin sweeps
-were scheduled according to policy even before they submit a `RepoMarginCallIsi`
-transaction.【crates/iroha_data_model/src/repo.rs:113】【crates/iroha_core/src/smartcontracts/isi/repo.rs:557】
-Each margin call must include three artefacts in the evidence bundle:
+**保证金和应计节奏。** 每项协议都会暴露节奏助手
+`RepoAgreement::next_margin_check_after()` 和缓存的
+`last_margin_check_timestamp_ms`，使办公桌能够证明利润扫荡
+甚至在提交 `RepoMarginCallIsi` 之前就根据政策进行了安排
+交易。【crates/iroha_data_model/src/repo.rs:113】【crates/iroha_core/src/smartcontracts/isi/repo.rs:557】
+每个追加保证金通知必须在证据包中包含三件文物：
 
-1. `repo margin-call --agreement <id>` JSON output (or the equivalent SDK
-   payload), which records the agreement id, the block timestamp used for the
-   check, and the authority that triggered it.【crates/iroha_cli/src/main.rs:3821】
-2. A snapshot of the agreement (`repo query get --agreement-id <id>`) taken
-   immediately before the call so reviewers can confirm the cadence was due
-   (compare `current_timestamp_ms` with `next_margin_check_after()`).
-3. The `AccountEvent::Repo::MarginCalled` SSE/NDJSON feed emitted to each role
-   (initiator, counterparty, and optionally custodian) because the runtime
-   duplicates the event for every participant.【crates/iroha_data_model/src/events/data/events.rs:742】
+1. `repo margin-call --agreement <id>` JSON输出（或等效的SDK
+   Payload），记录了协议id、用于该协议的区块时间戳
+   检查，以及触发它的权限。【crates/iroha_cli/src/main.rs:3821】
+2. 协议快照（`repo query get --agreement-id <id>`）
+   就在通话之前，以便审阅者可以确认节奏是否到期
+   （比较 `current_timestamp_ms` 与 `next_margin_check_after()`）。
+3. 发送到每个角色的 `AccountEvent::Repo::MarginCalled` SSE/NDJSON feed
+   （发起人、交易对手和可选的托管人）因为运行时
+   为每个参与者复制事件。【crates/iroha_data_model/src/events/data/events.rs:742】
 
-CI already exercises these rules via
-`repo_margin_call_enforces_cadence_and_participant_rules`, which rejects calls
-that arrive early or from unauthorised accounts.【integration_tests/tests/repo.rs:395】
-Repeating that provenance in the evidence archive is what closes the roadmap F1
-documentation gap: governance reviewers can see the same timestamps that the
-runtime relied on, together with the deterministic proof hash captured in §2.7
-and the manifest discussed in §3.2.
+CI 已经通过以下方式行使了这些规则
+`repo_margin_call_enforces_cadence_and_participant_rules`，拒绝呼叫
+提前到达或来自未经授权的帐户。【integration_tests/tests/repo.rs:395】
+重复证据档案中的出处就是路线图 F1 的结束
+文档差距：治理审核者可以看到与
+运行时依赖，以及第 2.7 节中捕获的确定性证明哈希
+以及第 3.2 节中讨论的清单。
 
-### 2.8 Tri-party custody approvals & monitoring
+### 2.8 三方托管批准和监控路线图 **F1** 还提出了三方回购协议，其中抵押品存放在
+托管人而非交易对手。运行时强制执行托管路径
+通过持久化 `RepoAgreement::custodian`，将质押资产路由至
+托管人的帐户在启动和发出期间
+`RepoAccountRole::Custodian` 每个生命周期步骤的事件，以便审核员可以看到
+谁在每个时间戳持有抵押品。【crates/iroha_data_model/src/repo.rs:74】【crates/iroha_core/src/smartcontracts/isi/repo.rs:252】【integration_tests/tests/repo.rs:951】
+除了上面列出的双边证据外，每个三方回购协议还必须
+在治理数据包被视为完整之前捕获以下工件。
 
-Roadmap **F1** also calls out tri-party repos where collateral is parked with a
-custodian rather than the counterparty. The runtime enforces the custodian path
-by persisting `RepoAgreement::custodian`, routing pledged assets into the
-custodian’s account during initiation, and emitting
-`RepoAccountRole::Custodian` events for every lifecycle step so auditors can see
-who held collateral at each timestamp.【crates/iroha_data_model/src/repo.rs:74】【crates/iroha_core/src/smartcontracts/isi/repo.rs:252】【integration_tests/tests/repo.rs:951】
-In addition to the bilateral evidence listed above, every tri-party repo must
-capture the artefacts below before the governance packet is considered complete.
+**额外摄入要求**
 
-**Additional intake requirements**
+1. **保管人确认书。** 服务台必须存储来自以下机构的签名确认书：
+   每个托管人确认回购标识符、托管窗口、路由
+   账户和结算 SLA。附上已签署的文件
+   （`artifacts/finance/repo/<agreement>/custodian_ack_<custodian>.md`）
+   并在治理包中引用它，以便审阅者可以看到
+   第三方同意发起者/交易对手批准的相同字节。
+2. **托管账本快照。** 启动将抵押品移至托管人
+   account 和 unwind 将其返回给发起者；捕捉相关的
+   `FindAssets` 输出为每条腿之前和之后的托管人以便审核员
+   可以确认余额与阶段指令相符。【crates/iroha_core/src/smartcontracts/isi/repo.rs:252】【crates/iroha_core/src/smartcontracts/isi/repo.rs:1641】
+3. **事件收据。** 镜像所有角色的 `RepoAccountEvent` 流并
+   将托管人有效负载与发起者/交易对手记录一起存储。
+   运行时为每个角色发出单独的事件
+   `RepoAccountRole::{Initiator,Counterparty,Custodian}`，因此附上原始数据
+   SSE feed 证明所有三方都看到了相同的时间戳并且
+   结算金额。【crates/iroha_data_model/src/events/data/events.rs:742】【integration_tests/tests/repo.rs:1508】
+4. **托管人准备情况检查表。** 当回购引用操作时
+   垫片（例如，托管调节或长期指示），记录
+   用于排练工作流程的自动化联系人和命令（例如
+   如 `iroha app repo initiate --custodian ... --dry-run`），因此审阅者可以到达
+   演习期间的托管操作员。
 
-1. **Custodian acknowledgement.** Desks must store a signed acknowledgement from
-   each custodian confirming the repo identifier, custody window, routing
-   account, and settlement SLAs. Attach the signed document
-   (`artifacts/finance/repo/<agreement>/custodian_ack_<custodian>.md`)
-   and reference it in the governance packet so reviewers can see that the
-   third party agreed to the same bytes the initiator/counterparty approved.
-2. **Custody ledger snapshot.** Initiation moves collateral into the custodian
-   account and unwind returns it to the initiator; capture the relevant
-   `FindAssets` output for the custodian before and after each leg so auditors
-   can confirm the balances match the staged instructions.【crates/iroha_core/src/smartcontracts/isi/repo.rs:252】【crates/iroha_core/src/smartcontracts/isi/repo.rs:1641】
-3. **Event receipts.** Mirror the `RepoAccountEvent` stream for all roles and
-   store the custodian payload alongside the initiator/counterparty records.
-   The runtime emits separate events for each role in
-   `RepoAccountRole::{Initiator,Counterparty,Custodian}`, so attaching the raw
-   SSE feed proves that all three parties saw the same timestamps and
-   settlement amounts.【crates/iroha_data_model/src/events/data/events.rs:742】【integration_tests/tests/repo.rs:1508】
-4. **Custodian readiness checklist.** When the repo references operational
-   shims (for example, escrow reconciliations or standing instructions), record
-   the automation contact and the command used to rehearse the workflow (such
-   as `iroha app repo initiate --custodian ... --dry-run`) so reviewers can reach
-   the custodian operators during drills.
-
-| Evidence | Command / Path | Purpose |
+|证据|命令/路径|目的|
 |----------|----------------|---------|
-| Custodian acknowledgement (`custodian_ack_<custodian>.md`) | Link to the signed note referenced in `docs/examples/finance/repo_governance_packet_template.md` (use `docs/examples/finance/repo_custodian_ack_template.md` as the seed). | Shows the third party accepted the repo id, custody SLA, and settlement channel before assets move. |
-| Custody asset snapshot | `iroha json --query FindAssets '{ "id": "...#<custodian>" }' > artifacts/.../assets/custodian_<ts>.json` | Proves collateral left/returned exactly as `RepoIsi` encoded it. |
-| Custodian `RepoAccountEvent` feed | `torii-events --account <custodian> --event-type repo > artifacts/.../events/custodian.ndjson` | Captures the `RepoAccountRole::Custodian` payloads the runtime emitted for initiation, margin calls, and unwind. |
-| Custody drill log | `artifacts/.../governance/drills/<timestamp>-custodian.log` | Documents dry runs where the custodian exercised their rollback or settlement scripts. |
+|托管人确认 (`custodian_ack_<custodian>.md`) |链接到 `docs/examples/finance/repo_governance_packet_template.md` 中引用的签名注释（使用 `docs/examples/finance/repo_custodian_ack_template.md` 作为种子）。 |显示第三方在资产转移之前接受了 repo id、托管 SLA 和结算渠道。 |
+|托管资产快照| `iroha json --query FindAssets '{ "id": "...#<custodian>" }' > artifacts/.../assets/custodian_<ts>.json` |证明留下/归还的抵押品与 `RepoIsi` 编码完全相同。 |
+|托管人 `RepoAccountEvent` 饲料 | `torii-events --account <custodian> --event-type repo > artifacts/.../events/custodian.ndjson` |捕获为启动、追加保证金通知和展开而发出的运行时的 `RepoAccountRole::Custodian` 有效负载。 |
+|托管演习日志| `artifacts/.../governance/drills/<timestamp>-custodian.log` |记录托管人执行回滚或结算脚本的试运行。 |重复使用相同的哈希工作流程 (`scripts/repo_evidence_manifest.py`)
+托管人确认、资产快照和事件源保持三方关系
+数据包可重现。当多个保管人参与一本书时，创建
+每个保管人的子目录，以便清单突出显示哪些文件属于
+各方；治理票证应引用每个清单哈希和
+匹配的确认文件。集成测试涵盖
+`repo_initiation_with_custodian_routes_collateral` 和
+`reverse_repo_with_custodian_emits_events_for_all_parties` 已经强制执行
+运行时行为——将他们的人工制品镜像到证据包中就是什么
+让路线图 **F1** 为三方场景提供 GA 就绪文档。【integration_tests/tests/repo.rs:951】【integration_tests/tests/repo.rs:1508】
 
-Reusing the same hashing workflow (`scripts/repo_evidence_manifest.py`) for the
-custodian acknowledgement, asset snapshots, and event feeds keeps tri-party
-packets reproducible. When multiple custodians participate in a book, create
-subdirectories per custodian so the manifest highlights which files belong to
-each party; the governance ticket should reference each manifest hash and the
-matching acknowledgement file. The integration tests that cover
-`repo_initiation_with_custodian_routes_collateral` and
-`reverse_repo_with_custodian_emits_events_for_all_parties` already enforce the
-runtime behaviour—mirroring their artefacts inside the evidence bundle is what
-lets roadmap **F1** ship GA-ready documentation for the tri-party scenario.【integration_tests/tests/repo.rs:951】【integration_tests/tests/repo.rs:1508】
+### 2.9 批准后配置快照
 
-### 2.9 Post-approval configuration snapshots
+一旦治理批准变更并且 `[settlement.repo]` 节登陆
+在集群中，从每个对等方捕获经过身份验证的配置快照，以便
+审核员可以证明批准的值是有效的。 Torii 暴露了
+用于此目的的 `/v1/configuration` 路线和所有 SDK 表面帮助程序，例如
+`ToriiClient.getConfiguration`，因此捕获工作流程适用于桌面脚本，
+CI，或手动操作员运行。【crates/iroha_torii/src/lib.rs:3225】【javascript/iroha_js/src/toriiClient.js:2115】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:4681】
 
-Once governance approves a change and the `[settlement.repo]` stanza lands on
-the cluster, capture an authenticated configuration snapshot from every peer so
-auditors can prove the approved values are live. Torii exposes the
-`/v1/configuration` route for this purpose and all SDKs surface helpers such as
-`ToriiClient.getConfiguration`, so the capture workflow works for desk scripts,
-CI, or manual operator runs.【crates/iroha_torii/src/lib.rs:3225】【javascript/iroha_js/src/toriiClient.js:2115】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:4681】
-
-1. Call `GET /v1/configuration` (or the SDK helper) per peer immediately after
-   the roll-out. Persist the full JSON under
-   `artifacts/finance/repo/<agreement>/config/peers/<peer-id>.json` and record
-   the block height/cluster timestamp in `config/config_snapshot_index.md`.
+1. 在每个对等点之后立即调用 `GET /v1/configuration`（或 SDK 帮助程序）
+   推出。将完整的 JSON 保留在下面
+   `artifacts/finance/repo/<agreement>/config/peers/<peer-id>.json` 并记录
+   `config/config_snapshot_index.md` 中的块高度/集群时间戳。
    ```bash
    mkdir -p artifacts/finance/repo/<slug>/config/peers
    curl -fsSL https://peer01.example/v1/configuration \
      | jq '.' \
      > artifacts/finance/repo/<slug>/config/peers/peer01.json
    ```
-2. Hash every snapshot (`sha256sum config/peers/*.json`) and log the digest next
-   to the peer id in the governance packet template. This proves which peers
-   ingested the policy and which commit/toolchain produced the snapshot.
-3. Compare the `.settlement.repo` block in each snapshot with the staged
-   `[settlement.repo]` TOML snippet; record any drift and rerun
-   `repo query get --agreement-id <id> --pretty` so the evidence bundle shows
-   both the runtime configuration and the normalised `RepoGovernance` values
-   stored with the agreement.【crates/iroha_cli/src/main.rs:3821】
-4. Attach the snapshot files and summary index to the evidence manifest (see
-   §3.2) so the governance record links the approved change to the actual peer
-   configuration bytes. The governance template was updated to include this
-   table, so every future repo packet carries the same proof.
+2. 对每个快照 (`sha256sum config/peers/*.json`) 进行哈希处理并记录下一个摘要
+   到治理数据包模板中的对等 ID。这证明了哪些同行
+   摄取策略以及哪个提交/工具链生成了快照。
+3. 将每个快照中的 `.settlement.repo` 块与暂存的块进行比较
+   `[settlement.repo]` TOML 片段；记录任何漂移并重新运行
+   `repo query get --agreement-id <id> --pretty` 所以证据包显示
+   运行时配置和标准化 `RepoGovernance` 值
+   与协议一起存储。【crates/iroha_cli/src/main.rs:3821】
+4. 将快照文件和摘要索引附加到证据清单（请参阅
+   §3.2）因此治理记录将批准的变更链接到实际的同行
+   配置字节。治理模板已更新以包含此内容
+   表，因此每个未来的回购数据包都带有相同的证明。
 
-Capturing these snapshots closes the `iroha_config` documentation gap called out
-in the roadmap: reviewers can now diff the staged TOML against the bytes every
-peer reports, and auditors can re-run the comparison whenever a repo change is
-under investigation.
+捕获这些快照可以弥补 `iroha_config` 文档中指出的空白
+路线图中：审阅者现在可以将分阶段的 TOML 与每个字节进行比较
+同行报告，只要回购协议发生变化，审计师就可以重新进行比较
+正在调查中。
 
-## 3. Deterministic Evidence Workflow
+## 3. 确定性证据工作流程1. **记录指令出处**
+   - 通过 `iroha app repo ... --output` 生成存储库/展开有效负载。
+   - 将 `InstructionBox` JSON 存储在
+     `artifacts/finance/repo/<agreement-id>/initiation.json`。
+2. **捕获账本状态**
+   - 之前运行 `iroha app repo query list --pretty > artifacts/.../agreements.json`
+     并在结算后证明余额已结清。
+   - 可选择通过 `iroha json` 或 SDK 帮助程序查询 `FindAssets` 进行存档
+     回购分支中触及的资产余额。
+3. **持久化事件流**
+   - 通过 Torii SSE 订阅 `AccountEvent::Repo` 或拉出并附加
+     将 JSON 发送到证据目录。这满足了防篡改
+     日志记录子句，因为事件是由观察到的对等方签名的
+     每一次改变。
+4. **运行确定性测试**
+   - CI already runs `integration_tests/tests/repo.rs`;对于手动签核，
+     执行`cargo test -p integration_tests repo::`并归档日志加上
+     `target/debug/deps/repo-*` JUnit 输出。
+5. **序列化治理和配置**
+   - 签入（或附加）该期间使用的 `[settlement.repo]` 配置，
+     包括理发/合格名单。这使得审核重播能够匹配
+     运行时规范化治理记录在 `RepoAgreement` 中。
 
-1. **Record the instruction provenance**
-   - Generate the repo/unwind payload via `iroha app repo ... --output`.
-   - Store the `InstructionBox` JSON under
-     `artifacts/finance/repo/<agreement-id>/initiation.json`.
-2. **Capture ledger state**
-   - Run `iroha app repo query list --pretty > artifacts/.../agreements.json` before
-     and after settlement to prove balances cleared.
-   - Optionally query `FindAssets` via `iroha json` or SDK helpers to archive
-     the asset balances touched in the repo leg.
-3. **Persist event streams**
-   - Subscribe to `AccountEvent::Repo` over Torii SSE or Pull and attach the
-     emitted JSON to the evidence directory. This satisfies the tamper-evident
-     logging clause because the events are signed by the peers that observed
-     each change.
-4. **Run deterministic tests**
-   - CI already runs `integration_tests/tests/repo.rs`; for manual sign-off,
-     execute `cargo test -p integration_tests repo::` and archive the log plus
-     `target/debug/deps/repo-*` JUnit output.
-5. **Serialize governance & config**
-   - Check in (or attach) the `[settlement.repo]` config used for the period,
-     including haircut/eligible lists. This allows audit replays to match the
-     runtime-normalised governance recorded in `RepoAgreement`.
+### 3.1 证据包布局
 
-### 3.1 Evidence bundle layout
-
-Store every artefact called out in this section beneath a single agreement
-directory so governance can archive or hash one tree. The recommended layout is:
+将本节中提到的所有工件存储在单一协议下
+目录，以便治理可以归档或散列一棵树。推荐的布局是：
 
 ```
 artifacts/finance/repo/<agreement-id>/
@@ -565,27 +548,27 @@ artifacts/finance/repo/<agreement-id>/
     └── repo_lifecycle.log
 ```
 
-- `agreements_before/after.json` capture `repo query list` output so auditors can
-  prove the ledger cleared the agreement.
-- `initiation.json`, `unwind.json`, and `margin/*.json` are the exact Norito
-  payloads staged with `iroha app repo ... --output`.
-- `events/repo-events.ndjson` replays the `AccountEvent::Repo(*)` stream while
-  `tests/repo_lifecycle.log` preserves the `cargo test` evidence.
-- `repo_proof_snapshot.json` and `repo_proof_digest.txt` come from the snapshot
-  refresh procedure in §2.7 and let reviewers recompute the lifecycle hash
-  without re-running the harness.
-- `config/settlement_repo.toml` contains the `[settlement.repo]` snippet
-  (haircuts, substitution matrix) that was active when the repo executed.
-- `config/peers/*.json` captures `/v1/configuration` snapshots for each peer,
-  closing the loop between the staged TOML and the runtime values peers report
-  over Torii.
+- `agreements_before/after.json` 捕获 `repo query list` 输出，以便审核员可以
+  证明账本已清除协议。
+- `initiation.json`、`unwind.json` 和 `margin/*.json` 与 Norito 完全相同
+  有效负载以 `iroha app repo ... --output` 上演。
+- `events/repo-events.ndjson` 重播 `AccountEvent::Repo(*)` 流，同时
+  `tests/repo_lifecycle.log` 保留 `cargo test` 证据。
+- `repo_proof_snapshot.json` 和 `repo_proof_digest.txt` 来自快照
+  刷新§2.7中的过程并让审阅者重新计算生命周期哈希
+  无需重新运行线束。
+- `config/settlement_repo.toml` 包含 `[settlement.repo]` 片段
+  （理发、替换矩阵）在执行回购协议时处于活动状态。
+- `config/peers/*.json` 捕获每个对等点的 `/v1/configuration` 快照，
+  关闭暂存 TOML 和运行时值同行报告之间的循环
+  超过 Torii。
 
-### 3.2 Hash manifest generation
+### 3.2 哈希清单生成
 
-Attach a deterministic manifest to every bundle so reviewers can verify hashes
-without unpacking the archive. The helper at `scripts/repo_evidence_manifest.py`
-walks the agreement directory, records `size`, `sha256`, `blake2b`, and the last
-modified timestamp for each file, and writes a JSON summary:
+将确定性清单附加到每个包，以便审核者可以验证哈希值
+无需解压存档。 `scripts/repo_evidence_manifest.py` 的助手
+走协议目录，记录`size`，`sha256`，`blake2b`，最后一个
+修改每个文件的时间戳，并写入 JSON 摘要：
 
 ```bash
 python3 scripts/repo_evidence_manifest.py \
@@ -595,15 +578,13 @@ python3 scripts/repo_evidence_manifest.py \
   --exclude 'scratch/*'
 ```
 
-The generator sorts paths lexicographically, skips the output file when it lives
-inside the same directory, and emits totals that governance can copy directly
-into the change ticket. When `--output` is omitted the manifest prints to
-stdout, which is convenient for quick diffs during desk reviews.
-Use `--exclude <glob>` to omit scratch material (for example, `--exclude 'scratch/*' --exclude '*.tmp'`)
-without moving files out of the bundle; the glob pattern always applies to the
-path relative to `--root`.
-
-Example manifest (truncated for brevity):
+生成器按字典顺序对路径进行排序，在输出文件存在时跳过它
+在同一目录中，并发出治理可以直接复制的总计
+进入改签机票。当省略 `--output` 时，清单将打印到
+标准输出，方便在案头审查期间进行快速比较。
+使用 `--exclude <glob>` 省略临时材料（例如，`--exclude 'scratch/*' --exclude '*.tmp'`）
+无需将文件移出捆绑包； glob 模式始终适用于
+相对于 `--root` 的路径。示例清单（为简洁起见被截断）：
 
 ```json
 {
@@ -631,42 +612,42 @@ Example manifest (truncated for brevity):
 }
 ```
 
-Include the manifest next to the evidence bundle and reference its SHA-256 hash
-in the governance proposal so desks, operators, and auditors share the same
-ground truth.
+将清单包含在证据包旁边并引用其 SHA-256 哈希值
+在治理提案中，各部门、运营商和审计员共享相同的信息
+基本事实。
 
-### 3.3 Governance change log & rollback drills
+### 3.3 治理变更日志和回滚演练
 
-The finance council expects every repo request, haircut tweak, or substitution
-matrix change to arrive with a reproducible governance packet that can be linked
-directly from the referendum minutes.【docs/source/governance_playbook.md:1】
+金融委员会预计每一次回购请求、削减调整或替代
+矩阵更改以可链接的可复制治理数据包的方式到达
+直接来自公投记录。【docs/source/governance_playbook.md:1】
 
-1. **Build the governance packet**
-   - Copy the evidence bundle for the agreement into
-     `artifacts/finance/repo/<agreement-id>/governance/`.
-   - Add `gar.json` (council approval record), `referendum.md` (who approved
-     and which hashes they reviewed), and `rollback_playbook.md`
-     summarising the reversal procedure from `repo_runbook.md`
+1. **构建治理包**
+   - 将协议的证据包复制到
+     `artifacts/finance/repo/<agreement-id>/governance/`。
+   - 添加`gar.json`（理事会批准记录），`referendum.md`（谁批准
+     以及他们审查了哪些哈希值），以及 `rollback_playbook.md`
+     总结 `repo_runbook.md` 的逆转过程
      §§4–5.【docs/source/finance/repo_runbook.md:1】
-   - Capture the deterministic manifest hash from §3.2 in
-     `hashes.txt` so reviewers can confirm the payloads they see in Torii match
-     the staged bytes.
-2. **Reference the packet in the referendum**
-   - When running `iroha app governance referendum submit` (or the equivalent SDK
-     helper) include the manifest hash from `hashes.txt` in the `--notes`
-     payload so the GAR points back to the immutable packet.
-   - File the same hash inside the governance tracker or ticketing system so
-     audit traces do not rely on screenshotting dashboards.
-3. **Document drills and rollbacks**
-   - After the referendum passes, update `ops/drill-log.md` with the repo
-     agreement id, deployed config hash, GAR id, and operator contact so the
-     quarterly drill record includes finance actions.【ops/drill-log.md:1】
-   - If a rollback drill executes, attach the signed
-     `rollback_playbook.md` and the CLI output from `iroha app repo unwind` under
-     `governance/drills/<timestamp>.log` and inform the council using the same
-     steps described in the governance playbook.
+   - 捕获第 3.2 节中的确定性清单哈希
+     `hashes.txt`，以便审核者可以确认他们在 Torii 匹配中看到的有效负载
+     分阶段的字节。
+2. **参考公投中的数据包**
+   - 运行 `iroha app governance referendum submit`（或等效的 SDK
+     helper）将来自 `hashes.txt` 的清单哈希包含在 `--notes` 中
+     有效负载，因此 GAR 指向不可变的数据包。
+   - 在治理跟踪器或票务系统中归档相同的哈希值，以便
+     审计跟踪不依赖于仪表板屏幕截图。
+3. **记录演练和回滚**
+   - 公投通过后，使用存储库更新 `ops/drill-log.md`
+     协议 ID、部署的配置哈希、GAR ID 和操作员联系方式，以便
+     季度演练记录包括财务行动。【ops/drill-log.md:1】
+   - 如果执行回滚演习，请附上签名的
+     `rollback_playbook.md` 和 `iroha app repo unwind` 下的 CLI 输出
+     `governance/drills/<timestamp>.log` 并使用相同的信息通知理事会
+     治理手册中描述的步骤。
 
-Example layout:
+布局示例：
 
 ```
 artifacts/finance/repo/<agreement-id>/governance/
@@ -678,46 +659,42 @@ artifacts/finance/repo/<agreement-id>/governance/
     └── 2026-05-12T09-00Z.log
 ```
 
-Keeping the GAR, referendum, and drill artefacts alongside the lifecycle
+将 GAR、公投和演练工件与生命周期保持一致
 evidence guarantees that every repo change satisfies the roadmap F1 governance
-bar without requiring bespoke ticket spelunking later on.
+酒吧，无需稍后购买定制门票。
 
-### 3.4 Lifecycle governance checklist
+### 3.4 生命周期治理清单
 
-Roadmap **F1** calls out governance coverage for initiation, accrual/margin, and
-tri-party unwinds. The table below consolidates the approvals, deterministic
-artefacts, and test references per lifecycle step so finance desks can cite a
-single checklist when assembling a packet.
+路线图 **F1** 提出了启动、应计/利润和的治理覆盖范围
+三方放松。下表汇总了确定性的批准
+工件，并测试每个生命周期步骤的参考，以便财务部门可以引用
+组装数据包时的单一清单。|生命周期步骤|所需的批准和门票 |确定性工件和命令 |链接回归覆盖率 |
+|----------------|------------------------------------------|------------------------------------------------|----------------------------|
+| **发起（双边或三方）** |通过 `docs/examples/finance/repo_governance_packet_template.md` 记录的双控制签核、具有 `[settlement.repo]` diff 和 GAR ID 的治理票据、设置 `--custodian` 时的托管人确认。 |通过`iroha --config client.toml --output repo initiate ...` 暂存指令。发出生命周期证明快照（`REPO_PROOF_*` 环境变量）以及来自 `scripts/repo_evidence_manifest.py` 的捆绑清单。附加最新的 `FindRepoAgreements` JSON 和 `[settlement.repo]` 片段（理发、合格列表、替换矩阵）。 | `integration_tests/tests/repo.rs::repo_roundtrip_transfers_balances_and_clears_agreement`（双边）和 `integration_tests/tests/repo.rs::repo_roundtrip_with_custodian_routes_collateral`（三方）证明运行时与分阶段的有效负载匹配。 |
+| **追加保证金应计节奏** |办公桌领导 + 风险经理批准治理包中记录的节奏窗口；票证引用预定的 `RepoMarginCallIsi`。 |在调用 `iroha app repo margin-call` 之前捕获 `iroha app repo margin --agreement-id` 输出，对生成的 JSON 进行哈希处理，并将 `RepoAccountEvent::MarginCalled` SSE 负载存档在证据包中。将 CLI 日志存储在确定性证明哈希旁边。 | `integration_tests/tests/repo.rs::repo_margin_call_enforces_cadence_and_participant_rules` 保证运行时拒绝过早调用和非参与者提交。 |
+| **抵押品替代和到期解除** |治理变更记录引用了所需的 `collateral_substitution_matrix` 条目和削减政策；理事会会议记录列出了替换对 SHA-256 哈希值。 |使用 `iroha app repo unwind --output ... --settlement-timestamp-ms <planned>` 暂存展开部分，以便 ACT/360 计算 (§2.8) 和替换有效负载都可重现。将 `[settlement.repo]` TOML 片段、替换清单以及生成的 `RepoAccountEvent::Settled` 有效负载包含在工件包中。 | `integration_tests/tests/repo.rs::repo_roundtrip_transfers_balances_and_clears_agreement` 内的替换往返执行不足与批准的替换流程，同时保持协议 ID 不变。 |
+| **紧急放松/回滚演练** |事件指挥官 + 财务委员会批准 `docs/source/finance/repo_runbook.md`（第 4-5 节）中所述的回滚，并捕获 `ops/drill-log.md` 中的条目。 |使用分阶段回滚负载执行 `iroha app repo unwind`，将 CLI 日志 + GAR 引用附加到 `governance/drills/<timestamp>.log`，然后重新运行 `repo_deterministic_lifecycle_proof_matches_fixture` 和 `scripts/repo_evidence_manifest.py` 帮助程序以证明演练之前/之后的确定性。 |快乐路径展开由 `integration_tests/tests/repo.rs::repo_roundtrip_transfers_balances_and_clears_agreement` 涵盖；遵循演练步骤可以使治理工件与该测试所执行的运行时保证保持一致。 |
 
-| Lifecycle step | Required approvals & tickets | Deterministic artefacts & commands | Linked regression coverage |
-|----------------|------------------------------|------------------------------------|----------------------------|
-| **Initiation (bilateral or tri-party)** | Dual-control sign-off recorded via `docs/examples/finance/repo_governance_packet_template.md`, governance ticket with the `[settlement.repo]` diff and GAR ID, custodian acknowledgement when `--custodian` is set. | Stage the instruction via<br>`iroha --config client.toml --output repo initiate ...`.<br>Emit the lifecycle proof snapshot (`REPO_PROOF_*` env vars) plus the bundle manifest from `scripts/repo_evidence_manifest.py`.<br>Attach the latest `FindRepoAgreements` JSON and `[settlement.repo]` snippet (haircut, eligible list, substitution matrix). | `integration_tests/tests/repo.rs::repo_roundtrip_transfers_balances_and_clears_agreement` (bilateral) and `integration_tests/tests/repo.rs::repo_roundtrip_with_custodian_routes_collateral` (tri-party) prove the runtime matches the staged payloads. |
-| **Margin call accrual cadence** | Desk lead + risk manager approve the cadence window documented in the governance packet; ticket references the scheduled `RepoMarginCallIsi`. | Capture `iroha app repo margin --agreement-id` output before calling `iroha app repo margin-call`, hash the resulting JSON, and archive the `RepoAccountEvent::MarginCalled` SSE payload in the evidence bundle.<br>Store the CLI log next to the deterministic proof hash. | `integration_tests/tests/repo.rs::repo_margin_call_enforces_cadence_and_participant_rules` guarantees the runtime rejects premature calls and non-participant submissions. |
-| **Collateral substitution & maturity unwind** | Governance change record cites the required `collateral_substitution_matrix` entries and haircut policy; council minutes list the substitution pair SHA-256 hash. | Stage the unwind leg with `iroha app repo unwind --output ... --settlement-timestamp-ms <planned>` so both the ACT/360 calculation (§2.8) and substitution payload are reproducible.<br>Include the `[settlement.repo]` TOML snippet, substitution manifest, and the resulting `RepoAccountEvent::Settled` payload in the artefact bundle. | The substitution round-trip inside `integration_tests/tests/repo.rs::repo_roundtrip_transfers_balances_and_clears_agreement` exercises insufficient-versus-approved substitution flows while keeping the agreement id constant. |
-| **Emergency unwind / rollback drill** | Incident commander + finance council approve the rollback as described in `docs/source/finance/repo_runbook.md` (sections 4–5) and capture the entry in `ops/drill-log.md`. | Execute `iroha app repo unwind` using the staged rollback payload, append CLI logs + GAR reference to `governance/drills/<timestamp>.log`, and rerun both `repo_deterministic_lifecycle_proof_matches_fixture` and the `scripts/repo_evidence_manifest.py` helper to prove determinism before/after the drill. | The happy-path unwind is covered by `integration_tests/tests/repo.rs::repo_roundtrip_transfers_balances_and_clears_agreement`; following the drill steps keeps the governance artefacts aligned with the runtime guarantees exercised by that test. |
+**桌面时间表。**1. 复制摄入模板，填写元数据块（协议 ID、GAR 票证、
+   保管人、配置哈希），并创建证据目录。
+2. 将每条指令（`initiate`、`margin-call`、`unwind`、替换）暂存在
+   `--output` 模式，散列 JSON，并在每个散列旁边记录批准。
+3. 在暂存后立即发出生命周期证明快照和清单，以便
+   治理审核者可以使用相同的回购协议重新计算摘要。
+4. 镜像受影响帐户的 `RepoAccountEvent::*` SSE 负载并删除
+   `artifacts/finance/repo/<agreement-id>/events.ndjson` 中导出的 NDJSON
+   在归档数据包之前。
+5. 投票通过后，用 GAR 标识符更新 `hashes.txt`，
+   配置哈希和清单校验和，以便理事会可以跟踪部署
+   无需重新运行本地脚本。
 
-**Desk timeline.**
+### 3.5 治理包快速入门
 
-1. Copy the intake template, fill the metadata block (agreement id, GAR ticket,
-   custodian, configuration hash), and create the evidence directory.
-2. Stage every instruction (`initiate`, `margin-call`, `unwind`, substitution) in
-   `--output` mode, hash the JSON, and log the approvals beside each hash.
-3. Emit the lifecycle proof snapshot and manifest immediately after staging so
-   governance reviewers can recompute the digest with the same repo fixtures.
-4. Mirror `RepoAccountEvent::*` SSE payloads for the affected accounts and drop
-   the exported NDJSON in `artifacts/finance/repo/<agreement-id>/events.ndjson`
-   before filing the packet.
-5. Once the vote passes, update `hashes.txt` with the GAR identifier,
-   configuration hash, and manifest checksum so the council can trace the rollout
-   without re-running local scripts.
+路线图 F1 审阅者要求提供一份简明的清单，以便他们在
+组装证据包。每当有回购请求时，请遵循以下顺序
+或政策变化正走向治理：
 
-### 3.5 Governance packet quickstart
-
-Roadmap F1 reviewers asked for a concise checklist they can reference while
-assembling an evidence bundle. Follow the sequence below whenever a repo request
-or policy change is heading to governance:
-
-1. **Export the lifecycle proof artefacts.**
+1. **导出生命周期证明工件。**
    ```bash
    mkdir -p artifacts/finance/repo/<slug>
    REPO_PROOF_SNAPSHOT_OUT=artifacts/finance/repo/<slug>/repo_proof_snapshot.json \
@@ -725,155 +702,151 @@ or policy change is heading to governance:
    cargo test -p iroha_core \
      -- --exact smartcontracts::isi::repo::tests::repo_deterministic_lifecycle_proof_matches_fixture
    ```
-   The exported JSON + digest mirror the checked-in fixtures under
-   `crates/iroha_core/tests/fixtures/`, so reviewers can recompute the lifecycle
-   frame without re-running the entire suite (see §2.7). You can also call
+   导出的 JSON + 摘要镜像了下签入的装置
+   `crates/iroha_core/tests/fixtures/`，以便审阅者可以重新计算生命周期
+   框架而无需重新运行整个套件（请参阅§2.7）。您也可以致电
    `scripts/regen_repo_proof_fixture.sh --bundle-dir artifacts/finance/repo/<slug>`
-   to refresh and copy the same files in one step.
-2. **Stage and hash every instruction.** Generate initiation/margin/unwind
-   payloads with `iroha app repo ... --output`. Capture the SHA-256 for each file
-   (store under `hashes/`) so `docs/examples/finance/repo_governance_packet_template.md`
-   can reference the same bytes the desks reviewed.
-3. **Save ledger/config snapshots.** Export `repo query list` output before/after
-   settlement, dump the `[settlement.repo]` TOML block that will be applied, and
-   mirror the relevant `AccountEvent::Repo(*)` SSE feed into
-   `artifacts/finance/repo/<slug>/events/repo-events.ndjson`. After the GAR
-   passes, capture `/v1/configuration` snapshots per peer (§2.9) and store them
-   under `config/peers/` so the governance packet proves the rollout succeeded.
-4. **Generate the evidence manifest.**
+   一步刷新并复制相同的文件。
+2. **暂存并散列每条指令。** 生成启动/保证金/展开
+   有效负载为 `iroha app repo ... --output`。捕获每个文件的 SHA-256
+   （存储在 `hashes/` 下）所以 `docs/examples/finance/repo_governance_packet_template.md`
+   可以引用办公桌审查的相同字节。
+3. **保存账本/配置快照。** 导出之前/之后的 `repo query list` 输出
+   结算，转储将要应用的 `[settlement.repo]` TOML 块，以及
+   将相关 `AccountEvent::Repo(*)` SSE 镜像到
+   `artifacts/finance/repo/<slug>/events/repo-events.ndjson`。 GAR之后
+   通过，捕获每个对等点的 `/v1/configuration` 快照（第 2.9 节）并存储它们
+   在 `config/peers/` 下，因此治理数据包证明部署成功。
+4. **生成证据清单。**
    ```bash
    python3 scripts/repo_evidence_manifest.py \
      --root artifacts/finance/repo/<slug> \
      --agreement-id <repo-id> \
      --output artifacts/finance/repo/<slug>/manifest.json
    ```
-   Include the manifest hash inside the governance ticket or GAR minutes so
-   auditors can diff the packet without downloading the raw bundle (see §3.2).
-5. **Assemble the packet.** Copy the template from
-   `docs/examples/finance/repo_governance_packet_template.md`, fill the metadata,
-   attach the proof snapshot/digest, manifest, config hash, SSE export, and test
-   logs, then cite the manifest SHA-256 inside the referendum `--notes` field.
-   Store the completed Markdown next to the artefacts so rollbacks inherit the
-   exact evidence you shipped for approval.
+   将清单哈希包含在治理票证或 GAR 分钟内，以便
+   审核员可以在不下载原始包的情况下区分数据包（请参阅第 3.2 节）。
+5. **组装数据包。** 从以下位置复制模板
+   `docs/examples/finance/repo_governance_packet_template.md`，填写元数据，
+   附加证明快照/摘要、清单、配置哈希、SSE 导出和测试
+   日志，然后在全民投票 `--notes` 字段中引用清单 SHA-256。
+   将完成的 Markdown 存储在工件旁边，以便回滚继承
+   您运送以供批准的确切证据。
 
-Running the steps above immediately after staging a repo request means the
-governance packet is ready as soon as the council convenes, avoiding last-minute
-scrambles to recreate hashes or event streams.
+在暂存存储库请求后立即运行上述步骤意味着
+理事会一召开，治理包就已准备就绪，避免了最后一刻
+争先恐后地重新创建哈希值或事件流。
 
-## 4. Tri-Party Custody & Collateral Substitution
-
-- **Custodians:** Passing `--custodian <account>` routes collateral to the
-  custodian vault; runtime enforces account existence and emits role-tagged
-  events so custodians can reconcile (`RepoAccountRole::Custodian`). The state
-  machine rejects agreements whose custodian matches either party.
-- **Collateral substitution:** The unwind leg may deliver a different collateral
-  quantity/series during substitution so long as it is **not less** than the
-  pledged amount *and* the substitution matrix allows the pair; `ReverseRepoIsi`
-  enforces both conditions
-  (`crates/iroha_core/src/smartcontracts/isi/repo.rs:414`–`437`). The integration
-  test suite exercises both the rejection path and a successful substitution
-  roundtrip (`integration_tests/tests/repo.rs:261`–`359`), while the repo unit
-  tests cover the new matrix policy.
-- **ISO 20022 mapping:** When building ISO envelopes or reconciling external
-  systems, reuse the field mapping documented in
+## 4. 三方托管和抵押品替代- **托管人：** 通过 `--custodian <account>` 路线抵押品
+  保管金库；运行时强制帐户存在并发出角色标记
+  事件，以便保管人可以协调 (`RepoAccountRole::Custodian`)。国家
+  机器拒绝托管人与任何一方匹配的协议。
+- **抵押品替代：** 平仓部分可能会提供不同的抵押品
+  替换期间的数量/系列，只要它**不小于**
+  质押金额*和*替换矩阵允许配对； `ReverseRepoIsi`
+  强制执行这两个条件
+  (`crates/iroha_core/src/smartcontracts/isi/repo.rs:414`–`437`)。整合
+  测试套件同时测试拒绝路径和成功替换
+  往返 (`integration_tests/tests/repo.rs:261`–`359`)，而回购单元
+  测试涵盖了新的矩阵策略。
+- **ISO 20022 映射：** 构建 ISO 信封或协调外部时
+  系统，重用记录在
   `docs/source/finance/settlement_iso_mapping.md` (`colr.007`, `sese.023`,
-  `sese.025`) so the Norito payload and ISO confirmations stay in sync.
+  `sese.025`），因此 Norito 有效负载和 ISO 确认保持同步。
 
-## 5. Operational Checklists
+## 5. 操作清单
 
-### Daily pre-open
+### 每日开盘前
 
-1. Export the outstanding agreement set via `iroha app repo query list`.
-2. Compare against treasury inventory and ensure eligible collateral config
-   matches the planned book.
-3. Stage upcoming repos/unwinds with `--output` and collect dual approvals.
+1. 通过`iroha app repo query list`导出未完成的协议。
+2. 与库存库存进行比较并确保合格的抵押品配置
+   与计划的书相符。
+3. 使用 `--output` 暂存即将到来的回购/解除并收集双重批准。
 
-### Intraday monitoring
+### 日内监控
 
-1. Subscribe to `AccountEvent::Repo` for initiator/counterparty/custodian
-   accounts; alert when unexpected initiations occur.
-2. Use `iroha app repo margin --agreement-id ID` (or
-   `RepoAgreementRecord::next_margin_check_after`) hourly to detect cadence
-   drift; trigger `repo margin-call` when `is_due = true`.
+1、发起人/交易对手/托管人订阅`AccountEvent::Repo`
+   账户；当意外启动发生时发出警报。
+2. 使用 `iroha app repo margin --agreement-id ID`（或
+   `RepoAgreementRecord::next_margin_check_after`) 每小时检测一次踏频
+   漂移；当 `is_due = true` 时触发 `repo margin-call`。
 3. Log all margin calls with operator initials and attach the CLI JSON output to
-   the evidence directory.
+   证据目录。
 
-### End-of-day + post-settlement
+### 日终+结算后
 
-1. Re-run `repo query list` and confirm unwound agreements have been removed.
-2. Archive the `RepoAccountEvent::Settled` payloads and cross-check cash/collateral
-   balances via `FindAssets`.
-3. File a drill entry in `ops/drill-log.md` when repo drills or incident tests
-   run; reuse `scripts/telemetry/log_sorafs_drill.sh` conventions for timestamps.
+1. 重新运行 `repo query list` 并确认已解除的协议已被删除。
+2. 归档 `RepoAccountEvent::Settled` 有效负载并交叉检查现金/抵押品
+   通过 `FindAssets` 进行余额。
+3. 当回购演习或事件测试时，在 `ops/drill-log.md` 中归档演习条目
+   跑；重用 `scripts/telemetry/log_sorafs_drill.sh` 时间戳约定。
 
-## 6. Fraud & Rollback Procedures
+## 6. 欺诈和回滚程序
 
-- **Dual control:** Always generate instructions with `--output` and store the
-  JSON for co-signing. Reject single-party submissions at the process level
-  even though the runtime enforces initiator authority.
-- **Tamper-evident logging:** Mirror the `RepoAccountEvent` stream into your
-  SIEM so any forged instruction would be detectable (missing peer signatures).
-- **Rollback:** If a repo must be unwound prematurely, submit `repo unwind`
-  with the same agreement id and attach the `--notes` field in your incident
-  tracker referencing the GAR-approved rollback playbook.
-- **Fraud escalation:** If unauthorised repos appear, export the offending
-  `RepoAccountEvent` payloads, freeze the accounts via governance policy, and
-  notify the council per the repo governance SOP.
+- **双重控制：**始终使用 `--output` 生成指令并存储
+  用于共同签名的 JSON。在流程级别拒绝单方提交
+  即使运行时强制执行发起者权限。
+- **防篡改日志记录：** 将 `RepoAccountEvent` 流镜像到您的
+  SIEM，因此任何伪造的指令都可以被检测到（缺少对等签名）。
+- **回滚：** 如果必须提前解除仓库，请提交 `repo unwind`
+  使用相同的协议 ID 并在您的事件中附加 `--notes` 字段
+  跟踪器引用 GAR 批准的回滚剧本。
+- **欺诈升级：** 如果出现未经授权的存储库，请导出违规内容
+  `RepoAccountEvent` 有效负载，通过治理策略冻结帐户，以及
+  根据回购治理 SOP 通知理事会。
 
-## 7. Reporting & Follow-Up
+## 7. 报告和跟进
 
-### 7.1 Treasury reconciliation & ledger evidence
+### 7.1 财务对账和分类账证据路线图 **F1** 和全球定居点护栏 (roadmap.md#L1975-L1978)
+要求每次回购审查都包括确定性的财务证明。制作一个
+按照下面的清单按季度捆绑每本书。
 
-Roadmap **F1** and the global settlement guardrail (roadmap.md#L1975-L1978)
-require every repo review to include deterministic treasury proofs. Produce a
-quarterly bundle per book by following the checklist below.
+1. **快照余额。** 使用支持的 `FindAssets` 查询
+   `iroha ledger asset list` (`crates/iroha_cli/src/main_shared.rs`) 或
+   `iroha_python` 帮助程序导出 `ih58...` 的异或余额，
+   `ih58...`，以及参与审核的每个台账。商店
+   下的 JSON
+   `artifacts/finance/repo/<period>/treasury_assets.json`并记录git
+   随附的 `README.md` 中的提交/工具链。
+2. **交叉检查账本预测。** 重新运行
+   `sorafs reserve ledger --quote <...> --json-out ...` 并标准化输出
+   通过 `scripts/telemetry/reserve_ledger_digest.py`。将摘要放在旁边
+   资产快照，以便审计人员可以将 XOR 总数与回购协议进行比较
+   无需重放 CLI 即可进行账本投影。
+3. **发布调节说明。** 总结增量
+   `artifacts/finance/repo/<period>/treasury_reconciliation.md` 参考：
+   资产快照哈希、账本摘要哈希以及所涵盖的协议。
+   链接财务治理跟踪器中的注释，以便审阅者可以确认
+   批准回购发行之前的财务覆盖范围。
 
-1. **Snapshot balances.** Use the `FindAssets` query that powers
-   `iroha ledger asset list` (`crates/iroha_cli/src/main_shared.rs`) or the
-   `iroha_python` helper to export XOR balances for `ih58...`,
-   `ih58...`, and every desk account involved in the review. Store
-   the JSON under
-   `artifacts/finance/repo/<period>/treasury_assets.json` and record the git
-   commit/toolchain in the accompanying `README.md`.
-2. **Cross-check ledger projections.** Re-run
-   `sorafs reserve ledger --quote <...> --json-out ...` and normalise the output
-   via `scripts/telemetry/reserve_ledger_digest.py`. Place the digest next to
-   the asset snapshot so auditors can diff the XOR totals against the repo
-   ledger projection without replaying the CLI.
-3. **Publish the reconciliation note.** Summarise deltas in
-   `artifacts/finance/repo/<period>/treasury_reconciliation.md` by referencing:
-   the asset snapshot hash, the ledger digest hash, and the agreements covered.
-   Link the note from the finance governance tracker so reviewers can confirm
-   treasury coverage before approving the repo release.
+### 7.2 演练和回滚演练证据
 
-### 7.2 Drill & rollback rehearsal evidence
+验收标准还要求分阶段回滚和事件演习。每个
+演习或混乱排练必须收集以下文物：
 
-The acceptance criteria also demand staged rollbacks and incident drills. Every
-drill or chaos rehearsal must collect the following artefacts:
+1. `repo_runbook.md` 第 4-5 节检查表，由事故指挥官签署，并且
+   财务委员会。
+2. 排练的 CLI/SDK 日志 (`repo initiate|margin-call|unwind`) 以及
+   已存储刷新的生命周期证明快照和证据清单 (§§2.7–3.2)
+   在 `artifacts/finance/repo/drills/<timestamp>/` 下。
+3. Alertmanager 或寻呼机转录显示注入的信号和
+   确认轨迹。将成绩单放在钻探制品旁边，然后
+   包括使用时的 Alertmanager 静音 ID。
+4. 引用 GAR id、清单哈希和钻取的 `ops/drill-log.md` 条目
+   捆绑路径，以便将来的审核可以跟踪排练，而无需抓取聊天日志。
 
-1. `repo_runbook.md` Sections 4–5 checklist signed by the incident commander and
-   finance council.
-2. CLI/SDK logs for the rehearsal (`repo initiate|margin-call|unwind`) plus the
-   refreshed lifecycle proof snapshot and evidence manifest (§§2.7–3.2) stored
-   under `artifacts/finance/repo/drills/<timestamp>/`.
-3. Alertmanager or pager transcripts showing the injected signals and the
-   acknowledgement trail. Drop the transcript next to the drill artefacts and
-   include the Alertmanager silence ID when one was used.
-4. An `ops/drill-log.md` entry referencing the GAR id, manifest hash, and drill
-   bundle path so future audits can trace rehearsals without scraping chat logs.
+### 7.3 治理跟踪器和文档卫生
 
-### 7.3 Governance tracker & doc hygiene
-
-- Keep this document, `repo_runbook.md`, and the finance governance tracker in
-  lockstep whenever CLI/SDK or runtime behaviour changes; reviewers expect the
-  acceptance table to stay accurate.
-- Attach the full evidence bundle (`agreements.json`, staged instructions, SSE
-  transcripts, config snapshot, reconciliations, drill artefacts, and test
-  logs) to the tracker for every quarterly review.
-- Reference `docs/source/finance/settlement_iso_mapping.md` when coordinating
-  with ISO bridge operators so cross-system reconciliation remains aligned.
+- 将此文档 `repo_runbook.md` 和财务治理跟踪器保存在
+  每当 CLI/SDK 或运行时行为发生变化时，都会保持同步；审稿人期望
+  验收表以保持准确。
+- 附上完整的证据包（`agreements.json`、分阶段说明、SSE
+  成绩单、配置快照、协调、演练工件和测试
+  记录）到跟踪器以进行每个季度的审查。
+- 协调时参考 `docs/source/finance/settlement_iso_mapping.md`
+  与 ISO 桥操作员保持一致，以便跨系统协调保持一致。
 
 By following this guide, operators satisfy the roadmap F1 acceptance bar:
-deterministic proofs are captured, tri-party and substitution flows are
-documented, and governance procedures (dual-control + incident logging) are
-codified in-tree.
+捕获确定性证明，三方和替代流
+记录和治理程序（双重控制+事件记录）
+编码树内。

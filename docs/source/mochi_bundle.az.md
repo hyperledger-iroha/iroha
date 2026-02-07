@@ -7,47 +7,48 @@ generator: scripts/sync_docs_i18n.py
 source_hash: f2dd292b7d15b449f3cec1b79343387a8c23beef3a163367bd5fa8ced8593aae
 source_last_modified: "2025-12-29T18:16:35.986892+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# MOCHI Bundle Tooling
+# MOCHI Bundle Alətləri
 
-MOCHI ships with a lightweight packaging workflow so developers can produce a
-portable desktop bundle without wiring bespoke CI scripts. The `xtask`
-subcommand handles compilation, layout, hashing, and (optionally) archive
-creation in one shot.
+MOCHI yüngül qablaşdırma iş axını ilə göndərilir ki, tərtibatçılar a
+sifarişli CI skriptlərini bağlamadan portativ masa üstü paketi. `xtask`
+alt komanda kompilyasiya, tərtibat, hashing və (istəyə görə) arxivi idarə edir
+bir atışda yaradılış.
 
-## Generating a bundle
+## Paketin yaradılması
 
 ```bash
 cargo xtask mochi-bundle
 ```
 
-By default the command builds release binaries, assembles the bundle under
-`target/mochi-bundle/`, and emits a `mochi-<os>-<arch>-release.tar.gz` archive
-alongside a deterministic `manifest.json`. The manifest lists every file with
-its size and SHA-256 hash so CI pipelines can re-run verification or publish
-attestations. The helper ensures both the `mochi` desktop shell and the
-workspace `kagami` binary are present so genesis generation works out of the
-box.
+Varsayılan olaraq, komanda buraxılış binalarını qurur, paketi altında toplayır
+`target/mochi-bundle/` və `mochi-<os>-<arch>-release.tar.gz` arxivini yayır
+deterministik `manifest.json` ilə yanaşı. Manifest hər faylı siyahıya alır
+onun ölçüsü və SHA-256 hashı beləliklə, CI boru kəmərləri yoxlamanı yenidən həyata keçirə və ya dərc edə bilsin
+attestasiyalar. Köməkçi həm `mochi` masa üstü qabığını, həm də
+iş sahəsi `kagami` binar mövcuddur, buna görə də genezis nəsli
+qutu.
 
-### Flags
+### Bayraqlar
 
-| Flag                | Description                                                                 |
-|---------------------|-----------------------------------------------------------------------------|
-| `--out <dir>`       | Override the output directory (defaults to `target/mochi-bundle`).         |
-| `--profile <name>`  | Build with a specific Cargo profile (e.g., `debug` for tests).              |
-| `--no-archive`      | Skip the `.tar.gz` archive, leaving only the prepared folder.               |
-| `--kagami <path>`   | Use an explicit `kagami` binary instead of building `iroha_kagami`.         |
-| `--matrix <path>`   | Append bundle metadata to a JSON matrix for CI provenance tracking.         |
-| `--smoke`           | Run `mochi --help` from the packaged bundle as a basic execution gate.      |
-| `--stage <dir>`     | Copy the finished bundle (and archive, when present) into a staging folder. |
+| Bayraq | Təsvir |
+|--------------------|---------------------------------------------------------------------------------------|
+| `--out <dir>` | Çıxış kataloqunu ləğv edin (defolt olaraq `target/mochi-bundle`).         |
+| `--profile <name>` | Xüsusi Yük profili ilə qurun (məsələn, testlər üçün `debug`).              |
+| `--no-archive` | Yalnız hazırlanmış qovluğu tərk edərək, `.tar.gz` arxivini atlayın.               |
+| `--kagami <path>` | `iroha_kagami` qurmaq əvəzinə açıq `kagami` binar istifadə edin.         |
+| `--matrix <path>` | CI mənşəyinin izlənməsi üçün paket metadatasını JSON matrisinə əlavə edin.         |
+| `--smoke` | Əsas icra qapısı kimi paketlənmiş paketdən `mochi --help`-i işə salın.      |
+| `--stage <dir>` | Hazır paketi (və mövcud olduqda arxivi) bir quruluş qovluğuna kopyalayın. |
 
-`--stage` is intended for CI pipelines where each build agent uploads its
-artefacts to a shared location. The helper recreates the bundle directory and
-copies the generated archive into the staging directory so publish jobs can
-collect platform-specific outputs without shell scripting.
+`--stage`, hər bir qurma agentinin öz yüklədiyi CI boru kəmərləri üçün nəzərdə tutulub.
+artefaktları paylaşılan yerə. Köməkçi paket kataloqunu yenidən yaradır və
+yaradılan arxivi tərtib qovluğuna kopyalayır ki, işləri dərc edə bilsin
+qabıq skripti olmadan platformaya xas çıxışları toplayın.
 
-The layout inside the bundle is intentionally simple:
+Paketin içərisində düzülmə qəsdən sadədir:
 
 ```
 bin/mochi              # egui desktop executable
@@ -58,11 +59,11 @@ LICENSE                # repository licence
 manifest.json          # generated file manifest with SHA-256 digests
 ```
 
-### Runtime overrides
+### İcra müddəti ləğv edilir
 
-The packaged `mochi` executable accepts command-line overrides for the most
-common supervisor settings. Use these flags instead of editing
-`config/local.toml` when experimenting:
+Paketlənmiş `mochi` icra olunan faylı ən çox əmr satırı ləğvetmələrini qəbul edir
+ümumi nəzarətçi parametrləri. Redaktə etmək əvəzinə bu bayraqlardan istifadə edin
+Təcrübə edərkən `config/local.toml`:
 
 ```
 ./bin/mochi --data-root ./data --profile four-peer-bft \
@@ -70,16 +71,16 @@ common supervisor settings. Use these flags instead of editing
     --irohad /path/to/irohad --kagami /path/to/kagami
 ```
 
-Any CLI value takes precedence over `config/local.toml` entries and environment
-variables.
+İstənilən CLI dəyəri `config/local.toml` girişləri və mühiti üzərində üstünlük təşkil edir
+dəyişənlər.
 
-## Snapshot automation
+## Snapshot avtomatlaşdırılması
 
-`manifest.json` records the generation timestamp, target triple, Cargo profile,
-and the complete file inventory. Pipelines can diff the manifest to detect when
-new artefacts appear, upload the JSON alongside release assets, or audit the
-hashes before promoting a bundle to operators.
+`manifest.json` nəsil vaxt damğasını, hədəf üçlüyü, Yük profilini,
+və tam fayl inventar. Boru kəmərləri nə vaxt olduğunu aşkar etmək üçün manifestləri fərqləndirə bilər
+yeni artefaktlar görünür, buraxılış aktivləri ilə yanaşı JSON-u yükləyin və ya yoxlayın
+paketi operatorlara təqdim etməzdən əvvəl hashlər.
 
-The helper is idempotent: re-running the command updates the manifest and
-overwrites the previous archive, keeping `target/mochi-bundle/` as the single
-source of truth for the latest bundle on the current machine.
+Köməkçi idempotentdir: əmrin təkrar icrası manifest və
+`target/mochi-bundle/`-i tək saxlayaraq əvvəlki arxivin üzərinə yazır
+cari maşındakı ən son paket üçün həqiqət mənbəyi.

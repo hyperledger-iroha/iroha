@@ -9,119 +9,113 @@ source_last_modified: "2025-12-29T18:16:35.983537+00:00"
 translation_last_reviewed: 2026-02-07
 title: Ministry Transparency & Audit Plan
 summary: Implementation plan for roadmap item MINFO-8 covering quarterly transparency reports, privacy guardrails, dashboards, and automation.
+translator: machine-google-reviewed
 ---
 
-# Transparency & Audit Reports (MINFO-8)
+# དྭངས་གསལ་དང་རྩིས་ཞིབ་སྙན་ཞུ་ (MINFO-8)
 
-Roadmap reference: **MINFO-8 — Transparency & audit reports** and **MINFO-8a — Privacy-preserving release process**
+ལམ་སྟོན་གཞི་བསྟུན་: **MINFO-8 — དྭངས་གསལ་དང་རྩིས་ཞིབ་སྙན་ཞུ་** དང་ **MINFO-8a — སྒེར་གསང་སྲུང་སྐྱོབ་བཏོན་ནིའི་བྱ་རིམ་***
 
-The Ministry of Information must publish deterministic transparency artefacts so the community can audit moderation efficacy, appeal handling, and blacklist churn. This document defines the scope, artefacts, privacy controls, and operational workflow required to close MINFO-8 before the Q3 2026 target.
+བརྡ་དོན་ལྷན་ཁག་གིས་ མི་སྡེ་གིས་ དྭངས་གསལ་གྱི་ ཕན་ནུས་དང་ མཐོ་གཏུགས་འབད་ནི་ དེ་ལས་ ཐོ་ཡིག་ནགཔོ་ཚུ་ རྩིས་ཞིབ་འབད་ཚུགས། ཡིག་ཆ་འདི་གིས་ Q32026 དམིགས་གཏད་ཀྱི་ཧེ་མ་ MINFO-8 འདི་ཁ་བསྡམ་ནི་ལུ་དགོ་པའི་ ཁྱབ་ཁོངས་དང་ ཅ་རྙིང་ སྒེར་གསང་ཚད་འཛིན་ དེ་ལས་ ལག་ལེན་གྱི་ ལཱ་གི་རྒྱུན་རིམ་ཚུ་ ངེས་འཛིན་འབདཝ་ཨིན།
 
-## Goals & Deliverables
+## དམིགས་ཡུལ་དང་བསྐྱེལ་འདྲེན་འབད་ནི།
 
-- Produce quarterly transparency packets that summarise AI moderation accuracy, appeal outcomes, denylist churn, volunteer panel activity, and treasury movements tied to MINFO budgets.
-- Ship accompanying raw-data bundles (Norito JSON + CSV) plus dashboards so citizens can slice metrics without waiting for static PDFs.
-- Enforce privacy guarantees (differential privacy + minimum-count rules) and signed attestations before any dataset is published.
-- Record each publication in the governance DAG and SoraFS so historical artefacts remain immutable and independently verifiable.
+- བཅོས་མའི་བློ་རིག་གི་ གཏན་གཏན་དང་ མཐོ་གཏུགས་ཀྱི་གྲུབ་འབྲས་ ཐོ་ཡིག་མེད་པའི་ ཆུམ་དང་ ཁས་བླངས་ཚོགས་ཆུང་གི་ལས་སྣ་ དེ་ལས་ MINFO འཆར་དངུལ་ལུ་ འབྲེལ་མཐུད་འབད་དེ་ཡོད་མི་ དྭངས་གསལ་གྱི་ ཐུམ་སྒྲིལ་ཚུ་ བཀོད།
+- གྲུ་གཟིངས་ནང་ གནས་སྡུད་བསྡུ་སྒྲིག་འབད་མི་ (Norito JSON + CSV) དང་ ཌེཤ་བོརཌི་ཚུ་ མཉམ་སྦྲགས་འབད་དེ་ མི་ཁུངས་ཚུ་གིས་ གནས་སྟངས་ངེས་མེད་ པི་ཌི་ཨེཕ་ཚུ་ བསྒུག་མ་དགོ་པར་ མེ་ཊིག་ཚུ་ བཏོག་བཏང་ཚུགས།
+- སྒེར་གསང་འགན་ལེན་ཚུ་ (ཁྱད་པར་ཅན་གྱི་སྒེར་དོན་ + ཉུང་མཐའི་ལམ་ལུགས་) དང་ གནད་སྡུད་ཆ་ཚན་གང་རུང་ཅིག་ དཔར་བསྐྲུན་མ་འབད་བའི་ཧེ་མར་ མཚན་རྟགས་བཀོད་ཡོད་པའི་ ངོས་འཛིན་ཚུ་ བསྟར་སྤྱོད་འབད།
+- གཞུང་སྐྱོང་ DAG དང་ SoraFS ནང་ དཔེ་སྐྲུན་རེ་རེ་ཐོ་བཀོད་འབད་དེ་ རྒྱལ་རབས་ཀྱི་ཅ་ཆས་ཚུ་ འགྱུར་བཅོས་འགྱོ་མ་ཚུགསཔ་དང་ རང་དབང་ཅན་སྦེ་ བདེན་དཔྱད་འབད་ཚུགསཔ་སྦེ་ ལུས་ཡོདཔ་ཨིན།
 
-### Artefact Matrix
+### ཅ་རྙིང་མེ་རིགས།
 
-| Artefact | Description | Format | Storage |
-|----------|-------------|--------|---------|
-| Transparency summary | Human-readable report with executive summary, highlights, risk items | Markdown → PDF | `docs/source/ministry/reports/<YYYY-Q>.md` → `artifacts/ministry/transparency/<YYYY-Q>/summary.pdf` |
-| Data appendix | Canonical Norito bundle with sanitized tables (`ModerationLedgerBlockV1`, appeals, blacklist deltas) | `.norito` + `.json` | `artifacts/ministry/transparency/<YYYY-Q>/data` (mirrored to SoraFS CID) |
-| Metrics CSVs | Convenience CSV exports for dashboards (AI FP/FN, appeal SLA, denylist churn) | `.csv` | Same directory, hashed & signed |
-| Dashboard snapshot | Grafana JSON export of `ministry_transparency_overview` panels + alert rules | `.json` | `dashboards/grafana/ministry_transparency_overview.json` / `dashboards/alerts/ministry_transparency_rules.yml` |
-| Provenance manifest | Norito manifest tying digests, SoraFS CID, signatures, release timestamp | `.json` + detached signature | `artifacts/ministry/transparency/<YYYY-Q>/manifest.json(.sig)` (also attached to governance vote) |
+| ཅ་ཆས། | འགྲེལ་བཤད་ | རྩ་སྒྲིག་ | གསོག་འཇོག་ |
+|-------------------------------------------------- |
+| དྭངས་གསལ་བཅུད་དོན། | མི་གིས་ལྷག་ཚུགས་པའི་སྙན་ཞུ། བཀོད་ཁྱབ་བཅུད་བསྡུས་དང་ འོད་རྟགས་ ཉེན་ཁའི་རྣམ་གྲངས་ | མརཀ་ཌའོན་ → PDF | `docs/source/ministry/reports/<YYYY-Q>.md` → `artifacts/ministry/transparency/<YYYY-Q>/summary.pdf` |
+| གནད་སྡུད་ཟུར་ཐོ་ | གཙང་སྦྲ་ཅན་གྱི་ཐིག་ཁྲམ་ཚུ་དང་གཅིག་ཁར་ ཀེན་ནི་ཀཱལ་ཨའི་༡༨ཨེན་ཊི་༠༠༠༠༠༠༦ བུནཌལ་ (`ModerationLedgerBlockV1`, མཐོ་གཏུགས་ཚུ་, ཐོ་ཡིག་ནགཔོ་ཌེལ་ཊ་) | `.norito` + `.json` | `artifacts/ministry/transparency/<YYYY-Q>/data` (SoraFS CID ལུ་མར་རོརཔ་) |
+| མེ་ཊིག་སི་ཨེསི་ཝི་ཚུ་ | སྟབས་བདེ་བའི་ CSV ཕྱིར་འདྲེན་ (AI FP/FN, མཐོ་གཏུགས་ SLA, ཐོ་ཡིག་མེད་པའི་ཆུ) | `.csv` | གཅིག་མཚུངས་སྣོད་ཐོ། ཧ་ཤིཌ་དང་མིང་རྟགས་བཀོད་ཡོད། |
+| ཌེཤ་བོརཌི་པར་ལེན་ | Grafana JSON Grafana པེ་ནཱལ་ + དྲན་སྐུལ་ལམ་ལུགས་ཚུ་ ཕྱིར་འདྲེན་འབདཝ་ཨིན། | `.json` | `dashboards/grafana/ministry_transparency_overview.json` / `dashboards/alerts/ministry_transparency_rules.yml` |
+| Provenance གསལ་སྟོན་ | Norito གིས་ བཞུ་བཅུག་མི་ བཞུར་རྫས་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན། SoraFS སི་ཨའི་ཌི་, མཚན་རྟགས་, གསར་བཏོན་འབད་མི་ དུས་ཚོད་མཚོན་རྟགས་ | `.json` + ཁ་ཕྱེ་ཡོད་པའི་མིང་རྟགས་ | `artifacts/ministry/transparency/<YYYY-Q>/manifest.json(.sig)` (གཞུང་སྐྱོང་ཚོགས་རྒྱན་ལུ་ཡང་ མཉམ་སྦྲགས་འབད་ཡོདཔ་) |
 
-## Data Sources & Pipeline
+## གནད་སྡུད་འབྱུང་ཁུངས།
 
-| Source | Feed | Notes |
-|--------|------|-------|
-| Moderation ledger (`docs/source/sorafs_transparency_plan.md`) | Hourly `ModerationLedgerBlockV1` exports stored in CAR files | Already live for SFM-4c; reused for quarterly aggregation. |
-| AI calibration + false-positive rates | `docs/source/sorafs_ai_moderation_plan.md` fixtures + calibration manifests (`docs/examples/ai_moderation_calibration_*.json`) | Metrics aggregated per policy, region, and model profile. |
-| Appeal register | Norito `AppealCaseV1` events emitted by MINFO-7 treasury tooling | Contains stake transfers, panel roster, SLA timers. |
-| Denylist churn | `MinistryDenylistChangeV1` events from the Merkle registry (MINFO-6) | Includes hash families, TTL, emergency canon flags. |
-| Treasury flows | `MinistryTreasuryTransferV1` events (appeal deposits, panel rewards) | Balanced against `finance/mminfo_gl.csv`. |
+| ཡོང་ཁུངས། | ཕིཌ་ | དྲན་ཐོ། |
+|----------------------|------------------------------------------------------
+| འཕྲུལ་ལྟོ་ལེ་ཇར་ (`docs/source/sorafs_transparency_plan.md`) | ཆུ་ཚོད་ `ModerationLedgerBlockV1` ཕྱིར་འདྲེན་ཚུ་ སི་ཨར་ཡིག་སྣོད་ཚུ་ནང་ གསོག་འཇོག་འབད་ཡོདཔ། | ཧེ་མ་ལས་ SFM-4c གི་དོན་ལུ་སྡོད་དགོ། ཟླཝ་གསུམ་གྱི་རིང་ལུ་ ལོག་སྟེ་ལག་ལེན་འཐབ་ཡོདཔ། |
+| AI ཚད་འཇལ་ + རྫུན་མའི་གནས་ཚད། | `docs/source/sorafs_ai_moderation_plan.md` སྒྲིག་བཀོད་ཚུ་ + ཚད་འཇལ་ཚུ་ མངོན་གསལ་འབདཝ་ཨིན་ (`docs/examples/ai_moderation_calibration_*.json`) | མེ་ཊིགསི་འདི་ སྲིད་བྱུས་དང་ ལུང་ཕྱོགས་ དེ་ལས་ དཔེ་སྟོན་གསལ་སྡུད་རེ་རེ་ལུ་ བསྡུ་སྒྲིག་འབད་ཡོདཔ་ཨིན། |
+| མཐོ་གཏུགས་ཐོ་འགོད། | Norito Grafana བྱུང་རིམ་ཚུ་ MINFO-7 བང་མཛོད་ཀྱི་ལག་ཆ་གིས་ བཏོན་ཡོདཔ་ཨིན། | བཀོད་སྒྲིག་སྤོ་བཤུད་དང་ པེ་ནཱལ་རོ་སི་ཊར་ ཨེསི་ཨེལ་ཨེ་དུས་ཚོད་ཚུ་ཡོདཔ་ཨིན། |
+| ཌི་ནི་ལིསི་ ཆུན | མེར་ཀལ་གྱི་ཐོ་བཀོད་ལས་ `MinistryDenylistChangeV1` ལས་རིམ་ཚུ་ (MINFO-6) | ཧེཤ་བཟའ་ཚང་ ཊི་ཊི་ཨེལ་ གློ་བུར་གྱི་ཁྲིམས་ལུགས་དར་ཆ་ཚུ་ཚུདཔ་ཨིན། |
+| དངུལ་རྩིས་རྒྱུན་བཞུགས། | `MinistryTreasuryTransferV1` བྱུང་རིམ་ (མཐོ་གཏུགས་དངུལ་བཙུགས་, པེ་ནཱལ་ཁེ་འབབ་) | `finance/mminfo_gl.csv` དང་མཐུན་མོ། |གློ་བུར་གྱི་ཁྲིམས་གཞུང་དང་ ཊི་ཊི་ཨེལ་ཚད་གཞི་ དེ་ལས་ བསྐྱར་ཞིབ་དགོས་མཁོ་ཚུ་ ད་ལྟོ་ གནས་ཏེ་ཡོདཔ་ཨིན།
+[`docs/source/ministry/emergency_canon_policy.md`](emergency_canon_policy.md),
+ཆུན་མེ་ཊིགསི་གིས་ རིམ་པ་ (`standard`, `emergency`, `permanent`), canon id,
+དང་ བསྐྱར་ཞིབ་ཀྱི་དུས་ཚོད་འདི་ Torii མངོན་གསལ་གྱི་དུས་ཚོད་ལུ་ བསྟར་སྤྱོད་འབདཝ་ཨིན།
 
-Emergency canon governance, TTL limits, and review requirements now live in
-[`docs/source/ministry/emergency_canon_policy.md`](emergency_canon_policy.md), ensuring
-that the churn metrics capture the tier (`standard`, `emergency`, `permanent`), canon id,
-and review deadlines that Torii enforces at load time.
+ལས་སྦྱོར་གྱི་གནས་རིམ་ཚུ།
+1. **Ineses** བྱུང་རིམ་ཚུ་ `ministry_transparency_ingest` ནང་ལུ་ (Rust ཞབས་ཏོག) མཚན་མོ་ བློ་འགྱོད་ཅན།
+2. **བསྡོམས་རྩིས་** སྤྱི་ཟླ་རེ་ནང་ `ministry_transparency_builder` དང་མཉམ་དུ། སྒེར་དོན་ཚགས་མ་ཚུ་གི་ཧེ་མར་ Norito གནད་སྡུད་ཟུར་ཐོ་ ཟུར་ཐིག་ཚུ་ པ་རེ་རེ་ལུ་ ཐིག་ཁྲམ་ཚུ་ བཙུགསཔ་ཨིན།
+3. **Sanitize** ཚད་གཞི་ཚུ་ `cargo xtask ministry-transparency sanitize` (ཡང་ན་ `scripts/ministry/dp_sanitizer.py`) བརྒྱུད་དེ་ མེ་ཊིག་ཌེ་ཊ་དང་གཅིག་ཁར་ CSV/JSON བཤུད་ཚུ་ བཏོན་གཏང་།
+4. **ཐུམ་སྒྲིལ་** ཅ་ཆས་ཚུ་, `ministry_release_signer` དང་ SoraFS + གཞུང་སྐྱོང་ DAG ལུ་བཙུགས་དགོ།
 
-Processing stages:
-1. **Ingest** raw events into `ministry_transparency_ingest` (Rust service mirroring the transparency ledger ingestor). Runs nightly, idempotent.
-2. **Aggregate** per quarter with `ministry_transparency_builder`. Outputs the Norito data appendix plus per-metric tables before privacy filters.
-3. **Sanitize** metrics via `cargo xtask ministry-transparency sanitize` (or `scripts/ministry/dp_sanitizer.py`) and emit CSV/JSON slices with metadata.
-4. **Package** artefacts, sign them with `ministry_release_signer`, and upload to SoraFS + governance DAG.
+## 2026-Q3 དཔྱད་གཞིའི་གསལ་བཤད།
 
-## 2026-Q3 Reference Release
+- འགོ་འབྱེད་འབད་མི་ གཞུང་སྐྱོང་སྡེ་ཚན་ (༢༠༢༦-Q3) འདི་ སྤྱི་ལོ་༢༠༢༦-༡༠‐༠༧ ལུ་ Grafana ལས་ བཏོན་ཡོདཔ་ཨིན། `artifacts/ministry/transparency/2026-Q3/` ནང་ལུ་ ངོ་མ་སྦེ་རང་ Norito, Norito, Norito, `checksums.sha256`, Grafana, དང་ Grafana—I SoraFS CID `7f4c2d81a6b13579ccddeeff00112233` ལུ་ མེ་ལོང་བཙུགས་ཡོདཔ་ཨིན།
+- དཔེ་སྐྲུན་གྱི་ཁ་གསལ་དང་ མེ་ཊིགསི་ཐིག་ཁྲམ་ དེ་ལས་ གནང་བ་ཚུ་ `docs/source/ministry/reports/2026-Q3.md` ནང་ བཟུང་ཡོདཔ་ད་ ད་ལྟོ་ Q3 སྒོ་སྒྲིག་བསྐྱར་ཞིབ་འབད་མི་ རྩིས་ཞིབ་པ་ཚུ་གི་དོན་ལུ་ ཁྲིམས་མཐུན་གྱི་ གཞི་བསྟུན་སྦེ་ ལཱ་འབདཝ་ཨིན།
+- CI གིས་ `ci/check_ministry_transparency.sh` / `make check-ministry-transparency` འདི་ ངལ་གསོ་མ་འབད་བའི་ཧེ་མ་ ལག་ལེན་འཐབ་ཨིན།
 
-- The inaugural governance-gated bundle (2026-Q3) was produced on 2026‑10‑07 via `make check-ministry-transparency`. Artefacts live in `artifacts/ministry/transparency/2026-Q3/`—including `sanitized_metrics.json`, `dp_report.json`, `summary.md`, `checksums.sha256`, `transparency_manifest.json`, and `transparency_release_action.json`—and were mirrored to SoraFS CID `7f4c2d81a6b13579ccddeeff00112233`.
-- Publication details, metrics tables, and approvals are captured in `docs/source/ministry/reports/2026-Q3.md`, which now serves as the canonical reference for auditors reviewing the Q3 window.
-- CI applies `ci/check_ministry_transparency.sh` / `make check-ministry-transparency` before releases leave staging, verifying the artefact digests, Grafana/alert hashes, and manifest metadata so every future quarter follows the same evidence trail.
+## མེ་ཊིགསི་དང་ ཌེཤ་བོརཌི་ཚུ།
 
-## Metrics & Dashboards
+འོག་གི་པེ་ནཱལ་ཚུ་ ཕྱིར་བཏོན་འབདཝ་ཨིན།
 
-The Grafana dashboard (`dashboards/grafana/ministry_transparency_overview.json`) exposes the following panels:
+- བཅོས་མའི་བློ་རིག་གི་ གཏན་གཏན་: དཔེ་ཚད་རེ་ལུ་ FP/FN ཚད་དང་ ཌིཕཊ་དང་ ཚད་འཇལ་དམིགས་གཏད་ དེ་ལས་ དྲན་སྐུལ་ཚད་གཞི་ `docs/source/sorafs/reports/ai_moderation_calibration_*.md` ལུ་ བསྡམ་བཞག་ཡོདཔ་ཨིན།
+- མཐོ་གཏུགས་ཀྱི་མི་ཚེ་འཁོར་རིམ་: ཞུ་ཡིག་ ཨེསི་ཨེལ་ཨེ་ བསྟར་སྤྱོད་ ཕྱིར་ལོག་ བུན་གཡར་གྱི་ མེ་རྐྱེན་ ཊི་ཡར་ རྒྱབ་ལོག་།
+- ཌི་ནི་ལིཀ་ཆརན: ཁ་སྐོང་/བཏོན་གཏང་ནི་ ཧེཤ་བཟའ་ཚང་རེ་ལུ་ ཊི་ཊི་ཨེལ་དུས་ཡུན་ཚང་བ། གློ་བུར་གྱི་འབོད་བརྡ་ཚུ།
+- དྭངས་གསལ་གྱི་ བརྡ་དོན་དང་ སྣ་མང་ སྐད་ཡིག་རེ་རེ་ལུ་ ཞུ་ཡིག་ སྐྱེད་ཀྱི་ འཁྲུག་རྩོད་ དཔར་བསྐྲུན་གྱི་ ལག་ཁ། འདྲ་མཉམ་གྱི་ས་སྒོ་ཚུ་ `docs/source/ministry/volunteer_brief_template.md` ནང་ལུ་གསལ་བཀོད་འབད་དེ་ཡོདཔ་ལས་ བདེན་ཁུངས་ཐིག་ཁྲམ་དང་ བར་མཚམས་ངོ་རྟགས་ཚུ་ འཕྲུལ་ཆས་ལྷག་ཚུགསཔ་སྦེ་ངེས་གཏན་བཟོཝ་ཨིན།
+- དངུལ་ཁང་གི་ལྷག་ལུས་: དངུལ་བཙུགས་དང་ གླ་ཆ་ ཁྱད་འཕགས་ཅན་གྱི་འགན་འཁྲི་ (feeds MINFO-7)།
 
-- AI moderation accuracy: per-model FP/FN rate, drift vs calibration target, and alert thresholds tied to `docs/source/sorafs/reports/ai_moderation_calibration_*.md`.
-- Appeal lifecycle: submissions, SLA compliance, reversals, bond burns, per-tier backlog.
-- Denylist churn: additions/removals per hash family, TTL expirations, emergency canon invocations.
-- Volunteer briefs & panel diversity: submissions per language, conflict-of-interest disclosures, publication lag. Balanced brief fields are specified in `docs/source/ministry/volunteer_brief_template.md`, ensuring fact tables and moderation tags are machine readable.
-- Treasury balances: deposits, payouts, outstanding liability (feeds MINFO-7).
+ཉེན་བརྡ་ལམ་ལུགས་ (`dashboards/alerts/ministry_transparency_rules.yml` ནང་ གསང་སྒྲིག) ཁྱབ་ཁོངས།
+- FP/FN ཐ་དད་ >25% དང་ ཚད་འཇལ་གཞི་རྟེན།
+- མཐོ་གཏུགས་ཨེསི་ཨེལ་ཨེ་གི་ཚད་གཞི་ >༥% རེ།
+- ཛ་དྲག་གི་ ཀེ་ནོན་ ཊི་ཊི་ཨེལ་ཚུ་ སྲིད་བྱུས་ལས་ རྙིངམ།
+- དཔེ་སྐྲུན་འབད་ནི། > སྤྱི་ཟླ་༤ གི་ཤུལ་ལས་ ཉིནམ་༡༤ གི་རྒྱབ་ལས་ཨིན།
 
-Alert rules (codified in `dashboards/alerts/ministry_transparency_rules.yml`) cover:
-- FP/FN deviation >25% versus calibration baseline.
-- Appeal SLA miss rate >5% per quarter.
-- Emergency canon TTLs older than policy.
-- Publication lag >14 days after quarter close.
-
-## Privacy & Release Guardrails (MINFO-8a)
-
-| Metric class | Mechanism | Parameters | Additional guards |
+## སྒེར་གསང་དང་ བཏོན་གཏང་ གཱར་ཌི་རེལ་ (MINFO-8a)| མེ་ཊིག་སྡེ་ཚན། | ཐབས་ལམ། | ཚད་བཟུང་ | ཁ་སྐོང་སྲུང་སྐྱོབ་པ་ |
 |--------------|-----------|------------|-------------------|
-| Counts (appeals, blacklist changes, volunteer briefs) | Laplace noise | ε = 0.75 per quarter, δ = 1e-6 | Suppress buckets with post-noise value <5; clip contributions to 1 per actor per quarter. |
-| AI accuracy | Gaussian noise on numerator/denominator | ε = 0.5, δ = 1e-6 | Release only when sanitized sample count ≥ 50 (the `min_accuracy_samples` floor) and publish the confidence interval. |
-| Treasury flows | No noise (already public on-chain) | — | Mask account names except treasury IDs; include Merkle proofs. |
+| གྱངས་ཁ་ (མཐོ་གཏུགས། ལེ་པེསི་སྐད་ཆ། | ε=0.75 བཞི་རེའི་, δ=1e-6 | སྐད་བརྡ་རྗེས་མའི་གནས་གོང་ <5 དང་བཅས་པའི་ བཱ་ཀེཊི་ཚུ་ མར་ཕབ་འབད། བཞི་པ་རེ་རེའི་འཁྲབ་རྩེདཔ་རེ་ལུ་ ༡ ལུ་ བརྙན་འཕྲིན། |
+| བཅོས་མའི་བློ་རིག་གི་ཏན་ཏན་ | གཱའུ་སི་ཡན་གྱི་སྐད་སྒྲ་ཨང་རྟགས་/བགོ་བརྡའི་ཐོག་ལུ་ | ε=0.5, δ=1e-6 | གཙང་སྦྲ་ཅན་གྱི་དཔེ་ཚད་གྱངས་ཁ་ ≥50 (`min_accuracy_samples` ཐིག) དང་ བློ་གཏད་བར་མཚམས་དཔར་བསྐྲུན་འབད་བའི་སྐབས་རྐྱངམ་ཅིག་ བཏོན་གཏང་། |
+| དངུལ་རྩིས་རྒྱུན་བཞུགས། | སྐད་ཅོར་མེད་ (ཧེ་མ་ལས་ མི་མང་གི་རིམ་སྒྲིག་) | — | དངུལ་ཁང་གི་ཨའི་ཌི་ཚུ་མ་གཏོགས་ མགོ་རྒྱན་རྩིས་ཁྲའི་མིང་ཚུ། Merkle གི་བདེན་ཁུངས་ཚུ་ཚུདཔ་ཨིན། |
 
-Release requirements:
-- Differential privacy reports include the epsilon/delta ledger and RNG seed commitment (`blake3(seed)`).
-- Sensitive examples (evidence hashes) redacted unless already in public Merkle receipts.
-- Redaction log appended to the summary describing all removed fields and justification.
+དགོས་མཁོའི་དགོས་མཁོ།
+- ཁྱད་པར་ཅན་གྱི་སྒེར་གྱི་སྙན་ཞུ་ནང་ epsilon/delta ledger དང་ RNG སོན་གྱི་ཁས་བླངས་ (`blake3(seed)`) ཚུ་ཚུདཔ་ཨིན།
+- མི་མང་མར་ཀལ་གྱི་འོང་འབབ་ནང་ ཧེ་མ་ལས་མ་ཚུད་ཚུན་ཚོད་ ཚོར་ཤུགས་ཅན་གྱི་དཔེ་ (གསལ་སྟོན་གྱི་ཧེ་ཤེ) ཚུ་ བསྒྱུར་བཅོས་འབད་ཡོདཔ་ཨིན།
+- རྩ་བསྐྲད་གཏང་ཡོད་པའི་ས་སྒོ་ཚུ་ཆ་མཉམ་དང་བདེན་དཔྱད་འབད་ནི་ཚུ་ཆ་མཉམ་འགྲེལ་བཤད་རྐྱབ་མི་ བཅུད་དོན་དྲན་ཐོ།
 
-## Publishing Workflow & Timeline
+## ལས་ཀའི་རྒྱུན་དང་དུས་ཚོད།
 
-| T‑Window | Task | Owner(s) | Evidence |
-|----------|------|----------|----------|
-| T + 3 d after quarter close | Freeze raw exports, trigger aggregation job | Ministry Observability TL | `ministry_transparency_ingest.log`, pipeline job ID |
-| T + 7 d | Review raw metrics, run DP sanitizer dry run | Data Trust team | Sanitizer report (`artifacts/.../dp_report.json`) |
-| T + 10 d | Draft summary + data appendix | Docs/DevRel + Policy analyst | `docs/source/ministry/reports/<YYYY-Q>.md` |
-| T + 12 d | Sign artefacts, produce manifest, upload to SoraFS | Ops / Governance Secretariat | `manifest.json(.sig)`, SoraFS CID |
-| T + 14 d | Publish dashboards + alerts, post governance announcement | Observability + Comms | Grafana export, alert rule hash, governance vote link |
+| T‐ཝིན་ཌོ་ | ལས་ཀ་ | ཇོ་བདག་(ཚུ་) | སྒྲུབ་བྱེད་ |
+|------------------------------------------------ |
+| བཞི་དཔྱ་ཁ་བསྡམས་རྗེས་ T+3d | ཕྱིར་གཏོང་ངོ་མ་ཚུ་ བཅོ་ཁ་རྐྱབ་ནི་དང་ བསྡོམས་རྩིས་ལཱ་ འགོ་བཙུགས་ནི་ | ལྷན་ཁག་བལྟ་བརྟོག་ TL | `ministry_transparency_ingest.log`, མདོང་ལམ་ལས་ཀ་ ID |
+| T+7d | བསྐྱར་ཞིབ། ཌི་པི་ གཙང་སྦྲ་འཕྲོད་བསྟེན་གྱི་ སྐམ་བང་རྒྱུག་ | གནས་སྡུད་བློ་གཏད་སྡེ་ཚན་ | གཙང་སྦྲ་འཕྲོད་བསྟེན་གྱི་སྙན་ཞུ། (`artifacts/.../dp_report.json`) |
+| T+10d | བཅུད་བསྡུས་ + གནད་སྡུད་ཟུར་ཐོ་ | Docs/DevRel + སྲིད་བྱུས་དབྱེ་དཔྱད་པ། | `docs/source/ministry/reports/<YYYY-Q>.md` |
+| T+12d | རྟགས་མཚན་གྱི་ཅ་རྙིང་། གསལ་སྟོན་བཏོནམ་ད་ SoraFS ལུ་སྐྱེལ་བཙུགས་འབད། | Ops / གཞུང་སྐྱོང་དྲུང་ཆེ། | `manifest.json(.sig)`, SoraFS སི་ཨའི་ཌི་ |
+| T+14d | ཌེཤ་བོརཌ་ཚུ་ དཔར་བསྐྲུན་འབད་ནི། + དྲན་སྐུལ་ཚུ་ ཤུལ་མམ་གྱི་ གཞུང་སྐྱོང་གསལ་བསྒྲགས། | བལྟ་རྟོག་འབད་ཚུགསཔ་ + བསམ་འཆར། | Grafana ཕྱིར་གཏོང་།, ཉེན་བརྡའི་ཁྲིམས་ལུགས་ཧ་ཤི་, གཞུང་སྐྱོང་ཚོགས་རྒྱན་མཐུད་ལམ་ |
 
-Each release must be approved by:
-1. Ministry Observability TL (data integrity)
-2. Governance Council liaison (policy)
-3. Docs/Comms lead (public wording)
+གསར་བཏོན་རེ་རེ་བཞིན་དུ་ ཆ་འཇོག་འབད་དགོ།
+1. ལྷན་ཁང་བལྟ་རྟོག་ TL (གནས་སྡུད་མཐུན་རྐྱེན།)
+2. གཞུང་སྐྱོང་ལྷན་ཚོགས་ཀྱི་འབྲེལ་གཏུགས་ (སྲིད་བྱུས)།
+3. Docs/Comms ལིས་ (མི་མང་ཚིག་འཆར།)
 
-## Automation & Evidence Storage
+## རང་འཇུག དང་སྒྲུབ་བྱེད་ཀྱི་གསོག་འཇོག་།- `cargo xtask ministry-transparency ingest` ལག་ལེན་འཐབ། དཔར་བསྐྲུན་མ་འབད་བའི་ཧེ་མ་ ཌེཤ་བོརཌི་མེ་ཊིགསི་དང་ མཚན་རྟགས་བཀོད་ཡོད་པའི་གསལ་སྟོན་ཚུ་ བཏོན་གཏང་ནི་ལུ་ `cargo xtask ministry-transparency build` དང་ཅིག་ཁར་ རྗེས་སུ་འཇུག་དགོ།
+- སྡེ་ཚན་དམརཔོ་གི་མཐུད་ལམ་: གཅིག་ཡང་ན་མངམ་ `--red-team-report docs/source/ministry/reports/<YYYY-MM>-mod-red-team-<scenario>.md` ཡིག་སྣོད་ཚུ་ དྭངས་གསལ་གྱི་པར་རིས་དང་ གཙང་སྦྲ་ཅན་གྱི་མེ་ཊིག་ཚུ་གིས་ དམག་སྦྱོང་འབད་མི་ IDs དང་ གནས་སྟངས་དབྱེ་རིམ་ སྒྲུབ་བྱེད་བཱན་ཌལ་ལམ་ཚུ་ དེ་ལས་ ཌེཤ་བོརཌི་ཨེསི་ཨེཆ་ཨེ་ཚུ་ ལེག་ཊར་/མཐོ་གཏུགས་/མ་བདེན་པའི་གནས་སྡུད་ཀྱི་མཉམ་དུ་འབག་འོང་། འདི་གིས་ MINFO-9 གི་སྦྱོང་བརྡར་འདི་ ལག་ཐོག་ལས་ཞུན་དག་འབད་མ་བཏུབ་པའི་ དྭངས་གསལ་སྦུང་ཚན་ག་རའི་ནང་ལུ་ བཀྲམ་སྟོན་འབདཝ་ཨིན།
+- ཁས་བླངས་པ་ཚུ་ `docs/source/ministry/volunteer_brief_template.md` ལུ་རྗེས་སུ་འཇུག་དགོཔ་ཨིན། གོ་རིམ་འདི་གིས་ དངོས་པོ་དེ་ཚུ་གི་ JSON ཨེ་རེ་དང་ རང་བཞིན་གྱིས་ `moderation.off_topic` ཐོ་བཀོད་ཚུ་ཚགས་མ་ཚུ་ ཚགས་མ་འབདཝ་ཨིནམ་དང་ གསལ་བསྒྲགས་ཚུ་ བསྟར་སྤྱོད་འབད་དེ་ བདེན་ཁུངས་ཐིག་ཁྲམ་ཁྱབ་ཚད་ཚུ་ ཐོ་བཀོད་འབད་དེ་ ཌེཤ་བོརཌི་ཚུ་གིས་ བརླག་སྟོར་ཤོར་བའི་ ལུང་འདྲེན་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན།
+- ཁ་སྐོང་འཕྲུལ་ཆས་ཚུ་ `scripts/ministry/` གི་འོག་ལུ་ཡོདཔ་ཨིན། `dp_sanitizer.py` གིས་ `cargo xtask ministry-transparency sanitize` བརྡ་བཀོད་འདི་ བཀབ་ཡོདཔ་ད་ `transparency_release.py` གིས་ ད་ལྟོ་ ཐུམ་སྒྲིལ་ཚུ་ ཅ་ཆས་ཚུ་ བཀོད་སྒྲིག་འབད་དེ་ SoraFS CID འདི་ `sorafs_cli car pack|proof verify` བཅུད་བསྡུས་ (ཡང་ན་ གསལ་རི་རི་ཅིག་ གསལ་རི་རི་སྦེ་ བསྡུ་སྒྲིག་འབདཝ་ཨིན། `--sorafs-cid`), and writes both `transparency_manifest.json` and `transparency_release_action.json` (a `TransparencyReleaseV1` governance payload capturing the manifest digest, SoraFS CID, and dashboards git SHA). `--governance-dir <path>` ལས་ `transparency_release.py` ལས་ `cargo xtask ministry-transparency anchor --action artifacts/.../transparency_release_action.json --governance-dir <path>`) འདི་ Norito གི་དངུལ་སྤྲོད་ལེན་འབད་དེ་ དཔར་བསྐྲུན་མ་འབད་བའི་ཧེ་མ་ Norito གི་དངུལ་སྤྲོད་ལེན་འདི་ བཀོ་བཞག་དགོ། དར་ཆ་འདི་གིས་ `MinistryTransparencyHeadUpdateV1` གི་ཞུ་བ་ `<governance-dir>/publisher/head_requests/ministry_transparency/` གི་འོག་ལུ་ཡང་ བཏོནམ་ཨིན། IPNS འདི་ དུས་ཚོད་གཅིག་ཁར་ དཔར་བསྐྲུན་འབད་དགོཔ་འཐོན་པའི་སྐབས་ IPNS འདི་ དཔར་བསྐྲུན་འབད་དགོཔ་འཐོན་པའི་སྐབས་ IPNS འདི་ འཕྲལ་མགྱོགས་རང་ `publisher_head_updater.py` བརྒྱུད་དེ་ ཞུ་བ་འདི་ དེ་འཕྲོ་ལས་ ལས་སྦྱོར་འབད་ནི་ལུ་ `--auto-head-update` བྱིན་དགོ། དེ་མེན་པ་ཅིན་ `scripts/ministry/publisher_head_updater.py --governance-dir <path>` འདི་གི་ཤུལ་ལས་ ༼དགོས་མཁོ་ཡོད་པ་ཅིན་ ཊེམ་པེལེཊི་ཅོག་འཐདཔ་དང་གཅིག་ཁར་༽ གཡོག་བཀོལ་ནི་དང་ `publisher/ipns_heads/<key>.json` དུས་མཐུན་བཟོ་ནི་དང་ དུས་མཐུན་བཟོ་ནི་ དེ་ལས་ `head_requests/ministry_transparency/processed/` གི་འོག་ལུ་ ལས་སྦྱོར་འབད་ཡོད་པའི་ JSON གཏན་མཛོད་འབད་ནི།
+- གསར་བཏོན་ལྡེ་མིག་གིས་ མིང་རྟགས་བཀོད་ཡོད་པའི་ `artifacts/ministry/transparency/<YYYY-Q>/` ཡིག་སྣོད་ཅིག་དང་གཅིག་ཁར་ `artifacts/ministry/transparency/<YYYY-Q>/` གི་འོག་ལུ་ གསོག་འཇོག་འབད་ཡོདཔ། ད་རེས་ ཤིང་འདི་གིས་ `artifacts/ministry/transparency/2026-Q3/` ལུ་ གཞི་བསྟུན་བཱན་ཌལ་ཅིག་འབག་སྟེ་ཡོདཔ་ཨིན། ༼གཙང་སྦྲ་འཕྲོད་བསྟེན་གྱི་མེ་ཊིགསི་ བཅུད་བསྡུས་དང་ གསལ་སྟོན་ གསལ་སྟོན་དང་ གཞུང་སྐྱོང་བྱ་བ་༽ དེ་འབདཝ་ལས་ བཟོ་རིག་པ་ཚུ་གིས་ ལག་ཆས་ཚུ་ བརྟག་དཔྱད་འབད་ཚུགས་ནི་ཨིནམ་དང་ `scripts/ministry/check_transparency_release.py` གིས་ ཌའི་ཇེསཊ་/སོ་ཊ་ཌ་ཊ་འདི་ ས་གནས་ཀྱི་ནང་ལུ་ བདེན་དཔྱད་འབདཝ་ཨིན་རུང་ `ci/check_ministry_transparency.sh` གིས་ བདེན་དཔྱད་ཀྱི་ བདེན་དཔྱད་འབད་མ་ཚར་བའི་ཧེ་མ་ སི་ཨའི་ བདེན་དཔྱད་འབད་ཚུགསཔ་ཨིན། ད་ལྟོ་ཞིབ་དཔྱད་འབད་མི་གིས་ ཡིག་ཐོག་ལུ་བཀོད་ཡོད་པའི་DP འཆར་དངུལ་ (གྱངས་ཁ་ཚུ་གི་དོན་ལུ་ ε≤༠.༥, གཏན་གཏན་སྦེ་ δ≤1e−6) དང་ `min_accuracy_samples` ཡང་ན་ བཀག་འཛིན་ཚད་གཞི་ ཌིཕརཆ་ ཡང་ན་ བཀག་ཆ་མེད་པའི་ཚད་གཞི་ ཌིཕརཕཊི་འབད་བའི་སྐབས་ བཟོ་བསྐྲུན་འདི་ འཐུས་ཤོར་བྱུངམ་ཨིན། འགྲུལ་ལམ་གྱི་ས་ཁྲ་ (MINFO‐‐‐‐18) དང་ CI: སྒེར་དོན་ཚད་གཞི་ཚུ་ འགྱུར་བཅོས་འགྱོ་བ་ཅིན་ གོང་འཁོད་ཀྱི་ཐིག་ཁྲམ་གཉིས་ཆ་ར་ གཅིག་ཁར་ བདེ་སྒྲིག་འབད།- གཞུང་སྐྱོང་ཨེན་ཀོར་: `TransparencyReleaseV1` བྱ་བ་གསར་བསྐྲུན་འབདཝ་ཨིན་ གསལ་སྟོན་འཇུ་བྱེད་ SoraFS CID དང་ dashboard git SHA (`iroha_data_model::ministry::TransparencyReleaseV1`) གིས་ ཀེན་ནོ་ནིལ་པེ་ལོཌི་འདི་ངེས་འཛིན་འབདཝ་ཨིན།
 
-- Use `cargo xtask ministry-transparency ingest` to build the quarterly snapshot from the raw feeds (ledger, appeals, denylist, treasury, volunteer). Follow up with `cargo xtask ministry-transparency build` to emit the dashboard metrics JSON plus the signed manifest before publishing.
-- Red-team linkage: pass one or more `--red-team-report docs/source/ministry/reports/<YYYY-MM>-mod-red-team-<scenario>.md` files to the ingest step so the transparency snapshot and sanitized metrics carry drill IDs, scenario classes, evidence bundle paths, and dashboard SHAs alongside the ledger/appeal/denylist data. This keeps MINFO-9 drill cadence reflected in every transparency packet without manual edits.
-- Volunteer submissions must follow `docs/source/ministry/volunteer_brief_template.md` (example: `docs/examples/ministry/volunteer_brief_template.json`). The ingest step expects a JSON array of those objects, automatically filters `moderation.off_topic` entries, enforces disclosure attestations, and records fact-table coverage so dashboards can highlight missing citations.
-- Additional automation lives under `scripts/ministry/`. `dp_sanitizer.py` wraps the `cargo xtask ministry-transparency sanitize` command, while `transparency_release.py` (added alongside the provenance tooling) now packages artefacts, derives the SoraFS CID from the `sorafs_cli car pack|proof verify` summary (or an explicit `--sorafs-cid`), and writes both `transparency_manifest.json` and `transparency_release_action.json` (a `TransparencyReleaseV1` governance payload capturing the manifest digest, SoraFS CID, and dashboards git SHA). Pass `--governance-dir <path>` to `transparency_release.py` (or run `cargo xtask ministry-transparency anchor --action artifacts/.../transparency_release_action.json --governance-dir <path>`) to encode the Norito payload and drop it (plus the JSON summary) into the governance DAG directory before publishing. The same flag also emits a `MinistryTransparencyHeadUpdateV1` request under `<governance-dir>/publisher/head_requests/ministry_transparency/`, referencing the quarter, SoraFS CID, manifest paths, and IPNS key alias (overridable via `--ipns-key`). Provide `--auto-head-update` to process that request immediately via `publisher_head_updater.py`, optionally passing `--head-update-ipns-template '/usr/local/bin/ipfs name publish --key {ipns_key} /ipfs/{cid}'` when IPNS needs to be published at the same time. Otherwise, run `scripts/ministry/publisher_head_updater.py --governance-dir <path>` later (with the same template if needed) to drain the queue, append `publisher/head_updates.log`, update `publisher/ipns_heads/<key>.json`, and archive the processed JSON under `head_requests/ministry_transparency/processed/`.
-- Artefacts stored under `artifacts/ministry/transparency/<YYYY-Q>/` with a `checksums.sha256` file signed by the release key. The tree now carries a reference bundle at `artifacts/ministry/transparency/2026-Q3/` (sanitized metrics, DP report, summary, manifest, governance action) so engineers can test the tooling offline, and `scripts/ministry/check_transparency_release.py` verifies the digests/quarter metadata locally while `ci/check_ministry_transparency.sh` runs the same validation in CI before evidence is uploaded. The checker now enforces the documented DP budgets (ε≤0.75 for counts, ε≤0.5 for accuracy, δ≤1e−6) and fails the build whenever `min_accuracy_samples` or the suppression threshold drift, or when a bucket leaks a value below those floors without being suppressed. Treat the script as the contract between the roadmap (MINFO‑8) and CI: adjust both the table above and the checker together if the privacy parameters ever change.
-- Governance anchor: create `TransparencyReleaseV1` action referencing the manifest digest, SoraFS CID, and dashboard git SHA (`iroha_data_model::ministry::TransparencyReleaseV1` defines the canonical payload).
+## ལས་ཀ་དང་ཤུལ་མམ་གྱི་གོ་རིམ་ཚུ་ཁ་ཕྱེ།
 
-## Open Tasks & Next Steps
+| ལས་ཀ་ | གནས་ཚད་ | དྲན་ཐོ། |
+|-------|-------------|------------------------------------------------------------
+| `ministry_transparency_ingest` + བཟོ་བསྐྲུན་པ་ལས་ཀ། | 🈺 ཡར་རྒྱས་ནང་ | `cargo xtask ministry-transparency ingest|build` ད་ལྟ་ ལེ་ཌི་ཇར་/པི་ཡལ་/དངུལ་ཁང་གི་ ཕིཌ་ཚུ་ བསྡམས་ཡོདཔ་ཨིན། ལྷག་ལུས་ལས་ཀའི་སྐུད་པ་ DP sanitizer + གསར་བཏོན་ཡིག་གཟུགས་ཀྱི་པའིཔ་ལའི། |
+| Grafana བརྡ་བཀོད་ + དྲན་སྐུལ་ཐུམ་སྒྲིལ་ | 🈴 མཇུག་བསྡུ་ཡོདཔ། | Dashboard + ཉེན་བརྡ་ཡིག་སྣོད་ཚུ་ `dashboards/grafana/ministry_transparency_overview.json` དང་ `dashboards/alerts/ministry_transparency_rules.yml` གི་འོག་ལུ་ཡོདཔ་ཨིན། གློག་ཐག་འདི་ བསྐོར་བའི་སྐབས་ PagerDuty `ministry-transparency` ནང་ལུ་ཡོདཔ་ཨིན། |
+| རང་བཞིན་ཌི་པི་ སན་ཊི་ཛར་ + བདེན་ཁུངས་གསལ་སྟོན་ | 🈴 མཇུག་བསྡུ་ཡོདཔ། | `cargo xtask ministry-transparency sanitize` (wrapper: `scripts/ministry/dp_sanitizer.py`) གིས་ གཙང་སྦྲ་ཅན་གྱི་མེ་ཊིག་ + DP སྙན་ཞུ་དང་ `scripts/ministry/transparency_release.py` གིས་ བདེན་དཔྱད་ཀྱི་དོན་ལུ་ `checksums.sha256` དང་ `transparency_manifest.json` བྲིས་ཡོདཔ་ཨིན། |
+| ཟླཝ་གསུམ་གྱི་སྙན་ཞུ་ཊེམ་པེལེཊི་གསར་བསྐྲུན་འབད།(`reports/<YYYY-Q>.md`) | 🈴 མཇུག་བསྡུ་ཡོདཔ། | `docs/source/ministry/reports/2026-Q3-template.md` ལུ་ཁ་སྐོང་འབད་ཡོདཔ། སྤྱི་ཟླ་བཞི་པའི་ནང་ འདྲ་བཤུས་/མིང་བཏགས་ཞིནམ་ལས་ དཔར་བསྐྲུན་མ་འབད་བའི་ཧེ་མ་ `{{...}}` ཊོ་ཀེན་ཚུ་ ཚབ་བཙུགས། |
+| གློག་ཐག་གཞུང་སྐྱོང་ DAG anchoring | 🈴 མཇུག་བསྡུ་ཡོདཔ། | `TransparencyReleaseV1` `iroha_data_model::ministry` ནང་ལུ་སྡོད་དོ་ཡོདཔ་ད་ `scripts/ministry/transparency_release.py` གིས་ JSON པེ་ལོཌ་དང་ `cargo xtask ministry-transparency anchor` གིས་ `.to` གིས་ རིམ་སྒྲིག་གཞུང་སྐྱོང་ DAG སྣོད་ཐོ་ནང་ལུ་ རིམ་སྒྲིག་འབད་ཡོད་པའི་ DAG སྣོད་ཐོ་ནང་ལུ་ བཀོད་སྒྲིག་འབདཝ་ཨིན། |
 
-| Task | Status | Notes |
-|------|--------|-------|
-| Implement `ministry_transparency_ingest` + builder jobs | 🈺 In Progress | `cargo xtask ministry-transparency ingest|build` now stitches ledger/appeal/denylist/treasury feeds; remaining work wires the DP sanitizer + release script pipeline. |
-| Publish Grafana dashboard + alert pack | 🈴 Completed | Dashboard + alert files live under `dashboards/grafana/ministry_transparency_overview.json` and `dashboards/alerts/ministry_transparency_rules.yml`; wire them into PagerDuty `ministry-transparency` during rollout. |
-| Automate DP sanitizer + provenance manifest | 🈴 Completed | `cargo xtask ministry-transparency sanitize` (wrapper: `scripts/ministry/dp_sanitizer.py`) emits the sanitized metrics + DP report, and `scripts/ministry/transparency_release.py` now writes `checksums.sha256` plus `transparency_manifest.json` for provenance. |
-| Create quarterly report template (`reports/<YYYY-Q>.md`) | 🈴 Completed | Template added at `docs/source/ministry/reports/2026-Q3-template.md`; copy/rename per quarter and replace the `{{...}}` tokens before publishing. |
-| Wire governance DAG anchoring | 🈴 Completed | `TransparencyReleaseV1` lives in `iroha_data_model::ministry`, `scripts/ministry/transparency_release.py` emits the JSON payload, and `cargo xtask ministry-transparency anchor` encodes the `.to` artefact into the configured governance DAG directory so the publisher can ingest releases automatically. |
-
-Delivering the document, dashboard spec, and workflow moves MINFO-8 from 🈳 to 🈺. Remaining engineering tasks (jobs, scripts, alert wiring) are tracked in the table above and should close before the first Q3 2026 publication.
+ཡིག་ཆ་དང་ བཀོད་སྒྲིག་ དེ་ལས་ ལཱ་གི་རྒྱུན་རིམ་ཚུ་ བཀྲམ་སྤེལ་འབད་མི་འདི་གིས་ MINFO-8 ལས་ 🈳 ལས་ 🈺 ལུ་སྤོ་བཤུད་འབདཝ་ཨིན། བཟོ་རིག་གི་ལཱ་ཚུ་ (ལཱ་གཡོག་དང་ ཡིག་གཟུགས་ དེ་ལས་ ཉེན་བརྡ་གློག་ཐག་) ཚུ་ གོང་འཁོད་ཀྱི་ཐིག་ཁྲམ་ནང་ བརྟག་ཞིབ་འབད་དེ་ Q32026 དཔར་བསྐྲུན་འགོ་དང་པ་མ་འབད་བའི་ཧེ་མ་ སྒོ་བསྡམ་དགོཔ་ཨིན།

@@ -6,22 +6,23 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 8d4569e75fb219979ee7c5e776427336bc43c155a24210af977e7a8e6ee1c8be
 source_last_modified: "2026-01-03T18:08:00.803277+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! ISO 20022 clarification prompt templates for roadmap Milestone F3.
+//! قوالب مطالبة توضيح ISO 20022 لخريطة الطريق Milestone F3.
 
-# ISO 20022 Clarification Prompt Templates
+# قوالب مطالبة توضيح ISO 20022
 
-These templates help seed requests to LLM (or other assistants) when financial-settlement engineers need quick references from ISO 20022 documentation or market-structure norms. Always include concrete payload samples and cite the specific message families you are working on so responses remain deterministic and audit-friendly.
+تساعد هذه القوالب في تقديم الطلبات الأولية إلى LLM (أو مساعدين آخرين) عندما يحتاج مهندسو التسوية المالية إلى مراجع سريعة من وثائق ISO 20022 أو معايير هيكل السوق. قم دائمًا بتضمين عينات الحمولة الصافية الملموسة واستشهد بمجموعات الرسائل المحددة التي تعمل عليها حتى تظل الاستجابات حتمية وصديقة للتدقيق.
 
-## Before You Ask
-- Identify the ISO 20022 message (`MsgDefId`, variant, market practice pack) and version.
-- Collect the Norito/ISI context: instruction name, legs, optional parameters, expected execution timeline.
-- Note which artefacts you already have (schema snippet, BR-n validation rule, market practice note).
-- Clarify whether you need regulatory guidance (e.g., CPMI-IOSCO) or operational norms (cut-off windows, liquidity buffers).
+## قبل أن تسأل
+- التعرف على رسالة ISO 20022 (`MsgDefId`، المتغير، حزمة ممارسات السوق) والإصدار.
+- اجمع سياق Norito/ISI: اسم التعليمات، والأرجل، والمعلمات الاختيارية، والجدول الزمني المتوقع للتنفيذ.
+- لاحظ العناصر الموجودة لديك بالفعل (مقتطف المخطط، قاعدة التحقق من صحة BR-n، مذكرة ممارسات السوق).
+- توضيح ما إذا كنت بحاجة إلى إرشادات تنظيمية (على سبيل المثال، CPMI-IOSCO) أو معايير تشغيلية (فترات التوقف، ومخازن السيولة).
 
-## Template 1 – Field Mapping & Semantics
+## النموذج 1 – رسم الخرائط الميدانية وعلم الدلالة
 ```text
 You are LLM acting as an ISO 20022 integration analyst.
 Goal: map {{Norito_instruction_or_field}} in Hyperledger Iroha to ISO 20022 {{message_id}} (version {{version}}).
@@ -38,7 +39,7 @@ Questions:
 Return the answer as a table with `Field`, `ISO Path`, `Rules`, `Notes`.
 ```
 
-## Template 2 – Settlement Workflow & Timeline Clarifications
+## النموذج 2 - سير عمل التسوية وتوضيحات الجدول الزمني
 ```text
 You are LLM advising on DvP/PvP settlement workflows referencing ISO 20022 repo/payments messages.
 Scenario: {{brief_repo_or_pvp_scenario}}, including legs, currencies, and counterparties.
@@ -55,7 +56,7 @@ Questions:
 Deliver the answer as bullet lists grouped by phase, citing ISO references (e.g., sese.023 BR23).
 ```
 
-## Template 3 – Validation Rules & Code Sets
+## القالب 3 - قواعد التحقق ومجموعات التعليمات البرمجية
 ```text
 You are LLM validating ISO 20022 message content.
 Message: {{message_id_version}} for {{business_process}}.
@@ -68,7 +69,7 @@ Tasks:
 Produce the result as a checklist with `Requirement`, `Reference`, `Implementation Hint`.
 ```
 
-## Template 4 – Market-Structure & Regulatory Context
+## النموذج 4 – هيكل السوق والسياق التنظيمي
 ```text
 You are LLM providing market-structure references for ISO 20022 settlement.
 Region/Market: {{market_or_region}}
@@ -81,7 +82,7 @@ Need:
 Return concise paragraphs with citations and note where operator documentation should reference these rules.
 ```
 
-## Template 5 – Exception Handling & Reconciliation
+## النموذج 5 – معالجة الاستثناءات والمصالحة
 ```text
 You are LLM focusing on exception handling for ISO 20022-driven settlements.
 Scenario: {{failure_case}} (e.g., counterparty fails cash leg).
@@ -94,7 +95,7 @@ Questions:
 Respond with a step-by-step outline and map each action to ISO codes.
 ```
 
-## Usage Notes
-- Store filled-in prompts in the issue tracker or design docs to ensure conversations remain auditable.
-- When sharing external references, link to official ISO documentation portals or SMPG extracts; avoid unpublished material.
-- Update this template set whenever new ISO message families or market practices enter scope (e.g., pacs.009, derivatives collateral).
+## ملاحظات الاستخدام
+- قم بتخزين المطالبات المملوءة في أداة تعقب المشكلات أو مستندات التصميم لضمان بقاء المحادثات قابلة للتدقيق.
+- عند مشاركة المراجع الخارجية، قم بالارتباط ببوابات توثيق ISO الرسمية أو مقتطفات SMPG؛ تجنب المواد غير المنشورة.
+- قم بتحديث مجموعة القوالب هذه عندما تدخل مجموعات رسائل ISO الجديدة أو ممارسات السوق في النطاق (على سبيل المثال، pacs.009، ضمانات المشتقات).

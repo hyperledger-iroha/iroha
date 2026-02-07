@@ -7,45 +7,46 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 05149d624d680d04433be41a4525538c97bd103ae7f80dda2613a6adb181a93d
 source_last_modified: "2025-12-29T18:16:35.968850+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Iroha Monitor
+# Iroha 监视器
 
-The refactored Iroha monitor pairs a lightweight terminal UI with animated
-festival ASCII art and the traditional Etenraku theme.  It focuses on two
-simple workflows:
+重构的 Iroha 显示器将轻量级终端 UI 与动画相结合
+节日 ASCII 艺术和传统的 Etenraku 主题。  它重点关注两个
+简单的工作流程：
 
-- **Spawn-lite mode** – start ephemeral status/metrics stubs that mimic peers.
-- **Attach mode** – point the monitor at existing Torii HTTP endpoints.
+- **Spawn-lite 模式** – 启动模仿对等点的临时状态/指标存根。
+- **附加模式** – 将监视器指向现有 Torii HTTP 端点。
 
-The UI renders three regions on every refresh:
+UI 在每次刷新时呈现三个区域：
 
-1. **Torii skyline header** – animated torii gate, Mt. Fuji, koi waves, and star
-   field that scroll in sync with the refresh cadence.
-2. **Summary strip** – aggregated blocks/transactions/gas plus refresh timing.
-3. **Peer table & festival whispers** – peer rows on the left, rotating event
-   log on the right that captures warnings (timeouts, oversized payloads, etc.).
-4. **Optional gas trend** – enable `--show-gas-trend` to append a sparkline
-   summarising total gas usage across all peers.
+1. **Torii 天际线标题** – 动画鸟居、富士山、锦鲤波浪和星星
+   与刷新节奏同步滚动的字段。
+2. **摘要条** – 聚合区块/交易/gas 加上刷新时间。
+3. **同行桌和节日私语** – 同行行在左边，轮流活动
+   登录右侧捕获警告（超时、负载过大等）。
+4. **可选气体趋势** – 启用 `--show-gas-trend` 附加迷你图
+   总结所有同行的 Gas 使用总量。
 
-New in this refactor:
+此次重构的新内容：
 
-- Animated Japanese-style ASCII scene with koi, torii, and lanterns.
-- Simplified command surface (`--spawn-lite`, `--attach`, `--interval`).
-- Intro banner with optional audio playback of the gagaku theme (external MIDI
-  player or the built-in soft synth when the platform/audio stack supports it).
-- `--no-theme` / `--no-audio` flags for CI or fast smoke runs.
-- Per-peer “mood” column showing the latest warning, commit time, or uptime.
+- 带有锦鲤、牌坊和灯笼的日式 ASCII 动画场景。
+- 简化的命令界面（`--spawn-lite`、`--attach`、`--interval`）。
+- 介绍横幅，带有雅乐主题的可选音频播放（外部 MIDI
+  播放器或内置软合成器（当平台/音频堆栈支持时）。
+- `--no-theme` / `--no-audio` CI 或快速烟雾运行的标志。
+- 每个对等点的“心情”列显示最新的警告、提交时间或正常运行时间。
 
-## Quickstart
+## 快速入门
 
-Build the monitor and run it against the stubbed peers:
+构建监视器并针对已存根的对等点运行它：
 
 ```bash
 cargo run -p iroha_monitor -- --spawn-lite --peers 3
 ```
 
-Attach to existing Torii endpoints:
+连接到现有的 Torii 端点：
 
 ```bash
 cargo run -p iroha_monitor -- \
@@ -53,13 +54,13 @@ cargo run -p iroha_monitor -- \
   --interval 500
 ```
 
-CI-friendly invocation (skip intro animation and audio):
+CI 友好的调用（跳过介绍动画和音频）：
 
 ```bash
 cargo run -p iroha_monitor -- --spawn-lite --no-theme --no-audio
 ```
 
-### CLI flags
+### CLI 标志
 
 ```
 --spawn-lite         start local status/metrics stubs (default if no --attach)
@@ -77,56 +78,54 @@ cargo run -p iroha_monitor -- --spawn-lite --no-theme --no-audio
                      cap headless fallback to N frames (0 = unlimited)
 ```
 
-## Theme intro
+## 主题介绍
 
-By default, startup plays a short ASCII animation while the Etenraku score
-begins.  Audio selection order:
+默认情况下，启动时播放一段简短的 ASCII 动画，同时 Etenraku 乐谱
+开始。  音频选择顺序：
 
-1. If `--midi-player` is provided, generate the demo MIDI (or use `--midi-file`)
-   and spawn the command.
-2. Otherwise, on macOS/Windows (or Linux with `--features iroha_monitor/linux-builtin-synth`)
-   render the score with the built-in gagaku soft synth (no external audio
-   assets required).
-3. If audio is disabled or initialization fails, the intro still prints the
-   animation and immediately enters the TUI.
+1. 如果提供了 `--midi-player`，则生成演示 MIDI（或使用 `--midi-file`）
+   并生成命令。
+2. 否则，在 macOS/Windows（或具有 `--features iroha_monitor/linux-builtin-synth` 的 Linux）上
+   使用内置雅乐软合成器渲染乐谱（无外部音频
+   所需资产）。
+3. 如果音频被禁用或初始化失败，简介仍会打印
+   动画并立即进入 TUI。
 
-The CPAL-powered synth auto-enables on macOS and Windows. On Linux it is
-opt-in to avoid missing ALSA/Pulse headers during workspace builds; enable it
-with `--features iroha_monitor/linux-builtin-synth` if your system provides a
-working audio stack.
+由 CPAL 驱动的合成器在 macOS 和 Windows 上自动启用。在 Linux 上是
+选择加入以避免在工作区构建期间丢失 ALSA/Pulse 标头；启用它
+如果您的系统提供了 `--features iroha_monitor/linux-builtin-synth`
+工作音频堆栈。
 
-Use `--no-theme` or `--no-audio` when running in CI or headless shells.
+在 CI 或无头 shell 中运行时，使用 `--no-theme` 或 `--no-audio`。
 
-The soft synth now follows the arrangement captured in *MIDI synth design in
-Rust.pdf*: hichiriki and ryūteki share a heterophonic melody while the shō
-provides the aitake pads described in the document.  The timed note data lives
-in `etenraku.rs`; it powers both the CPAL callback and the generated demo MIDI.
-When audio output is unavailable the monitor skips playback but still renders
-the ASCII animation.
+软合成器现在遵循 *MIDI 合成器设计中捕获的安排
+Rust.pdf*： hichiriki 和 ryūteki 共享异声旋律，而 shō
+提供文档中描述的 aitake 垫。  定时笔记数据有效
+在 `etenraku.rs` 中；它为 CPAL 回调和生成的演示 MIDI 提供动力。
+当音频输出不可用时，显示器会跳过播放但仍会呈现
+ASCII 动画。
 
-## UI overview
+## 用户界面概述- **标题艺术** – 由 `AsciiAnimator` 生成每帧；锦鲤、鸟居灯笼、
+  波浪漂移以产生连续的运动。
+- **摘要条** – 显示在线对等点、报告的对等点计数、区块总数、
+  非空块总数、交易批准/拒绝、gas 使用量和刷新率。
+- **对等表** – 别名/端点、块、事务、队列大小的列，
+  Gas 使用量、延迟和“情绪”提示（警告、提交时间、正常运行时间）。
+- **节日低语** – 滚动警告日志（连接错误、有效负载
+  限制违规、缓慢端点）。  消息被反转（最新的在顶部）。
 
-- **Header art** – generated each frame by `AsciiAnimator`; koi, torii lanterns,
-  and waves drift to give continuous motion.
-- **Summary strip** – shows online peers, reported peer count, block totals,
-  non-empty block totals, tx approvals/rejections, gas usage, and refresh rate.
-- **Peer table** – columns for alias/endpoint, blocks, transactions, queue size,
-  gas usage, latency, and a “mood” hint (warnings, commit time, uptime).
-- **Festival whispers** – rolling log of warnings (connection errors, payload
-  limit breaches, slow endpoints).  Messages are reversed (latest on top).
+键盘快捷键：
 
-Keyboard shortcuts:
+- `n` / 右 / 下 – 将焦点移至下一个对等点。
+- `p` / 向左 / 向上 – 将焦点移至上一个点。
+- `q` / Esc / Ctrl-C – 退出并恢复终端。
 
-- `n` / Right / Down – move focus to the next peer.
-- `p` / Left / Up – move focus to the previous peer.
-- `q` / Esc / Ctrl-C – exit and restore the terminal.
+显示器使用 crossterm +ratatui 和备用屏幕缓冲区；退出时
+恢复光标并清除屏幕。
 
-The monitor uses crossterm + ratatui with an alternate-screen buffer; on exit it
-restores the cursor and clears the screen.
+## 冒烟测试
 
-## Smoke tests
-
-The crate ships integration tests that exercise both modes and the HTTP limits:
+该板条箱提供了执行两种模式和 HTTP 限制的集成测试：
 
 - `spawn_lite_smoke_renders_frames`
 - `attach_mode_with_stubs_runs_cleanly`
@@ -134,46 +133,46 @@ The crate ships integration tests that exercise both modes and the HTTP limits:
 - `status_limit_warning_is_rendered`
 - `attach_mode_with_slow_peer_renders_multiple_frames`
 
-Run just the monitor tests:
+仅运行监视器测试：
 
 ```bash
 cargo test -p iroha_monitor -- --nocapture
 ```
 
-The workspace has heavier integration tests (`cargo test --workspace`). Running
-the monitor tests separately is still useful for quick validation when you do
-not need the full suite.
+工作区具有较重的集成测试 (`cargo test --workspace`)。跑步
+当您这样做时，单独的监视器测试对于快速验证仍然有用
+不需要全套。
 
-## Updating screenshots
+## 更新截图
 
-The docs demo now focuses on the torii skyline and peer table.  To refresh the
-assets, run:
+文档演示现在重点关注鸟居天际线和对等桌。  要刷新
+资产，运行：
 
 ```bash
 make monitor-screenshots
 ```
 
-This wraps `scripts/iroha_monitor_demo.sh` (spawn-lite mode, fixed seed/viewport,
-no intro/audio, dawn palette, art-speed 1, headless cap 24) and writes the
-SVG/ANSI frames plus `manifest.json` and `checksums.json` into
-`docs/source/images/iroha_monitor_demo/`. `make check-iroha-monitor-docs`
-wraps both CI guards (`ci/check_iroha_monitor_assets.sh` and
-`ci/check_iroha_monitor_screenshots.sh`) so generator hashes, manifest fields,
-and checksums stay in sync; the screenshot check also ships as
-`python3 scripts/check_iroha_monitor_screenshots.py`. Pass `--no-fallback` to
-the demo script if you want the capture to fail instead of falling back to the
-baked frames when the monitor output is empty; when fallback is used the raw
-`.ans` files are rewritten with the baked frames so the manifest/checksums stay
-deterministic.
+这包装了 `scripts/iroha_monitor_demo.sh`（spawn-lite 模式，固定种子/视口，
+无介绍/音频、黎明调色板、art-speed 1、无头帽 24）并写道
+SVG/ANSI 帧加上 `manifest.json` 和 `checksums.json` 到
+`docs/source/images/iroha_monitor_demo/`。 `make check-iroha-monitor-docs`
+包裹两个 CI 防护（`ci/check_iroha_monitor_assets.sh` 和
+`ci/check_iroha_monitor_screenshots.sh`) 所以生成器哈希、清单字段、
+并且校验和保持同步；屏幕截图检查也作为
+`python3 scripts/check_iroha_monitor_screenshots.py`。将 `--no-fallback` 传递给
+如果您希望捕获失败而不是退回到演示脚本
+当监视器输出为空时烘焙帧；当使用后备时，原始
+`.ans` 文件使用烘焙帧重写，以便清单/校验和保留
+确定性的。
 
-## Deterministic screenshots
+## 确定性屏幕截图
 
-The shipped snapshots live in `docs/source/images/iroha_monitor_demo/`:
+发送的快照位于 `docs/source/images/iroha_monitor_demo/` 中：
 
-![monitor overview](images/iroha_monitor_demo/iroha_monitor_demo_overview.svg)
-![monitor pipeline](images/iroha_monitor_demo/iroha_monitor_demo_pipeline.svg)
+![监视器概述](images/iroha_monitor_demo/iroha_monitor_demo_overview.svg)
+![监控管道](images/iroha_monitor_demo/iroha_monitor_demo_pipeline.svg)
 
-Reproduce them with a fixed viewport/seed:
+使用固定视口/种子再现它们：
 
 ```bash
 scripts/iroha_monitor_demo.sh \
@@ -182,26 +181,24 @@ scripts/iroha_monitor_demo.sh \
   --seed iroha-monitor-demo
 ```
 
-The capture helper fixes `LANG`/`LC_ALL`/`TERM`, forwards
-`IROHA_MONITOR_DEMO_SEED`, mutes audio, and pins the art theme/speed so the
-frames render identically across platforms. It writes `manifest.json` (generator
-hashes + sizes) and `checksums.json` (SHA-256 digests) under
-`docs/source/images/iroha_monitor_demo/`; CI runs
-`ci/check_iroha_monitor_assets.sh` and `ci/check_iroha_monitor_screenshots.sh`
-to fail when the assets drift from the recorded manifests.
+捕获助手修复了 `LANG`/`LC_ALL`/`TERM`，转发
+`IROHA_MONITOR_DEMO_SEED`，静音音频，并固定艺术主题/速度，以便
+帧在不同平台上呈现相同的效果。它写入 `manifest.json`（发电机
+哈希值 + 大小）和 `checksums.json`（SHA-256 摘要）
+`docs/source/images/iroha_monitor_demo/`； CI 运行
+`ci/check_iroha_monitor_assets.sh` 和 `ci/check_iroha_monitor_screenshots.sh`
+当资产偏离记录的清单时失败。
 
-## Troubleshooting
+## 故障排除- **无音频输出** – 显示器返回静音播放并继续。
+- **无头后备提前退出** – 监视器将无头运行限制为一对
+  无法切换时有十几帧（默认间隔约12秒）
+  终端进入原始模式；通过 `--headless-max-frames 0` 使其保持运行
+  无限期地。
+- **超大状态负载** – 同伴的心情栏和节日日志
+  显示 `body exceeds …` 以及配置的限制 (`128 KiB`)。
+- **慢速对等点** – 事件日志记录超时警告；关注点
+  突出显示该行。
 
-- **No audio output** – the monitor falls back to muted playback and continues.
-- **Headless fallback exits early** – the monitor caps headless runs to a couple
-  dozen frames (about 12 seconds at the default interval) when it cannot switch
-  the terminal into raw mode; pass `--headless-max-frames 0` to keep it running
-  indefinitely.
-- **Oversized status payloads** – the peer’s mood column and the festival log
-  show `body exceeds …` with the configured limit (`128 KiB`).
-- **Slow peers** – the event log records timeout warnings; focus that peer to
-  highlight the row.
-
-Enjoy the festival skyline!  Contributions for additional ASCII motifs or
-metrics panels are welcome—keep them deterministic so clusters render the same
-frame-by-frame regardless of terminal.
+欣赏节日天际线！  对其他 ASCII 主题的贡献或
+欢迎使用指标面板 - 保持它们的确定性，以便集群呈现相同的效果
+无论终端如何，逐帧进行。

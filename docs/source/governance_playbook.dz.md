@@ -7,169 +7,164 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 9201c0027f05b1ab2c83fa6b3e1a1e6dad3ff9660a8ed23bac7667408d421ada
 source_last_modified: "2026-01-22T14:35:37.551676+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Governance Playbook
+# གཞུང་སྐྱོང་ རྩེད་དེབ་།
 
-This playbook captures the day-to-day rituals that keep the Sora Network
-governance council aligned. It aggregates the authoritative references from the
-repository so individual ceremonies can remain concise, while operators always
-have a single entry point for the broader process.
+འདི་རྩེད་དེབ་འདི་གིས་ ཉིན་བསྟར་གྱི་རིམ་འགྲོ་ཚུ་ སོ་ར་ཡོངས་འབྲེལ་བཞག་མི་ བླངས་ཏེ་ཡོདཔ་ཨིན།
+གཞུང་སྐྱོང་ཚོགས་སྡེ་གིས་ ཕྲང་སྒྲིག་འབད་ཡོདཔ། འདི་གིས་ དབང་ཚད་ཅན་གྱི་གཞི་བསྟུན་ཚུ་ ལས་བསྡོམས་འབདཝ་ཨིན།
+repository དེ་འབདཝ་ལས་ ངོ་རྐྱང་གི་མཛད་སྒོ་ཚུ་ བསྡུ་སྒྲིག་འབད་ཚུགས།
+རྒྱ་ཆེ་བའི་བྱ་རིམ་གྱི་དོན་ལུ་ འཛུལ་སྒོ་གཅིག་ཡོདཔ་ཨིན།
 
-## Council Ceremonies
+## ལྷན་ཚོགས་ཀྱི་མཛད་སྒོ།
 
-- **Fixture governance** – See [Sora Parliament Fixture Approval](sorafs/signing_ceremony.md)
-  for the on-chain approval flow that the Parliament’s Infrastructure Panel now
-  follows when reviewing SoraFS chunker updates.
-- **Vote tally publication** – Refer to
-  [Governance Vote Tally](governance_vote_tally.md) for the step-by-step CLI
-  workflow and reporting template.
+- **ཕིག་ཅར་གཞུང་སྐྱོང་** – [སོ་རེ་གྲོས་ཚོགས་གཏན་འཁེལ་ཆ་འཇོག](sorafs/signing_ceremony.md)
+  སྤྱི་ཚོགས་ཀྱི་གཞི་རྟེན་ཚོགས་ཆུང་གིས་ ད་ལྟོ་ ཆ་འཇོག་གྲུབ་པའི་ རྒྱུན་རིམ་གྱི་དོན་ལུ་ཨིན།
+  SoraFS ཆ་ཤས་ཚུ་བསྐྱར་ཞིབ་འབད་བའི་སྐབས་ རྗེས་སུ་འཇུག་ཨིན།
+- **ཚོགས་རྒྱན་བཙུགས་པའི་དཔེ་སྐྲུན་** – ལུ་བལྟ།
+  [གཞུང་སྐྱོང་འོས་སྦྱོར་གྱི་ས་ཁྲ།](governance_vote_tally.md) གོ་རིམ་བཞིན་དུ་ CLI གི་དོན་ལུ་ཨིན།
+  ལཱ་གི་རྒྱུན་རིམ་དང་ སྙན་ཞུའི་ཊེམ་པེལེཊི།
 
-## Operational Runbooks
+### ལས་དོན་གྱི་གཡོག་བཀོལ།
 
-- **API integrations** – [Governance API reference](governance_api.md) lists the
-  REST/gRPC surfaces exposed by council services, including authentication
-  requirements and pagination rules.
-- **Telemetry dashboards** – The Grafana JSON definitions under
-  `docs/source/grafana_*` define the “Governance Constraints” and “Scheduler
-  TEU” boards. Export the JSON into Grafana after each release to stay aligned
-  with the canonical layout.
+- **API མཉམ་བསྡོམས་ཚུ་** – [གཞུང་སྐྱོང་ཨེ་པི་ཨའི་ གཞི་བསྟུན་](governance_api.md) གིས་ ཐོ་བཀོད་འབདཝ་ཨིན།
+  བདེན་བཤད་རྩིས་ཏེ་ ཚོགས་སྡེའི་ཞབས་ཏོག་ཚུ་གིས་ གསལ་སྟོན་འབད་མི་ REST/gRPC ཁ་ཐོག་ཚུ།
+  དགོས་མཁོ་དང་ ཤོག་ངོས་སྒྲིག་གཞི།
+- **ཊེ་ལི་མི་ཊི་རི་ཌི་བོརཌི་ཚུ་** – འོག་ལུ་ Grafana JSON ངེས་ཚིག་ཚུ།
+  `docs/source/grafana_*` གིས་ “གཞུང་གི་བཀག་ཆ་” དང་ “Schenuler ) ངེས་ཚིག་བརྗོད་ཡོད།
+  TEU” boards: JSON འདི་ བཏོན་གཏང་པའི་ཤུལ་ལས་ Grafana ནང་ལུ་ཕྱིར་འདྲེན་འབད།
+  དང་བཅས་ ཀེ་ནོ་ནིག་སྒྲིག་བཀོད་འདི་ཨིན།
 
-## Data Availability Oversight
+## གནད་སྡུད་འཐོབ་ཚུགས་པའི་མཐོང་ཚུལ།
 
-### Retention classes
+### བདག་འཛིན་འཛིན་གྲྭ།
 
-Parliament panels approving DA manifests must reference the enforced retention
-policy before voting. The table below mirrors the defaults enforced via
-`torii.da_ingest.replication_policy` so reviewers can spot mismatches without
-hunting for the source TOML.【docs/source/da/replication_policy.md:1】
+སྤྱི་ཚོགས་ཚོགས་ཆུང་ཚུ་གིས་ DA གི་གསལ་སྟོན་ཚུ་ ཆ་འཇོག་འབད་མི་ བསྟར་སྤྱོད་ལུ་ གཞི་བསྟུན་འབད་དགོ།
+ཚོགས་རྒྱན་བཙུགས་པའི་ཧེ་མར་ སྲིད་བྱུས། ཐིག་ཁྲམ་འདི་གིས་ བརྒྱུད་དེ་ སྔོན་སྒྲིག་ཚུ་ བསྟར་སྤྱོད་འབད་མི་ མེ་ལོང་ནང་ མེ་ལོང་འབདཝ་ཨིན།
+`torii.da_ingest.replication_policy` བསྐྱར་ཞིབ་ཚུ་གིས་ མ་མཐུནམ་ཚུ་ མེད་པར་ མཐོང་ཚུགས།
+འབྱུང་ཁུངས་ཀྱི་དོན་ལུ་ ཤ་རོགས། 【【 དཀའ་ངལ་/འབྱུང་ཁུངས་/ཌ/འདྲ་བཤུས་_polic.md:】 】
 
-| Governance tag | Blob class | Hot retention | Cold retention | Required replicas | Storage class |
-|----------------|------------|---------------|----------------|-------------------|---------------|
-| `da.taikai.live` | `taikai_segment` | 24 h | 14 d | 5 | `hot` |
-| `da.sidecar` | `nexus_lane_sidecar` | 6 h | 7 d | 4 | `warm` |
-| `da.governance` | `governance_artifact` | 12 h | 180 d | 3 | `cold` |
-| `da.default` | _all other classes_ | 6 h | 30 d | 3 | `warm` |
+| གཞུང་སྐྱོང་ངོ་རྟགས། | བློ་རིག་འཛིན་གྲྭ། | ཚ་དྲོད་བདག་འཛིན། | གྲང་བག་བདག་འཛིན། | འདྲ་དཔེ་དགོས་མཁོ། | བསག་མཛོད་འཛིན་གྲྭ། |
+|---------------------------------------------------------------------------------------------------- ---------------------------------|
+| `da.taikai.live` | `taikai_segment` | 24h | 14d | 5 | `hot` |
+| `da.sidecar` | `nexus_lane_sidecar` | 6h | 7d | 4 | `warm` |
+| `da.governance` | `governance_artifact` | 12h | ༡༨༠d | 3 | `cold` |
+| `da.default` | _all འཛིན་གྲྭ་_ | 6h | 30d | 3 | `warm` |
 
-The Infrastructure Panel should attach the filled template from
-`docs/examples/da_manifest_review_template.md` to every ballot so the manifest
-digest, retention tag, and Norito artefacts remain linked in the governance
-record.
+གཞི་རྟེན་པེ་ནཱལ་གྱིས་ བཀང་ཡོད་པའི་ཊེམ་པེལེཊི་འདི་ ལས་ མཉམ་སྦྲགས་འབད་དགོ།
+`docs/examples/da_manifest_review_template.md` ཚོགས་རྒྱན་རེ་རེ་ལུ་ དེ་འབདཝ་ལས་ གསལ་སྟོན་འདི་ གསལ་སྟོན་འབདཝ་ཨིན།
+ཌའི་ཇེསཊ་ བཀག་འཛིན་གྱི་ ཊེག་ དང་ Norito གཞུང་སྐྱོང་ནང་ འབྲེལ་མཐུན་ལུས་ཡོདཔ།
+ཐོ་བཀོད།
 
-### Signed manifest audit trail
+### མཚན་རྟགས་བཀོད་པའི་གསལ་སྟོན་རྩིས་གཞིའི་ལམ་ལུགས།
 
-Before a ballot reaches the agenda, council staff must prove that the manifest
-bytes under review match the Parliament envelope and the SoraFS artefact. Use
-the existing tooling to collect that evidence:
-
-1. Fetch the manifest bundle from Torii (`iroha app da get-blob --storage-ticket <hex>`
-   or the equivalent SDK helper) so everyone hashes the same bytes that reached
-   the gateways.
-2. Run the manifest stub verifier with the signed envelope:
+ཚོགས་རྒྱན་འདི་ གྲོས་གཞི་ལུ་མ་ལྷོད་པའི་ཧེ་མ་ ཚོགས་སྡེའི་ལས་བྱེདཔ་ཚུ་གིས་ གསལ་སྟོན་འདི་ བདེན་ཁུངས་བཀལ་དགོཔ་ཨིན།
+བསྐྱར་ཞིབ་ཀྱི་བཱའིཊ་ཚུ་ སྤྱི་ཚོགས་ཀྱི་ ཡིག་ཆ་དང་ SoraFS གི་ ཅ་ཆས་ཚུ་དང་ མཐུན་སྒྲིག་འབདཝ་ཨིན། ལག་ལེན་འཐབ་ནི
+ད་ལྟོ་ཡོད་པའི་ སྒྲུབ་བྱེད་བསྡུ་ལེན་འབད་ནིའི་དོན་ལུ་ ལག་ཆས་ཚུ།1. Torii (`iroha app da get-blob --storage-ticket <hex>`) ལས་ གསལ་སྟོན་གྱི་བང་རིམ་འདི་ལེན་དགོ།
+   ཡང་ན་ འདྲ་མཉམ་གྱི་ཨེསི་ཌི་ཀེ་གྲོགས་རམ་པ་) དེ་འབདཝ་ལས་ ག་ར་གིས་ ལྷོད་མི་ བཱའིཊི་གཅིགཔོ་ཚུ་ ཧ་ཤེསཔ་ཨིན།
+   འཛུལ་སྒོ་ཚུ།
+༢ མིང་རྟགས་བཀོད་པའི་ཡིག་ཤུབས་དང་གཅིག་ཁར་ གསལ་སྟོན་གསལ་སྟོན་འདི་གཡོག་བཀོལ།
    ```
    cargo run -p sorafs_car --bin sorafs-manifest-stub -- manifest.json \
      --manifest-signatures-in=fixtures/sorafs_chunker/manifest_signatures.json \
      --json-out=/tmp/manifest_report.json
    ```
-   This recomputes the BLAKE3 manifest digest, validates the
-   `chunk_digest_sha3_256`, and checks every Ed25519 signature embedded in
-   `manifest_signatures.json`. See `docs/source/sorafs/manifest_pipeline.md`
-   for additional CLI options.
-3. Copy the digest, `chunk_digest_sha3_256`, profile handle, and signer list into
-   the review template. NOTE: if the verifier reports “profile mismatch” or a
-   missing signature, halt the vote and request a corrected envelope.
-4. Store the verifier output (or CI artefact from
-   `ci/check_sorafs_fixtures.sh`) alongside the Norito `.to` payload so auditors
-   can replay the evidence without accessing internal gateways.
+   འདི་གིས་ BLAKE3 གསལ་སྟོན་འདི་ ཌའི་ཊི་ཚུ་ ལོག་རྩིས་སྟོནམ་ཨིན།
+   `chunk_digest_sha3_256`, དང་ དེ་ལས་ ནང་བཙུགས་ཡོད་པའི་ Ed25519 ཆ་མཉམ་ཞིབ་དཔྱད་འབདཝ་ཨིན།
+   `manifest_signatures.json`. གཟིགས། `docs/source/sorafs/manifest_pipeline.md`
+   ཁ་སྐོང་སི་ཨེལ་ཨའི་གདམ་ཁ་ཚུ་གི་དོན་ལུ་ཨིན།
+3. བཞུ་དང་ `chunk_digest_sha3_256` དང་གསལ་སྡུད་འཛིན་སྐྱོང་ དེ་ལས་ མཚན་རྟགས་བཀོད་མི་ཐོ་ཡིག་ཚུ་ འདྲ་བཤུས་རྐྱབས།
+   བསྐྱར་ཞིབ་ཊེམ་པེལེཊི་འདི། དྲན་འཛིན་: བདེན་བཤད་པ་གིས་ “གསལ་སྡུད་མི་མཐུན་” ཡང་ན་ a སྙན་ཞུ་སྙན་ཞུ་འབད་བ་ཅིན་
+   བརླག་སྟོར་ཤོར་བའི་མིང་རྟགས་ ཚོགས་རྒྱན་བཀག་ཞིནམ་ལས་ བདེན་དཔྱད་འབད་ཡོད་པའི་ཡིག་ཤུབས་ཅིག་ཞུ་བ་འབད།
+༤ བདེན་དཔྱད་འབད་མི་ཐོན་འབྲས་ (ཡང་ན་ སི་ཨའི་ ཅ་རྙིང་ལས་ ལས་ ཅ་རྙིང་ཚུ་ གསོག་འཇོག་འབད།
+   `ci/check_sorafs_fixtures.sh`) མཉམ་དུ་ Norito `.to` པེ་ལོཌ་འབདཝ་ལས་ རྩིས་ཞིབ་པ་ཚུ།
+   ནང་འཁོད་འཛུལ་སྒོ་ཚུ་ འཛུལ་སྤྱོད་མ་འབད་བར་ སྒྲུབ་བྱེད་ཚུ་ ལོག་རྩེད་ཚུགས།
 
-The resulting audit pack should let Parliament recreate every hash and signature
-check even after the manifest is rotated out of hot storage.
+གྲུབ་འབྲས་རྩིས་ཞིབ་ཀྱི་ཐུམ་སྒྲིལ་འདི་གིས་ སྤྱི་ཚོགས་ཀྱིས་ ཧ་ཤི་དང་མིང་རྟགས་ག་ར་ བསྐྱར་བཟོ་འབད་དགོ།
+གསལ་སྟོན་འདི་ ཚ་དྲོད་གསོག་འཇོག་ལས་ བསྒྱིར་ཚར་བའི་ཤུལ་ལས་ཡང བརྟག་དཔྱད་འབད།
 
-### Review checklist
+### དཔྱད་ཞིབ་ཐོ་འགོད།
 
-1. Pull the Parliament-approved manifest envelope (see
-   `docs/source/sorafs/signing_ceremony.md`) and record the BLAKE3 digest.
-2. Verify the manifest’s `RetentionPolicy` block matches the tag in the table
-   above; Torii will reject mismatches, but the council must capture the
-   evidence for auditors.【docs/source/da/replication_policy.md:32】
-3. Confirm that the submitted Norito payload references the same retention tag
-   and blob class that appears in the intake ticket.
-4. Attach proof of the policy check (CLI output, `torii.da_ingest.replication_policy`
-   dump, or CI artefact) to the review packet so SRE can replay the decision.
-5. Record planned subsidy taps or rent adjustments when the proposal depends on
+1. སྤྱི་ཚོགས་ཀྱིས་ཆ་འཇོག་གྲུབ་པའི་གསལ་སྟོན་ཡིག་ཤུབས་འཐེན་པ།(བལྟ།)
+   `docs/source/sorafs/signing_ceremony.md`) དེ་ལས་ BLAKE3 བཞུ་བཅོས་འདི་ཐོ་བཀོད་འབད།
+2. གསལ་སྟོན་གྱི་ `RetentionPolicy` སྡེབ་ཚན་ཚུ་ ཐིག་ཁྲམ་ནང་ལུ་ ངོ་རྟགས་དང་མཐུན་སྒྲིག་འབད།
+   ལྟག་ལུ; Torii མ་མཐུན་ཆ་ཚུ་བཀག་ཆ་འབད་ནི་ཨིན་རུང་ ཚོགས་སྡེ་གིས་ བཟུང་དགོཔ་ཨིན།
+   རྩིས་ཞིབ་པ་ཚུ་གི་དོན་ལུ་ སྒྲུབ་བྱེད་།【docs/ source/da/འདྲ་བཤུས་_poric.md:32】།
+3. Norito དངུལ་སྤྲོད་ལེན་གྱི་གཞི་བསྟུན་ཚུ་ བཀག་འཛིན་གྱི་ངོ་རྟགས་གཅིག་སྦེ་ ངེས་གཏན་བཟོ།
+   དང་ བཞེས་སྒོའི་ཤོག་བྱང་ནང་ འཐོན་མི་ བློ་རིག་འཛིན་གྲྭ།
+༤ སྲིད་བྱུས་ཞིབ་དཔྱད་ཀྱི་བདེན་ཁུངས་མཉམ་སྦྲགས་འབད་ (སི་ཨེལ་ཨའི་ཨའུཊི་པུཊི་, `torii.da_ingest.replication_policy`
+   ཌམཔ་ ཡང་ན་ སི་ཨའི་ ཅ་རྙིང་) བསྐྱར་ཞིབ་སྦུང་ཚན་ལུ་ ཨེསི་ཨར་ཨི་གིས་ གྲོས་ཐག་བཅད་མི་འདི་ ལོག་རྩེད་ཚུགས།
+༥ གྲོས་འཆར་འདི་ ༡ ལུ་རག་ལསཔ་ད་ འཆར་གཞི་བརྩམ་ཡོད་པའི་ གྲོགས་རམ་གྱི་ཐབས་ལམ་ཡང་ན་ ཁང་གླ་བདེ་སྒྲིག་འབད་ནི།
    `docs/source/sorafs_reserve_rent_plan.md`.
 
-### Escalation matrix
+### ཡར་འཕར་གྱི་མེ་རིགས།
 
-| Request type | Owning panel | Evidence to attach | Deadlines & telemetry | References |
+| ཞུ་བ་དབྱེ་བ་ | བདག་དབང་ཡོད་པའི་ པེ་ནཱལ་ | མཐུད་པའི་སྒྲུབ་བྱེད་ | དུས་ཚོད་དང་ བརྒྱུད་འཕྲིན་ | གཞི་བསྟུན་ཚུ་ |
 |--------------|--------------|--------------------|-----------------------|------------|
-| Subsidy / rent adjustment | Infrastructure + Treasury | Filled DA packet, rent delta from `reserve_rentd`, updated reserve projection CSV, council vote minutes | Note rent impact before submitting the Treasury update; include rolling 30 d buffer telemetry so Finance can reconcile within the next settlement window | `docs/source/sorafs_reserve_rent_plan.md`, `docs/examples/da_manifest_review_template.md` |
-| Moderation takedown / compliance action | Moderation + Compliance | Compliance ticket (`ComplianceUpdateV1`), proof tokens, signed manifest digest, appeal status | Follow the gateway compliance SLA (acknowledge within 24 h, full removal ≤72 h). Attach `TransparencyReportV1` excerpt showing the action. | `docs/source/sorafs_gateway_compliance_plan.md`, `docs/source/sorafs_moderation_panel_plan.md` |
-| Emergency freeze / rollback | Parliament moderation panel | Prior approval packet, new freeze order, rollback manifest digest, incident log | Publish freeze notice immediately and schedule the rollback referendum within the next governance slot; include buffer saturation + DA replication telemetry to justify the emergency. | `docs/source/sorafs/signing_ceremony.md`, `docs/source/sorafs_moderation_panel_plan.md` |
+| རོགས་སྐྱོར་ / ཁང་གླ་བདེ་སྒྲིག་འབད་ནི། | གཞི་རྟེན་ + དངུལ་ཁང་ | ཌི་ཨེ་བཀང་ཡོད་པའི་ ཌི་ཨེ་ ཐུམ་སྒྲིལ་ ཁང་གླ་ `reserve_rentd` ལས་ དུས་མཐུན་བཟོ་ཡོད་པའི་ གསོག་འཇོག་པར་བརྙན་ CSV, ཚོགས་སྡེའི་ཚོགས་རྒྱན་སྐར་མ་ | དངུལ་ཁང་དུས་མཐུན་བཟོ་མ་ཚར་བའི་ཧེ་མ་ ཁང་གླའི་གནོད་སྐྱོན། དངུལ་རྩིས་འདི་ ཤུལ་མའི་གཞིས་ཆགས་སྒོ་སྒྲིག་ནང་ལུ་ མཐུན་སྒྲིག་འབད་ཚུགས་ནི་གི་དོན་ལུ་ ༣༠d buffer telemetry འདི་ཚུདཔ་ཨིན། `docs/source/sorafs_reserve_rent_plan.md`, `docs/examples/da_manifest_review_template.md` |
+| བར་མཚམས་འཇོན་ཐངས་ / བསྟར་སྤྱོད་ཀྱི་བྱ་བ་ | བར་མཚམས་ + བསྟུན་འཛིན། | བསྟར་སྤྱོད་ཀྱི་ ཤོག་འཛིན་ (`ComplianceUpdateV1`), བདེན་ཁུངས་བརྡ་མཚོན་ མཚན་རྟགས་བཀོད་མི་ གསལ་སྟོན་གསལ་སྟོན་འཇུ་བྱེད་ མཐོ་གཏུགས་ཀྱི་གནས་ཚད། | འཛུལ་སྒོའི་ལམ་ལུ་མཐུན་སྒྲིག་འབད་མི་ SLA (24h ནང་འཁོད་ལུ་ངོས་ལེན་འབད་ཡོདཔ་) ཆ་ཚང་བཏོན་བཏང་ ≤72h) ལུ་བལྟ། བྱ་བ་སྟོན་མི་ `TransparencyReportV1` exserpt མཉམ་སྦྲགས་འབད། | `docs/source/sorafs_gateway_compliance_plan.md`, `docs/source/sorafs_moderation_panel_plan.md` |
+| གློ་བུར་གྱི་གྱང་ཤུགས་ / ལོག་བཤུད། | སྤྱི་ཚོགས་ཀྱི་ བར་མཚམས་ཚོགས་ཆུང་ | སྔོན་འགྲོའི་ཆ་འཇོག་སྦུང་ཚད་ གྱང་ཁོག་བཀའ་རྒྱ་གསརཔ་ བསྐོར་བའི་གསལ་སྟོན་ འཇུ་བྱེད་ བྱུང་རྐྱེན་དྲན་ཐོ་ | གྱང་ཤུགས་བརྡ་དོན་འདི་ དེ་འཕྲོ་ལས་ དཔར་བསྐྲུན་འབད་ཞིནམ་ལས་ ཤུལ་མའི་གཞུང་སྐྱོང་ས་ཁོངས་ནང་ལུ་ འོས་འདེམས་འདི་ ལོག་བསྒྱིར་ནི་གི་དུས་ཚོད་བཀོད་དགོ། གློ་བུར་གྱི་བདེན་ཁུངས་བཟོ་ནིའི་དོན་ལུ་ བཱ་ཕར་ཚིལ་ལུ་ + ཌི་ཨེ་ འདྲ་དཔེ་བརྒྱུན་ལམ་ཚུ་ཚུདཔ་ཨིན། | `docs/source/sorafs/signing_ceremony.md`, `docs/source/sorafs_moderation_panel_plan.md` |ཚོད་བརྟག་འབད་ནི་གི་དོན་ལུ་ ཤོག་འཛིན་ཚུ་ལག་ལེན་འཐབ་པའི་སྐབས་ ཐིག་ཁྲམ་འདི་ལག་ལེན་འཐབ།
+དེ་གི་དབང་ཚད་ལག་ལེན་འཐབ་ནིའི་དོན་ལུ་ ཅ་རྙིང་ཚུ།
 
-Use the table when triaging intake tickets so every panel receives the exact
-artefacts required to execute its mandate.
+### སྙན་ཞུ།
 
-### Reporting deliverables
+DA-10 ཐག་གཅོད་རེ་རེ་བཞིན་གཤམ་གསལ་གྱི་ཅ་ཆས་ཚུ་དང་གཅིག་ཁར་ བཏང་དགོཔ་ཨིན།
+ཚོགས་རྒྱན་ནང་ གཞུང་སྐྱོང་ DAG ཐོ་བཀོད་འབད་ཡོདཔ།):
 
-Every DA-10 decision must ship with the following artefacts (attach them to the
-Governance DAG entry referenced in the vote):
+- མཇུག་བསྡུའི་རྟགས་བཀོད་པའི་སྦུང་ཚན་ ལས་
+  `docs/examples/da_manifest_review_template.md` (ད་ལྟ་མཚན་རྟགས་དང་།
+  ཡར་འཕར་དབྱེ་ཚན་ཚུ།
+- མིང་རྟགས་བཀོད་ཡོད་པའི་ Norito གསལ་སྟོན་ (`.to`) དང་ `manifest_signatures.json` ཡིག་ཤུགས།
+  ཡང་ན་ ཕེཆ་ ཟས་བཅུད་ བདེན་དཔང་འབད་མི་ སི་ཨའི་ བདེན་དཔྱད་ཀྱི་ དྲན་ཐོ་ཚུ།
+- བྱ་བ་དེ་གིས་ འབྱུང་བཅུག་མི་ དྭངས་གསལ་དུས་མཐུན་གང་རུང་།
+  - `TransparencyReportV1` བཏོན་གཏང་ནི་དང་ ཡང་ན་ བསྟར་སྤྱོད་འབད་ནི་གི་དོན་ལུ་ གྱང་ཤུགས་ཅན་གྱི་ གྱང་ཁོག་ཚུ་ཨིན།
+  - གླ་ཆ་/གསོག་འཇོག་ ལེཌ་ཇར་ཌེལ་ཊ་ ཡང་ན་ གྲོགས་རམ་གྱི་དོན་ལུ་ `ReserveSummaryV1` པར་ལེན་འབད།
+- བསྐྱར་ཞིབ་ཀྱི་སྐབས་ལུ་ བསྡུ་སྒྲིག་འབད་མི་ ཊེ་ལི་མི་ཊི་པར་ལེན་ཚུ་དང་ འབྲེལ་མཐུད།
+  buffer heaproom, བར་མའི་རྒྱབ་ལོག་) དེ་འབདཝ་ལས་ བལྟ་རྟོག་པ་ཚུ་གིས་ ཕར་ཚུར་གནས་སྟངས་ཞིབ་དཔྱད་འབད་ཚུགས།
+  དོན་དངོས་ཀྱི་ཤུལ་ལུ།
 
-- The completed Markdown packet from
-  `docs/examples/da_manifest_review_template.md` (now including signature and
-  escalation sections).
-- The signed Norito manifest (`.to`) plus the `manifest_signatures.json` envelope
-  or CI verifier logs that prove the fetch digest.
-- Any transparency updates triggered by the action:
-  - `TransparencyReportV1` delta for takedowns or compliance-driven freezes.
-  - Rent/reserve ledger delta or `ReserveSummaryV1` snapshot for subsidies.
-- Links to telemetry snapshots collected during the review (replication depth,
-  buffer headroom, moderation backlog) so observers can cross-check conditions
-  after the fact.
+## བར་མཐའམ་དང་ཡར་འཛེལ།
 
-## Moderation & Escalation
+གཱེཊ་ཝེ་ བཏོན་གཏང་ནི་དང་ རྒུད་སྐྱོར་གྱི་ ལྕགས་ཐག་ ཡང་ན་ ཌི་ཨེ་ འཁྱེག་ཚུ་ བསྟར་སྤྱོད་འབད་མི་ལུ་ གཞི་བཞགཔ་ཨིན།
+Norito ནང་འགྲེལ་བཤད་བྱས་ཡོད།
+`docs/source/sorafs_moderation_panel_plan.md` ནང་ལག་ཆ་འབད་ནི། པེ་ནཱལ་ཚུ་གིས་ འབད་དགོ།
 
-Gateway takedowns, subsidy clawbacks, or DA freezes follow the compliance
-pipeline described in `docs/source/sorafs_gateway_compliance_plan.md` and the
-appeal tooling in `docs/source/sorafs_moderation_panel_plan.md`. Panels should:
+1. འབྱུང་ཁུངས་མཐུན་སྒྲིག་ཤོག་བྱང་ (`ComplianceUpdateV1` ཡང་ན།
+   `ModerationAppealV1`) དང་ འབྲེལ་ཡོད་བདེན་དཔང་ཊོ་ཀེན་ཚུ་ 【 ཌོཀ་/འབྱུང་ཁུངས་_སོ་རཕ་_གེ་ཊི་ཝེ་_མཐུན་སྒྲིག་_པེལེན་.ཨེམ་ཌི་:༢༠ 】 མཉམ་སྦྲགས་འབད།
+2. ཞུ་བ་འདི་གིས་ བར་འདུམ་གྱི་ མཐོ་གཏུགས་འགྲུལ་ལམ་ (མི་སེར་གྱི་པེ་ནཱལ་ (མི་རིགས་ཀྱི་ པེ་ནཱལ་)
+   ཚོགས་རྒྱན་༽ ཡང་ན་ གློ་བུར་གྱི་སྤྱི་ཚོགས་ཅིག་ གྱང་ཤུགས་བཏོན་ནི། གཉིས་ཀའི་རྒྱུན་འབབ་ཀྱིས་མངོན་རྟགས་བཀོད་དགོས།
+   ཌའི་ཇེསཊ་དང་ བཀག་འཛིན་གྱི་ངོ་རྟགས་གསརཔ་ ཊེམ་པེལེཊི་ནང་ བཟུང་ཡོདཔ་ཨིན།
+༣ ཡར་འཛེགས་པའི་དུས་ཚོད་ (མཐོ་གཏུགས་/གསལ་སྟོན་སྒོ་སྒྲིག་ གློ་བུར་གྱི་གནས་སྟངས་ཚུ།
+   freaze file) དང་ ཚོགས་སྡེ་ཡང་ན་ ཚོགས་ཆུང་གིས་ རྗེས་འཇུག་གི་བདག་དབང་ཡོདཔ་ཨིན་ན།
+༤ ལུ་ལག་ལེན་འཐབ་མི་ ཊེ་ལི་མི་ཊི་རི་པར་ (བཱ་ཕར་མགུ་ཏོ་ཁང་།
+   འདོན་སྤེལ།: ༢༠༡༠/༠༤/༢༠ རིག་པ།(༡) འབྲུག་རྒྱང་བསྒྲགས་ལས་ཁུངས་ཀྱིས་ འབྲུག་རྒྱང་བསྒྲགས་ལས་ཁུངས་ལུ་ བརྡ་དོན་འཕྲུལ་རིག་དང་འབྲེལ་བའི་ ལས་རིམ་ཚུ་ འགོ་འདྲེན་འཐབ་ནི།
+   གནས་སྟངས།
 
-1. Log the originating compliance ticket (`ComplianceUpdateV1` or
-   `ModerationAppealV1`) and attach the associated proof tokens.【docs/source/sorafs_gateway_compliance_plan.md:20】
-2. Confirm whether the request invokes the moderation appeal path (citizen panel
-   vote) or an emergency Parliament freeze; both flows must cite the manifest
-   digest and retention tag captured in the new template.【docs/source/sorafs_moderation_panel_plan.md:1】
-3. Enumerate escalation deadlines (appeal commit/reveal windows, emergency
-   freeze duration) and state which council or panel owns the follow-up.
-4. Capture the telemetry snapshot (buffer headroom, moderation backlog) used to
-   justify the action so downstream audits can match the decision to the live
-   state.
+བསྟར་སྤྱོད་དང་བར་མཚམས་པེ་ནཱལ་ཚུ་གིས་ ཁོང་རའི་བདུན་ཕྲག་གི་དྭངས་གསལ་སྙན་ཞུ་ཚུ་མཉམ་འབྱུང་འབད་དགོ།
+གཞིས་ཆགས་ལམ་སྟོན་བཀོལ་སྤྱོད་པ་ཚུ་དང་གཅིག་ཁར་ དེ་འབདཝ་ལས་ བཏོན་གཏང་ནི་དང་ གྲོགས་རམ་ཚུ་ལུ་ ཅོག་འཐདཔ་ལུ་གནོད་པ་ཡོདཔ་ཨིན།
+གསལ་སྟོན་གྱི་སྒྲིག་སྟངས།
 
-The compliance and moderation panels must sync their weekly transparency reports
-with the settlement router operators so takedowns and subsidies affect the same
-set of manifests.
+## ཊེམ་པེལེཊི་ཚུ་སྙན་ཞུ་འབད་ནི།
 
-## Reporting Templates
+ད་ལྟོ་ DA-10 བསྐྱར་ཞིབ་ཆ་མཉམ་ལུ་ མཚན་རྟགས་བཀོད་ཡོད་པའི་ མརཀ་ཌའོན་ཐུམ་སྒྲིལ་ཅིག་དགོཔ་ཨིན། འདྲ་བཤུས།
+`docs/examples/da_manifest_review_template.md`, གསལ་སྟོན་གྱི་མེ་ཊ་ཌེ་ཊ་འདི་ མི་རློབས་བཏོན།
+བདེན་དཔྱད་ཐིག་ཁྲམ་དང་ པེ་ནཱལ་ཚོགས་རྒྱན་གྱི་བཅུད་བསྡུས་ དེ་ལས་ མཇུག་བསྡུ་ཡོད་མི་ལུ་ པིན་འབད།
+ཡིག་ཆ་ (plus གཞི་བསྟུན་འབད་མི་ Norito/JSON ཅ་མཛོད་ཚུ་) གཞུང་སྐྱོང་ DAG འཛུལ་ཞུགས་ལུ།
+པེ་ནཱལ་ཚུ་གིས་ གཞུང་སྐྱོང་གི་སྐབས་ལུ་ སྦུང་ཚན་འདི་ འབྲེལ་མཐུད་འབད་དགོཔ་ལས་ མ་འོངས་པ་ལུ་ བཏོན་གཏང་།
+རྒུད་འཐུས་བསྐྱར་གསོ་འདི་གིས་ ལོག་སྟེ་མ་བརྡུང་བར་ མངོན་གསལ་ངོ་མ་འདི་ བཞུ་ཚུགས།
+མཛད་སྒོ་ཆ་ཚང་།
 
-All DA-10 reviews now require a signed Markdown packet. Copy
-`docs/examples/da_manifest_review_template.md`, populate the manifest metadata,
-retention verification table, and panel vote summary, then pin the completed
-document (plus referenced Norito/JSON artefacts) to the Governance DAG entry.
-Panels should link the packet in the governance minutes so future takedowns or
-subsidy renewals can cite the original manifest digest without re-running the
-entire ceremony.
+## བྱུང་རྐྱེན་དང་ ཆ་མེད་བཏང་བའི་ལས་རིམ།
 
-## Incident & Revocation Workflow
+ཛ་དྲག་གི་བྱ་བ་ཚུ་ད་ལྟོ་རིམ་སྒྲིག་གུ་འབྱུངམ་ཨིན། སྒྲིག་ཆས་གསར་བཏོན་འབད་དགོ་པའི་སྐབས།
+ལོག་བསྐོར་ཏེ་ གཞུང་སྐྱོང་གི་ ཤོག་འཛིན་བཙུགས་ཏེ་ སྤྱི་ཚོགས་ཀྱི་ རྒྱབ་སྣོན་ཅིག་ ཁ་ཕྱེ་ནི།
+ཧེ་མ་ལས་ཆ་འཇོག་འབད་ཡོད་པའི་གསལ་སྟོན་འཇུ་བྱེད་ལུ་སྟོན་ནི། གཞི་རྟེན་ཚོགས་ཆུང་།
+ཚོགས་རྒྱན་འདི་ འཛིན་སྐྱོང་འཐབ་སྟེ་ ཚར་གཅིག་ Nexus རན་ཊའིམ་འདི་ ལོག་བཤུད་བརྡར་བརྐྱབ་ཨིན།
+མར་འབབ་པའི་མཁོ་མངགས་འབད་མི་ཚུ་གིས་ ཟ་སྤྱོད་འབད་བའི་བྱུང་རིམ། ས་གནས་ཀྱི་JSON ཅ་རྙིང་ཚུ་དགོཔ་མེད།
 
-Emergency actions now happen on-chain. When a fixture release needs to be
-rolled back, file a governance ticket and open a Parliament revert proposal
-pointing at the previously approved manifest digest. The Infrastructure Panel
-handles the vote, and once finalized the Nexus runtime publishes the rollback
-event that downstream clients consume. No local JSON artefacts are required.
-
-## Keeping the Playbook Current
-
-- Update this file whenever a new governance-facing runbook lands in the
-  repository.
-- Cross-link new ceremonies here so the council index remains discoverable.
-- If a referenced document moves (for example, a new SDK path), update the link
-  as part of the same pull request to avoid stale pointers.
+## རྩེད་དེབ་འདི་ད་ལྟོ་བཞག་དོ།- གཞུང་སྐྱོང་གསརཔ་ལུ་གདོང་ལེན་འབད་མི་ རན་དེབ་ས་ཆ་ཚུ་ ག་དུས་འབད་རུང་ ཡིག་སྣོད་འདི་ ནང་ན་དུས་མཐུན་བཟོ་དགོ།
+  མཛོད་ཁང་།
+- ནཱ་ལུ་ འབྲེལ་མཐུན་གྱི་ མཛད་སྒོ་གསརཔ་ཚུ་ ཡོདཔ་ལས་ ཚོགས་སྡེའི་ཟུར་ཐོ་འདི་ གསར་འཚོལ་འབད་ཚུགསཔ་ཨིན།
+- གཞི་བསྟུན་འབད་ཡོད་པའི་ཡིག་ཆ་ཅིག་སྤོ་བཤུད་འབད་བ་ཅིན་ (དཔེར་ན་ ཨེསི་ཌི་ཀེ་འགྲུལ་ལམ་གསརཔ་) འབྲེལ་ལམ་འདི་དུས་མཐུན་བཟོ།
+  དཔག་བྱེད་ཚུ་ བཀག་ཐབས་ལུ་ འདྲུད་པའི་ཞུ་བ་གཅིག་པའི་ཆ་ཤས་ཅིག་སྦེ།

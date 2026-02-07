@@ -9,82 +9,79 @@ source_last_modified: "2026-01-05T09:28:12.023255+00:00"
 translation_last_reviewed: 2026-02-07
 title: MOCHI Architecture Plan
 description: High-level design for the MOCHI local-network GUI supervisor.
+translator: machine-google-reviewed
 ---
 
-# MOCHI Architecture Plan
+# MOCHI არქიტექტურული გეგმა
 
 
-## Goals
+## გოლები
 
-- Bootstrap single-peer or multi-peer (four-node BFT) local networks quickly.
-- Wrap `kagami`, `irohad`, and supporting binaries in a friendly GUI workflow.
-- Surface live block, event, and state data through Torii HTTP/WebSocket endpoints.
-- Provide structured builders for transactions and Iroha Special Instructions (ISI), with local signing and submission.
-- Manage snapshots, re-genesis flows, and configuration tweaks without editing files manually.
-- Ship as a single cross-platform Rust binary with no webview or Docker dependency.
+- სწრაფად გაუშვით ლოკალური ქსელები ერთჯერადი ან მრავალთანაბარიანი (ოთხ კვანძის BFT).
+- შეფუთეთ `kagami`, `irohad` და მხარდაჭერილი ბინარები მეგობრულ GUI სამუშაო პროცესში.
+- ზედაპირის პირდაპირი ბლოკის, მოვლენის და მდგომარეობის მონაცემები Torii HTTP/WebSocket ბოლო წერტილების მეშვეობით.
+- უზრუნველყოს სტრუქტურირებული მშენებლები ტრანზაქციებისთვის და Iroha სპეციალური ინსტრუქციები (ISI), ადგილობრივი ხელმოწერით და წარდგენით.
+- მართეთ სნეპშოტები, ხელახალი წარმოშობის ნაკადები და კონფიგურაციის შესწორებები ფაილების ხელით რედაქტირების გარეშე.
+- გაგზავნეთ როგორც ერთი კროს-პლატფორმა Rust ორობითი ვებ-ხედის გარეშე ან Docker დამოკიდებულების გარეშე.
 
-## Architecture Overview
+## არქიტექტურის მიმოხილვა
 
-MOCHI is split into two primary crates housed in a new `/mochi` directory (see the
-[MOCHI Quickstart](mochi/quickstart.md) for build and usage instructions):
+MOCHI იყოფა ორ ძირითად ყუთად, რომლებიც განთავსებულია ახალ `/mochi` დირექტორიაში (იხ.
+[MOCHI Quickstart](mochi/quickstart.md) აგებისა და გამოყენების ინსტრუქციებისთვის):
 
-1. `mochi-core`: a headless library responsible for configuration templating, key and genesis material generation, supervising child processes, driving Torii clients, and managing filesystem state.
-2. `mochi-ui-egui`: a desktop application built on `egui`/`eframe` that renders the user interface and delegates all orchestration through the `mochi-core` API.
+1. `mochi-core`: უთავო ბიბლიოთეკა, რომელიც პასუხისმგებელია კონფიგურაციის შაბლონებზე, გასაღებისა და წარმოშობის მასალის გენერირებაზე, ბავშვის პროცესების ზედამხედველობაზე, Torii კლიენტების მართვასა და ფაილური სისტემის მდგომარეობის მართვაზე.
+2. `mochi-ui-egui`: დესკტოპის პროგრამა, რომელიც აგებულია `egui`/`eframe`-ზე, რომელიც ახდენს მომხმარებლის ინტერფეისს და დელეგირებს ყველა ორკესტრაციას `mochi-core` API-ის მეშვეობით.
 
-Additional front ends (for example a Tauri shell) can hook into `mochi-core` later without reworking the supervisor logic.
+დამატებითი წინა ბოლოები (მაგალითად, Tauri ჭურვი) შეიძლება მოგვიანებით ჩაერთოს `mochi-core`-ში ზედამხედველის ლოგიკის გადამუშავების გარეშე.
 
-## Process Model
+## პროცესის მოდელი
 
-- Peer nodes run as separate `irohad` child processes. MOCHI never links the peer as a library, avoiding unstable internal APIs and matching production deployment topologies.
-- Genesis and key material are created through `kagami` invocations with user provided inputs (chain ID, initial accounts, assets).
-- Configuration files are generated from TOML templates, filling in Torii and P2P ports, storage paths, snapshot settings, and trusted peer lists. Generated configs are stored beneath a per-network workspace directory.
-- The supervisor tracks process lifecycles, streams stdout/stderr for log surfaces, and polls `/status`, `/metrics`, and `/configuration` endpoints for health.
-- A thin Torii client layer wraps HTTP and WebSocket calls, leaning on the Iroha Rust client crates where possible to avoid reimplementing SCALE encoding/decoding.
+- თანატოლი კვანძები მუშაობს ცალკე `irohad` ბავშვური პროცესების სახით. MOCHI არასოდეს აკავშირებს თანატოლებს, როგორც ბიბლიოთეკას, თავიდან აიცილებს არასტაბილურ შიდა API-ებს და წარმოების განლაგების შესაბამის ტოპოლოგიებს.
+- გენეზისი და ძირითადი მასალა იქმნება `kagami` გამოძახებით მომხმარებლის მიერ მოწოდებული მონაცემებით (ჯაჭვის ID, საწყისი ანგარიშები, აქტივები).
+- კონფიგურაციის ფაილები გენერირებულია TOML შაბლონებიდან, ივსება Torii და P2P პორტები, შენახვის ბილიკები, სნეპშოტის პარამეტრები და სანდო თანატოლების სიები. გენერირებული კონფიგურაციები ინახება თითო ქსელის სამუშაო სივრცის დირექტორიაში.
+- ზედამხედველი თვალს ადევნებს პროცესის სასიცოცხლო ციკლებს, ახორციელებს stdout/stderr-ის სტრიმინგს ჟურნალის ზედაპირებისთვის და გამოკითხვებს `/status`, `/metrics` და `/configuration` საბოლოო წერტილებს ჯანმრთელობისთვის.
+- Torii კლიენტის თხელი ფენა ახვევს HTTP და WebSocket ზარებს, ეყრდნობა Iroha Rust კლიენტის ყუთებს, სადაც ეს შესაძლებელია, რათა თავიდან იქნას აცილებული SCALE კოდირების/დაშიფვრის ხელახალი განხორციელება.
 
-## User Flows Backed by `mochi-core`
+## მომხმარებლის ნაკადები მხარდაჭერილია `mochi-core`-ით- **ქსელის შექმნის ოსტატი**: აირჩიეთ ერთჯერადი ან ოთხთანაბარიანი პროფილი, შეარჩიეთ დირექტორიები და დარეკეთ `kagami` იდენტურობების და გენეზის გენერირებისთვის.
+- **სასიცოცხლო ციკლის კონტროლი **: დაწყება, გაჩერება, გადატვირთვა თანატოლებთან; ზედაპირის ცოცხალი მეტრიკა; გამოაშკარავება ჟურნალის კუდები; გაშვების დროის კონფიგურაციის ბოლო წერტილების გადართვა (მაგ. ჟურნალის დონეები).
+- **დაბლოკეთ და ივენთების ნაკადები**: გამოიწერეთ `/block/stream` და `/events`, შეინახეთ მეხსიერებაში მოძრავი ბუფერი UI პანელებისთვის.
+- **State Explorer**: გაუშვით Norito მხარდაჭერილი `/query` ზარები, რათა ჩამოთვალოთ დომენები, ანგარიშები, აქტივები და აქტივების განმარტებები პაგინაციის დამხმარეებით და მეტამონაცემების შეჯამებით.
+- **ტრანზაქციის კომპოზიტორი**: დადგმა ზარაფხანის/გადაცემის ინსტრუქციის პროექტები, დაალაგეთ ისინი ხელმოწერილ ტრანზაქციებში, გადახედეთ Norito დატვირთვას, გაგზავნეთ `/transaction`-ით და დააკვირდით შედეგად მოვლენებს; სარდაფის ხელმოწერის კაკვები რჩება მომავალ გამეორებად.
+- **Snapshots და Re-Genesis**: მოაწყეთ Kura-ს კადრების ექსპორტი/იმპორტი, წაშალეთ მაღაზიები და განაახლეთ გენეზის მასალა სწრაფი გადატვირთვისთვის.
 
-- **Network Creation Wizard**: choose single or four-peer profile, pick directories, and call `kagami` to generate identities plus genesis.
-- **Lifecycle Controls**: start, stop, restart peers; surface live metrics; expose log tails; toggle runtime configuration endpoints (e.g., log levels).
-- **Block and Event Streams**: subscribe to `/block/stream` and `/events`, storing an in-memory rolling buffer for UI panels.
-- **State Explorer**: run Norito-backed `/query` calls to list domains, accounts, assets, and asset definitions with pagination helpers and metadata summaries.
-- **Transaction Composer**: stage mint/transfer instruction drafts, batch them into signed transactions, preview the Norito payload, submit via `/transaction`, and monitor the resulting events; vault signing hooks remain a future iteration.
-- **Snapshots and Re-Genesis**: orchestrate Kura snapshot export/import, wipe stores, and regenerate genesis material for quick resets.
+## UI ფენა (`mochi-ui-egui`)
 
-## UI Layer (`mochi-ui-egui`)
+- იყენებს `egui`/`eframe` ერთი ძირითადი შემსრულებელი ფაილის გასაგზავნად გარე გაშვების გარეშე.
+- განლაგება მოიცავს:
+  - **ქსელის დაფა** თანატოლების ბარათებით, ჯანმრთელობის ინდიკატორებით და სწრაფი მოქმედებებით.
+  - **Blocks** პანელის ნაკადი უახლესი შეთანხმებების და საშუალებას იძლევა სიმაღლის ძებნა.
+  - **მოვლენები** პანელის ფილტრაციის ტრანზაქციის სტატუსები ჰეშის ან ანგარიშის მიხედვით.
+  - **State Explorer** ჩანართები დომენებისთვის, ანგარიშებისთვის, აქტივებისთვის და აქტივების დეფინიციებისთვის ფურცირებული Norito შედეგებით, პლუს დაუმუშავებელი ნაგავსაყრელები შესამოწმებლად.
+- **კომპოზიტორი** ფორმა ზარაფხანა/გადატანის პალიტრებით, რიგის მენეჯმენტი (დამატება/წაშლა/გასუფთავება), დაუმუშავებელი Norito წინასწარი გადახედვა და წარდგენის გამოხმაურება ხელმომწერთა საცავში, რათა ოპერატორებმა შეძლონ გაცვლა დეველოპერსა და რეალურ ავტორიტეტებს შორის.
+- ** Genesis & Snapshots ** მართვის ხედი.
+- **პარამეტრები** გაშვების დროის გადართვისა და მონაცემთა დირექტორიაში მალსახმობებისთვის.
+- UI გამოიწერს ასინქრონულ განახლებებს `mochi-core`-დან არხების საშუალებით; ბირთვი ავლენს `SupervisorHandle`-ს, რომელიც გადასცემს სტრუქტურირებულ მოვლენებს (თანატოლების სტატუსი, ბლოკის სათაურები, ტრანზაქციის განახლებები).
 
-- Uses `egui`/`eframe` to ship a single native executable without external runtimes.
-- Layout includes:
-  - **Network Dashboard** with peer cards, health indicators, and quick actions.
-  - **Blocks** panel streaming recent commits and allowing height search.
-  - **Events** panel filtering transaction statuses by hash or account.
-  - **State Explorer** tabs for domains, accounts, assets, and asset definitions with paginated Norito results plus raw dumps for inspection.
-- **Composer** form with batchable mint/transfer palettes, queue management (add/remove/clear), raw Norito preview, and submission feedback backed by the signer vault so operators can swap between dev and real authorities.
-- **Genesis & Snapshots** management view.
-- **Settings** for runtime toggles and data directory shortcuts.
-- UI subscribes to asynchronous updates from `mochi-core` via channels; the core exposes a `SupervisorHandle` that streams structured events (peer status, block headers, transaction updates).
+## ადგილობრივი განვითარების შენიშვნები
 
-## Local Development Notes
+- სამუშაო სივრცის კონფიგურაცია ადგენს `ZSTD_SYS_USE_PKG_CONFIG=1`-ს, ასე რომ, `zstd-sys` აკავშირებს მასპინძელ `libzstd`-ს, გაყიდული არქივების მიღების ნაცვლად. ეს ინარჩუნებს pqcrypto-ზე დამოკიდებულ ნაგებობებს (და MOCHI ტესტებს) გაშვებას ოფლაინ ან სავარჯიშო გარემოში.
 
-- The workspace config sets `ZSTD_SYS_USE_PKG_CONFIG=1` so `zstd-sys` links against the host `libzstd` instead of fetching vendored archives. This keeps pqcrypto-dependent builds (and MOCHI tests) running inside offline or sandboxed environments.
+## შეფუთვა და დისტრიბუცია
 
-## Packaging and Distribution
+- MOCHI აგროვებს (ან აღმოაჩენს `PATH`-ზე) `irohad`, `iroha_cli` და `kagami` ბინარებს.
+- იყენებს `rustls`-ს გამავალი HTTPS-ისთვის, რათა თავიდან აიცილოს OpenSSL დამოკიდებულებები.
+- ინახავს ყველა გენერირებულ არტეფაქტს სპეციალურ აპლიკაციის მონაცემთა ფესვში (მაგ., `~/.local/share/mochi` ან პლატფორმის ექვივალენტი) თითო ქსელის ქვედირექტორიებით. GUI უზრუნველყოფს დამხმარეებს „გამოვლენა Finder/Explorer-ში“.
+- ავტომატურად ამოიცნობს და ინახავს Torii (8080+) და P2P (1337+) პორტებს თანატოლების გაშვებამდე, კონფლიქტების თავიდან ასაცილებლად.
 
-- MOCHI bundles (or discovers on `PATH`) the `irohad`, `iroha_cli`, and `kagami` binaries.
-- Uses `rustls` for outbound HTTPS to avoid OpenSSL dependencies.
-- Stores all generated artifacts in a dedicated application data root (e.g., `~/.local/share/mochi` or platform equivalent) with per-network subdirectories. GUI provides “reveal in Finder/Explorer” helpers.
-- Auto-detects and reserves Torii (8080+) and P2P (1337+) ports before launching peers to prevent conflicts.
+## მომავალი გაფართოებები (MVP-ის ფარგლებს გარეთ)- ალტერნატიული წინა ბოლოები (Tauri, CLI უთავო რეჟიმი) გაზიარებული `mochi-core`.
+- მრავალ მასპინძელი ორკესტრირება განაწილებული ტესტირების კლასტერებისთვის.
+- ვიზუალიზატორები კონსენსუსის ინტერიერებისთვის (Sumeragi მრგვალი მდგომარეობა, ჭორების დრო).
+- ინტეგრაცია CI მილსადენებთან ავტომატური ეფემერული ქსელის სნეპშოტებისთვის.
+- დანამატის სისტემა მორგებული დაფების ან დომენის სპეციფიკური ინსპექტორებისთვის.
 
-## Future Extensions (Out of Scope for MVP)
+## ცნობები
 
-- Alternate front ends (Tauri, CLI headless mode) sharing `mochi-core`.
-- Multi-host orchestration for distributed testing clusters.
-- Visualizers for consensus internals (Sumeragi round states, gossip timings).
-- Integration with CI pipelines for automated ephemeral network snapshots.
-- Plug-in system for custom dashboards or domain-specific inspectors.
-
-## References
-
-- [Torii Endpoints](https://docs.iroha.tech/reference/torii-endpoints.html)
-- [Peer Configuration Parameters](https://docs.iroha.tech/reference/peer-config/params.html)
-- [`kagami` repository documentation](https://github.com/hyperledger-iroha/iroha)
-- [Iroha Special Instructions](https://iroha-test.readthedocs.io/en/iroha2-dev/references/isi/)
+- [Torii საბოლოო წერტილები](https://docs.iroha.tech/reference/torii-endpoints.html)
+- [თანტოლების კონფიგურაციის პარამეტრები] (https://docs.iroha.tech/reference/peer-config/params.html)
+- [`kagami` საცავის დოკუმენტაცია] (https://github.com/hyperledger-iroha/iroha)
+- [Iroha სპეციალური ინსტრუქციები] (https://iroha-test.readthedocs.io/en/iroha2-dev/references/isi/)

@@ -7,85 +7,84 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 1ee87ee60e2e8c9d9636b282231b33de3cf1fd7240c8d31d0a0a1673651dcef1
 source_last_modified: "2025-12-29T18:16:35.972838+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% JDG-SDN attestations and rotation
+% JDG-SDN sertifikatları və rotasiya
 
-This note captures the enforcement model for Secret Data Node (SDN) attestations
-used by the Jurisdiction Data Guardian (JDG) flow.
+Bu qeyd Secret Data Node (SDN) sertifikatları üçün icra modelini əks etdirir
+Yurisdiksiya Data Guardian (JDG) axını tərəfindən istifadə olunur.
 
-## Commitment format
-- `JdgSdnCommitment` binds the scope (`JdgAttestationScope`), the encrypted
-  payload hash, and the SDN public key. Seals are typed signatures
-  (`SignatureOf<JdgSdnCommitmentSignable>`) over the domain-tagged payload
+## Öhdəlik formatı
+- `JdgSdnCommitment` əhatə dairəsini birləşdirir (`JdgAttestationScope`), şifrələnmiş
+  faydalı yük hash və SDN açıq açarı. Möhürlər çap edilmiş imzalardır
+  (`SignatureOf<JdgSdnCommitmentSignable>`) domen etiketli faydalı yük üzərində
   `iroha:jurisdiction:sdn:commitment:v1\x00 || norito(signable)`.
-- Structural validation (`validate_basic`) enforces:
+- Struktur təsdiqləmə (`validate_basic`) tətbiq edir:
   - `version == JDG_SDN_COMMITMENT_VERSION_V1`
-  - valid block ranges
-  - non-empty seals
-  - scope equality against the attestation when run via
+  - etibarlı blok diapazonları
+  - boş olmayan möhürlər
+  - vasitəsilə həyata keçirildikdə attestasiyaya qarşı əhatə dairəsi bərabərliyi
     `JdgAttestation::validate_with_sdn`/`validate_with_sdn_registry`
-- Deduplication is handled by the attestation validator (signer+payload hash
-  uniqueness) to prevent withheld/duplicate commitments.
+- Təkmilləşdirmə attestasiya təsdiqləyicisi tərəfindən idarə olunur (imzalayan+faydalı yük hash
+  unikallıq) saxlanılan/təkrarlanan öhdəliklərin qarşısını almaq üçün.
 
-## Registry and rotation policy
-- SDN keys live in `JdgSdnRegistry`, keyed by `(Algorithm, public_key_bytes)`.
-- `JdgSdnKeyRecord` records the activation height, optional retirement height,
-  and optional parent key.
-- Rotation is governed by `JdgSdnRotationPolicy` (currently: `dual_publish_blocks`
-  overlap window). Registering a child key updates the parent retirement to
-  `child.activation + dual_publish_blocks`, with guardrails:
-  - missing parents are rejected
-  - activations must be strictly increasing
-  - overlaps that exceed the grace window are rejected
-- Registry helpers surface the installed records (`record`, `keys`) for status
-  and API exposure.
+## Qeydiyyat və rotasiya siyasəti
+- SDN açarları `(Algorithm, public_key_bytes)` ilə idarə olunan `JdgSdnRegistry`-də yaşayır.
+- `JdgSdnKeyRecord` aktivləşdirmə hündürlüyünü, isteğe bağlı pensiya hündürlüyünü qeyd edir,
+  və isteğe bağlı ana açar.
+- Rotasiya `JdgSdnRotationPolicy` tərəfindən idarə olunur (hazırda: `dual_publish_blocks`
+  üst-üstə düşən pəncərə). Uşaq açarının qeydiyyatı valideyn pensiyasını yeniləyir
+  `child.activation + dual_publish_blocks`, qoruyucularla:
+  - itkin düşən valideynlər rədd edilir
+  - aktivləşdirmələr ciddi şəkildə artırılmalıdır
+  - lütf pəncərəsini aşan üst-üstə düşmələr rədd edilir
+- Reyestr köməkçiləri status üçün quraşdırılmış qeydləri (`record`, `keys`) üzə çıxarır
+  və API məruz qalması.
 
-## Validation flow
-- `JdgAttestation::validate_with_sdn_registry` wraps the structural
-  attestation checks and SDN enforcement. `JdgSdnPolicy` threads:
-  - `require_commitments`: enforce presence for PII/secret payloads
-  - `rotation`: grace window used when updating parent retirement
-- Each commitment is checked for:
-  - structural validity + attestation-scope match
-  - registered key presence
-  - active window covering the attested block range (retirement bounds already
-    include the dual-publish grace)
-  - valid seal over the domain-tagged commitment body
-- Stable errors surface the index for operator evidence:
+## Doğrulama axını
+- `JdgAttestation::validate_with_sdn_registry` strukturu əhatə edir
+  attestasiya yoxlamaları və SDN tətbiqi. `JdgSdnPolicy` mövzuları:
+  - `require_commitments`: PII/gizli yüklər üçün mövcudluğu təmin edin
+  - `rotation`: valideyn pensiyasını yeniləyərkən istifadə olunan lütf pəncərəsi
+- Hər bir öhdəlik aşağıdakılar üçün yoxlanılır:
+  - struktur etibarlılıq + attestasiya-miqyas uyğunluğu
+  - qeydiyyatdan keçmiş açar mövcudluğu
+  - təsdiqlənmiş blok diapazonunu əhatə edən aktiv pəncərə (təqaüd hədləri artıq
+    ikili nəşr lütfünü daxil edin)
+  - domen etiketli öhdəlik orqanının üzərində etibarlı möhür
+- Sabit xətalar operator sübutları üçün indeksi üzə çıxarır:
   `MissingSdnCommitments`, `UnknownSdnKey`, `InactiveSdnKey`, `InvalidSeal`,
-  or structural `Commitment`/`ScopeMismatch` failures.
+  və ya struktur `Commitment`/`ScopeMismatch` nasazlıqları.
 
 ## Operator runbook
-- **Provision:** register the first SDN key with `activated_at` at or before the
-  first secret block height. Publish the key fingerprint to JDG operators.
-- **Rotate:** generate the successor key, register it with `rotation_parent`
-  pointing at the current key, and confirm the parent retirement equals
-  `child_activation + dual_publish_blocks`. Re-seal payload commitments with
-  the active key during the overlap window.
-- **Audit:** expose registry snapshots (`record`, `keys`) via Torii/status
-  surfaces so auditors can confirm the active key and retirement windows. Alert
-  if the attested range falls outside the active window.
-- **Recovery:** `UnknownSdnKey` → ensure the registry includes the sealing key;
-  `InactiveSdnKey` → rotate or adjust activation heights; `InvalidSeal` →
-  re-seal payloads and refresh attestations.
+- **Təminat:** ilk SDN açarını `activated_at` ilə və ya ondan əvvəl qeydiyyatdan keçirin
+  birinci gizli blokun hündürlüyü. Əsas barmaq izini JDG operatorlarına dərc edin.
+- **Rotate:** varisi açarı yaradın, onu `rotation_parent` ilə qeydiyyatdan keçirin
+  cari açarı göstərin və valideyn pensiyasının bərabər olduğunu təsdiqləyin
+  `child_activation + dual_publish_blocks`. Faydalı yük öhdəliklərini ilə yenidən möhürləyin
+  üst-üstə düşən pəncərə zamanı aktiv açar.
+- **Audit:** Torii/status vasitəsilə reyestr şəkillərini (`record`, `keys`) ifşa edin
+  auditorların aktiv açarı və ehtiyat pəncərələrini təsdiq edə bilməsi üçün səthlər. Xəbərdarlıq
+  təsdiq edilmiş diapazon aktiv pəncərədən kənara düşərsə.
+- **Bərpa:** `UnknownSdnKey` → reyestrdə möhürləmə açarının daxil olmasını təmin edin;
+  `InactiveSdnKey` → aktivləşdirmə hündürlüklərini fırladın və ya tənzimləyin; `InvalidSeal` →
+  faydalı yükləri yenidən möhürləyin və sertifikatları təzələyin.## İş vaxtı köməkçisi
+- `JdgSdnEnforcer` (`crates/iroha_core/src/jurisdiction.rs`) siyasəti paketləşdirir +
+  reyestr və `validate_with_sdn_registry` vasitəsilə attestasiyaları təsdiqləyir.
+- Qeydiyyatlar Norito kodlu `JdgSdnKeyRecord` paketlərindən yüklənə bilər (bax.
+  `JdgSdnEnforcer::from_reader`/`from_path`) və ya yığılmışdır
+  Qeydiyyat zamanı fırlanma qoruyucularını tətbiq edən `from_records`.
+- Operatorlar Norito paketini Torii/status üçün sübut kimi saxlaya bilərlər
+  surfacing isə eyni faydalı yük qəbul tərəfindən istifadə icraçı qidalanır və
+  konsensus mühafizəçiləri. Vahid qlobal enforcer vasitəsilə başlanğıcda işə salına bilər
+  `init_enforcer_from_path` və `enforcer()`/`registry_snapshot()`/`sdn_registry_status()`
+  canlı siyasəti + status/Torii səthləri üçün əsas qeydləri ifşa edin.
 
-## Runtime helper
-- `JdgSdnEnforcer` (`crates/iroha_core/src/jurisdiction.rs`) packages a policy +
-  registry and validates attestations via `validate_with_sdn_registry`.
-- Registries can be loaded from Norito-encoded `JdgSdnKeyRecord` bundles (see
-  `JdgSdnEnforcer::from_reader`/`from_path`) or assembled with
-  `from_records`, which applies the rotation guardrails during registration.
-- Operators can persist the Norito bundle as evidence for Torii/status
-  surfacing while the same payload feeds the enforcer used by admission and
-  consensus guards. A single global enforcer can be initialised at startup via
-  `init_enforcer_from_path`, and `enforcer()`/`registry_snapshot()`/`sdn_registry_status()`
-  expose the live policy + key records for status/Torii surfaces.
-
-## Tests
-- Regression coverage in `crates/iroha_data_model/src/jurisdiction.rs`:
+## Testlər
+- `crates/iroha_data_model/src/jurisdiction.rs`-də reqressiya əhatəsi:
   `sdn_registry_accepts_active_commitment`, `sdn_registry_rejects_unknown_key`,
   `sdn_registry_rejects_inactive_key`, `sdn_registry_rejects_bad_signature`,
   `sdn_registry_sets_parent_retirement_window`,
-  `sdn_registry_rejects_overlap_beyond_policy`, alongside the existing
-  structural attestation/SDN validation tests.
+  `sdn_registry_rejects_overlap_beyond_policy`, mövcud ilə yanaşı
+  struktur attestasiya/SDN doğrulama testləri.

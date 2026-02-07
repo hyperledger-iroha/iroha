@@ -9,82 +9,79 @@ source_last_modified: "2026-01-05T09:28:12.023255+00:00"
 translation_last_reviewed: 2026-02-07
 title: MOCHI Architecture Plan
 description: High-level design for the MOCHI local-network GUI supervisor.
+translator: machine-google-reviewed
 ---
 
-# MOCHI Architecture Plan
+# MOCHI ဗိသုကာအစီအစဥ်
 
 
-## Goals
+## ပန်းတိုင်
 
-- Bootstrap single-peer or multi-peer (four-node BFT) local networks quickly.
-- Wrap `kagami`, `irohad`, and supporting binaries in a friendly GUI workflow.
-- Surface live block, event, and state data through Torii HTTP/WebSocket endpoints.
-- Provide structured builders for transactions and Iroha Special Instructions (ISI), with local signing and submission.
-- Manage snapshots, re-genesis flows, and configuration tweaks without editing files manually.
-- Ship as a single cross-platform Rust binary with no webview or Docker dependency.
+- Bootstrap single-peer သို့မဟုတ် multi-peer (four-node BFT) local networks များကို လျှင်မြန်စွာ။
+- `kagami`၊ `irohad` ကို ခြုံပြီး ဖော်ရွေသော GUI အလုပ်အသွားအလာတွင် binaries များကို ပံ့ပိုးပေးသည်။
+- Torii HTTP/WebSocket အဆုံးမှတ်များမှတဆင့် တိုက်ရိုက်ထုတ်လွှပိတ်ဆို့ခြင်း၊ ဖြစ်ရပ်နှင့် ပြည်နယ်ဒေတာ။
+- အရောင်းအ ၀ ယ်များအတွက်ဖွဲ့စည်းပုံတည်ဆောက်သူများနှင့် Iroha အထူးညွှန်ကြားချက်များ (ISI) ကိုဒေသခံလက်မှတ်ရေးထိုးခြင်းနှင့်တင်ပြခြင်း။
+- ဖိုင်များကို ကိုယ်တိုင်မတည်းဖြတ်ဘဲ လျှပ်တစ်ပြက်ရိုက်ချက်များ၊ ပြန်လည်ဖြစ်ပေါ်မှုများနှင့် ဖိုင်များကို ကိုယ်တိုင်မွမ်းမံပြင်ဆင်ခြင်းများကို စီမံပါ။
+- webview သို့မဟုတ် Docker မှီခိုမှုမရှိသော Rust binary တစ်ခုတည်းအဖြစ် သင်္ဘောတင်ပါ။
 
-## Architecture Overview
+## ဗိသုကာအနှစ်ချုပ်
 
-MOCHI is split into two primary crates housed in a new `/mochi` directory (see the
-[MOCHI Quickstart](mochi/quickstart.md) for build and usage instructions):
+MOCHI ကို `/mochi` လမ်းညွှန်အသစ်တွင် ထည့်သွင်းထားသော မူလသေတ္တာနှစ်လုံးအဖြစ် ခွဲထားသည်။
+တည်ဆောက်မှုနှင့် အသုံးပြုမှုလမ်းညွှန်များအတွက် [MOCHI Quickstart](mochi/quickstart.md)-
 
-1. `mochi-core`: a headless library responsible for configuration templating, key and genesis material generation, supervising child processes, driving Torii clients, and managing filesystem state.
-2. `mochi-ui-egui`: a desktop application built on `egui`/`eframe` that renders the user interface and delegates all orchestration through the `mochi-core` API.
+1. `mochi-core`- ဖွဲ့စည်းမှုပုံစံပုံစံ၊ သော့နှင့် ဥပါဒ်ပစ္စည်းထုတ်လုပ်ခြင်း၊ ကလေးလုပ်ငန်းစဉ်များကို ကြီးကြပ်ခြင်း၊ Torii ဖောက်သည်များကို မောင်းနှင်ခြင်းနှင့် ဖိုင်စနစ်အခြေအနေကို စီမံခန့်ခွဲခြင်းတို့အတွက် တာဝန်ရှိသည့် ခေါင်းမရှိစာကြည့်တိုက်။
+2. `mochi-ui-egui`- `egui`/`eframe` ပေါ်တွင် တည်ဆောက်ထားသော ဒက်စ်တော့ အပလီကေးရှင်းတစ်ခုသည် အသုံးပြုသူမျက်နှာပြင်ကို ပုံဖော်ပေးပြီး `mochi-core` API မှတဆင့် စုစည်းမှုအားလုံးကို လွှဲအပ်ပေးသည်။
 
-Additional front ends (for example a Tauri shell) can hook into `mochi-core` later without reworking the supervisor logic.
+အပိုရှေ့စွန်းများ (ဥပမာ Tauri အခွံ) သည် ကြီးကြပ်ရေးမှူး၏ ယုတ္တိကို ပြန်လည်လုပ်ဆောင်ခြင်းမရှိဘဲ နောက်ပိုင်းတွင် `mochi-core` တွင် ချိတ်နိုင်သည်။
 
-## Process Model
+## လုပ်ငန်းစဉ်ပုံစံ
 
-- Peer nodes run as separate `irohad` child processes. MOCHI never links the peer as a library, avoiding unstable internal APIs and matching production deployment topologies.
-- Genesis and key material are created through `kagami` invocations with user provided inputs (chain ID, initial accounts, assets).
-- Configuration files are generated from TOML templates, filling in Torii and P2P ports, storage paths, snapshot settings, and trusted peer lists. Generated configs are stored beneath a per-network workspace directory.
-- The supervisor tracks process lifecycles, streams stdout/stderr for log surfaces, and polls `/status`, `/metrics`, and `/configuration` endpoints for health.
-- A thin Torii client layer wraps HTTP and WebSocket calls, leaning on the Iroha Rust client crates where possible to avoid reimplementing SCALE encoding/decoding.
+- Peer node များသည် သီးခြား `irohad` ကလေးလုပ်ငန်းစဉ်များအဖြစ် လုပ်ဆောင်သည်။ MOCHI သည် သက်တူရွယ်တူများကို စာကြည့်တိုက်တစ်ခုအဖြစ် ဘယ်တော့မှ လင့်ခ်မချိတ်ဘဲ၊ မတည်မငြိမ်ဖြစ်နေသော အတွင်းပိုင်း API များနှင့် ကိုက်ညီသော ထုတ်လုပ်မှု ဖြန့်ကျက်မှုဆိုင်ရာ topologies များကို ရှောင်ကြဉ်ပါ။
+- ကမ္ဘာဦးကျမ်းနှင့် သော့ချက်ပစ္စည်းကို အသုံးပြုသူပံ့ပိုးပေးထားသည့် ထည့်သွင်းမှုများ (ကွင်းဆက် ID၊ ကနဦးအကောင့်များ၊ ပိုင်ဆိုင်မှု) များဖြင့် `kagami` တောင်းခံမှုများဖြင့် ဖန်တီးထားသည်။
+- ဖွဲ့စည်းမှုဖိုင်များကို TOML နမူနာပုံစံများမှ ထုတ်ပေးပြီး၊ Torii နှင့် P2P ပေါက်များ၊ သိုလှောင်မှုလမ်းကြောင်းများ၊ လျှပ်တစ်ပြက်ဆက်တင်များနှင့် ယုံကြည်ရသော မျိုးတူစာရင်းများကို ဖြည့်သွင်းပါသည်။ ထုတ်လုပ်လိုက်သော configs များကို ကွန်ရက်တစ်ခုစီအတွက် workspace directory အောက်တွင် သိမ်းဆည်းထားသည်။
+- ကြီးကြပ်သူသည် မှတ်တမ်းမျက်နှာပြင်များအတွက် လုပ်ငန်းစဉ်ဘဝစက်ဝန်းများ၊ stdout/stderr များကို ခြေရာခံပြီး ကျန်းမာရေးအတွက် `/status`၊ `/metrics` နှင့် `/configuration` အဆုံးမှတ်များကို စစ်တမ်းကောက်ယူခြင်း။
+- ပါးလွှာသော Torii ဖောက်သည်အလွှာသည် HTTP နှင့် WebSocket ခေါ်ဆိုမှုများကို ခြုံငုံပြီး SCALE ကုဒ်ကုဒ်/ကုဒ်ကို ပြန်လည်အကောင်အထည်ဖော်ခြင်းအား ရှောင်ရှားရန် ဖြစ်နိုင်သည့် Iroha Rust client သေတ္တာများကို မှီထားသည်။
 
-## User Flows Backed by `mochi-core`
+## User Flows ကို `mochi-core` မှ ကျောထောက်နောက်ခံပြုထားသည်။- **Network Creation Wizard**- တစ်ခုတည်း သို့မဟုတ် လေးခုပါသော ပရိုဖိုင်ကို ရွေးပါ၊ လမ်းညွှန်များကို ရွေးကာ `kagami` ကို ခေါ်ဆို၍ အထောက်အထားများ နှင့် ဥပါဒ်များ ထုတ်ပေးရန်။
+- **ဘဝသံသရာထိန်းချုပ်မှုများ**- စတင်ရန်၊ ရပ်တန့်ရန်၊ ရွယ်တူများကို ပြန်လည်စတင်ပါ။ မျက်နှာပြင် တိုက်ရိုက်တိုင်းတာမှုများ၊ သစ်လုံးအမြီးများကို ဖော်ထုတ်ပါ။ runtime configuration endpoints (ဥပမာ၊ မှတ်တမ်းအဆင့်များ) ကိုပြောင်းပါ။
+- **Block နှင့် Event Stream**- UI panel များအတွက် Memory rolling buffer ကို သိမ်းဆည်းကာ `/block/stream` နှင့် `/events` တွင် စာရင်းသွင်းပါ။
+- **State Explorer**- ဒိုမိန်းများ၊ အကောင့်များ၊ ပိုင်ဆိုင်မှုများနှင့် ပိုင်ဆိုင်မှုအဓိပ္ပါယ်ဖွင့်ဆိုချက်များကို စာရင်းပြုစုရန် Norito-ကျောထောက်နောက်ခံပြုထားသော `/query` ခေါ်ဆိုမှုများကို လုပ်ဆောင်ပါ။
+- **Transaction Composer**- အဆင့် mint/transfer ညွှန်ကြားချက်မူကြမ်းများ၊ ၎င်းတို့ကို လက်မှတ်ရေးထိုးထားသော အရောင်းအ၀ယ်များအဖြစ် အစုလိုက်၊ Norito payload ကို အစမ်းကြည့်ရှုပါ၊ `/transaction` မှတစ်ဆင့် တင်သွင်းပါ၊ ရလဒ်များကို စောင့်ကြည့်ပါ။ vault လက်မှတ်ရေးထိုးခြင်းချိတ်များသည် အနာဂတ်တွင် ထပ်တူထပ်မျှရှိနေပါသည်။
+- **Snapshots နှင့် Re-Genesis**- Kura ကို လျှပ်တစ်ပြက် ထုတ်ယူခြင်း/တင်သွင်းခြင်း၊ စတိုးဆိုင်များကို ရှင်းလင်းခြင်းနှင့် အမြန်ပြန်လည်သတ်မှတ်ခြင်းအတွက် ဥပါဒ်ပစ္စည်းကို ပြန်လည်ထုတ်လုပ်ခြင်းတို့ကို စုစည်းပါ။
 
-- **Network Creation Wizard**: choose single or four-peer profile, pick directories, and call `kagami` to generate identities plus genesis.
-- **Lifecycle Controls**: start, stop, restart peers; surface live metrics; expose log tails; toggle runtime configuration endpoints (e.g., log levels).
-- **Block and Event Streams**: subscribe to `/block/stream` and `/events`, storing an in-memory rolling buffer for UI panels.
-- **State Explorer**: run Norito-backed `/query` calls to list domains, accounts, assets, and asset definitions with pagination helpers and metadata summaries.
-- **Transaction Composer**: stage mint/transfer instruction drafts, batch them into signed transactions, preview the Norito payload, submit via `/transaction`, and monitor the resulting events; vault signing hooks remain a future iteration.
-- **Snapshots and Re-Genesis**: orchestrate Kura snapshot export/import, wipe stores, and regenerate genesis material for quick resets.
+## UI အလွှာ (`mochi-ui-egui`)
 
-## UI Layer (`mochi-ui-egui`)
+- ပြင်ပ runtime မလိုအပ်ဘဲ မူရင်း executable တစ်ခုတည်းကို တင်ပို့ရန် `egui`/`eframe` ကို အသုံးပြုသည်။
+- Layout ပါဝင်သည်-
+  - သက်တူရွယ်တူကတ်များ၊ ကျန်းမာရေးညွှန်းကိန်းများနှင့် အမြန်လုပ်ဆောင်မှုများပါရှိသော **ကွန်ရက်ဒိုင်ခွက်**။
+  - **Blocks** panel သည် မကြာသေးမီက ထုတ်လွှင့်မှုများနှင့် အမြင့်ရှာဖွေမှုကို ခွင့်ပြုသည်။
+  - **ဖြစ်ရပ်များ** ဟက်ရှ် သို့မဟုတ် အကောင့်ဖြင့် ငွေပေးငွေယူ အခြေအနေများကို စစ်ထုတ်သည့် အကန့်။
+  - စစ်ဆေးရန်အတွက် ဒိုမိန်းများ၊ အကောင့်များ၊ ပိုင်ဆိုင်မှုများနှင့် ပိုင်ဆိုင်မှု အဓိပ္ပါယ်ဖွင့်ဆိုချက်များအတွက် **State Explorer** တဘ်များ Norito ရလဒ်များအပြင် စစ်ဆေးရန်အတွက် အမှိုက်ပုံများ။
+- batchable mint/transfer palettes၊ တန်းစီစီမံခန့်ခွဲမှု (add/remove/clear)၊ ကုန်ကြမ်း Norito အစမ်းကြည့်ရှုခြင်းနှင့် signer vault မှ ကျောထောက်နောက်ခံပြုထားသော တင်ပြချက်တုံ့ပြန်ချက်၊ သို့မှသာ အော်ပရေတာများသည် dev နှင့် စစ်မှန်သောအာဏာပိုင်များအကြား လဲလှယ်နိုင်ပါသည်။
+- **ကမ္ဘာဦးကျမ်းနှင့် လျှပ်တစ်ပြက်** စီမံခန့်ခွဲမှုမြင်ကွင်း။
+- runtime toggles နှင့် data directory shortcuts အတွက် **ဆက်တင်များ**။
+- UI သည် ချန်နယ်များမှတစ်ဆင့် `mochi-core` မှ အညီအမျှ အပ်ဒိတ်များကို စာရင်းသွင်းသည်။ core သည် `SupervisorHandle` ကိုဖွဲ့စည်းထားသောဖြစ်ရပ်များ (ရွယ်တူအခြေအနေ၊ ပိတ်ဆို့ခေါင်းစီးများ၊ ငွေပေးငွေယူအပ်ဒိတ်များ) ကိုထုတ်လွှင့်သည်။
 
-- Uses `egui`/`eframe` to ship a single native executable without external runtimes.
-- Layout includes:
-  - **Network Dashboard** with peer cards, health indicators, and quick actions.
-  - **Blocks** panel streaming recent commits and allowing height search.
-  - **Events** panel filtering transaction statuses by hash or account.
-  - **State Explorer** tabs for domains, accounts, assets, and asset definitions with paginated Norito results plus raw dumps for inspection.
-- **Composer** form with batchable mint/transfer palettes, queue management (add/remove/clear), raw Norito preview, and submission feedback backed by the signer vault so operators can swap between dev and real authorities.
-- **Genesis & Snapshots** management view.
-- **Settings** for runtime toggles and data directory shortcuts.
-- UI subscribes to asynchronous updates from `mochi-core` via channels; the core exposes a `SupervisorHandle` that streams structured events (peer status, block headers, transaction updates).
+## ဒေသဖွံ့ဖြိုးတိုးတက်ရေးမှတ်စုများ
 
-## Local Development Notes
+- workspace config သည် `ZSTD_SYS_USE_PKG_CONFIG=1` ကို သတ်မှတ်ပေးသောကြောင့် `zstd-sys` သည် ရောင်းချထားသော archives ကို ရယူမည့်အစား host `libzstd` နှင့် ချိတ်ဆက်ထားသည်။ ၎င်းသည် အော့ဖ်လိုင်း သို့မဟုတ် sandboxed ပတ်၀န်းကျင်အတွင်းတွင် pqcrypto-မှီခိုတည်ဆောက်မှုများ (နှင့် MOCHI စမ်းသပ်မှုများ) ကို ထိန်းသိမ်းထားသည်။
 
-- The workspace config sets `ZSTD_SYS_USE_PKG_CONFIG=1` so `zstd-sys` links against the host `libzstd` instead of fetching vendored archives. This keeps pqcrypto-dependent builds (and MOCHI tests) running inside offline or sandboxed environments.
+##ထုပ်ပိုးခြင်းနှင့် ဖြန့်ဖြူးခြင်း။
 
-## Packaging and Distribution
+- MOCHI အစုအဝေးများ (သို့မဟုတ် `PATH`) တွင် `irohad`၊ `iroha_cli` နှင့် `kagami` ဒွိစုံများ။
+- OpenSSL မှီခိုမှုကိုရှောင်ရှားရန် ပြင်ပ HTTPS အတွက် `rustls` ကို အသုံးပြုသည်။
+- သီးသန့်အပလီကေးရှင်းဒေတာရင်းမြစ် (ဥပမာ၊ `~/.local/share/mochi` သို့မဟုတ် ပလပ်ဖောင်းနှင့်ညီမျှသော) တွင် ထုတ်လုပ်ထားသော ပစ္စည်းများအားလုံးကို ကွန်ရက်လမ်းကြောင်းခွဲတစ်ခုဖြင့် သိမ်းဆည်းထားသည်။ GUI သည် "ရှာဖွေသူ/ရှာဖွေသူတွင် ဖော်ထုတ်ရန်" ကူညီပေးသူများကို ပံ့ပိုးပေးသည်။
+- ပဋိပက္ခများကိုကာကွယ်ရန် ရွယ်တူများကိုမစတင်မီ Torii (8080+) နှင့် P2P (1337+) တို့ကို အလိုအလျောက်သိရှိပြီး သိမ်းဆည်းထားပါ။
 
-- MOCHI bundles (or discovers on `PATH`) the `irohad`, `iroha_cli`, and `kagami` binaries.
-- Uses `rustls` for outbound HTTPS to avoid OpenSSL dependencies.
-- Stores all generated artifacts in a dedicated application data root (e.g., `~/.local/share/mochi` or platform equivalent) with per-network subdirectories. GUI provides “reveal in Finder/Explorer” helpers.
-- Auto-detects and reserves Torii (8080+) and P2P (1337+) ports before launching peers to prevent conflicts.
+## အနာဂတ် တိုးချဲ့မှုများ (MVP အတွက် နယ်ပယ် ပြင်ပ)- `mochi-core` ကို မျှဝေခြင်း - အခြားရှေ့စွန်းများ (Tauri၊ CLI ခေါင်းမဲ့မုဒ်)။
+- ဖြန့်ဝေစမ်းသပ်မှုအစုအဝေးများအတွက် ဘက်စုံအိမ်ရှင် စုစည်းမှု။
+- အများသဘောတူအတွင်းပိုင်းအတွက် မြင်သာမြင်သာအောင်များ (Sumeragi ပတ်ပတ်လည်ပြည်နယ်များ၊ အတင်းအဖျင်းအချိန်များ)။
+- အလိုအလျောက် ပေါ်ပင်ကွန်ရက် လျှပ်တစ်ပြက်ရိုက်ချက်များအတွက် CI ပိုက်လိုင်းများနှင့် ပေါင်းစည်းခြင်း။
+- စိတ်ကြိုက် ဒက်ရှ်ဘုတ်များ သို့မဟုတ် ဒိုမိန်းအလိုက် စစ်ဆေးရေးမှူးများအတွက် ပလပ်အင်စနစ်။
 
-## Future Extensions (Out of Scope for MVP)
-
-- Alternate front ends (Tauri, CLI headless mode) sharing `mochi-core`.
-- Multi-host orchestration for distributed testing clusters.
-- Visualizers for consensus internals (Sumeragi round states, gossip timings).
-- Integration with CI pipelines for automated ephemeral network snapshots.
-- Plug-in system for custom dashboards or domain-specific inspectors.
-
-## References
+## ကိုးကား
 
 - [Torii Endpoints](https://docs.iroha.tech/reference/torii-endpoints.html)
-- [Peer Configuration Parameters](https://docs.iroha.tech/reference/peer-config/params.html)
+- [မျိုးတူဖွဲ့စည်းမှုဆိုင်ရာ ကန့်သတ်ချက်များ](https://docs.iroha.tech/reference/peer-config/params.html)
 - [`kagami` repository documentation](https://github.com/hyperledger-iroha/iroha)
-- [Iroha Special Instructions](https://iroha-test.readthedocs.io/en/iroha2-dev/references/isi/)
+- [Iroha အထူးညွှန်ကြားချက်](https://iroha-test.readthedocs.io/en/iroha2-dev/references/isi/)

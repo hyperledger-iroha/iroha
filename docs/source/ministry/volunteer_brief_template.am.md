@@ -9,70 +9,69 @@ source_last_modified: "2025-12-29T18:16:35.984008+00:00"
 translation_last_reviewed: 2026-02-07
 title: Volunteer Brief Template
 summary: Structured template for roadmap item MINFO-3a covering balanced briefs, fact tables, conflict disclosures, and moderation tags.
+translator: machine-google-reviewed
 ---
 
-# Volunteer Brief Template (MINFO-3a)
+# የበጎ ፈቃደኞች አጭር አብነት (MINFO-3a)
 
-Roadmap reference: **MINFO-3a — Balanced brief templates & conflict disclosure.**
+የመንገድ ካርታ ማጣቀሻ፡- **MINFO-3a — ሚዛናዊ አጭር አብነቶች እና የግጭት መግለጫ።**
 
-Volunteer brief submissions summarise positions that citizen panels want governance to review when blacklist changes or other Ministry enforcement motions are proposed. MINFO-3a requires that every brief follows a deterministic structure so the transparency pipeline can (1) render comparable fact tables, (2) confirm that conflicts-of-interest are disclosed, and (3) drop or flag off-topic submissions automatically. This page defines the canonical fields, CSV-style fact table layout, and moderation tags expected by the tooling shipped in `cargo xtask ministry-transparency`.
+የበጎ ፈቃደኞች አጭር ማቅረቢያ የዜጎች ፓነሎች አስተዳደር እንዲከለስላቸው የሚፈልጓቸውን የጥቁር መዝገብ ለውጦች ወይም ሌሎች የሚኒስቴር ማስፈጸሚያ ቅስቀሳዎች ሲቀርቡ አቋሞችን ያጠቃልላል። MINFO-3a እያንዳንዱ አጭር መግለጫ የሚወስን መዋቅር እንዲከተል ይፈልጋል ስለዚህ የግልጽነት ቧንቧ መስመር (1) ተመጣጣኝ የሐቅ ሠንጠረዦችን ማቅረብ፣ (2) የፍላጎት ግጭቶች መገለጣቸውን ማረጋገጥ እና (3) ከርዕስ ውጪ የሚቀርቡ ግቤቶችን መጣል ወይም መጠቆም ይችላል። ይህ ገጽ በ`cargo xtask ministry-transparency` ውስጥ በተላኩ መሳሪያዎች የሚጠበቁ ቀኖናዊ መስኮችን፣ የCSV አይነት የእውነታ ሠንጠረዥ አቀማመጥ እና የአወያይ መለያዎችን ይገልጻል።
 
-> **Norito schema:** the `iroha_data_model::ministry::VolunteerBriefV1` struct (version `1`) is now the authoritative schema for all submissions. Tooling and portal validators call `VolunteerBriefV1::validate` before publishing a brief or referencing it in panel summaries.
+> ** Norito እቅድ፡** የ`iroha_data_model::ministry::VolunteerBriefV1` መዋቅር (ስሪት `1`) አሁን ለሁሉም ማቅረቢያዎች ስልጣን ያለው እቅድ ነው። አጭር መግለጫ ከማተም ወይም በፓናል ማጠቃለያ ላይ ከማጣቀስ በፊት የመሳሪያ እና የፖርታል አረጋጋጮች `VolunteerBriefV1::validate` ይደውላሉ።
 
-## Submission payload structure
+## የማስረከቢያ ጭነት መዋቅር
 
-| Section | Fields | Requirements |
-|---------|--------|--------------|
-| **Envelope** | `version` (u16) | Must be `1`. The version guard allows the Ministry to evolve the schema without ambiguity. |
-| **Identity & stance** | `brief_id` (string, unique per calendar year), `proposal_id` (links to the blacklist or policy motion), `language` (BCP-47), `stance` (`support`/`oppose`/`context`), `submitted_at` (RFC 3339) | All fields required. `stance` feeds dashboards and must match the allowed vocabulary. |
-| **Author info** | `author.name`, `author.organization` (optional), `author.contact`, `author.no_conflicts_certified` (bool) | `author.contact` is redacted from public dashboards but stored in the raw artefact. Set `no_conflicts_certified: true` only if the author attests that no disclosures apply. |
-| **Summary** | `summary.title`, `summary.abstract`, `summary.requested_action` | Textual overview surfaced beside the fact table. Limit `summary.abstract` to ≤2 000 characters. |
-| **Fact table** | `fact_table` array (see next section) | Required even for short briefs. The CLI and transparency ingest job reject submissions without a fact table. |
-| **Disclosures** | `disclosures` array OR `author.no_conflicts_certified: true` | Each disclosure row must include `type` (`financial`, `employment`, `governance`, `family`, `other`), `entity`, `relationship`, and `details`. |
-| **Moderation metadata** | `moderation.off_topic` (bool), `moderation.tags` (array of enum strings), `moderation.notes` | Used by reviewers to suppress astroturfing or unrelated submissions. Off-topic entries do not contribute to dashboards. |
+| ክፍል | መስኮች | መስፈርቶች |
+|--------|--------|-------------|
+| ** ፖስታ *** | `version` (u16) | `1` መሆን አለበት። የስሪት ጠባቂው ሚኒስቴር መሥሪያ ቤቱን ያለምንም ጥርጣሬ እንዲያሻሽል ያስችለዋል። |
+| ** ማንነት እና አቋም** | `brief_id` (ሕብረቁምፊ፣ በቀን መቁጠሪያ ዓመት ልዩ)፣ `proposal_id` (ወደ ጥቁር መዝገብ ወይም የፖሊሲ እንቅስቃሴ አገናኞች)፣ `language` (BCP-47)፣ `stance` (`support`/`oppose`/`context`)፣ `submitted_at` (RFC3339) | ሁሉም መስኮች ያስፈልጋሉ። `stance` ዳሽቦርዶችን ይመገባል እና ከተፈቀደው የቃላት ዝርዝር ጋር መዛመድ አለበት። |
+| **የደራሲ መረጃ** | `author.name`፣ `author.organization` (አማራጭ)፣ `author.contact`፣ `author.no_conflicts_certified` (ቦል) | `author.contact` ከህዝባዊ ዳሽቦርድ ተሰርዟል ነገር ግን በጥሬ ዕቃው ውስጥ ተከማችቷል። `no_conflicts_certified: true` ያዋቅሩት ደራሲው ምንም ይፋዊ መግለጫዎች እንደማይተገበሩ ካረጋገጡ ብቻ ነው። |
+| **ማጠቃለያ** | `summary.title`፣ `summary.abstract`፣ `summary.requested_action` | የጽሑፍ አጠቃላይ እይታ ከእውነታው ሠንጠረዥ አጠገብ ወጣ። `summary.abstract` ወደ ≤2000 ቁምፊዎች ገድብ። |
+| **የእውነታ ሰንጠረዥ** | `fact_table` ድርድር (ቀጣዩን ክፍል ይመልከቱ) | ለአጭር አጭር መግለጫዎች እንኳን ያስፈልጋል። የ CLI እና የግልጽነት ስራ ያለመረጃ ሠንጠረዥ አቅርቦቶችን ውድቅ ያደርጋል። |
+| ** መግለጫዎች *** | `disclosures` ድርድር ወይም `author.no_conflicts_certified: true` | እያንዳንዱ የመግለጫ ረድፍ `type` (`financial`፣ `employment`፣ `governance`፣ `family`፣ `other`፣ I18000000038X፣ I18009 `relationship`፣ እና `details`። |
+| ** ልከኝነት ሜታዳታ** | `moderation.off_topic` (bool), `moderation.tags` (የ enum ሕብረቁምፊዎች ድርድር), `moderation.notes` | ኮከብ ቆጣሪዎችን ወይም ተዛማጅ ያልሆኑ ግቤቶችን ለማፈን በገምጋሚዎች ጥቅም ላይ ይውላል። ከርዕስ ውጪ ያሉ ግቤቶች ለዳሽቦርዶች አስተዋጽዖ አያደርጉም። |
 
-## Fact table specification
+## የእውነታ ሰንጠረዥ መግለጫ
 
-Each `fact_table` row captures a machine-readable claim. Store the rows as JSON objects with the following fields:
+እያንዳንዱ `fact_table` ረድፍ በማሽን ሊነበብ የሚችል የይገባኛል ጥያቄን ይይዛል። ረድፎቹን ከሚከተሉት መስኮች ጋር እንደ JSON ነገሮች ያከማቹ፡| መስክ | መግለጫ |
+|-------|-----------|
+| `claim_id` | የተረጋጋ ለዪ (ለምሳሌ፡ `VB-2026-04-F1`)። |
+| `claim` | የአንድ-ዓረፍተ ነገር እውነታ ወይም ተጽዕኖ መግለጫ። |
+| `status` | ከ `corroborated`፣ `disputed`፣ `context-only` አንዱ። |
+| `impact` | አንድ ወይም ከዚያ በላይ `governance`፣ `technical`፣ `compliance`፣ `community` የያዘ ድርድር። |
+| `citations` | ባዶ ያልሆኑ የሕብረቁምፊዎች ስብስብ። ዩአርኤሎች፣ Torii የጉዳይ መታወቂያዎች ወይም የCID ማጣቀሻዎች ተቀባይነት አላቸው። |
+| `evidence_digest` | አማራጭ BLAKE3 የድጋፍ ሰነዶች ቼክ ድምር። |
 
-| Field | Description |
-|-------|-------------|
-| `claim_id` | Stable identifier (e.g., `VB-2026-04-F1`). |
-| `claim` | Single-sentence statement of fact or impact. |
-| `status` | One of `corroborated`, `disputed`, `context-only`. |
-| `impact` | Array containing one or more of `governance`, `technical`, `compliance`, `community`. |
-| `citations` | Non-empty array of strings. URLs, Torii case IDs, or CID references are accepted. |
-| `evidence_digest` | Optional BLAKE3 checksum of supporting documents. |
+ራስ-ሰር ማስታወሻዎች:
+- የህትመት ውጤት ካርዶችን ለመገንባት የሚያስገባው ስራ `fact_rows` እና `fact_rows_with_citation` ይቆጥራል። ጥቅሶች የሌላቸው ረድፎች በሰው ሊነበቡ በሚችሉት ሠንጠረዥ ውስጥ አሁንም ይታያሉ ነገር ግን እንደ የጎደሉ ማስረጃዎች ክትትል ይደረግባቸዋል።
+- የይገባኛል ጥያቄዎችን አጠር አድርገው ያስቀምጡ እና በአስተዳደር ሀሳቦች ውስጥ ጥቅም ላይ የሚውሉትን ተመሳሳይ መለያዎችን ያጣቅሱ ስለዚህ ማገናኘት የሚወስን ነው።
 
-Automation notes:
-- The ingest job counts `fact_rows` and `fact_rows_with_citation` to build publication scorecards. Rows without citations still appear in the human-readable table but are tracked as missing evidence.
-- Keep claims concise and reference the same identifiers used in governance proposals so cross-linking is deterministic.
+## የግጭት መግለጫ መስፈርቶች
 
-## Conflict disclosure requirements
+1. የገንዘብ፣የስራ፣የአስተዳደር ወይም የቤተሰብ ትስስር ሲኖር ቢያንስ አንድ ይፋዊ መግቢያ ያቅርቡ።
+2. “ያልታወቁ ግጭቶች” ለማለት `author.no_conflicts_certified: true` ይጠቀሙ። ማስረከቦች ይፋ ማውጣት ወይም የ`true` ማረጋገጫን ማካተት አለባቸው። ያለበለዚያ ፣ በሚጠጡበት ጊዜ ምልክት ይደረግባቸዋል ።
+3. ይፋዊ ሰነዶች በሚኖሩበት ጊዜ ሁሉ `disclosures[i].evidence`ን ያካትቱ (ለምሳሌ፣ የድርጅት ሰነዶች፣ የDAO ድምጾች)። ለ"ምንም" ማረጋገጫዎች ማስረጃ አማራጭ ነው ነገር ግን በጥብቅ የሚመከር።
 
-1. Provide at least one disclosure entry when a financial, employment, governance, or familial tie exists.
-2. Use `author.no_conflicts_certified: true` to assert “no known conflicts.” Submissions must include either a disclosure entry or a `true` certification; otherwise, they’re flagged during ingest.
-3. Include `disclosures[i].evidence` whenever public documentation exists (e.g., corporate filings, DAO votes). Evidence is optional for “none” certifications but strongly recommended.
+## የአወያይ መለያዎች እና ከርዕስ ውጪ አያያዝ
 
-## Moderation tags & off-topic handling
+የአወያይ ገምጋሚዎች ወደ ግልፅነት ቧንቧው ከመግባታቸው በፊት ማቅረቢያዎችን መሰየም ይችላሉ፡-
 
-Moderation reviewers can label submissions before they enter the transparency pipeline:
+- `moderation.off_topic: true` የ `off_topic_rejections` ቆጣሪን በመጨመር ግቤቱን ከድምር ቆጠራ ያስወግዳል። ረድፉ አሁንም ለኦዲት በጥሬ መዛግብት ይገኛል።
+- `moderation.tags` የቁጥር እሴቶችን ይቀበላል፡ `duplicate`፣ `needs-translation`፣ `needs-follow-up`፣ `spam`፣ `astroturf`፣ I180000 ሙሉ አጭር መግለጫውን ሳያነቡ መለያዎች የታችኛው ተፋሰስ ገምጋሚዎች እንዲለዩ ያግዛሉ።
+- `moderation.notes` ለሽምግልና ውሳኔ (≤512 ቁምፊዎች) አጭር ማረጋገጫ ያከማቻል።
 
-- `moderation.off_topic: true` removes the entry from aggregate counts while incrementing an `off_topic_rejections` counter. The row is still available in raw archives for audit.
-- `moderation.tags` accepts enum values: `duplicate`, `needs-translation`, `needs-follow-up`, `spam`, `astroturf`, `policy-escalation`. Tags help downstream reviewers triage without re-reading the full brief.
-- `moderation.notes` stores a short justification for the moderation decision (≤512 characters).
+## የማስረከቢያ ዝርዝር
 
-## Submission checklist
+1. ይህንን አብነት ወይም ከዚህ በታች የተገለጸውን የረዳት CLI በመጠቀም የJSON ክፍያን ይሙሉ።
+2. ቢያንስ አንድ የእውነታ ሠንጠረዥ ረድፍ ብዛት; ለእያንዳንዱ ረድፍ ጥቅሶችን ያካትቱ.
+3. ይፋዊ መግለጫዎችን ያቅርቡ ወይም `author.no_conflicts_certified: true` በግልፅ ያዘጋጁ።
+4. ገምጋሚዎች በፍጥነት መለየት እንዲችሉ የአወያይ ሜታዳታ (ነባሪው `off_topic: false`) ያያይዙ።
+5. ከመጫንዎ በፊት ክፍያውን በ`cargo xtask ministry-transparency ingest --volunteer <file>` ወይም በማንኛውም Norito አረጋጋጭ ያረጋግጡ።
 
-1. Fill out the JSON payload using this template or the helper CLI described below.
-2. Populate at least one fact table row; include citations for each row.
-3. Provide disclosures or explicitly set `author.no_conflicts_certified: true`.
-4. Attach moderation metadata (default `off_topic: false`) so reviewers can triage quickly.
-5. Validate the payload with `cargo xtask ministry-transparency ingest --volunteer <file>` or any Norito validator before uploading.
+## ማረጋገጫ CLI (MINFO-3)
 
-## Validation CLI (MINFO-3)
-
-The repository now ships a dedicated validator for volunteer briefs:
+ማከማቻው አሁን ለፈቃደኛ አጭር መግለጫዎች ራሱን የቻለ አረጋጋጭ ይልካል።
 
 ```bash
 cargo xtask ministry-transparency volunteer-validate \
@@ -80,32 +79,30 @@ cargo xtask ministry-transparency volunteer-validate \
   --json-output artifacts/ministry/volunteer_lint_report.json
 ```
 
-Key behaviour:
+ቁልፍ ባህሪ፡- የግለሰብ JSON ዕቃዎችን * ወይም * የአጭር መግለጫዎችን ይቀበላል; በአንድ ሩጫ ውስጥ ብዙ ፋይሎችን ለመደርደር `--input` ብዙ ጊዜ ማለፍ።
+- የስህተቶችን እና የማስጠንቀቂያዎችን ብዛት የሚያሳይ አጭር ማጠቃለያ ያወጣል; ማስጠንቀቂያዎች ባዶ የጥቅስ ዝርዝሮችን ወይም ረጅም ማስታወሻዎችን ያጎላሉ, ስህተቶች ግን ህትመቶችን ያግዳሉ.
+- የሚፈለጉ መስኮች (`brief_id`፣ `proposal_id`፣ `stance`፣ የእውነታ ሠንጠረዥ ይዘቶች፣ ይፋ መግለጫዎች ወይም `no_conflicts_certified`) ከዚህ አብነት ጋር እንደሚዛመዱ እና የቁጥር እሴቶች በሰነድ መዝገበ-ቃላት ውስጥ እንደሚቆዩ ያረጋግጣል።
+- `--json-output <path>` ሲዋቀር አረጋጋጩ በማሽን የሚነበብ አንጸባራቂ ይጽፋል እያንዳንዱን አጭር ማጠቃለያ (የፕሮፖዛል መታወቂያ፣ አቋም፣ አቋም፣ ስህተቶች/ማስጠንቀቂያዎች)። የፖርታሉ `npm run generate:volunteer-lint` ትእዛዝ ከእያንዳንዱ የፕሮፖዛል ገጽ ቀጥሎ ያለውን ግልጽ ሁኔታ ለማሳየት ይህንን አንጸባራቂ ይበላል።
 
-- Accepts individual JSON objects *or* arrays of briefs; pass `--input` multiple times to lint several files in one run.
-- Emits a per-brief summary showing the number of errors and warnings; warnings highlight empty citation lists or overlong notes, while errors block publication.
-- Ensures required fields (`brief_id`, `proposal_id`, `stance`, fact table contents, disclosures or `no_conflicts_certified`) match this template and that enum values stay within the documented vocabularies.
-- When `--json-output <path>` is set the validator writes a machine-readable manifest summarising every brief (proposal id, stance, status, errors/warnings). The portal’s `npm run generate:volunteer-lint` command consumes this manifest to display lint status next to each proposal page.
+የበጎ ፈቃደኞች ማቅረቢያዎች ግልጽነት ወደ ውስጥ ከመግባታቸው በፊት ከ **MINFO-3** ጋር ተገዢ እንዲሆኑ ትዕዛዙን ወደ ፖርታል የስራ ፍሰቶች ወይም CI ያዋህዱ።
 
-Integrate the command into portal workflows or CI to keep volunteer submissions compliant with **MINFO-3** before they reach the transparency ingest job.
+## ምሳሌ ጭነት
 
-## Example payload
+የእውነታ ሰንጠረዥ ረድፎችን፣ መግለጫዎችን እና የአወያይ መለያዎችን ጨምሮ ሙሉ ለሙሉ ለተሞላ ምሳሌ `docs/examples/ministry/volunteer_brief_template.json` ይመልከቱ። የታችኛው ዳሽቦርዶች ጥሬውን JSON ይበላሉ እና በራስ ሰር ያሰላሉ፡-
 
-See `docs/examples/ministry/volunteer_brief_template.json` for a fully populated example, including fact table rows, disclosures, and moderation tags. Downstream dashboards consume the raw JSON and automatically calculate:
-
-- `total_briefs` (off-topic submissions excluded)
+- `total_briefs` (ከርዕስ ውጪ ማስገባቶች አልተካተቱም)
 - `fact_rows` / `fact_rows_with_citation`
 - `disclosures_missing`
 - `off_topic_rejections`
 
-If new fields are required, update this document and the ingest summariser (`xtask/src/ministry.rs`) in the same change so the governance evidence remains reproducible.
+አዳዲስ መስኮች ከተፈለጉ፣ ይህንን ሰነድ እና የመግቢያ ማጠቃለያውን (`xtask/src/ministry.rs`) ያዘምኑ ስለዚህ የአስተዳደር ማስረጃው እንደገና ሊባዛ ይችላል።
 
-## Publication SLA & portal surfacing (MINFO-3)
+## ሕትመት SLA እና ፖርታል ወለል (MINFO-3)
 
-To keep citizen submissions transparent, the portal now publishes briefs on a fixed cadence once they pass validation:
+የዜጎችን ማስረከቦች ግልፅነት ለመጠበቅ ፖርታሉ አሁን ማረጋገጫውን ካለፉ በኋላ ስለ ቋሚ ቃላቶች አጭር መግለጫዎችን ያትማል፡-
 
-1. **T+0–6 hours:** submissions land via the volunteer intake form or `cargo xtask ministry-transparency ingest`. Validators run `VolunteerBriefV1::validate`, reject malformed payloads, and emit lint reports (missing disclosures, duplicate fact IDs, etc.).
-2. **T+6–24 hours:** accepted briefs are queued for translation/triage. Moderation tags (`needs-translation`, `duplicate`, `policy-escalation`, …) are applied, and off-topic entries are archived but excluded from aggregate counts.
-3. **T+24–48 hours:** the portal publishes the brief alongside the corresponding proposal page. Each published proposal now links to “Volunteer Opinions” so reviewers can read support/oppose/context briefs without opening raw JSON.
+1. **T+0–6ሰዓት፡** መሬት በበጎ ፈቃደኝነት ቅበላ ቅፅ ወይም `cargo xtask ministry-transparency ingest` በኩል ያቀርባል። አረጋጋጮች `VolunteerBriefV1::validate` ን ያሂዳሉ፣ የተበላሹ ሸክሞችን ውድቅ ያደርጋሉ እና የተዘበራረቁ ሪፖርቶችን ያሰራጫሉ (የጎደሉ መግለጫዎች፣ የተባዙ የእውነታ መታወቂያዎች፣ ወዘተ)።
+2. **T+6–24ሰአታት፡** ተቀባይነት ያላቸው አጭር መግለጫዎች ለትርጉም/ለተለያዩ ተሰልፈዋል። የአወያይ መለያዎች (`needs-translation`፣ `duplicate`፣ `policy-escalation`፣ …) ተተግብረዋል፣ እና ከርዕስ ውጪ ያሉ ግቤቶች በማህደር ተቀምጠዋል ነገር ግን ከድምር ቆጠራዎች የተገለሉ ናቸው።
+3. **T+24–48ሰአታት፡** ፖርታሉ አጭር ዘገባውን ከተዛማጅ ፕሮፖዛል ገጽ ጋር ያትማል። እያንዳንዱ የታተመ ፕሮፖዛል አሁን ከ"ፍቃደኛ አስተያየቶች" ጋር ይገናኛል ስለዚህ ገምጋሚዎች ጥሬ JSON ሳይከፍቱ የድጋፍ/መቃወም/የአውድ አጭር መግለጫዎችን ማንበብ ይችላሉ።
 
-If a submission is marked `policy-escalation` or `astroturf`, the SLA tightens to **12 hours** so governance can respond quickly. Operators can audit the SLA via the **Volunteer Briefs** page in the docs portal (`docs/portal/docs/ministry/volunteer-briefs.md`), which lists the latest publication windows, lint status, and links to Norito artefacts.
+አንድ ግቤት `policy-escalation` ወይም `astroturf` ምልክት ከተደረገበት፣ SLA ወደ **12ሰአታት** ያጠነክራል ስለዚህ አስተዳደር በፍጥነት ምላሽ መስጠት ይችላል። ኦፕሬተሮች SLA ኦዲት ማድረግ ይችላሉ ** የበጎ ፈቃደኞች አጭር መግለጫ ** ገጽ በሰነዶች ፖርታል (`docs/portal/docs/ministry/volunteer-briefs.md`) ፣ እሱም የቅርብ ጊዜዎቹን የሕትመት መስኮቶች ፣ የ lint ሁኔታ እና ከ Norito ቅርሶች ጋር ይዘረዝራል።

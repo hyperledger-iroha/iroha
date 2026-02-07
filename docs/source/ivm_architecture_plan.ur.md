@@ -6,83 +6,82 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: da8a99adbbcf1d8b209a25da32e256c0dad2860633f373d7410a3a91d790c938
 source_last_modified: "2026-01-21T10:21:48.087325+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# IVM Architecture Refactor Plan
+# IVM فن تعمیر ریفیکٹر پلان
 
-This plan captures the short-term milestones for reshaping the Iroha Virtual Machine
-(IVM) into clearer layers while preserving security and performance characteristics.
-It focuses on isolating responsibilities, making host integrations safer, and
-preparing the Kotodama language stack for extraction into a standalone crate.
+اس منصوبے میں Iroha ورچوئل مشین کو تبدیل کرنے کے لئے قلیل مدتی سنگ میل کو اپنی گرفت میں لے لیا ہے
+(IVM) سیکیورٹی اور کارکردگی کی خصوصیات کو محفوظ رکھتے ہوئے واضح پرتوں میں۔
+یہ ذمہ داریوں کو الگ تھلگ کرنے ، میزبان انضمام کو محفوظ تر بنانے ، اور پر مرکوز ہے
+اسٹینڈ لون کریٹ میں نکالنے کے لئے Kotodama زبان کے اسٹیک کی تیاری۔
 
-## Goals
+## اہداف
 
-1. **Layered runtime façade** – introduce an explicit runtime interface so the VM
-   core can be embedded behind a narrow trait and alternative front-ends can evolve
-   without touching internal modules.
-2. **Host/syscall boundary  hardening** – route syscall dispatch through a
-   dedicated adapter that enforces ABI policy and pointer validation before any host
-   code executes.
-3. **Language/tooling separation** – move Kotodama specific code to a new crate and
-   keep only the bytecode execution surface in `ivm`.
-4. **Configuration cohesion** – unify acceleration and feature toggles so they are
-   driven through `iroha_config`, removing environment-based knobs in production
-   paths.
+1. ** پرتوں والے رن ٹائم فاؤڈ ** - ایک واضح رن ٹائم انٹرفیس متعارف کروائیں لہذا VM
+   کور کو ایک تنگ خصلت کے پیچھے سرایت کیا جاسکتا ہے اور متبادل فرنٹ اینڈ تیار ہوسکتے ہیں
+   داخلی ماڈیولز کو چھوئے بغیر۔
+2.
+   سرشار اڈاپٹر جو کسی بھی میزبان کے سامنے ABI پالیسی اور پوائنٹر کی توثیق کو نافذ کرتا ہے
+   کوڈ پر عمل درآمد ہوتا ہے۔
+3. ** زبان/ٹولنگ علیحدگی ** - Kotodama مخصوص کوڈ کو ایک نئے کریٹ میں منتقل کریں اور
+   `ivm` میں صرف بائیکوڈ پر عمل درآمد کی سطح کو رکھیں۔
+4. ** کنفیگریشن ہم آہنگی ** - ایکسلریشن اور فیچر ٹوگل کو متحد کریں تاکہ وہ ہیں
+   `iroha_config` کے ذریعے کارفرما ، پیداوار میں ماحول پر مبنی نوبس کو ہٹا کر
+   راستے
 
-## Phase Breakdown
+## فیز خرابی
 
-### Phase 1 – Runtime façade (in progress)
-- Add a `runtime` module that defines a `VmEngine` trait describing lifecycle
-  operations (`load_program`, `execute`, host plumbing).
-- Teach `IVM` to implement the trait.  This keeps the existing struct but allows
-  consumers (and future tests) to depend on the interface instead of concrete
-  types.
-- Start shedding direct module re-exports from `lib.rs` so callers import via the
-  façade when possible.
+### فیز 1 - رن ٹائم فاؤڈ (پیشرفت میں)
+- ایک `runtime` ماڈیول شامل کریں جو زندگی کی تصویر کو بیان کرنے والے `VmEngine` خصلت کی وضاحت کرتا ہے
+  آپریشنز (`load_program` ، `execute` ، میزبان پلمبنگ)۔
+- خصلت کو نافذ کرنے کے لئے `IVM` سکھائیں۔  یہ موجودہ ڈھانچے کو برقرار رکھتا ہے لیکن اجازت دیتا ہے
+  کنکریٹ کے بجائے انٹرفیس پر انحصار کرنے کے لئے صارفین (اور مستقبل کے ٹیسٹ)
+  اقسام
+- `lib.rs` سے براہ راست ماڈیول دوبارہ برآمدات کا آغاز کریں تاکہ کال کرنے والے کے ذریعے درآمد کریں
+  جب ممکن ہو تو
 
-**Security / performance impact**: The façade restricts direct access to internal
-state; only safe entry points are exposed.  This makes it easier to audit host
-interactions and reason about gas or TLV handling.
+** سیکیورٹی / کارکردگی کا اثر **: فالڈ داخلی تک براہ راست رسائی پر پابندی عائد کرتا ہے
+ریاست ؛ صرف محفوظ انٹری پوائنٹس کو بے نقاب کیا گیا ہے۔  اس سے میزبان آڈٹ کرنا آسان ہوجاتا ہے
+گیس یا TLV ہینڈلنگ کے بارے میں تعامل اور وجہ۔
 
-### Phase 2 – Syscall dispatcher
-- Introduce a `SyscallDispatcher` component that wraps `IVMHost` and enforces ABI
-  policy and pointer validation once, in one location.
-- Migrate the default host and mock hosts to use the dispatcher, removing
-  duplicated validation logic.
-- Make dispatcher pluggable so hosts can supply custom instrumentation without
-  bypassing safety checks.
-- Provide a `SyscallDispatcher::shared(...)` helper so cloned VMs can forward
-  syscalls through a shared `Arc<Mutex<..>>` host without each worker building
-  bespoke wrappers.
+### فیز 2 - سیسکل ڈسپیچر
+- `SyscallDispatcher` جزو متعارف کروائیں جو `IVMHost` کو لپیٹتا ہے اور ABI کو نافذ کرتا ہے
+  پالیسی اور پوائنٹر کی توثیق ایک بار ، ایک جگہ پر۔
+- ڈسپیچر کو استعمال کرنے کے لئے پہلے سے طے شدہ میزبان اور موک میزبانوں کو منتقل کریں ، ہٹاتے ہوئے
+  نقل کی توثیق کی منطق۔
+- ڈسپیچر پلگ ایبل بنائیں تاکہ میزبان بغیر کسٹم اوزار کی فراہمی کرسکیں
+  حفاظتی چیکوں کو نظرانداز کرنا۔
+- ایک `SyscallDispatcher::shared(...)` مددگار فراہم کریں تاکہ کلونڈ VMs آگے جاسکیں
+  ہر کارکن کی عمارت کے بغیر مشترکہ `Arc<Mutex<..>>` میزبان کے ذریعے سیسکلز
+  بیسپوک ریپرس۔
 
-**Security / performance impact**: Centralised gating protects against hosts that
-forget to call `is_syscall_allowed`, and it allows future caching of pointer
-validations for repeated syscalls.
+** سیکیورٹی / کارکردگی کا اثر **: مرکزی گیٹنگ میزبانوں کے خلاف حفاظت کرتا ہے
+`is_syscall_allowed` پر کال کرنا بھول جائیں ، اور یہ مستقبل کے پوائنٹر کی کیچنگ کی اجازت دیتا ہے
+بار بار سیسکلز کے لئے توثیق۔
 
-### Phase 3 – Kotodama extraction
-- Kotodama compiler extracted to `crates/kotodama_lang` (from `crates/ivm/src/kotodama`).
-- Provide a minimal bytecode API that the VM consumes (`compile_to_ivm_bytecode`).
+### فیز 3 - Kotodama نکالنے
+- Kotodama مرتب `crates/kotodama_lang` (`crates/ivm/src/kotodama` سے) پر نکالا گیا۔
+- ایک کم سے کم بائیک کوڈ API فراہم کریں جو VM کھاتا ہے (`compile_to_ivm_bytecode`)۔
 
-**Security / performance impact**: Decoupling lowers the attack surface of the VM
-core and allows language innovation without risking interpreter regressions.
+** سیکیورٹی / کارکردگی کا اثر **: ڈیکولنگ VM کے حملے کی سطح کو کم کرتا ہے
+بنیادی اور ترجمان کے رجعتوں کو خطرے میں ڈالے بغیر زبان کی جدت کی اجازت دیتا ہے۔### فیز 4 - ترتیب استحکام
+- موجودہ ماحول کو اوور رائڈز (`IVM_DISABLE_CUDA` ، `IVM_DISABLE_METAL`) کو رن ٹائم کِل سوئچ کے طور پر برقرار رکھتے ہوئے `iroha_config` پریسیٹس (جیسے ، GPU بیک اینڈ کو قابل بنانا) کے ذریعے تھریڈ ایکسلریشن کے اختیارات۔
+- نئے fawade کے ذریعے `RuntimeConfig` آبجیکٹ کو بے نقاب کریں لہذا میزبان منتخب کریں
+  عین مطابق ایکسلریشن کی پالیسیاں واضح طور پر۔
 
-### Phase 4 – Configuration consolidation
-- Thread acceleration options through `iroha_config` presets (e.g., enabling GPU backends) while keeping the existing environment overrides (`IVM_DISABLE_CUDA`, `IVM_DISABLE_METAL`) as runtime kill switches.
-- Expose a `RuntimeConfig` object through the new façade so hosts select
-  deterministic acceleration policies explicitly.
+** سیکیورٹی / کارکردگی کا اثر **: ENV پر مبنی ٹوگل کو ختم کرنا خاموش سے گریز کرتا ہے
+ترتیب بڑھنے اور تعیناتیوں میں تعی .ن پسندانہ سلوک کو یقینی بناتا ہے۔
 
-**Security / performance impact**: Eliminating env-based toggles avoids silent
-configuration drift and ensures deterministic behaviour across deployments.
+## فوری اگلے اقدامات
 
-## Immediate next steps
+- فیز 1 کو ختم کرنے اور اعلی سطحی کال سائٹوں کو اپ ڈیٹ کرکے فیز 1 کو ختم کریں
+  اس پر انحصار کریں۔
+- عوامی سطح پر اور جان بوجھ کر عوامی APIs کو یقینی بنانے کے لئے عوامی دوبارہ برآمدات کا آڈٹ کریں
+  کریٹ سے باہر نکلنا۔
+- ایک علیحدہ ماڈیول میں سیسکل ڈسپیچر API پروٹو ٹائپ کریں اور ہجرت کریں
+  پہلے سے طے شدہ میزبان ایک بار توثیق کرتا ہے۔
 
-- Finish Phase 1 by adding the façade trait and updating high-level call sites to
-  depend on it.
-- Audit public re-exports to ensure only the façade and deliberately public APIs
-  leak out of the crate.
-- Prototype the syscall dispatcher API in a separate module and migrate the
-  default host once validated.
-
-Progress on each phase will be tracked in `status.md` once the implementation is
-underway.
+ایک بار عمل درآمد ہونے کے بعد ہر مرحلے پر پیشرفت کو `status.md` میں ٹریک کیا جائے گا
+جاری ہے۔

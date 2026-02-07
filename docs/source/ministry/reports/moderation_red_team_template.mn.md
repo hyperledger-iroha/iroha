@@ -9,74 +9,75 @@ source_last_modified: "2025-12-29T18:16:35.982646+00:00"
 translation_last_reviewed: 2026-02-07
 title: Red-Team Drill Report Template
 summary: Copy this file for every MINFO-9 drill to capture metadata, evidence, and remediation actions.
+translator: machine-google-reviewed
 ---
 
-> **How to use:** duplicate this template to `docs/source/ministry/reports/<YYYY-MM>-mod-red-team-<scenario>.md` immediately after each drill. Keep filenames lowercase, hyphenated, and aligned with the drill ID logged in Alertmanager.
+> **Хэрхэн ашиглах вэ:** Өрөмдлөг бүрийн дараа энэ загварыг `docs/source/ministry/reports/<YYYY-MM>-mod-red-team-<scenario>.md` болгон хуулбарлана уу. Файлын нэрийг жижиг үсгээр, зураасаар зурж, Alertmanager-д нэвтэрсэн өрөмдлөгийн ID-тай зэрэгцүүлэн үлдээгээрэй.
 
-# Red-Team Drill Report — `<SCENARIO NAME>`
+# Улаан-Багийн Өрмийн тайлан — `<SCENARIO NAME>`
 
-- **Drill ID:** `<YYYYMMDD>-<scenario>`
-- **Date & window:** `<YYYY-MM-DD HH:MMZ – HH:MMZ>`
-- **Scenario class:** `smuggling | bribery | gateway | ...`
-- **Operators:** `<names / handles>`
-- **Dashboards frozen from commit:** `<git SHA>`
-- **Evidence bundle:** `artifacts/ministry/red-team/<YYYY-MM>/<scenario>/`
-- **SoraFS CID (optional):** `<cid>`  
-- **Related roadmap items:** `MINFO-9`, plus any linked tickets.
+- **Өрмийн ID:** `<YYYYMMDD>-<scenario>`
+- **Огноо, цонх:** `<YYYY-MM-DD HH:MMZ – HH:MMZ>`
+- **Хувилбарын анги:** `smuggling | bribery | gateway | ...`
+- **Операторууд:** `<names / handles>`
+- **Хяналтын самбарыг үйлдлээс царцаасан:** `<git SHA>`
+- **Нотлох баримтын багц:** `artifacts/ministry/red-team/<YYYY-MM>/<scenario>/`
+- **SoraFS CID (заавал биш):** `<cid>`  
+- **Холбогдох замын зураглал:** `MINFO-9`, дээр нь холбоотой тасалбарууд.
 
-## 1. Objectives & Entry Conditions
+## 1. Зорилтууд ба Элсэлтийн нөхцөл
 
-- **Primary objectives**
+- **Үндсэн зорилтууд**
   - `<e.g. Verify denylist TTL enforcement under smuggling attack>`
-- **Prerequisites confirmed**
-  - `emergency_canon_policy.md` version `<tag>`
+- ** Урьдчилсан нөхцөлийг баталгаажуулсан**
+  - `emergency_canon_policy.md` хувилбар `<tag>`
   - `dashboards/grafana/ministry_moderation_overview.json` digest `<sha256>`
-  - Override authority on-call: `<name>`
+  - Дуудлагын дагуу эрх мэдлийг хүчингүй болгох: `<name>`
 
-## 2. Execution Timeline
+## 2. Гүйцэтгэх хугацаа
 
-| Timestamp (UTC) | Actor | Action / Command | Result / Notes |
-|-----------------|-------|------------------|----------------|
+| Цагийн тэмдэг (UTC) | Жүжигчин | Үйлдэл / Тушаал | Үр дүн / Тайлбар |
+|----------------|-------|------------------|----------------|
 |  |  |  |  |
 
-> Include Torii request IDs, chunk hashes, override approvals, and Alertmanager links.
+> Torii хүсэлтийн ID, бөөн хэш, хүчингүй болгох зөвшөөрөл, Alertmanager холбоосыг оруулна уу.
 
-## 3. Observations & Metrics
+## 3. Ажиглалт ба хэмжигдэхүүн
 
-| Metric | Target | Observed | Pass/Fail | Notes |
+| Метрик | Зорилтот | Ажигласан | Давсан/Бүтэлгүйтсэн | Тэмдэглэл |
 |--------|--------|----------|-----------|-------|
-| Alert response latency | `<X> min` | `<Y> min` | ✅/⚠️ |  |
-| Moderation detection rate | `>= <value>` |  |  |  |
-| Gateway anomaly detection | `Alert fired` |  |  |  |
+| Сэрэмжлүүлгийн хариу саатал | `<X> min` | `<Y> min` | ✅/⚠️ |  |
+| Модерацийг илрүүлэх түвшин | `>= <value>` |  |  |  |
+| Гарцын гажиг илрүүлэх | `Alert fired` |  |  |  |
 
 - `Grafana export:` `artifacts/.../dashboards/ministry_moderation_overview.json`
 - `Alert bundle:` `artifacts/.../alerts/ministry_moderation_rules.yml`
 - `Norito manifests:` `<path>`
 
-## 4. Findings & Remediation
+## 4. Олдворууд ба засвар
 
-| Severity | Finding | Owner | Target Date | Status / Link |
+| Хүнд байдал | Олж байна | Эзэмшигч | Зорилтот огноо | Статус / Холбоос |
 |----------|---------|-------|-------------|---------------|
-| High |  |  |  |  |
+| Өндөр |  |  |  |  |
 
-Document how calibration manifests, denylist policies, or SDK/tooling must change. Link to GitHub/Jira issues and note blocked/unblocked states.
+Тохируулга хэрхэн илрэх, жагсаалтаас хасах бодлого эсвэл SDK/хэрэгсэл өөрчлөгдөх ёстойг баримтжуулна уу. GitHub/Jira-тай холбогдож, блоклосон/блоклосон төлөвийг тэмдэглэ.
 
-## 5. Governance & Approvals
+## 5. Засаглал ба Зөвшөөрөл
 
-- **Incident commander sign-off:** `<name / timestamp>`
-- **Governance council review date:** `<meeting id>`
-- **Follow-up checklist:** `[ ] status.md updated`, `[ ] roadmap row updated`, `[ ] transparency packet annotated`
+- **Осол гарсан командлагчийн гарын үсэг:** `<name / timestamp>`
+- **Засаглалын зөвлөлийг хянан шалгах огноо:** `<meeting id>`
+- **Дараах шалгах хуудас:** `[ ] status.md updated`, `[ ] roadmap row updated`, `[ ] transparency packet annotated`
 
-## 6. Attachments
+## 6. Хавсралт
 
-- `[ ] CLI logbook (`logs/<file>.md`)`
+- `[ ] CLI logbook (`logs/.md`)`
 - `[ ] Dashboard JSON export`
 - `[ ] Alertmanager history`
 - `[ ] SoraFS manifest / CAR`
 - `[ ] Override audit log`
 
-Mark each attachment with `[x]` once uploaded to the evidence bundle and SoraFS snapshot.
+Хавсралт бүрийг нотлох баримтын багц болон SoraFS агшин зуурт байршуулсны дараа `[x]` гэж тэмдэглэнэ үү.
 
 ---
 
-_Last updated: {{ date | default("2026-02-20") }}_
+_Сүүлд шинэчлэгдсэн: {{огноо | анхдагч("2026-02-20") }}_

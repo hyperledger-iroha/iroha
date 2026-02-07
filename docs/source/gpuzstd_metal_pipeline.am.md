@@ -7,115 +7,114 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 019b3aa25ae224c1595467ac809f2c53290813e91a78b78b94ca71c3dd950264
 source_last_modified: "2026-01-31T19:25:45.072449+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# GPU Zstd (Metal) Pipeline
+# ጂፒዩ Zstd (ሜታል) የቧንቧ መስመር
 
-This document describes the deterministic GPU pipeline used by the Metal helper
-for zstd compression. It is a design and implementation guide for the
-`gpuzstd_metal` helper that emits standard zstd frames and deterministic bytes
-for a given sequence stream. Outputs must roundtrip with CPU decoders; byte-for-
-byte parity with the CPU compressor is not required because sequence generation
-differs.
+ይህ ሰነድ በብረታ ብረት ረዳት የሚጠቀመውን ቆራጥ የጂፒዩ መስመር ይገልጻል
+ለ zstd መጭመቂያ. የንድፍ እና የትግበራ መመሪያ ነው
+`gpuzstd_metal` መደበኛ zstd ፍሬሞችን እና የሚወስን ባይት የሚያመነጭ
+ለተወሰነ ተከታታይ ዥረት. ውጤቶቹ ከሲፒዩ ዲኮደሮች ጋር መዞር አለባቸው። ባይት ለ-
+ከሲፒዩ መጭመቂያው ጋር ባይት እኩልነት አያስፈልግም ምክንያቱም ተከታታይ ማመንጨት
+ይለያያል።
 
-## Goals
+# ግቦች
 
-- Emit standard zstd frames that decode identically with CPU zstd; byte parity
-  with the CPU compressor is not required.
-- Deterministic outputs across hardware, drivers, and thread scheduling.
-- Explicit bounds checks and predictable buffer lifetimes.
+- ከሲፒዩ zstd ጋር በተመሳሳይ ሁኔታ የሚፈቱ መደበኛ zstd ፍሬሞችን ያውጡ; ባይት እኩልነት
+  በሲፒዩ መጭመቂያ አያስፈልግም.
+- በሃርድዌር ፣ በሾፌሮች እና በክር መርሐግብር ላይ የሚወስኑ ውጤቶች።
+- ግልጽ የሆኑ የድንበር ፍተሻዎች እና ሊተነበይ የሚችል ቋት የህይወት ዘመን።
 
-## Current implementation note
+## የአሁኑ የትግበራ ማስታወሻ
 
-- Match finding and sequence generation run on GPU.
-- Frame assembly and entropy coding (Huffman/FSE) currently run on the host
-  using the in-crate encoder; GPU Huffman/FSE kernels are parity-tested but not
-  yet wired into the full frame path.
-- Decode uses the in-crate frame decoder with a CPU zstd fallback for unsupported frames;
-  full GPU block decode remains in progress.
+- ግጥሚያ ፍለጋ እና ተከታታይ ማመንጨት በጂፒዩ ላይ ይሰራል።
+- የፍሬም ስብሰባ እና ኢንትሮፒ ኮድ (Huffman/FSE) በአሁኑ ጊዜ በአስተናጋጁ ላይ ይሰራሉ
+  የ in-crate ኢንኮደር በመጠቀም; ጂፒዩ ሃፍማን/ኤፍኤስኢ አስኳሎች በእኩልነት የተፈተኑ ናቸው ግን ግን አይደሉም
+  ወደ ሙሉ ፍሬም መንገድ ገና ተሽሯል።
+- ዲኮድ ላልተደገፉ ክፈፎች የውስጠ-ክሬት ፍሬም ዲኮደርን ከሲፒዩ zstd ውድቀት ጋር ይጠቀማል።
+  ሙሉ የጂፒዩ ብሎክ መፍታት በሂደት ላይ ነው።
 
-## Encoding pipeline (high level)
+## ኢንኮዲንግ ቧንቧ መስመር (ከፍተኛ ደረጃ)
 
-1. Input staging
-   - Copy the input into a device buffer.
-   - Partition into fixed-size chunks (for sequence generation) and blocks (for
-     zstd frame assembly).
-2. Match finding and sequence emission
-   - GPU kernels scan each chunk and emit sequences (literal length, match
-     length, offset).
-   - Sequence ordering is stable and deterministic.
-3. Literal preparation
-   - Collect literals referenced by sequences.
-   - Build literal histograms and select literal block mode (raw, RLE, or
-     Huffman) deterministically.
-4. Huffman tables (literals)
-   - Generate code lengths from the histogram.
-   - Build canonical tables with deterministic tie-breaking that matches CPU
-     zstd output.
-5. FSE tables (LL/ML/OF)
-   - Normalize frequency counts.
-   - Build FSE decoding/encoding tables deterministically.
-6. Bitstream writer
-   - Pack bits little-endian (LSB-first).
-   - Flush on byte boundaries; pad with zeros only.
-   - Mask values to declared bit widths and enforce capacity checks.
-7. Block and frame assembly
-   - Emit block headers (type, size, last-block flag).
-   - Serialize literals and sequences into compressed blocks.
-   - Emit standard zstd frame headers and optional checksums.
+1. የግቤት አቀማመጥ
+   - ግቤቱን ወደ መሳሪያ ቋት ይቅዱ።
+   - ወደ ቋሚ መጠን ቁርጥራጮች (ለተከታታይ ትውልድ) እና ብሎኮች (ለ
+     zstd ፍሬም ስብሰባ).
+2. የግጥሚያ ፍለጋ እና ተከታታይ ልቀት
+   - የጂፒዩ ከርነሎች እያንዳንዱን ቁራጭ ይቃኛሉ እና ቅደም ተከተሎችን ያስወጣሉ (ጥሬው ርዝመት ፣ ግጥሚያ
+     ርዝመት, ማካካሻ).
+   - ቅደም ተከተል ማዘዝ የተረጋጋ እና የሚወሰን ነው.
+3. የቃል ዝግጅት
+   - በቅደም ተከተሎች የተጠቀሰውን ቃል በቃል ይሰብስቡ.
+   - ቀጥተኛ ሂስቶግራሞችን ይገንቡ እና ቃል በቃል የማገጃ ሁነታን ይምረጡ (ጥሬ፣ አርኤል፣ ወይም
+     ሃፍማን) በቆራጥነት።
+4. የሃፍማን ጠረጴዛዎች (ቃል በቃል)
+   - ከሂስቶግራም የኮድ ርዝማኔዎችን ይፍጠሩ.
+   - ከሲፒዩ ጋር የሚዛመድ ቀኖናዊ ሠንጠረዦችን በቆራጥ ማሰሪያ-ሰበር ይገንቡ
+     zstd ውፅዓት.
+5. የኤፍኤስኢ ሠንጠረዦች (LL/ML/OF)
+   - የድግግሞሽ ብዛትን መደበኛ ያድርጉት።
+   - የ FSE ዲኮዲንግ/ኢኮዲንግ ሠንጠረዦችን በቆራጥነት ይገንቡ።
+6. Bitstream ጸሐፊ
+   - ቢትስ ትንሽ-ኤንዲያን (LSB-መጀመሪያ) ያሽጉ።
+   - በባይት ወሰኖች ላይ ማጠብ; ፓድ ከዜሮዎች ጋር ብቻ።
+   - የታወጁ ቢት ስፋቶችን ጭንብል እና የአቅም ፍተሻዎችን ለማስፈጸም።
+7. አግድ እና ክፈፍ ስብሰባ
+   - የማገጃ ራስጌዎችን አውጣ (አይነት፣ መጠን፣ የመጨረሻ-ብሎክ ባንዲራ)።
+   - ቀጥተኛ እና ቅደም ተከተሎችን ወደ የታመቁ ብሎኮች ተከታታይ ያድርጉ።
+   - መደበኛ zstd ፍሬም ራስጌዎችን እና አማራጭ ቼኮችን ያውጡ።
 
-## Decoding pipeline (high level)
+## የቧንቧ መስመር መፍታት (ከፍተኛ ደረጃ)
 
-1. Frame parse
-   - Validate magic bytes, window settings, and frame header fields.
-2. Bitstream reader
-   - Read LSB-first bit sequences with strict bounds checks.
-3. Literal decode
-   - Decode literal blocks (raw, RLE, or Huffman) into the literal buffer.
-4. Sequence decode
-   - Decode LL/ML/OF values using FSE tables.
-   - Reconstruct matches using the sliding window.
-5. Output and checksum
-   - Write reconstructed bytes into the output buffer.
-   - Verify optional checksums when enabled.
+1. ፍሬም ትንተና
+   - አስማታዊ ባይት፣ የመስኮት ቅንብሮች እና የፍሬም ራስጌ መስኮችን ያረጋግጡ።
+2. Bitstream አንባቢ
+   - የ LSB-የመጀመሪያ ቢት ቅደም ተከተሎችን በጥብቅ የወሰን ፍተሻዎች ያንብቡ።
+3. የቃል ዲኮድ
+   - ቃል በቃል ብሎኮችን (ጥሬ፣ አርኤል፣ ወይም ሃፍማን) በጥሬው ቋት ውስጥ ይግለጹ።
+4. ቅደም ተከተል መፍታት
+   - የ FSE ሰንጠረዦችን በመጠቀም LL/ML/OF እሴቶችን ይግለጹ።
+   - ተንሸራታች መስኮቱን በመጠቀም ግጥሚያዎችን እንደገና ገንባ።
+5. ውፅዓት እና ቼክ
+   - እንደገና የተገነቡ ባይት ወደ የውጤት ቋት ይጻፉ።
+   - ሲነቃ አማራጭ ቼኮችን ያረጋግጡ።
 
-## Buffer lifetimes and ownership
+## የህይወት ዘመንን እና የባለቤትነት ጊዜን አቆይ- የግቤት ቋት፡ አስተናጋጅ -> መሣሪያ፣ ተነባቢ-ብቻ።
+- የቅደም ተከተል ቋት፡ መሳሪያ፣ በክብሪት ፍለጋ የተሰራ እና በ entropy የሚበላ
+  ኮድ መስጠት; ምንም የማገጃ ዳግም መጠቀም.
+- ቃል በቃል ቋት: መሣሪያ, ለእያንዳንዱ ብሎክ የተሰራ እና እገዳ በኋላ የተለቀቀ
+  ልቀት.
+- የውጤት ቋት፡ መሳሪያ፣ አስተናጋጁ እስኪገለብጣቸው ድረስ የመጨረሻውን ፍሬም ባይት ይይዛል
+  ወጣ።
+- የጭረት ማስቀመጫዎች፡ በከርነሎች ላይ እንደገና ጥቅም ላይ የዋለ፣ ነገር ግን ሁልጊዜ የሚገለበጥ።
 
-- Input buffer: host -> device, read-only.
-- Sequence buffer: device, produced by match-finding and consumed by entropy
-  coding; no cross-block reuse.
-- Literal buffer: device, produced for each block and released after block
-  emission.
-- Output buffer: device, holds the final frame bytes until the host copies them
-  out.
-- Scratch buffers: reused across kernels, but always overwritten deterministically.
+## የከርነል ሀላፊነቶች
 
-## Kernel responsibilities
+- የከርነል ፍለጋ ግጥሚያ፡ ግጥሚያዎችን ፈልግ እና ተከታታይ ልቀት (LL/ML/OF + literals)።
+- ሃፍማን ከርነል ይገነባል-የኮድ ርዝመቶችን እና ቀኖናዊ ሠንጠረዦችን ያግኙ።
+- FSE የከርነል ግንባታ: ኤልኤል / ኤምኤል / ኦፍ ጠረጴዛዎችን እና የስቴት ማሽኖችን ይገንቡ.
+- የከርነል ኢንኮድ አግድ፡- ቀጥተኛ ቃላትን እና ቅደም ተከተሎችን ወደ ቢት ዥረት ይፃፉ።
+- ከርነሎችን መፍታትን አግድ፡- ቢት ዥረትን ተንታን እና ቀጥተኛ ቃላትን/ተከታታይን እንደገና ገንባ።
 
-- Match finding kernels: find matches and emit sequences (LL/ML/OF + literals).
-- Huffman build kernels: derive code lengths and canonical tables.
-- FSE build kernels: build LL/ML/OF tables and state machines.
-- Block encode kernels: serialize literals and sequences into the bitstream.
-- Block decode kernels: parse bitstream and reconstruct literals/sequences.
+## የቁርጠኝነት እና የእኩልነት ገደቦች
 
-## Determinism and parity constraints
+- ቀኖናዊ የጠረጴዛ ግንባታዎች ልክ እንደ ሲፒዩ ተመሳሳይ ቅደም ተከተል እና ማሰር-ሰበር መጠቀም አለባቸው
+  zstd
+- ለማንኛውም የውጤት ባይት በክር መርሐግብር ላይ የሚወሰን ምንም አቶሚክ ወይም ቅነሳ የለም።
+- Bitstream ማሸግ ትንሽ-ኤንዲያን ነው, LSB-የመጀመሪያው; የባይት አሰላለፍ ንጣፎች ከዜሮዎች ጋር።
+- ሁሉም የድንበር ቼኮች ግልጽ ናቸው; ልክ ያልሆኑ ግብዓቶች በቆራጥነት አይሳኩም።
 
-- Canonical table builds must use the same ordering and tie-breaking as CPU
-  zstd.
-- No atomics or reductions that depend on thread scheduling for any output byte.
-- Bitstream packing is little-endian, LSB-first; byte alignment pads with zeros.
-- All bounds checks are explicit; invalid inputs fail deterministically.
+## ማረጋገጫ
 
-## Validation
-
-- CPU golden vectors for the bitstream writer/reader.
-- Corpus parity tests comparing GPU and CPU outputs.
-- Fuzz coverage for malformed frames and boundary conditions.
+- ሲፒዩ ወርቃማ ቬክተሮች ለ Bitstream ጸሐፊ / አንባቢ.
+- ጂፒዩ እና ሲፒዩ ውጽዓቶችን በማወዳደር ኮርፐስ እኩልነት ሙከራዎች።
+- ለተበላሹ ክፈፎች እና የድንበር ሁኔታዎች የፉዝ ሽፋን።
 
 ## Benchmarking
 
-Run `cargo test -p gpuzstd_metal gpu_vs_cpu_benchmark -- --ignored --nocapture` to
-compare CPU vs GPU encode latency across payload sizes. The test skips on hosts
-without a Metal-capable device; capture the output alongside hardware details
-when adjusting the GPU offload thresholds. Norito enforces the same cutoff in
-`gpu_zstd::encode_all`, so direct callers match the heuristic gate.
+`cargo test -p gpuzstd_metal gpu_vs_cpu_benchmark -- --ignored --nocapture` ወደ አሂድ
+ከሲፒዩ እና ጂፒዩ ጋር ያወዳድሩ በክፍያ መጠኖች ውስጥ መዘግየት። ፈተናው በአስተናጋጆች ላይ ይዘለላል
+ያለ ብረት አቅም ያለው መሳሪያ; ውጤቱን ከሃርድዌር ዝርዝሮች ጋር ይያዙ
+የጂፒዩ የመጫን ገደቦችን ሲያስተካክሉ። Norito ተመሳሳይ መቆራረጥን ያስገድዳል
+`gpu_zstd::encode_all`፣ ስለዚህ ቀጥታ ጠሪዎች ከሃይሪስቲክ በር ጋር ይጣጣማሉ።

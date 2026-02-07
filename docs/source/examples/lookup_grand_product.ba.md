@@ -7,28 +7,29 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 6f6421d420a704c5c4af335741e309adf641702ddb8c291dce94ea5581557a66
 source_last_modified: "2025-12-29T18:16:35.953884+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Lookup Grand-Product Example
+# Ҡарап Гранд-продукт Миҫал
 
-This example expands the FASTPQ permission lookup argument mentioned in
-`fastpq_plan.md`.  In the Stage 2 pipeline the prover evaluates the selector
-(`s_perm`) and witness (`perm_hash`) columns on the low-degree extension (LDE)
-domain, updates a running grand product `Z_i`, and finally commits the entire
-sequence with Poseidon.  The hashed accumulator is appended to the transcript
-under the `fastpq:v1:lookup:product` domain, while the final `Z_i` still matches
-the committed permission table product `T`.
+Был миҫал FASTPQ рөхсәт эҙләү аргументын киңәйтә, телгә алынған
+`fastpq_plan.md`.  2-се этапта торба үткәргес селектор баһалай
+(`s_perm`) һәм шаһит (`perm_hash`) бағаналары түбән дәрәжәле оҙайтыу (LDE)
+домен, яңырта эшләгән ҙур продукт `Z_i`, һәм, ниһайәт, бөтә ҡылған .
+Посейдон менән эҙмә-эҙлеклелек.  Хешэд аккумулятор стенограммаға ҡушыла
+`fastpq:v1:lookup:product` домены буйынса, шул уҡ ваҡытта һуңғы `Z_i` X матчтар .
+рөхсәт таблицаһы продукты `T`.
 
-We consider a tiny batch with the following selector values:
+Беҙ түбәндәге селектор ҡиммәттәре менән бәләкәй генә партияны ҡарайбыҙ:
 
-| row | `s_perm` | `perm_hash`                                   |
-| --- | -------- | ---------------------------------------------- |
-| 0   | 1        | `0x019a...` (grant role = auditor, perm = transfer_asset) |
-| 1   | 0        | `0xabcd...` (no permission change)                |
-| 2   | 1        | `0x42ff...` (revoke role = auditor, perm = burn_asset) |
+| рәт | `s_perm` | `perm_hash` |
+| --- | ------- | --------------------------------------------- |
+| 0 | 1 | `0x019a...` (грант роле = аудитор, пермь = күсерергә_ассет) |
+| 1 | 0 | `0xabcd...` (рөхсәт үҙгәртеү юҡ) |
+| 2 | 1 | `0x42ff...` (ролде кире ҡағыу = аудитор, пермь = яндырыу_ассет) |
 
-Let `gamma = 0xdead...` be the Fiat-Shamir lookup challenge derived from the
-transcript.  The prover initialises `Z_0 = 1` and folds each row:
+Рөхсәт `gamma = 0xdead...` булырға Fiat-Samir эҙләү һынау алынған алынған
+стенограммаһы.  Ижадсы `Z_0 = 1` инициализациялай һәм һәр рәтте йыйырға:
 
 ```
 Z_0 = 1
@@ -37,27 +38,27 @@ Z_2 = Z_1 * (perm_hash_1 + gamma)^(s_perm_1) = Z_1 (selector is zero)
 Z_3 = Z_2 * (perm_hash_2 + gamma)^(s_perm_2)
 ```
 
-Rows where `s_perm = 0` do not alter the accumulator.  After processing the
-trace, the prover Poseidon-hashes the sequence `[Z_1, Z_2, ...]` for the transcript
-yet also publishes `Z_final = Z_3` (the final running product) to match the table
-boundary condition.
+Ҡайҙа `s_perm = 0` үҙгәрмәй аккумулятор.  Һуңынан эшкәрткәндән һуң
+эҙ, иҫбатлаусы Посейдон-хештар эҙмә-эҙлеге `Z_i` өсөн стенограмма
+әммә шулай уҡ `Z_final = Z_3` (финал йүгерә продукты) баҫтырып сығара, таблицаға тап килһен өсөн
+сик торошо.
 
-On the table side, the committed permission Merkle tree encodes the deterministic
-set of active permissions for the slot.  The verifier (or the prover during
-witness generation) computes
+Өҫтәл яғында рөхсәт ителгән рөхсәт Меркл ағасы детерминистик кодлай
+слот өсөн әүҙем рөхсәттәр йыйылмаһы.  Тикшереүсе (йәки 2012 йыл ваҡытында иҫбатлаусы.
+шаһиттар быуыны) иҫәпләүҙәр
 
 ```
 T = product over entries: (entry.hash + gamma)
 ```
 
-The protocol enforces the boundary constraint `Z_final / T = 1`.  If the trace
-introduced a permission that is not present in the table (or omitted one that
-is), the grand product ratio diverges from 1 and the verifier rejects.  Because
-both sides multiply by `(value + gamma)` inside the Goldilocks field, the ratio
-remains stable across CPU/GPU backends.
+Протокол `Z_final / T = 1` сик сикләүен үтәй.  Әгәр эҙ.
+таблицала булмаған рөхсәт индергән (йәки төшөрөп ҡалдырылған, тип
+был), ҙур продукт нисбәте 1-ҙән айырыла һәм тикшерелгән кире ҡаға.  Сөнки
+ике яҡтан да `(value + gamma)`-ға Голдиллоктар яланы эсендә ҡабатлана, нисбәт
+процессор/ГПУ бэкэндтары буйынса тотороҡло ҡала.
 
-To serialise the example as Norito JSON for fixtures, record the tuple of
-`perm_hash`, selector, and accumulator after each row, for example:
+Миҫал өсөн сериялаштырыу өсөн Norito JSON өсөн ҡорамалдар, кортеж 2019 йыл.
+`perm_hash`, селектор, һәм һәр рәттән һуң аккумулятор, мәҫәлән:
 
 ```json
 {
@@ -71,7 +72,7 @@ To serialise the example as Norito JSON for fixtures, record the tuple of
 }
 ```
 
-The hexadecimal placeholders (`0x...`) can be replaced with concrete Goldilocks
-field elements when generating automated tests.  Stage 2 fixtures additionally
-record the Poseidon hash of the running accumulator but keep the same JSON shape,
-so the example can double as a template for future test vectors.
+Гексадецималь урын хужалары (`0x...`) бетон Голдилоктар менән алмаштырырға мөмкин .
+автоматлаштырылған һынауҙар генерациялағанда ялан элементтары.  2-се этап өҫтәмә рәүештә
+яҙып алыу посейдон хеш йүгерә аккумулятор әммә шул уҡ JSON формаһын һаҡлау,
+тимәк, миҫал киләсәктә һынау векторҙары өсөн ҡалып булараҡ икеләтә ала.

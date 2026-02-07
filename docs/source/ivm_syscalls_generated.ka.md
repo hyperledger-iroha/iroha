@@ -7,13 +7,12 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 62b33abe349096aec7afa0ab825e7921036250b36b9706c01f0b3aea02ddcb63
 source_last_modified: "2026-01-21T19:17:13.239548+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Generated IVM Syscall Table
+# გენერირებული IVM Syscall ცხრილი
 
-This file is generated from `crates/ivm_abi/src/syscalls.rs`. Edit the source to change syscall numbers; then re-run this script.
-
-| Name | Value (hex) | Note |
+ეს ფაილი გენერირებულია `crates/ivm_abi/src/syscalls.rs`-დან. შეცვალეთ წყარო syscall ნომრების შესაცვლელად; შემდეგ ხელახლა გაუშვით ეს სკრიპტი.| სახელი | მნიშვნელობა (hex) | შენიშვნა |
 |------|-------------|------|
 | SYSCALL_DEBUG_PRINT | 0x0 |  |
 | SYSCALL_EXIT | 0X01 |  |
@@ -29,7 +28,7 @@ This file is generated from `crates/ivm_abi/src/syscalls.rs`. Edit the source to
 | SYSCALL_REGISTER_ACCOUNT | 0X13 |  |
 | SYSCALL_UNREGISTER_ACCOUNT | 0X14 |  |
 | SYSCALL_ADD_SIGNATORY | 0X17 |  |
-| SYSCALL_REMOVE_SIGNATORY | 0X18 |  |
+| SYSCALL_REMOVE_SGNATORY | 0X18 |  |
 | SYSCALL_SET_ACCOUNT_QUORUM | 0X19 |  |
 | SYSCALL_SET_ACCOUNT_DETAIL | 0X1A |  |
 | SYSCALL_REGISTER_ASSET | 0X20 |  |
@@ -37,7 +36,7 @@ This file is generated from `crates/ivm_abi/src/syscalls.rs`. Edit the source to
 | SYSCALL_MINT_ASSET | 0X22 |  |
 | SYSCALL_BURN_ASSET | 0X23 |  |
 | SYSCALL_TRANSFER_ASSET | 0X24 |  |
-| SYSCALL_TRANSFER_V1 |  | alias of SYSCALL_TRANSFER_ASSET |
+| SYSCALL_TRANSFER_V1 |  | მეტსახელი SYSCALL_TRANSFER_ASSET |
 | SYSCALL_TRANSFER_V1_BATCH_BEGIN | 0X29 |  |
 | SYSCALL_TRANSFER_V1_BATCH_END | 0X2A |  |
 | SYSCALL_TRANSFER_V1_BATCH_APPLY | 0X2B |  |
@@ -92,8 +91,7 @@ This file is generated from `crates/ivm_abi/src/syscalls.rs`. Edit the source to
 | SYSCALL_GET_ACCOUNT_BALANCE | 0XF9 |  |
 | SYSCALL_USE_NULLIFIER | 0XFB |  |
 | SYSCALL_VERIFY_SIGNATURE | 0XFC |  |
-| SYSCALL_GET_PRIVATE_INPUT | 0XFD |  |
-| SYSCALL_COMMIT_OUTPUT | 0XFE |  |
+| SYSCALL_GET_PRIVATE_INPUT | 0XFD |  || SYSCALL_COMMIT_OUTPUT | 0XFE |  |
 | SYSCALL_ZK_VERIFY_TRANSFER | 0X60 |  |
 | SYSCALL_ZK_VERIFY_UNSHIELD | 0X61 |  |
 | SYSCALL_ZK_VOTE_VERIFY_BALLOT | 0X62 |  |
@@ -129,4 +127,4 @@ This file is generated from `crates/ivm_abi/src/syscalls.rs`. Edit the source to
 | SYSCALL_VERIFY_DS_PROOF | 0XB3 |  |
 | SYSCALL_USE_ASSET_HANDLE | 0XB4 |  |
 
-Note: Aliases resolve to the value of their target constant at compile time.
+შენიშვნა: მეტსახელები გადაიჭრება მათი სამიზნე მუდმივის მნიშვნელობამდე კომპილაციის დროს.

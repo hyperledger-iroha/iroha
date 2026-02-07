@@ -9,70 +9,69 @@ source_last_modified: "2025-12-29T18:16:35.984008+00:00"
 translation_last_reviewed: 2026-02-07
 title: Volunteer Brief Template
 summary: Structured template for roadmap item MINFO-3a covering balanced briefs, fact tables, conflict disclosures, and moderation tags.
+translator: machine-google-reviewed
 ---
 
-# Volunteer Brief Template (MINFO-3a)
+# 志愿者简介模板 (MINFO-3a)
 
-Roadmap reference: **MINFO-3a — Balanced brief templates & conflict disclosure.**
+路线图参考：**MINFO-3a — 平衡的简要模板和冲突披露。**
 
-Volunteer brief submissions summarise positions that citizen panels want governance to review when blacklist changes or other Ministry enforcement motions are proposed. MINFO-3a requires that every brief follows a deterministic structure so the transparency pipeline can (1) render comparable fact tables, (2) confirm that conflicts-of-interest are disclosed, and (3) drop or flag off-topic submissions automatically. This page defines the canonical fields, CSV-style fact table layout, and moderation tags expected by the tooling shipped in `cargo xtask ministry-transparency`.
+志愿者提交的简短意见总结了公民小组希望政府在提出黑名单变更或其他部委执法动议时审查的立场。 MINFO-3a 要求每份简报都遵循确定性结构，以便透明度管道能够 (1) 呈现可比较的事实表，(2) 确认利益冲突已披露，以及 (3) 自动删除或标记偏离主题的提交内容。此页面定义了 `cargo xtask ministry-transparency` 中附带的工具所需的规范字段、CSV 样式事实表布局和审核标签。
 
-> **Norito schema:** the `iroha_data_model::ministry::VolunteerBriefV1` struct (version `1`) is now the authoritative schema for all submissions. Tooling and portal validators call `VolunteerBriefV1::validate` before publishing a brief or referencing it in panel summaries.
+> **Norito 架构：** `iroha_data_model::ministry::VolunteerBriefV1` 结构（版本 `1`）现在是所有提交的权威架构。工具和门户验证程序在发布摘要或在小组摘要中引用它之前会调用 `VolunteerBriefV1::validate`。
 
-## Submission payload structure
+## 提交有效负载结构
 
-| Section | Fields | Requirements |
+|部分|领域 |要求|
 |---------|--------|--------------|
-| **Envelope** | `version` (u16) | Must be `1`. The version guard allows the Ministry to evolve the schema without ambiguity. |
-| **Identity & stance** | `brief_id` (string, unique per calendar year), `proposal_id` (links to the blacklist or policy motion), `language` (BCP-47), `stance` (`support`/`oppose`/`context`), `submitted_at` (RFC 3339) | All fields required. `stance` feeds dashboards and must match the allowed vocabulary. |
-| **Author info** | `author.name`, `author.organization` (optional), `author.contact`, `author.no_conflicts_certified` (bool) | `author.contact` is redacted from public dashboards but stored in the raw artefact. Set `no_conflicts_certified: true` only if the author attests that no disclosures apply. |
-| **Summary** | `summary.title`, `summary.abstract`, `summary.requested_action` | Textual overview surfaced beside the fact table. Limit `summary.abstract` to ≤2 000 characters. |
-| **Fact table** | `fact_table` array (see next section) | Required even for short briefs. The CLI and transparency ingest job reject submissions without a fact table. |
-| **Disclosures** | `disclosures` array OR `author.no_conflicts_certified: true` | Each disclosure row must include `type` (`financial`, `employment`, `governance`, `family`, `other`), `entity`, `relationship`, and `details`. |
-| **Moderation metadata** | `moderation.off_topic` (bool), `moderation.tags` (array of enum strings), `moderation.notes` | Used by reviewers to suppress astroturfing or unrelated submissions. Off-topic entries do not contribute to dashboards. |
+| **信封** | `version` (u16) |必须是 `1`。版本保护允许该部毫无歧义地发展模式。 |
+| **身份与立场** | `brief_id`（字符串，每个日历年唯一）、`proposal_id`（黑名单或政策动议的链接）、`language` (BCP-47)、`stance` （`support`/`oppose`/`context`），`submitted_at`（RFC3339）|所有字段均必填。 `stance` 提供仪表板并且必须匹配允许的词汇表。 |
+| **作者信息** | `author.name`、`author.organization`（可选）、`author.contact`、`author.no_conflicts_certified`（布尔）| `author.contact` 是从公共仪表板中编辑的，但存储在原始工件中。仅当作者证明没有披露适用时才设置 `no_conflicts_certified: true`。 |
+| **总结** | `summary.title`、`summary.abstract`、`summary.requested_action` |文本概述出现在事实表旁边。将 `summary.abstract` 限制为 ≤2000 个字符。 |
+| **事实表** | `fact_table` 阵列（参见下一节）|即使是短内裤也需要。 CLI 和透明度摄取作业会拒绝没有事实表的提交。 |
+| **披露** | `disclosures` 数组或 `author.no_conflicts_certified: true` |每个披露行必须包含 `type` (`financial`、`employment`、`governance`、`family`、`other`)、`entity`、 `relationship` 和 `details`。 |
+| **审核元数据** | `moderation.off_topic`（布尔）、`moderation.tags`（枚举字符串数组）、`moderation.notes` |审稿人用来压制 astroturfing 或不相关的提交内容。离题条目不会对仪表板做出贡献。 |
 
-## Fact table specification
+## 事实表规范
 
-Each `fact_table` row captures a machine-readable claim. Store the rows as JSON objects with the following fields:
+每个 `fact_table` 行捕获一个机器可读的声明。将行存储为具有以下字段的 JSON 对象：|领域|描述 |
+|--------|-------------|
+| `claim_id` |稳定标识符（例如 `VB-2026-04-F1`）。 |
+| `claim` |对事实或影响的单句陈述。 |
+| `status` | `corroborated`、`disputed`、`context-only` 之一。 |
+| `impact` |包含 `governance`、`technical`、`compliance`、`community` 中的一个或多个的数组。 |
+| `citations` |非空字符串数组。接受 URL、Torii 案例 ID 或 CID 参考。 |
+| `evidence_digest` |支持文档的可选 BLAKE3 校验和。 |
 
-| Field | Description |
-|-------|-------------|
-| `claim_id` | Stable identifier (e.g., `VB-2026-04-F1`). |
-| `claim` | Single-sentence statement of fact or impact. |
-| `status` | One of `corroborated`, `disputed`, `context-only`. |
-| `impact` | Array containing one or more of `governance`, `technical`, `compliance`, `community`. |
-| `citations` | Non-empty array of strings. URLs, Torii case IDs, or CID references are accepted. |
-| `evidence_digest` | Optional BLAKE3 checksum of supporting documents. |
+自动化注意事项：
+- 摄取作业计数 `fact_rows` 和 `fact_rows_with_citation` 以构建发布记分卡。没有引用的行仍然出现在人类可读的表中，但被跟踪为缺失的证据。
+- 保持声明简洁并引用治理提案中使用的相同标识符，以便交叉链接具有确定性。
 
-Automation notes:
-- The ingest job counts `fact_rows` and `fact_rows_with_citation` to build publication scorecards. Rows without citations still appear in the human-readable table but are tracked as missing evidence.
-- Keep claims concise and reference the same identifiers used in governance proposals so cross-linking is deterministic.
+## 冲突披露要求
 
-## Conflict disclosure requirements
+1. 当存在财务、就业、治理或家庭关系时，至少提供一项披露条目。
+2. 使用 `author.no_conflicts_certified: true` 断言“无已知冲突”。提交的内容必须包含披露条目或 `true` 认证；否则，它们会在摄取过程中被标记。
+3. 只要存在公共文件（例如，公司备案、DAO 投票），请包含 `disclosures[i].evidence`。对于“无”认证，证据是可选的，但强烈建议提供。
 
-1. Provide at least one disclosure entry when a financial, employment, governance, or familial tie exists.
-2. Use `author.no_conflicts_certified: true` to assert “no known conflicts.” Submissions must include either a disclosure entry or a `true` certification; otherwise, they’re flagged during ingest.
-3. Include `disclosures[i].evidence` whenever public documentation exists (e.g., corporate filings, DAO votes). Evidence is optional for “none” certifications but strongly recommended.
+## 审核标签和离题处理
 
-## Moderation tags & off-topic handling
+审核者可以在进入透明度管道之前对提交内容进行标记：
 
-Moderation reviewers can label submissions before they enter the transparency pipeline:
+- `moderation.off_topic: true` 从聚合计数中删除该条目，同时递增 `off_topic_rejections` 计数器。该行仍然可以在原始档案中用于审计。
+- `moderation.tags` 接受枚举值：`duplicate`、`needs-translation`、`needs-follow-up`、`spam`、`astroturf`、`policy-escalation`。标签可帮助下游审阅者进行分类，而无需重新阅读完整的摘要。
+- `moderation.notes` 存储审核决定的简短理由（≤512 个字符）。
 
-- `moderation.off_topic: true` removes the entry from aggregate counts while incrementing an `off_topic_rejections` counter. The row is still available in raw archives for audit.
-- `moderation.tags` accepts enum values: `duplicate`, `needs-translation`, `needs-follow-up`, `spam`, `astroturf`, `policy-escalation`. Tags help downstream reviewers triage without re-reading the full brief.
-- `moderation.notes` stores a short justification for the moderation decision (≤512 characters).
+## 提交清单
 
-## Submission checklist
+1. 使用此模板或下述帮助器 CLI 填写 JSON 负载。
+2. 填充至少一个事实表行；包括每行的引用。
+3. 提供披露或明确设置`author.no_conflicts_certified: true`。
+4. 附加审核元数据（默认 `off_topic: false`），以便审阅者可以快速分类。
+5. 上传前使用 `cargo xtask ministry-transparency ingest --volunteer <file>` 或任何 Norito 验证器验证有效负载。
 
-1. Fill out the JSON payload using this template or the helper CLI described below.
-2. Populate at least one fact table row; include citations for each row.
-3. Provide disclosures or explicitly set `author.no_conflicts_certified: true`.
-4. Attach moderation metadata (default `off_topic: false`) so reviewers can triage quickly.
-5. Validate the payload with `cargo xtask ministry-transparency ingest --volunteer <file>` or any Norito validator before uploading.
+## 验证 CLI (MINFO-3)
 
-## Validation CLI (MINFO-3)
-
-The repository now ships a dedicated validator for volunteer briefs:
+该存储库现在为志愿者简介提供了专用验证器：
 
 ```bash
 cargo xtask ministry-transparency volunteer-validate \
@@ -80,32 +79,30 @@ cargo xtask ministry-transparency volunteer-validate \
   --json-output artifacts/ministry/volunteer_lint_report.json
 ```
 
-Key behaviour:
+关键行为：- 接受单独的 JSON 对象*或*内裤数组；多次传递 `--input` 以在一次运行中检查多个文件。
+- 发出一个简短的摘要，显示错误和警告的数量；警告会突出显示空的引文列表或过长的注释，而错误则会阻止发表。
+- 确保必填字段（`brief_id`、`proposal_id`、`stance`、事实表内容、披露或 `no_conflicts_certified`）与此模板匹配，并且枚举值保留在记录的词汇表内。
+- 当设置 `--json-output <path>` 时，验证器会写入一个机器可读的清单，总结每个摘要（提案 ID、立场、状态、错误/警告）。门户的 `npm run generate:volunteer-lint` 命令使用此清单来显示每个提案页面旁边的 lint 状态。
 
-- Accepts individual JSON objects *or* arrays of briefs; pass `--input` multiple times to lint several files in one run.
-- Emits a per-brief summary showing the number of errors and warnings; warnings highlight empty citation lists or overlong notes, while errors block publication.
-- Ensures required fields (`brief_id`, `proposal_id`, `stance`, fact table contents, disclosures or `no_conflicts_certified`) match this template and that enum values stay within the documented vocabularies.
-- When `--json-output <path>` is set the validator writes a machine-readable manifest summarising every brief (proposal id, stance, status, errors/warnings). The portal’s `npm run generate:volunteer-lint` command consumes this manifest to display lint status next to each proposal page.
+将命令集成到门户工作流程或 CI 中，以确保志愿者提交的内容在到达透明度摄取作业之前符合 **MINFO-3**。
 
-Integrate the command into portal workflows or CI to keep volunteer submissions compliant with **MINFO-3** before they reach the transparency ingest job.
+## 负载示例
 
-## Example payload
+请参阅 `docs/examples/ministry/volunteer_brief_template.json` 以获取完整填充的示例，包括事实表行、披露和审核标签。下游仪表板使用原始 JSON 并自动计算：
 
-See `docs/examples/ministry/volunteer_brief_template.json` for a fully populated example, including fact table rows, disclosures, and moderation tags. Downstream dashboards consume the raw JSON and automatically calculate:
-
-- `total_briefs` (off-topic submissions excluded)
+- `total_briefs`（不包括题外话）
 - `fact_rows` / `fact_rows_with_citation`
 - `disclosures_missing`
 - `off_topic_rejections`
 
-If new fields are required, update this document and the ingest summariser (`xtask/src/ministry.rs`) in the same change so the governance evidence remains reproducible.
+如果需要新字段，请在同一更改中更新此文档和摄取摘要器 (`xtask/src/ministry.rs`)，以便治理证据保持可重现。
 
-## Publication SLA & portal surfacing (MINFO-3)
+## 出版物 SLA 和门户表面处理 (MINFO-3)
 
-To keep citizen submissions transparent, the portal now publishes briefs on a fixed cadence once they pass validation:
+为了保持公民提交的透明度，门户现在在通过验证后以固定的节奏发布简报：
 
-1. **T+0–6 hours:** submissions land via the volunteer intake form or `cargo xtask ministry-transparency ingest`. Validators run `VolunteerBriefV1::validate`, reject malformed payloads, and emit lint reports (missing disclosures, duplicate fact IDs, etc.).
-2. **T+6–24 hours:** accepted briefs are queued for translation/triage. Moderation tags (`needs-translation`, `duplicate`, `policy-escalation`, …) are applied, and off-topic entries are archived but excluded from aggregate counts.
-3. **T+24–48 hours:** the portal publishes the brief alongside the corresponding proposal page. Each published proposal now links to “Volunteer Opinions” so reviewers can read support/oppose/context briefs without opening raw JSON.
+1. **T+0–6 小时：** 通过志愿者报名表或 `cargo xtask ministry-transparency ingest` 提交意见。验证器运行 `VolunteerBriefV1::validate`，拒绝格式错误的有效负载，并发出 lint 报告（缺少披露、重复的事实 ID 等）。
+2. **T+6–24 小时：** 接受的简报将排队等待翻译/分类。应用审核标签（`needs-translation`、`duplicate`、`policy-escalation`，...），偏离主题的条目将被存档，但从聚合计数中排除。
+3. **T+24–48 小时：** 门户网站在相应的提案页面旁边发布简报。现在，每个已发布的提案都链接到“志愿者意见”，因此审阅者可以在不打开原始 JSON 的情况下阅读支持/反对/背景摘要。
 
-If a submission is marked `policy-escalation` or `astroturf`, the SLA tightens to **12 hours** so governance can respond quickly. Operators can audit the SLA via the **Volunteer Briefs** page in the docs portal (`docs/portal/docs/ministry/volunteer-briefs.md`), which lists the latest publication windows, lint status, and links to Norito artefacts.
+如果提交标记为 `policy-escalation` 或 `astroturf`，SLA 会收紧至 **12 小时**，以便治理可以快速响应。操作员可以通过文档门户 (`docs/portal/docs/ministry/volunteer-briefs.md`) 中的 **志愿者简介** 页面审核 SLA，其中列出了最新的发布窗口、lint 状态以及 Norito 工件的链接。

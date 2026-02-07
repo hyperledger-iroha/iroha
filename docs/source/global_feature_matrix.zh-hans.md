@@ -7,111 +7,104 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 6a406b7656a87bb1469444db1cc2d2d5922f16660b53cc7eaef5b838199127e8
 source_last_modified: "2026-01-23T23:46:10.135119+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Global Feature Matrix
+# 全局特征矩阵
 
-Legend: `◉` fully implemented · `○` mostly implemented · `▲` partially implemented · `△` implementation just started · `✖︎` not started
+图例： `◉` 完全实现 · `○` 大部分实现 · `▲` 部分实现 · `△` 实现刚刚开始 · `✖︎` 未开始
 
-## Consensus & Networking
+## 共识与网络
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Multi-collector K/r support & first-commit-certificate-wins | ◉ | Deterministic collector selection, redundant fan-out, on-chain K/r parameters, and first-valid-commit-certificate acceptance shipped with tests. | status.md:255; status.md:314 |
-| Pacemaker backoff, RTT floor, deterministic jitter | ◉ | Configurable timers with jitter band wired through config, telemetry, and docs. | status.md:251 |
-| NEW_VIEW gating & highest QC tracking | ◉ | Control flow carries NEW_VIEW/Evidence, the highest QC adopts monotonically, handshake guards computed fingerprint. | status.md:210 |
-| availability evidence tracking (advisory) | ◉ | Availability evidence emitted and tracked; commit does not gate on availability in v1. | status.md:latest |
-| Reliable Broadcast (DA payload transport) | ◉ | RBC message flow (Init/Chunk/Ready/Deliver) is enabled when `da_enabled=true` as a transport/recovery path; availability evidence is tracked (advisory) while commit proceeds independently. | status.md:latest |
-| Commit QC state-root binding | ◉ | Commit QCs carry `parent_state_root`/`post_state_root`; there is no separate execution-QC gate. | status.md:latest |
-| Evidence propagation & audit endpoints | ◉ | ControlFlow::Evidence, Torii evidence endpoints, and negative tests landed. | status.md:176; status.md:760-761 |
-| RBC telemetry, readiness/delivered metrics | ◉ | `/v1/sumeragi/rbc*` endpoints and telemetry counters/histogram available for operators. | status.md:283-284; status.md:772 |
-| Consensus parameter advert & topology verification | ◉ | Nodes broadcast `(collectors_k, redundant_send_r)` and validate equality across peers. | status.md:255 |
-| Permissioned PRF-based rotation | ◉ | Permissioned leader/collector selection uses PRF seed + height/view over the canonical roster; prev-hash rotation remains a legacy helper. | status.md:latest |
+|特色 |状态 |笔记|证据|
+|--------|--------|--------|----------|
+|多收集器 K/r 支持和首次提交证书获胜 | ◉ |确定性收集器选择、冗余扇出、链上 K/r 参数以及测试附带的第一个有效提交证书验收。 |状态.md:255;状态.md:314 |
+|起搏器退避、RTT 下限、确定性抖动 | ◉ |具有通过配置、遥测和文档连接的抖动带的可配置计时器。 |状态.md:251 |
+| NEW_VIEW 门控和最高 QC 跟踪 | ◉ |控制流携带NEW_VIEW/Evidence，最高QC采用单调，握手守护计算指纹。 |状态.md:210 |
+|可用性证据跟踪（咨询）| ◉ |发出并跟踪可用性证据；提交不会对 v1 中的可用性进行门控。 |状态.md：最新|
+|可靠广播（DA 有效负载传输）| ◉ |当 `da_enabled=true` 作为传输/恢复路径时，启用 RBC 消息流（Init/Chunk/Ready/Deliver）；跟踪可用性证据（建议），同时提交独立进行。 |状态.md：最新|
+|提交 QC 状态根绑定 | ◉ | Commit QC 带有 `parent_state_root`/`post_state_root`；没有单独的执行QC门。 |状态.md：最新|
+|证据传播和审计端点 | ◉ | ControlFlow::Evidence，Torii 证据终点，阴性测试落地。 |状态.md:176;状态.md:760-761 |
+| RBC 遥测、准备情况/交付指标 | ◉ | `/v1/sumeragi/rbc*` 端点和遥测计数器/直方图可供操作员使用。 |状态.md:283-284;状态.md:772 |
+|共识参数广告和拓扑验证 | ◉ |节点广播 `(collectors_k, redundant_send_r)` 并验证对等点之间的平等性。 |状态.md:255 |
+|基于 PRF 的许可轮换 | ◉ |允许的领导者/收集者选择使用 PRF 种子 + 规范名册的高度/视图；前哈希轮转仍然是一个传统的助手。 |状态.md：最新|
 
-## Pipeline, Kura & State
+## 管道、Kura 和 State|特色 |状态 |笔记|证据|
+|--------|--------|--------|----------|
+|检疫通道上限和遥测| ◉ |实现了配置旋钮、确定性溢出处理和遥测计数器。 |状态.md:263 |
+|管道工人池旋钮| ◉ | `[pipeline].workers` 通过环境初始化线程进行环境解析测试。 |状态.md:264 |
+|快照查询通道（存储/临时游标）| ◉ |具有 Torii 集成和阻塞工作池的存储游标模式。 |状态.md:265;状态.md:371;状态.md:501 |
+|静态 DAG 指纹恢复 sidecar | ◉ | Sidecar 存储在 Kura 中，在启动时进行验证，在不匹配时发出警告。 |状态.md:106;状态.md:349 |
+| Kura 块存储哈希解码强化 | ◉ |通过独立于 Norito 的往返测试，哈希读取切换为原始 32 字节处理。 |状态.md:608;状态.md:668 |
+| Norito 编解码器的自适应遥测 | ◉ | Norito 中添加了 AoS 与 NCB 选择指标。 |状态.md:156 |
+|通过 Torii 进行 WSV 查询快照 | ◉ | Torii 快照查询通道使用阻塞工作池、确定性语义。 |状态.md:501 |
+|触发调用执行链| ◉ |数据在按确定顺序执行调用后立即触发链。 |状态.md:668 |
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Quarantine lane caps & telemetry | ◉ | Config knobs, deterministic overflow handling, and telemetry counters implemented. | status.md:263 |
-| Pipeline worker pool knob | ◉ | `[pipeline].workers` threaded through state init with env parsing tests. | status.md:264 |
-| Snapshot query lane (stored/ephemeral cursors) | ◉ | Stored cursor mode with Torii integration and blocking worker pools. | status.md:265; status.md:371; status.md:501 |
-| Static DAG fingerprint recovery sidecars | ◉ | Sidecars stored in Kura, validated on startup, warnings emitted on mismatches. | status.md:106; status.md:349 |
-| Kura block store hash decoding hardening | ◉ | Hash reads switched to raw 32-byte handling with Norito-independent roundtrip tests. | status.md:608; status.md:668 |
-| Norito adaptive telemetry for codecs | ◉ | AoS vs NCB selection metrics added to Norito. | status.md:156 |
-| Snapshot WSV queries via Torii | ◉ | Torii snapshot query lane uses blocking worker pool, deterministic semantics. | status.md:501 |
-| Trigger by-call execution chaining | ◉ | Data triggers chain immediately after by-call execution with deterministic order. | status.md:668 |
+## Norito 序列化和工具
 
-## Norito Serialization & Tooling
+|特色 |状态 |笔记|证据|
+|--------|--------|--------|----------|
+| Norito JSON 迁移（工作区）| ◉ | Serde 已退出生产；库存+护栏仅保留工作空间Norito。 |状态.md:112;状态.md:124 |
+| Serde 拒绝名单和 CI 护栏 | ◉ |防护工作流程/脚本可防止跨工作区直接使用 Serde。 |状态.md:218 |
+| Norito 编解码器黄金和 AoS/NCB 测试 | ◉ |添加了 AoS/NCB 黄金、截断测试和文档同步。 |状态.md:140-147;状态.md:149-150;状态.md:332;状态.md:666 |
+| Norito 特征矩阵工具 | ◉ | `scripts/run_norito_feature_matrix.sh`支持下游冒烟测试； CI 涵盖了 Packed-seq/struct 组合。 |状态.md:146;状态.md:152 |
+| Norito 语言绑定 (Python/Java) | ◉ | Python 和 Java Norito 编解码器使用同步脚本维护。 |状态.md:74;状态.md:81 |
+| Norito Stage-1 SIMD 结构分类器 | Norito Stage-1 SIMD 结构分类器◉ | NEON/AVX2 stage-1 分类器，具有跨拱黄金和随机语料库测试。 |状态.md:241 |
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Norito JSON migration (workspace) | ◉ | Serde removed from production; inventory + guardrails keep the workspace Norito-only. | status.md:112; status.md:124 |
-| Serde deny-list & CI guardrails | ◉ | Guard workflows/scripts prevent new direct Serde usage across workspace. | status.md:218 |
-| Norito codec goldens & AoS/NCB tests | ◉ | AoS/NCB goldens, truncation tests, and doc sync added. | status.md:140-147; status.md:149-150; status.md:332; status.md:666 |
-| Norito feature matrix tooling | ◉ | `scripts/run_norito_feature_matrix.sh` supports downstream smoke tests; CI covers packed-seq/struct combos. | status.md:146; status.md:152 |
-| Norito language bindings (Python/Java) | ◉ | Python and Java Norito codecs maintained with sync scripts. | status.md:74; status.md:81 |
-| Norito Stage-1 SIMD structural classifiers | ◉ | NEON/AVX2 stage-1 classifiers with cross-arch goldens and randomized corpora tests. | status.md:241 |
+## 治理和运行时升级|特色 |状态 |笔记|证据|
+|--------|--------|--------|----------|
+|运行时升级准入（ABI 门控）| ◉ |入院时强制执行主动 ABI 集，并包含结构化错误和测试。 |状态.md:196 |
+|受保护的命名空间部署门控 | ▲|部署元数据要求并控制有线；政策/用户体验仍在不断发展。 |状态.md:171 |
+| Torii 治理读取端点 | ◉ | `/v1/gov/*` 读取通过路由器测试路由的 API。 |状态.md:212 |
+|验证密钥注册表生命周期和事件 | ◉ | VK 注册/更新/弃用、事件、CLI 过滤器和保留语义已实现。 |状态.md:236-239;状态.md:595;状态.md:603 |
 
-## Governance & Runtime Upgrades
+## 零知识基础设施
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Runtime upgrade admission (ABI gating) | ◉ | Active ABI set enforced at admission with structured errors and tests. | status.md:196 |
-| Protected namespace deploy gating | ▲ | Deploy metadata requirements and gating wired; policy/UX still evolving. | status.md:171 |
-| Torii governance read endpoints | ◉ | `/v1/gov/*` read APIs routed with router tests. | status.md:212 |
-| Verifying-key registry lifecycle & events | ◉ | VK register/update/deprecate, events, CLI filters, and retention semantics implemented. | status.md:236-239; status.md:595; status.md:603 |
+|特色 |状态 |笔记|证据|
+|--------|--------|--------|----------|
+|附件存储 API | ◉ | `POST/GET/LIST/DELETE` 具有确定性 ID 和测试的附件端点。 |状态.md:231 |
+|后台证明人员和报告 TTL | ▲|功能标志后面的证明者存根； TTL GC 和配置旋钮已接线；完整管道待定。 |状态.md:212;状态.md:233 |
+| CoreHost 中的信封哈希绑定 | ◉ |验证通过 CoreHost 绑定并通过审计脉冲公开的信封哈希值。 |状态.md:250 |
+|屏蔽根历史门控 | ◉ |根快照线程到具有有限历史记录和空根配置的 CoreHost 中。 |状态.md:303 |
+| ZK 投票执行与治理锁定 | ○ |实现了无效器推导、锁定更新、验证切换；完整的证明生命周期仍在成熟。 |状态.md:126-128;状态.md:194-195 |
+|证明附件预验证和重复数据删除 | ◉ |后端标签健全性、重复数据删除和证明记录在执行前保持不变。 |状态.md:348;状态.md:602 |
+| ZK Torii 证明获取端点 | ◉ | `/v1/zk/proof/{backend}/{hash}` 公开证明记录（状态、高度、vk_ref/commitment）。 |状态.md:94 |
 
-## Zero-Knowledge Infrastructure
+## IVM 和 Kotodama 集成|特色|状态 |笔记|证据|
+|--------|--------|--------|----------|
+| CoreHost 系统调用→ISI 桥| ○ |指针 TLV 解码和系统调用排队可操作；计划的覆盖差距/奇偶测试。 |状态.md:299-307;状态.md:477-486 |
+|指针构造函数和域内置函数 | ◉ | Kotodama 内置函数发出类型化的 Norito TLV 和 SCALL，以及 IR/e2e 测试和文档。 |状态.md:299-301 |
+|指针-ABI 严格验证和文档同步 | ◉ |通过黄金测试和生成的文档跨主机/IVM 强制实施 TLV 策略。 |状态.md:227;状态.md:317;状态.md:344;状态.md:366;状态.md:527 |
+|通过 CoreHost 进行 ZK 系统调用门控 | ◉ |每操作队列对经过验证的信封进行门控，并在 ISI 执行之前强制执行哈希匹配。 |板条箱/iroha_core/src/smartcontracts/ivm/host.rs:213;板条箱/iroha_core/src/smartcontracts/ivm/host.rs:279 |
+| Kotodama 指针-ABI 文档和语法 | ◉ |语法/文档与实时构造函数和 SCALL 映射同步。 |状态.md:299-301 |
+| ISO 20022 模式驱动引擎和 Torii 桥 | ◉ |嵌入规范 ISO 20022 模式、确定性 XML 解析和公开 `/v1/iso20022/status/{MsgId}` API。 |状态.md:65-70 |
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Attachment storage APIs | ◉ | `POST/GET/LIST/DELETE` attachment endpoints with deterministic ids and tests. | status.md:231 |
-| Background prover worker & report TTL | ▲ | Prover stub behind feature flag; TTL GC and config knobs wired; full pipeline pending. | status.md:212; status.md:233 |
-| Envelope hash binding in CoreHost | ◉ | Verify envelope hashes bound through CoreHost and exposed via audit pulses. | status.md:250 |
-| Shielded root history gating | ◉ | Root snapshots threaded into CoreHost with bounded history and empty-root config. | status.md:303 |
-| ZK ballot execution & governance locks | ○ | Nullifier derivation, lock updates, verification toggles implemented; full proof lifecycle still maturing. | status.md:126-128; status.md:194-195 |
-| Proof attachment pre-verify & dedup | ◉ | Backend-tag sanity, deduplication, and proof records persisted pre-execution. | status.md:348; status.md:602 |
-| ZK Torii proof fetch endpoint | ◉ | `/v1/zk/proof/{backend}/{hash}` exposes proof records (status, height, vk_ref/commitment). | status.md:94 |
+## 硬件加速
 
-## IVM & Kotodama Integration
+|特色|状态 |笔记|证据|
+|--------|--------|--------|----------|
+| SIMD 尾部/错位奇偶校验测试 | ◉ |随机奇偶校验测试确保 SIMD 向量运算与任意对齐的标量语义相匹配。 |状态.md:243 |
+| Metal/CUDA 后备和自测试 | ◉ | GPU 后端运行黄金自检，并在不匹配时回退到标量/SIMD；奇偶校验套件涵盖 SHA-256/Keccak/AES。 |状态.md:244-246 |
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| CoreHost syscall→ISI bridge | ○ | Pointer TLV decoding and syscall queueing operational; coverage gaps/parity tests planned. | status.md:299-307; status.md:477-486 |
-| Pointer constructors & domain builtins | ◉ | Kotodama builtins emit typed Norito TLVs and SCALLs, with IR/e2e tests and docs. | status.md:299-301 |
-| Pointer-ABI strict validation & doc sync | ◉ | TLV policy enforced across host/IVM with golden tests and generated docs. | status.md:227; status.md:317; status.md:344; status.md:366; status.md:527 |
-| ZK syscall gating via CoreHost | ◉ | Per-op queues gate verified envelopes and enforce hash matching before ISI execution. | crates/iroha_core/src/smartcontracts/ivm/host.rs:213; crates/iroha_core/src/smartcontracts/ivm/host.rs:279 |
-| Kotodama pointer-ABI docs & grammar | ◉ | Grammar/docs synced with live constructors and SCALL mappings. | status.md:299-301 |
-| ISO 20022 schema-driven engine & Torii bridge | ◉ | Canonical ISO 20022 schemas embedded, deterministic XML parsing, and `/v1/iso20022/status/{MsgId}` API exposed. | status.md:65-70 |
+## 网络时间和共识模式
 
-## Hardware Acceleration
+|特色|状态 |笔记|证据|
+|--------|--------|--------|----------|
+|网络时间服务 (NTS) | ✖︎ |设计存在于 `new_pipeline.md` 中；状态更新中尚未跟踪实施情况。 | new_pipeline.md |
+|提名PoS共识模式 | ✖︎ | Nexus 设计文档闭集和 NPoS 模式；核心实施待定。 | new_pipeline.md； Nexus.md |
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| SIMD tail/misalignment parity tests | ◉ | Randomized parity tests ensure SIMD vector ops match scalar semantics for arbitrary alignment. | status.md:243 |
-| Metal/CUDA fallback & self-tests | ◉ | GPU backends run golden self-tests and fall back to scalar/SIMD on mismatch; parity suites cover SHA-256/Keccak/AES. | status.md:244-246 |
+## Nexus 账本路线图|特色|状态 |笔记|证据|
+|--------|--------|--------|----------|
+|空间目录合同脚手架| ✖︎ | DS 舱单/治理的全球注册合同尚未实施。 | Nexus.md |
+|数据空间清单格式和生命周期| ✖︎ | Norito 清单架构、版本控制和治理流程仍保留在路线图上。 | Nexus.md |
+| DS 治理和验证者轮换 | ✖︎ | DS 成员/轮换的链上程序仍处于设计阶段。 | Nexus.md |
+|跨 DS 锚定和 Nexus 块组成 | ✖︎ |概述了组合层和锚定承诺，但尚未实施。 | Nexus.md |
+| Kura/WSV 纠删码存储 | ✖︎ |用于公共/私有 DS 的纠删码 blob/快照存储尚未构建。 | Nexus.md |
+| DS 的 ZK/乐观证明策略 | ✖︎ |代码中未跟踪每 DS 的证明要求和执行情况。 | Nexus.md |
+|每个数据空间的费用/配额隔离 | ✖︎ | DS 特定的配额和费用政策机制仍需未来的工作。 | Nexus.md |
 
-## Network Time & Consensus Modes
+## 混沌和故障注入
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Network Time Service (NTS) | ✖︎ | Design exists in `new_pipeline.md`; implementation not yet tracked in status updates. | new_pipeline.md |
-| Nominated PoS consensus mode | ✖︎ | Nexus design documents closed-set and NPoS modes; core implementation pending. | new_pipeline.md; nexus.md |
-
-## Nexus Ledger Roadmap
-
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Space Directory contract scaffold | ✖︎ | Global registry contract for DS manifests/governance not implemented yet. | nexus.md |
-| Data Space manifest format & lifecycle | ✖︎ | Norito manifest schema, versioning, and governance flow remain on the roadmap. | nexus.md |
-| DS governance & validator rotation | ✖︎ | On-chain procedures for DS membership/rotation still in design phase. | nexus.md |
-| Cross-DS anchoring & Nexus block composition | ✖︎ | Composition layer and anchoring commitments outlined but unimplemented. | nexus.md |
-| Kura/WSV erasure-coded storage | ✖︎ | Erasure-coded blob/snapshot storage for public/private DS not yet built. | nexus.md |
-| ZK/optimistic proof policy per DS | ✖︎ | Per-DS proof requirements and enforcement not tracked in code. | nexus.md |
-| Fee/quota isolation per Data Space | ✖︎ | DS-specific quotas and fee policy mechanisms remain future work. | nexus.md |
-
-## Chaos & Fault Injection
-
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Izanami chaosnet orchestration | ○ | Izanami workload now drives asset-definition, metadata, NFT, and trigger-repetition recipes with unit coverage for the new paths. | crates/izanami/src/instructions.rs; crates/izanami/src/instructions.rs#tests |
+|特色|状态 |笔记|证据|
+|--------|--------|--------|----------|
+| Izanami Chaosnet 编排 | ○ | Izanami 工作负载现在通过新路径的单元覆盖来驱动资产定义、元数据、NFT 和触发重复配方。 | crates/izanami/src/instructions.rs； crates/izanami/src/instructions.rs#tests |

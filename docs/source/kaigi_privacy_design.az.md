@@ -7,40 +7,41 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 6b7ffca7e960376a2959357cd865d8dab5afa1dfcb959adbc688b6db60977c8f
 source_last_modified: "2026-01-05T09:28:12.022066+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Kaigi Privacy & Relay Design
+# Kaigi Məxfilik və Relay Dizaynı
 
-This document captures the privacy-focused evolution that introduces zero-knowledge
-participation proofs and onion-style relays without sacrificing determinism or
-ledger auditability.
+Bu sənəd sıfır bilik təqdim edən məxfiliyə yönəlmiş təkamülü əks etdirir.
+iştirak sübutları və determinizm və ya qurban vermədən soğan tərzi releləri
+mühasibat kitabçasının yoxlanılması.
 
-# Overview
+# Baxış
 
-The design spans three layers:
+Dizayn üç təbəqəni əhatə edir:
 
-- **Roster privacy** – hide participant identities on-chain while keeping host permissions and billing consistent.
-- **Usage opacity** – allow hosts to log metered usage without disclosing per-segment details publicly.
-- **Overlay relays** – route transport packets through multi-hop peers so network observers cannot learn which participants communicate.
+- **Roster məxfiliyi** – ev sahibi icazələrini və hesablaşmanı ardıcıl saxlayaraq, zəncirdə iştirakçı şəxsiyyətlərini gizlədin.
+- **İstifadə qeyri-şəffaflığı** – hostlara hər seqment təfərrüatlarını ictimaiyyətə açıqlamadan ölçülü istifadəni qeyd etməyə icazə verin.
+- **Overlay reles** – marşrut daşıyıcı paketləri multi-hop peers vasitəsilə ötürür ki, şəbəkə müşahidəçiləri hansı iştirakçıların ünsiyyət qurduğunu öyrənə bilmirlər.
 
-All additions remain Norito-first, run under ABI version 1, and must execute deterministically across heterogeneous hardware.
+Bütün əlavələr ilk olaraq Norito olaraq qalır, ABI versiyası 1 altında işləyir və heterojen aparatlarda deterministik şəkildə yerinə yetirilməlidir.
 
-# Goals
+# Məqsəd
 
-1. Admit/evict participants using zero-knowledge proofs so the ledger never exposes raw account IDs.
-2. Maintain strong accounting guarantees: every join, leave, and usage event must still reconcile deterministically.
-3. Provide optional relay manifests that describe onion routes for control/data channels and can be audited on-chain.
-4. Keep the fallback (fully transparent roster) operational for deployments that do not require privacy.
+1. Sıfır bilik sübutlarından istifadə edərək iştirakçıları qəbul edin/çıxarın ki, kitab heç vaxt xam hesab identifikatorlarını ifşa etməsin.
+2. Güclü mühasibat zəmanətlərini qoruyun: hər bir qoşulma, ayrılma və istifadə hadisəsi hələ də determinist şəkildə uzlaşmalıdır.
+3. Nəzarət/məlumat kanalları üçün soğan marşrutlarını təsvir edən və zəncir üzərində yoxlanıla bilən əlavə relay manifestləri təqdim edin.
+4. Məxfilik tələb etməyən yerləşdirmələr üçün ehtiyatı (tam şəffaf siyahı) işlək saxlayın.
 
-# Threat Model Summary
+# Təhdid Modelinin xülasəsi
 
-- **Adversaries:** Network observers (ISPs), curious validators, malicious relay operators, and semi-honest hosts.
-- **Protected assets:** Participant identity, participation timing, per-segment usage/billing details, and network routing metadata.
-- **Assumptions:** Hosts still learn the true participant set off-chain; ledger peers verify proofs deterministically; overlay relays are untrusted but rate-limited; HPKE and SNARK primitives already exist in the codebase.
+- **Düşmənlər:** Şəbəkə müşahidəçiləri (ISP), maraqlı validatorlar, zərərli relay operatorları və yarı vicdanlı hostlar.
+- **Qorunan aktivlər:** İştirakçı şəxsiyyəti, iştirak vaxtı, seqment üzrə istifadə/faktura təfərrüatları və şəbəkə marşrutlaşdırma metadatası.
+- **Fərziyyələr:** Hostlar hələ də zəncirdən kənarda olan həqiqi iştirakçını öyrənirlər; ledger həmyaşıdları sübutları deterministik şəkildə yoxlayır; overlay releləri etibarsızdır, lakin sürət məhduddur; HPKE və SNARK primitivləri artıq kod bazasında mövcuddur.
 
-# Data Model Changes
+# Məlumat Modeli Dəyişiklikləri
 
-All types live in `iroha_data_model::kaigi`.
+Bütün növlər `iroha_data_model::kaigi`-də yaşayır.
 
 ```rust
 /// Commitment to a participant identity (Poseidon hash of account + domain salt).
@@ -68,13 +69,13 @@ pub struct KaigiRelayHop {
 }
 ```
 
-`KaigiRecord` gains the following fields:
+`KaigiRecord` aşağıdakı sahələri qazanır:
 
-- `roster_commitments: Vec<KaigiParticipantCommitment>` – replaces the exposed `participants` list once the privacy mode is enabled. Classic deployments can keep both populated during migration.
-- `nullifier_log: Vec<KaigiParticipantNullifier>` – strictly append-only, capped by a rolling window to keep metadata bounded.
-- `room_policy: KaigiRoomPolicy` – selects the viewer authentication stance for the session (`Public` rooms mirror read-only relays; `Authenticated` rooms require viewer tickets before an exit forwards packets).
-- `relay_manifest: Option<KaigiRelayManifest>` – structured manifest encoded with Norito so hops, HPKE keys, and weights stay canonical without JSON shims.
-- `privacy_mode: KaigiPrivacyMode` enum (see below).
+- `roster_commitments: Vec<KaigiParticipantCommitment>` – məxfilik rejimi aktivləşdirildikdən sonra açıqlanan `participants` siyahısını əvəz edir. Klassik yerləşdirmələr miqrasiya zamanı hər ikisini məskunlaşdıra bilər.
+- `nullifier_log: Vec<KaigiParticipantNullifier>` – yalnız ciddi şəkildə əlavə edilir, metadatanı məhdud saxlamaq üçün yuvarlanan pəncərə ilə örtülür.
+- `room_policy: KaigiRoomPolicy` – seans üçün izləyicinin identifikasiyası mövqeyini seçir (`Public` otaqları yalnız oxunmaq üçün releləri əks etdirir; `Authenticated` otaqları paketləri ötürməzdən əvvəl tamaşaçı biletlərini tələb edir).
+- `relay_manifest: Option<KaigiRelayManifest>` – Norito ilə kodlanmış strukturlaşdırılmış manifest, beləliklə hopplar, HPKE düymələri və çəkilər JSON şimləri olmadan kanonik qalır.
+- `privacy_mode: KaigiPrivacyMode` enum (aşağıya bax).
 
 ```rust
 pub enum KaigiPrivacyMode {
@@ -83,199 +84,191 @@ pub enum KaigiPrivacyMode {
 }
 ```
 
-`NewKaigi` receives matching optional fields so hosts can opt into privacy at creation time.
+`NewKaigi` uyğun isteğe bağlı sahələri qəbul edir ki, ev sahibləri yaradılış zamanı məxfiliyə üstünlük verə bilsinlər.
 
 
-- Fields use `#[norito(with = "...")]` helpers to enforce canonical encoding (little-endian for integers, sorted hops by position).
-- `KaigiRecord::from_new` seeds the new vectors empty and copies any provided relay manifest.
+- Sahələr kanonik kodlaşdırmanı tətbiq etmək üçün `#[norito(with = "...")]` köməkçilərindən istifadə edir (tam ədədlər üçün kiçik endian, mövqeyə görə sıralanmış hops).
+- `KaigiRecord::from_new` yeni vektorları boşaldır və təqdim olunan hər hansı relay manifestini kopyalayır.
 
-# Instruction Surface Changes
+# Təlimat Səthi Dəyişikliklər
 
-## Demo quickstart helper
+## Demo sürətli başlanğıc köməkçisi
 
-For ad-hoc demos and interoperability tests the CLI now exposes
-`iroha kaigi quickstart`. It:
+Ad-hoc demolar və qarşılıqlı fəaliyyət testləri üçün CLI indi ifşa edir
+`iroha kaigi quickstart`. O:- `--domain`/`--host` vasitəsilə ləğv edilmədiyi halda CLI konfiqurasiyasından (domen `wonderland` + hesabı) yenidən istifadə edir.
+- `--call-name` buraxıldıqda vaxt möhürü əsasında zəng adı yaradır və aktiv Torii son nöqtəsinə qarşı `CreateKaigi` təqdim edir.
+- İstəyə görə avtomatik olaraq hosta qoşulur (`--auto-join-host`) beləliklə, tamaşaçılar dərhal qoşula bilsinlər.
+- Torii URL, zəng identifikatorları, məxfilik/otaq siyasəti, kopyalamağa hazır qoşulma əmri və makara yolu testçiləri nəzarət etməli (məsələn, `storage/streaming/soranet_routes/exit-<relay-id>/kaigi-stream/*.norito`) olan JSON xülasəsi verir. Blobu davam etdirmək üçün `--summary-out path/to/file.json` istifadə edin.
 
-- Reuses the CLI config (domain `wonderland` + account) unless overridden via `--domain`/`--host`.
-- Generates a timestamp-based call name when `--call-name` is omitted and submits `CreateKaigi` against the active Torii endpoint.
-- Optionally auto-joins the host (`--auto-join-host`) so viewers can connect immediately.
-- Emits a JSON summary containing Torii URL, call identifiers, privacy/room policy, a ready-to-copy join command, and the spool path testers should monitor (e.g., `storage/streaming/soranet_routes/exit-<relay-id>/kaigi-stream/*.norito`). Use `--summary-out path/to/file.json` to persist the blob.
+Bu köməkçi işlək `irohad --sora` node ehtiyacını ** əvəz etmir: məxfilik marşrutları, spool faylları və relay manifestləri kitabca dəstəklənir. Xarici partiyalar üçün müvəqqəti otaqlar düzəldərkən, sadəcə olaraq, qazan lövhəsini düzəldir.
 
-This helper does **not** replace the need for a running `irohad --sora` node: privacy routes, spool files, and relay manifests remain ledger-backed. It simply trims boilerplate when spinning up temporary rooms for external parties.
+### Bir komanda demo skripti
 
-### One-command demo script
+Daha sürətli bir yol üçün bir yoldaş skripti var: `scripts/kaigi_demo.sh`.
+Sizin üçün aşağıdakıları yerinə yetirir:
 
-For an even faster path there is a companion script: `scripts/kaigi_demo.sh`.
-It performs the following for you:
+1. Birləşdirilmiş `defaults/nexus/genesis.json`-i `target/kaigi-demo/genesis.nrt`-ə imzalayır.
+2. İmzalanmış blokla `irohad --sora`-i işə salır (`target/kaigi-demo/irohad.log` altında qeydlər) və `http://127.0.0.1:8080/status`-i ifşa etmək üçün Torii-ni gözləyir.
+3. `iroha kaigi quickstart --auto-join-host --summary-out target/kaigi-demo/kaigi_summary.json` işləyir.
+4. JSON xülasəsinə gedən yolu üstəgəl spool kataloquna (`storage/streaming/soranet_routes/exit-<relay-id>/kaigi-stream/`) çap edir ki, siz onu xarici sınaqçılarla paylaşa biləsiniz.
 
-1. Signs the bundled `defaults/nexus/genesis.json` into `target/kaigi-demo/genesis.nrt`.
-2. Launches `irohad --sora` with the signed block (logs under `target/kaigi-demo/irohad.log`) and waits for Torii to expose `http://127.0.0.1:8080/status`.
-3. Runs `iroha kaigi quickstart --auto-join-host --summary-out target/kaigi-demo/kaigi_summary.json`.
-4. Prints the path to the JSON summary plus the spool directory (`storage/streaming/soranet_routes/exit-<relay-id>/kaigi-stream/`) so you can share it with external testers.
+Ətraf mühit dəyişənləri:
 
-Environment variables:
+- `TORII_URL` — sorğu üçün Torii son nöqtəsini ləğv edin (defolt `http://127.0.0.1:8080`).
+- `RUN_DIR` — işçi kataloqunu ləğv edin (defolt `target/kaigi-demo`).
 
-- `TORII_URL` — override the Torii endpoint to poll (default `http://127.0.0.1:8080`).
-- `RUN_DIR` — override the working directory (default `target/kaigi-demo`).
-
-Stop the demo by pressing `Ctrl+C`; the trap in the script terminates `irohad` automatically. The spool files and summary remain on disk so you can hand off artifacts after the process exits.
+`Ctrl+C` düyməsini basaraq nümayişi dayandırın; skriptdəki tələ avtomatik olaraq `irohad`-i dayandırır. Spool faylları və xülasə diskdə qalır ki, proses bitdikdən sonra artefaktları təhvil verə biləsiniz.
 
 ## `CreateKaigi`
 
-- Validates `privacy_mode` against host permissions.
-- If a `relay_manifest` is supplied, enforce ≥3 hops, non-zero weights, HPKE key presence, and uniqueness so on-chain manifests remain auditable.
-- Validate `room_policy` input from SDKs/CLI (`public` vs `authenticated`) and propagate it to SoraNet provisioning so relay caches expose the correct GAR categories (`stream.kaigi.public` vs `stream.kaigi.authenticated`). Hosts wire this via `iroha kaigi create --room-policy …`, the JS SDK’s `roomPolicy` field, or by setting `room_policy` when Swift clients assemble the Norito payload prior to submission.
-- Stores empty commitment/nullifier logs.
+- `privacy_mode`-i host icazələri ilə təsdiqləyir.
+- Əgər `relay_manifest` verilirsə, ≥3 hops, sıfır olmayan çəkilər, HPKE açarının mövcudluğu və unikallığı tətbiq edin ki, zəncirdəki manifestlər yoxlanıla bilsin.
+- SDK/CLI-dən `room_policy` girişini təsdiqləyin (`public` vs `authenticated`) və onu SoraNet təminatına təbliğ edin ki, relay keşləri düzgün GAR kateqoriyalarını (`stream.kaigi.public`010) ifşa etsin (`stream.kaigi.public`0). Hostlar bunu `iroha kaigi create --room-policy …`, JS SDK-nın `roomPolicy` sahəsi vasitəsilə və ya Swift müştəriləri təqdim etməzdən əvvəl Norito faydalı yükünü yığdıqda `room_policy` parametrini təyin etməklə ötürür.
+- Boş öhdəlik/nülledici qeydləri saxlayır.
 
 ## `JoinKaigi`
 
-Parameters:
+Parametrlər:
 
-- `proof: ZkProof` (Norito bytes wrapper) – Groth16 proof attesting the caller knows `(account_id, domain_salt)` whose Poseidon hash equals the supplied `commitment`.
+- `proof: ZkProof` (Norito bayt sarğı) – Zəng edənin Poseidon hash-ı təqdim edilmiş `commitment`-ə bərabər olan `(account_id, domain_salt)`-i tanıdığını təsdiq edən Groth16 sübutu.
 - `commitment: FixedBinary<32>`
 - `nullifier: FixedBinary<32>`
-- `relay_hint: Option<KaigiRelayHop>` – optional per-participant override for the next hop.
+- `relay_hint: Option<KaigiRelayHop>` – növbəti atlama üçün hər bir iştirakçı üçün isteğe bağlı ləğvetmə.
 
-Execution steps:
+İcra addımları:
 
-1. If `record.privacy_mode == Transparent`, fallback to current behavior.
-2. Verify the Groth16 proof against the circuit registry entry `KAIGI_ROSTER_V1`.
-3. Ensure `nullifier` has not appeared in `record.nullifier_log`.
-4. Append commitment/nullifier entries; if `relay_hint` is supplied, patch the relay manifest view for this participant (stored only in in-memory session state, not on-chain).
+1. Əgər `record.privacy_mode == Transparent`, cari davranışa qayıdın.
+2. Groth16 sübutunu `KAIGI_ROSTER_V1` dövrə reyestr qeydinə qarşı yoxlayın.
+3. `nullifier`-in `record.nullifier_log`-də görünməməsinə əmin olun.
+4. Öhdəlik/etibarsız qeydləri əlavə edin; Əgər `relay_hint` təchiz edilibsə, bu iştirakçı üçün relay manifest görünüşünü düzəldin (zəncirdə deyil, yalnız yaddaşdaxili sessiya vəziyyətində saxlanılır).## `LeaveKaigi`
 
-## `LeaveKaigi`
+Şəffaf rejim cari məntiqə uyğun gəlir.
 
-Transparent mode matches current logic.
+Şəxsi rejim tələb edir:
 
-Private mode requires:
-
-1. Proof that the caller knows a commitment in `record.roster_commitments`.
-2. Nullifier update proving single-use leave.
-3. Remove commitment/nullifier entries. Auditing preserves tombstones for fixed retention windows to avoid structural leakage.
+1. Zəng edənin `record.roster_commitments`-də öhdəliyi bildiyinin sübutu.
+2. Birdəfəlik məzuniyyəti sübut edən ləğvedici yeniləmə.
+3. Öhdəlik/etibarlı qeydləri silin. Audit struktur sızmasının qarşısını almaq üçün məzar daşlarını sabit saxlama pəncərələri üçün qoruyur.
 
 ## `RecordKaigiUsage`
 
-Extends payload with:
+Yük yükünü genişləndirir:
 
-- `usage_commitment: FixedBinary<32>` – commitment to the raw usage tuple (duration, gas, segment ID).
-- Optional ZK proof verifying the delta matches encrypted logs provided off-ledger.
+- `usage_commitment: FixedBinary<32>` – xammaldan istifadə dəftərinə sadiqlik (müddət, qaz, seqment ID).
+- Deltanın şifrlənmiş qeydlərə uyğunluğunu təsdiqləyən isteğe bağlı ZK sübutu.
 
-Hosts can still submit transparent totals; privacy mode only makes the commitment field mandatory.
+Hostlar hələ də şəffaf yekunları təqdim edə bilər; məxfilik rejimi yalnız öhdəlik sahəsini məcburi edir.
 
-# Verification & Circuits
+# Doğrulama və Sxemlər
 
-- `iroha_core::smartcontracts::isi::kaigi::privacy` now performs full roster
-  verification by default. It resolves `zk.kaigi_roster_join_vk` (joins) and
-  `zk.kaigi_roster_leave_vk` (leaves) from configuration,
-  looks up the corresponding `VerifyingKeyRef` in WSV (ensuring the record is
-  `Active`, backend/circuit identifiers match, and commitments align), charges
-  byte accounting, and dispatches to the configured ZK backend.
-- The `kaigi_privacy_mocks` feature retains the deterministic stub verifier so
-  unit/integration tests and constrained CI jobs can run without a Halo2 backend.
-  Production builds must keep the feature disabled to enforce real proofs.
-- The crate emits a compile-time error if `kaigi_privacy_mocks` is enabled on a
-  non-test, non-`debug_assertions` build, preventing accidental release binaries
-  from shipping with the stub.
-- Operators need to (1) register the roster verifier set through governance, and
-  (2) set `zk.kaigi_roster_join_vk`, `zk.kaigi_roster_leave_vk`, and
-  `zk.kaigi_usage_vk` in `iroha_config` so hosts can resolve them at runtime.
-  Until the keys are present, privacy joins, leaves, and usage calls fail
-  deterministically.
-- `crates/kaigi_zk` now ships Halo2 circuits for roster joins/leaves and usage
-  commitments alongside the reusable compressors (`commitment`, `nullifier`,
-  `usage`). The roster circuits expose the Merkle root (four little-endian
-  64-bit limbs) as additional public inputs so the host can crosscheck the proof
-  against the stored roster root before verification. Usage commitments are
-  enforced by `KaigiUsageCommitmentCircuit`, which ties `(duration, gas,
-  segment)` to the on-ledger hash.
-- `Join` circuit inputs: `(commitment, nullifier, domain_salt)` and private
-  `(account_id)`. Public inputs include `commitment`, `nullifier`, and
-  four limbs of the Merkle root for the roster commitment tree (the roster
-  remains off-chain, but the root is bound into the transcript).
-- Determinism: we fix Poseidon parameters, circuit versions, and indexes in the
-  registry. Any change bumps `KaigiPrivacyMode` to `ZkRosterV2` with matching
-  tests/golden files.
+- `iroha_core::smartcontracts::isi::kaigi::privacy` indi tam siyahı həyata keçirir
+  standart olaraq doğrulama. `zk.kaigi_roster_join_vk` (birləşir) və həll edir
+  `zk.kaigi_roster_leave_vk` (yarpaqlar) konfiqurasiyadan,
+  WSV-də müvafiq `VerifyingKeyRef`-i axtarır (qeyd
+  `Active`, arxa uç/sxem identifikatorları uyğun gəlir və öhdəliklər uyğunlaşdırılır), ödənişlər
+  bayt uçotu və konfiqurasiya edilmiş ZK arxa ucuna göndərir.
+- `kaigi_privacy_mocks` xüsusiyyəti deterministik stub yoxlayıcısını saxlayır
+  vahid/inteqrasiya testləri və məhdud CI işləri Halo2 backend olmadan işləyə bilər.
+  İstehsal qurğuları real sübutları tətbiq etmək üçün funksiyanı qeyri-aktiv saxlamalıdır.
+- `kaigi_privacy_mocks` aktivləşdirildikdə sandıq kompilyasiya vaxtı xətası verir.
+  qeyri-test, qeyri-`debug_assertions` quruluşu, təsadüfi buraxılan ikili faylların qarşısını alır
+  stub ilə göndərilmədən.
+- Operatorlar (1) idarəetmə vasitəsilə müəyyən edilmiş siyahı yoxlayıcısını qeydiyyatdan keçirməlidirlər və
+  (2) `zk.kaigi_roster_join_vk`, `zk.kaigi_roster_leave_vk` və
+  `zk.kaigi_usage_vk` `iroha_config`-də hostlar onları iş vaxtında həll edə bilsinlər.
+  Düymələr mövcud olana qədər məxfilik qoşulur, ayrılır və istifadə zəngləri uğursuz olur
+  deterministik olaraq.
+- `crates/kaigi_zk` indi siyahı birləşmələri/yarpaqları və istifadə üçün Halo2 dövrələrini göndərir
+  təkrar istifadə edilə bilən kompressorlarla yanaşı öhdəliklər (`commitment`, `nullifier`,
+  `usage`). Siyahı sxemləri Merkle kökünü ifşa edir (dörd kiçik endian
+  64-bit üzvlər) əlavə ictimai girişlər kimi istifadə edin ki, ev sahibi sübutu yoxlaya bilsin
+  yoxlamadan əvvəl saxlanılan siyahı kökünə qarşı. İstifadə öhdəlikləri bunlardır
+  `(müddət, qaz,
+  seqment) `-dəftərdəki hash-ə.
+- `Join` dövrə girişləri: `(commitment, nullifier, domain_salt)` və özəl
+  `(account_id)`. İctimai girişlərə `commitment`, `nullifier` və
+  siyahı öhdəliyi ağacı üçün Merkle kökünün dörd üzvü (siyahı
+  zəncirdən kənar qalır, lakin kök transkriptlə bağlıdır).
+- Determinizm: biz Poseidon parametrlərini, dövrə versiyalarını və indekslərini düzəldirik
+  reyestr. İstənilən dəyişiklik uyğunluğu ilə `KaigiPrivacyMode`-dən `ZkRosterV2`-ə zərbə vurur
+  testlər/qızıl fayllar.
 
 # Onion Routing Overlay
 
-## Relay Registration
+## Relay Qeydiyyatı- HPKE əsas materialı və bant genişliyi sinfi daxil olmaqla `kaigi_relay::<relay_id>` domen metadata girişləri kimi rele özünü qeydiyyata alır.
+- `RegisterKaigiRelay` təlimatı domen metadatasında deskriptoru saxlayır, `KaigiRelayRegistered` xülasəsini (HPKE barmaq izi və bant genişliyi sinfi ilə) yayır və düymələri determinist şəkildə fırlatmaq üçün yenidən işə salına bilər.
+- İdarəetmə domen metadatası (`kaigi_relay_allowlist`) vasitəsilə icazəli siyahıları idarə edir və relay qeydiyyatı/manifest yeniləmələri yeni yolları qəbul etməzdən əvvəl üzvlüyü tətbiq edir.
 
-- Relays self-register as domain metadata entries `kaigi_relay::<relay_id>` including HPKE key material and bandwidth class.
-- The `RegisterKaigiRelay` instruction persists the descriptor in domain metadata, emits a `KaigiRelayRegistered` summary (with HPKE fingerprint and bandwidth class), and can be re-invoked to rotate keys deterministically.
-- Governance curates allowlists through domain metadata (`kaigi_relay_allowlist`), and relay registration/manifest updates enforce membership before accepting new paths.
+## Manifest Yaradılış
 
-## Manifest Creation
+- Hostlar mövcud relelərdən multi-hop yolları (minimum uzunluq 3) qurur. Manifest laylı zərfi şifrələmək üçün tələb olunan AccountIds ardıcıllığını və HPKE ictimai açarlarını kodlayır.
+- Zəncirdə saxlanılan `relay_manifest` hop deskriptorlarını və istifadə müddətini ehtiva edir (Norito kodlu `KaigiRelayManifest`); faktiki efemer açarlar və sessiya üzrə ofsetlər HPKE istifadə edərək kitabdan kənar mübadilə edilir.
 
-- Hosts build multi-hop paths (minimum length 3) from available relays. The manifest encodes the sequence of AccountIds and the HPKE public keys required to encrypt the layered envelope.
-- `relay_manifest` stored on-chain contains hop descriptors and expiry (Norito-encoded `KaigiRelayManifest`); actual ephemeral keys and per-session offsets are exchanged off-ledger using HPKE.
+## Siqnal və Media
 
-## Signalling & Media
-
-- SDP/ICE exchange continues via Kaigi metadata but encrypted per hop. Validators only see HPKE ciphertext plus header indexes.
-- Media packets travel through relays using QUIC with sealed payloads. Each hop decrypts one layer to learn the next hop address; final recipient gets the media stream after stripping all layers.
+- SDP/ICE mübadiləsi Kaigi metadata vasitəsilə davam edir, lakin hər hop üçün şifrələnir. Təsdiqləyicilər yalnız HPKE şifrəli mətn və başlıq indekslərini görür.
+- Media paketləri möhürlənmiş faydalı yüklərlə QUIC-dən istifadə edərək relelərdən keçir. Hər bir hop növbəti hop ünvanını öyrənmək üçün bir təbəqənin şifrəsini açır; son alıcı bütün təbəqələri sildikdən sonra media axını alır.
 
 ## Failover
 
-- Clients monitor relay health via the `ReportKaigiRelayHealth` instruction, which persists signed feedback in domain metadata (`kaigi_relay_feedback::<relay_id>`), broadcasts `KaigiRelayHealthUpdated`, and allows governance/hosts to reason about current availability. When a relay fails, the host issues an updated manifest and logs a `KaigiRelayManifestUpdated` event (see below).
-- Hosts apply manifest changes on-ledger through the `SetKaigiRelayManifest` instruction, which replaces the stored path or clears it entirely. Clearing emits a summary with `hop_count = 0` so operators can observe the transition back to direct routing.
-- Prometheus metrics (`kaigi_relay_registered_total`, `kaigi_relay_registration_bandwidth_class`, `kaigi_relay_manifest_updates_total`, `kaigi_relay_manifest_hop_count`, `kaigi_relay_health_reports_total`, `kaigi_relay_health_state`, `kaigi_relay_failover_total`, `kaigi_relay_failover_hop_count`) now surface relay churn, health status, and failover cadence for operator dashboards.
+- Müştərilər domen metadatasında (`kaigi_relay_feedback::<relay_id>`) imzalanmış rəyi davam etdirən, `KaigiRelayHealthUpdated` yayımlayan və idarəetməyə/hostlara cari əlçatanlıq haqqında düşünməyə imkan verən `ReportKaigiRelayHealth` təlimatı vasitəsilə relay sağlamlığına nəzarət edir. Röle uğursuz olduqda, ev sahibi yenilənmiş manifest verir və `KaigiRelayManifestUpdated` hadisəsini qeyd edir (aşağıya baxın).
+- Hostlar saxlanılan yolu əvəz edən və ya onu tamamilə təmizləyən `SetKaigiRelayManifest` təlimatı vasitəsilə kitabda manifest dəyişiklikləri tətbiq edir. Klirinq `hop_count = 0` ilə xülasə verir ki, operatorlar birbaşa marşrutlaşdırmaya keçidi müşahidə edə bilsinlər.
+- Prometheus metrikləri (`kaigi_relay_registered_total`, `kaigi_relay_registration_bandwidth_class`, `kaigi_relay_manifest_updates_total`, `kaigi_relay_manifest_hop_count`, `kaigi_relay_health_reports_total`, `kaigi_relay_health_reports_total`, Prometheus, Norito `kaigi_relay_failover_hop_count`) indi operatorun idarə panelləri üçün səth relesinin tıxanması, sağlamlıq vəziyyəti və uğursuzluq kadansı.
 
-# Events
+# Hadisələr
 
-Extend `DomainEvent` variants:
+`DomainEvent` variantlarını genişləndirin:
 
-- `KaigiRosterSummary` – emitted with anonymised counts and the current roster
-  root whenever the roster changes (root is `None` in transparent mode).
-- `KaigiRelayRegistered` – emitted whenever a relay registration is created or updated.
-- `KaigiRelayManifestUpdated` – emitted when the relay manifest changes.
-- `KaigiRelayHealthUpdated` – emitted when hosts submit a relay health report via `ReportKaigiRelayHealth`.
-- `KaigiUsageSummary` – emitted after each usage segment, exposing aggregate totals only.
+- `KaigiRosterSummary` – anonim hesablamalar və cari siyahı ilə yayılır
+  siyahı dəyişdikdə kök (kök şəffaf rejimdə `None`-dir).
+- `KaigiRelayRegistered` – rele qeydiyyatı yaradıldıqda və ya yeniləndikdə yayılır.
+- `KaigiRelayManifestUpdated` – rele manifesti dəyişdikdə yayılır.
+- `KaigiRelayHealthUpdated` – hostlar `ReportKaigiRelayHealth` vasitəsilə relay sağlamlıq hesabatı təqdim etdikdə yayılır.
+- `KaigiUsageSummary` – hər istifadə seqmentindən sonra yayılır, yalnız ümumi cəmləri ifşa edir.
 
-Events serialize with Norito, exposing only commitment hashes and counts.
+Hadisələr Norito ilə seriallaşdırılır, yalnız öhdəlik hashlarını və saylarını ifşa edir.CLI alətləri (`iroha kaigi …`) hər bir ISI-ni əhatə edir ki, operatorlar seansları qeyd edə bilsinlər,
+siyahı yeniləmələrini təqdim edin, relay sağlamlığını bildirin və əl istehsalı əməliyyatlar olmadan istifadəni qeyd edin.
+Relay manifestləri və məxfilik sübutları ötürülən JSON/hex fayllarından yüklənir
+CLI-nin normal təqdimetmə yolu, skript müqaviləsini asanlaşdırır
+səhnə mühitlərində qəbul.
 
-CLI tooling (`iroha kaigi …`) wraps each ISI so operators can register sessions,
-submit roster updates, report relay health, and record usage without hand-crafting transactions.
-Relay manifests and privacy proofs are loaded from JSON/hex files passed through
-the CLI’s normal submission path, making it straightforward to script contract
-admission in staging environments.
+# Qaz uçotu
 
-# Gas Accounting
+- `crates/iroha_core/src/gas.rs`-də yeni sabitlər:
+  - `BASE_KAIGI_JOIN_ZK`, `BASE_KAIGI_LEAVE_ZK` və `BASE_KAIGI_USAGE_ZK`
+    Halo2 yoxlama vaxtlarına qarşı kalibrlənmişdir (siyahı üçün ≈1.6ms
+    qoşulma/yarpaq, Apple M2 Ultra-da istifadə üçün ≈1,2ms). Əlavə ödənişlər davam edir
+    `PER_KAIGI_PROOF_BYTE` vasitəsilə sübut bayt ölçüsü ilə miqyas.
+- `RecordKaigiUsage` öhdəliyin ölçüsünə və sübutun yoxlanışına əsasən əlavə haqq ödəyir.
+- Kalibrləmə qoşqu məxfi aktiv infrastrukturundan sabit toxumlarla yenidən istifadə edəcək.
 
-- New constants in `crates/iroha_core/src/gas.rs`:
-  - `BASE_KAIGI_JOIN_ZK`, `BASE_KAIGI_LEAVE_ZK`, and `BASE_KAIGI_USAGE_ZK`
-    calibrated against the Halo2 verification timings (≈1.6 ms for roster
-    joins/leaves, ≈1.2 ms for usage on Apple M2 Ultra). Surcharges continue to
-    scale with proof byte size via `PER_KAIGI_PROOF_BYTE`.
-- `RecordKaigiUsage` commits pay an extra fee based on commitment size and proof verification.
-- Calibration harness will reuse the confidential asset infrastructure with fixed seeds.
+# Sınaq Strategiyası
 
-# Testing Strategy
+- `KaigiParticipantCommitment`, `KaigiRelayManifest` üçün Norito kodlamasını/deşifrəsini yoxlayan vahid testləri.
+- Kanonik sifarişi təmin edən JSON görünüşü üçün qızıl testlər.
+- Mini-şəbəkəni fırlayan inteqrasiya testləri (bax
+  Cari əhatə dairəsi üçün `crates/iroha_core/tests/kaigi_privacy.rs`):
+  - Sınaq sübutlardan istifadə edərək özəl qoşulma/çıxma dövrləri (`kaigi_privacy_mocks` xüsusiyyət bayrağı).
+  - Metadata hadisələri vasitəsilə yayılan relay manifest yeniləmələri.
+- Host səhv konfiqurasiyasını əhatə edən UI testlərini sınaqdan keçirin (məsələn, məxfilik rejimində çatışmayan relay manifest).
+- Məhdud mühitlərdə vahid/inteqrasiya testlərini həyata keçirərkən (məsələn, Codex
+  sandbox), Norito bağlamasını keçmək üçün `NORITO_SKIP_BINDINGS_SYNC=1` ixrac edin
+  `crates/norito/build.rs` tərəfindən tətbiq edilən sinxronizasiya yoxlanışı.
 
-- Unit tests verifying Norito encode/decode for `KaigiParticipantCommitment`, `KaigiRelayManifest`.
-- Golden tests for JSON view ensuring canonical ordering.
-- Integration tests spinning up a mini-network with (see
-  `crates/iroha_core/tests/kaigi_privacy.rs` for the current coverage):
-  - Private join/leave cycles using mock proofs (feature flag `kaigi_privacy_mocks`).
-  - Relay manifest updates propagated via metadata events.
-- Trybuild UI tests covering host misconfiguration (e.g., missing relay manifest in privacy mode).
-- When running unit/integration tests in constrained environments (e.g., the Codex
-  sandbox), export `NORITO_SKIP_BINDINGS_SYNC=1` to bypass the Norito binding
-  sync check enforced by `crates/norito/build.rs`.
+# Miqrasiya Planı
 
-# Migration Plan
+1. ✅ `KaigiPrivacyMode::Transparent` defoltlarının arxasında məlumat modeli əlavələrini göndərin.
+2. ✅ Telin ikili yol yoxlanışı: istehsal `kaigi_privacy_mocks`-i söndürür,
+   `zk.kaigi_roster_vk` həll edir və real zərf yoxlamasını həyata keçirir; testlər edə bilər
+   hələ də deterministik stublar üçün funksiyanı aktivləşdirir.
+3. ✅ Xüsusi `kaigi_zk` Halo2 qutusu, kalibrlənmiş qaz və naqili təqdim edildi
+   real sübutları sona çatdırmaq üçün inteqrasiya əhatəsi (istehzalar indi yalnız sınaqdan keçirilir).
+4. ⬜ Bütün istehlakçılar öhdəlikləri başa düşdükdən sonra şəffaf `participants` vektorunu ləğv edin.
 
-1. ✅ Ship data model additions behind `KaigiPrivacyMode::Transparent` defaults.
-2. ✅ Wire dual-path verification: production disables `kaigi_privacy_mocks`,
-   resolves `zk.kaigi_roster_vk`, and runs real envelope verification; tests can
-   still enable the feature for deterministic stubs.
-3. ✅ Introduced the dedicated `kaigi_zk` Halo2 crate, calibrated gas, and wired
-   integration coverage to run real proofs end-to-end (mocks are now test-only).
-4. ⬜ Deprecate the transparent `participants` vector once all consumers understand commitments.
+# Açıq Suallar
 
-# Open Questions
+- Merkle ağacının davamlılığı strategiyasını müəyyənləşdirin: zəncir üzərində və zəncirdən kənarda (cari meyl: zəncir üzərində kök öhdəlikləri olan zəncirdən kənar ağac). *(KPG-201-də izlənilir.)*
+- Relay manifestlərinin çox yollu (eyni zamanda lazımsız yollar) dəstəklənməsinin olub olmadığını müəyyənləşdirin. *(KPG-202-də izlənilir.)*
+- Relay reputasiyası üçün idarəçiliyə aydınlıq gətirin - bizə kəsilməyə ehtiyac var, yoxsa yumşaq qadağalar? *(KPG-203-də izlənilir.)*
 
-- Define the Merkle tree persistence strategy: on-chain vs off-chain (current leaning: off-chain tree with on-chain root commitments). *(Tracked in KPG-201.)*
-- Determine whether relay manifests should support multi-path (simultaneous redundant paths). *(Tracked in KPG-202.)*
-- Clarify governance for relay reputations—do we need slashing or just soft bans? *(Tracked in KPG-203.)*
-
-These items should be resolved before enabling `KaigiPrivacyMode::ZkRosterV1` in production.
+`KaigiPrivacyMode::ZkRosterV1`-i istehsalda işə salmazdan əvvəl bu maddələr həll edilməlidir.

@@ -7,85 +7,84 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 1ee87ee60e2e8c9d9636b282231b33de3cf1fd7240c8d31d0a0a1673651dcef1
 source_last_modified: "2025-12-29T18:16:35.972838+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% JDG-SDN attestations and rotation
+% JDG-SDN ထောက်ခံချက်များနှင့် လည်ပတ်မှု
 
-This note captures the enforcement model for Secret Data Node (SDN) attestations
-used by the Jurisdiction Data Guardian (JDG) flow.
+ဤမှတ်စုသည် Secret Data Node (SDN) သက်သေအထောက်အထားများအတွက် ကျင့်သုံးမှုပုံစံကို ဖမ်းယူပါသည်။
+Jurisdiction Data Guardian (JDG) စီးဆင်းမှုမှ အသုံးပြုသည်။
 
-## Commitment format
-- `JdgSdnCommitment` binds the scope (`JdgAttestationScope`), the encrypted
-  payload hash, and the SDN public key. Seals are typed signatures
-  (`SignatureOf<JdgSdnCommitmentSignable>`) over the domain-tagged payload
-  `iroha:jurisdiction:sdn:commitment:v1\x00 || norito(signable)`.
-- Structural validation (`validate_basic`) enforces:
+## ကတိကဝတ်ပုံစံ
+- `JdgSdnCommitment` သည် ကုဒ်ဝှက်ထားသော နယ်ပယ် (`JdgAttestationScope`) ကို ချည်နှောင်သည်
+  payload hash နှင့် SDN အများသူငှာသော့။ တံဆိပ်များသည် ရိုက်နှိပ်ထားသော လက်မှတ်များဖြစ်သည်။
+  domain-tagged payload ကျော် (`SignatureOf<JdgSdnCommitmentSignable>`)
+  `iroha:jurisdiction:sdn:commitment:v1\x00 || norito(signable)`။
+- ဖွဲ့စည်းပုံဆိုင်ရာ တရားဝင်အတည်ပြုခြင်း (`validate_basic`) သည်-
   - `version == JDG_SDN_COMMITMENT_VERSION_V1`
-  - valid block ranges
-  - non-empty seals
-  - scope equality against the attestation when run via
+  - မှန်ကန်သောပိတ်ဆို့ခြင်းအပိုင်းအခြားများ
+  - အချည်းနှီးမဟုတ်သောတံဆိပ်များ
+  - တစ်ဆင့်ခံလုပ်ဆောင်သောအခါတွင် သက်သေခံချက်နှင့် ဆန့်ကျင်သည့် အတိုင်းအတာ တန်းတူညီမျှမှု
     `JdgAttestation::validate_with_sdn`/`validate_with_sdn_registry`
-- Deduplication is handled by the attestation validator (signer+payload hash
-  uniqueness) to prevent withheld/duplicate commitments.
+- ကူးယူခြင်းအား သက်သေအထောက်အထားစစ်ဆေးသူ (လက်မှတ်ထိုးသူ + ပေးဆောင်သည့်ဟက်ရှ်) မှ ကိုင်တွယ်သည်။
+  ထူးခြားမှု) ကတိကဝတ်များကို ချုပ်နှောင်ထား/ပွားခြင်းကို တားဆီးရန်။
 
-## Registry and rotation policy
-- SDN keys live in `JdgSdnRegistry`, keyed by `(Algorithm, public_key_bytes)`.
-- `JdgSdnKeyRecord` records the activation height, optional retirement height,
-  and optional parent key.
-- Rotation is governed by `JdgSdnRotationPolicy` (currently: `dual_publish_blocks`
-  overlap window). Registering a child key updates the parent retirement to
-  `child.activation + dual_publish_blocks`, with guardrails:
-  - missing parents are rejected
-  - activations must be strictly increasing
-  - overlaps that exceed the grace window are rejected
-- Registry helpers surface the installed records (`record`, `keys`) for status
-  and API exposure.
+## မှတ်ပုံတင်ခြင်းနှင့် လည်ပတ်ခြင်းမူဝါဒ
+- SDN သော့များသည် `JdgSdnRegistry` တွင်နေထိုင်သည်၊ `(Algorithm, public_key_bytes)` မှသော့ခတ်ထားသည်။
+- `JdgSdnKeyRecord` သည် activation အမြင့်၊ ရွေးချယ်နိုင်သောအနားယူမှုအမြင့်ကိုမှတ်တမ်းတင်သည်
+  နှင့် ရွေးချယ်နိုင်သော ပင်မကီး။
+- လှည့်ခြင်းကို `JdgSdnRotationPolicy` ဖြင့် ထိန်းချုပ်ထားသည် (လောလောဆယ်- `dual_publish_blocks`
+  ထပ်နေသည့်ဝင်းဒိုး)။ ကလေးသော့ကို မှတ်ပုံတင်ခြင်းသည် မိဘအငြိမ်းစားယူခြင်းကို အပ်ဒိတ်လုပ်သည်။
+  အကာအရံများပါသော `child.activation + dual_publish_blocks`
+  - ပျောက်ဆုံးနေသော မိဘများကို ငြင်းပယ်ခြင်း။
+  - activations များ တင်းကြပ်စွာ တိုးလာရမည်။
+  - ကျေးဇူးတော်ပြတင်းပေါက်ထက် ကျော်လွန်သော ထပ်နေမှုများကို ပယ်ချသည်။
+- Registry helpers သည် အခြေအနေအတွက် ထည့်သွင်းထားသော မှတ်တမ်းများ (`record`, `keys`) ကို ဖော်ပြသည်
+  နှင့် API ထိတွေ့မှု။
 
-## Validation flow
-- `JdgAttestation::validate_with_sdn_registry` wraps the structural
-  attestation checks and SDN enforcement. `JdgSdnPolicy` threads:
-  - `require_commitments`: enforce presence for PII/secret payloads
-  - `rotation`: grace window used when updating parent retirement
-- Each commitment is checked for:
-  - structural validity + attestation-scope match
-  - registered key presence
-  - active window covering the attested block range (retirement bounds already
-    include the dual-publish grace)
-  - valid seal over the domain-tagged commitment body
-- Stable errors surface the index for operator evidence:
-  `MissingSdnCommitments`, `UnknownSdnKey`, `InactiveSdnKey`, `InvalidSeal`,
-  or structural `Commitment`/`ScopeMismatch` failures.
+## အတည်ပြုခြင်း စီးဆင်းမှု
+- `JdgAttestation::validate_with_sdn_registry` သည် တည်ဆောက်ပုံအား ခြုံငုံသည်။
+  သက်သေခံချက်စစ်ဆေးမှုများနှင့် SDN ကျင့်သုံးမှု။ `JdgSdnPolicy` စာတွဲများ-
+  - `require_commitments`- PII/လျှို့ဝှက်ပေးဆောင်မှုများအတွက် ပါဝင်မှုကို တွန်းအားပေးပါ။
+  - `rotation`- မိဘအငြိမ်းစားယူခြင်းကို အပ်ဒိတ်လုပ်ရာတွင် အသုံးပြုသည့် ကျေးဇူးတော်ဝင်းဒိုး
+- ကတိကဝတ်တစ်ခုစီကို စစ်ဆေးသည်-
+  - ဖွဲ့စည်းတည်ဆောက်ပုံဆိုင်ရာတရားဝင်မှု + သက်သေပြမှုနယ်ပယ် ကိုက်ညီမှု
+  - မှတ်ပုံတင်ထားသောသော့ရှိနေခြင်း။
+  - အတည်ပြုထားသော ပိတ်ဆို့ခြင်းအကွာအဝေးကို ဖုံးအုပ်ထားသည့် တက်ကြွသောပြတင်းပေါက် (အငြိမ်းစားယူခွင့်ဘောင်များ ရှိပြီးသားဖြစ်သည်။
+    ထုတ်ဝေမှု နှစ်ခုပါ၀င်သည်)
+  - ဒိုမိန်း-တဂ်လုပ်ထားသော ကတိကဝတ်အဖွဲ့အပေါ် တရားဝင်တံဆိပ်
+- တည်ငြိမ်သောအမှားများသည် အော်ပရေတာအထောက်အထားအတွက် အညွှန်းကိုပေါ်လွင်စေသည်-
+  `MissingSdnCommitments`, `UnknownSdnKey`, `InactiveSdnKey`, `InvalidSeal`၊
+  သို့မဟုတ် တည်ဆောက်ပုံ `Commitment`/`ScopeMismatch` ကျရှုံးမှုများ။
 
-## Operator runbook
-- **Provision:** register the first SDN key with `activated_at` at or before the
-  first secret block height. Publish the key fingerprint to JDG operators.
-- **Rotate:** generate the successor key, register it with `rotation_parent`
-  pointing at the current key, and confirm the parent retirement equals
-  `child_activation + dual_publish_blocks`. Re-seal payload commitments with
-  the active key during the overlap window.
-- **Audit:** expose registry snapshots (`record`, `keys`) via Torii/status
-  surfaces so auditors can confirm the active key and retirement windows. Alert
-  if the attested range falls outside the active window.
-- **Recovery:** `UnknownSdnKey` → ensure the registry includes the sealing key;
-  `InactiveSdnKey` → rotate or adjust activation heights; `InvalidSeal` →
-  re-seal payloads and refresh attestations.
+## အော်ပရေတာ runbook
+- **ပံ့ပိုးမှု-** ပထမဆုံး SDN သော့ကို `activated_at` ဖြင့် သို့မဟုတ် မတိုင်မီ သို့မဟုတ် တွင် မှတ်ပုံတင်ပါ။
+  ပထမဆုံး လျှို့ဝှက်တုံးအမြင့်။ အဓိက လက်ဗွေကို JDG အော်ပရေတာများသို့ ထုတ်ဝေပါ။
+- **လှည့်ခြင်း-** ဆက်ခံသော့ကိုထုတ်ပေးပါ၊ ၎င်းကို `rotation_parent` ဖြင့် မှတ်ပုံတင်ပါ။
+  လက်ရှိသော့ကို ညွှန်ပြပြီး မိဘအငြိမ်းစားယူမှုနှင့် ညီမျှကြောင်း အတည်ပြုပါ။
+  `child_activation + dual_publish_blocks`။ payload ကတိကဝတ်များဖြင့် ပြန်လည်တံဆိပ်ခတ်ခြင်း။
+  ထပ်နေသည့်ဝင်းဒိုးအတွင်း တက်ကြွသောသော့။
+- **စာရင်းစစ်-** မှတ်ပုံတင်ထားသော လျှပ်တစ်ပြက်ပုံများ (`record`၊ `keys`) ကို Torii/အခြေအနေမှတစ်ဆင့် ဖော်ထုတ်ပါ။
+  စာရင်းစစ်များသည် တက်ကြွသောသော့နှင့် အငြိမ်းစားယူဒိုးများကို အတည်ပြုနိုင်စေရန် မျက်နှာပြင်များဖြစ်သည်။ သတိပေးချက်
+  သက်သေပြထားသော အတိုင်းအတာသည် တက်ကြွသောဝင်းဒိုးအပြင်ဘက်တွင် ကျရောက်ပါက၊
+- **ပြန်လည်ရယူခြင်း-** `UnknownSdnKey` → မှတ်ပုံတင်ခြင်းတွင် တံဆိပ်ခတ်ခြင်းသော့ပါဝင်ကြောင်း သေချာပါစေ။
+  `InactiveSdnKey` → လှည့်ပတ်ခြင်း သို့မဟုတ် လုပ်ဆောင်ချက်အမြင့်များကို ချိန်ညှိပါ `InvalidSeal` →
+  ဝန်ထုပ်ဝန်ပိုးများကို ပြန်လည်တံဆိပ်ခတ်ပြီး သက်သေအထောက်အထားများကို ပြန်လည်စတင်ပါ။## Runtime အကူအညီပေးသူ
+- `JdgSdnEnforcer` (`crates/iroha_core/src/jurisdiction.rs`) မူဝါဒကို ထုပ်ပိုးသည် +
+  မှတ်ပုံတင်ခြင်းနှင့် `validate_with_sdn_registry` မှတဆင့် သက်သေအထောက်အထားများကို အတည်ပြုသည်။
+- မှတ်ပုံတင်ချက်များကို Norito-ကုဒ်လုပ်ထားသော `JdgSdnKeyRecord` အစုအဝေးများမှ တင်နိုင်သည် (ကြည့်ပါ
+  `JdgSdnEnforcer::from_reader`/`from_path`) သို့မဟုတ် ဖြင့် တပ်ဆင်ထားသည်
+  `from_records`၊ မှတ်ပုံတင်နေစဉ်အတွင်း လှည့်ပတ်ထားသော ကာရန်လမ်းများကို အသုံးချသည်။
+- အော်ပရေတာများသည် Norito အတွဲကို Torii/အခြေအနေအတွက် အထောက်အထားအဖြစ် ဆက်ရှိနေနိုင်သည်
+  တူညီသော payload သည် ဝန်ခံချက်ဖြင့်အသုံးပြုသော enforcer ကို feeding လုပ်နေစဉ် surfacing
+  အများဆန္ဒအရပေါ့။ တစ်ခုတည်းသော ကမ္ဘာလုံးဆိုင်ရာ enforcer ကို startup မှတဆင့်စတင်နိုင်သည်။
+  `init_enforcer_from_path` နှင့် `enforcer()`/`registry_snapshot()`/`sdn_registry_status()`
+  တိုက်ရိုက်မူဝါဒ + အခြေအနေ/Torii မျက်နှာပြင်များအတွက် သော့မှတ်တမ်းများကို ဖော်ထုတ်ပါ။
 
-## Runtime helper
-- `JdgSdnEnforcer` (`crates/iroha_core/src/jurisdiction.rs`) packages a policy +
-  registry and validates attestations via `validate_with_sdn_registry`.
-- Registries can be loaded from Norito-encoded `JdgSdnKeyRecord` bundles (see
-  `JdgSdnEnforcer::from_reader`/`from_path`) or assembled with
-  `from_records`, which applies the rotation guardrails during registration.
-- Operators can persist the Norito bundle as evidence for Torii/status
-  surfacing while the same payload feeds the enforcer used by admission and
-  consensus guards. A single global enforcer can be initialised at startup via
-  `init_enforcer_from_path`, and `enforcer()`/`registry_snapshot()`/`sdn_registry_status()`
-  expose the live policy + key records for status/Torii surfaces.
-
-## Tests
-- Regression coverage in `crates/iroha_data_model/src/jurisdiction.rs`:
-  `sdn_registry_accepts_active_commitment`, `sdn_registry_rejects_unknown_key`,
-  `sdn_registry_rejects_inactive_key`, `sdn_registry_rejects_bad_signature`,
-  `sdn_registry_sets_parent_retirement_window`,
-  `sdn_registry_rejects_overlap_beyond_policy`, alongside the existing
-  structural attestation/SDN validation tests.
+## စမ်းသပ်မှုများ
+- `crates/iroha_data_model/src/jurisdiction.rs` တွင် Regression အကျုံးဝင်သည်-
+  `sdn_registry_accepts_active_commitment`, `sdn_registry_rejects_unknown_key`၊
+  `sdn_registry_rejects_inactive_key`, `sdn_registry_rejects_bad_signature`၊
+  `sdn_registry_sets_parent_retirement_window`၊
+  `sdn_registry_rejects_overlap_beyond_policy`၊ ရှိပြီးသား
+  ဖွဲ့စည်းတည်ဆောက်ပုံဆိုင်ရာ ထောက်ခံချက်/ SDN တရားဝင်စစ်ဆေးမှုများ။

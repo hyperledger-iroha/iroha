@@ -77,7 +77,7 @@ EXCLUDED_DIR_NAMES = {
     "rust_out",
     "__pycache__",
 }
-TRANSLATE_SAVE_EVERY = 50
+TRANSLATE_SAVE_EVERY = 10
 APPLY_PROGRESS_EVERY = 250
 _GOOGLE_BLOCKED = False
 _GOOGLE_BLOCKED_LOCK = threading.Lock()
@@ -270,13 +270,45 @@ def unmask_text(text: str, placeholders: dict[str, str]) -> str:
         if m:
             idx_map[int(m.group(1))] = value
 
-    def restore_variant(match: re.Match[str]) -> str:
-        idx_digits = match.group(1)
+    def resolve_idx_value(idx_digits: str) -> str | None:
         try:
             idx = int(idx_digits)
         except ValueError:
-            return match.group(0)
-        return idx_map.get(idx, match.group(0))
+            return None
+        value = idx_map.get(idx)
+        if value is not None:
+            return value
+        if not idx_map:
+            return None
+
+        norm = idx_digits.lstrip("0") or "0"
+
+        # Some providers inject extra zeros into placeholder indices.
+        max_len = len(str(max(idx_map)))
+        for width in range(max_len, min(max_len + 3, len(norm)) + 1):
+            tail = int(norm[-width:])
+            value = idx_map.get(tail)
+            if value is not None:
+                return value
+
+        # Fallback: try removing a single zero from the index.
+        for i, ch in enumerate(norm):
+            if ch != "0":
+                continue
+            candidate_digits = norm[:i] + norm[i + 1 :]
+            if not candidate_digits:
+                continue
+            candidate = int(candidate_digits)
+            value = idx_map.get(candidate)
+            if value is not None:
+                return value
+
+        return None
+
+    def restore_variant(match: re.Match[str]) -> str:
+        idx_digits = match.group(1)
+        value = resolve_idx_value(idx_digits)
+        return value if value is not None else match.group(0)
 
     text = re.sub(r"I18N[A-Z]\s*(\d{1,12})\s*X", restore_variant, text)
     text = re.sub(r"(?i)i18n[A-Z]?\s*(\d{1,12})\s*x", restore_variant, text)
@@ -285,7 +317,7 @@ def unmask_text(text: str, placeholders: dict[str, str]) -> str:
 
     # Case-insensitive exact-token recovery for tags mutated to lowercase.
     for token, value in placeholders.items():
-        text = re.sub(re.escape(token), value, text, flags=re.IGNORECASE)
+        text = re.sub(re.escape(token), lambda _m, v=value: v, text, flags=re.IGNORECASE)
 
     for token, value in placeholders.items():
         text = text.replace(token, value)
@@ -354,7 +386,7 @@ def extend_simply_rate_limit(seconds: float) -> None:
         _SIMPLY_BLOCK_UNTIL = max(_SIMPLY_BLOCK_UNTIL, time.time() + max(0.0, seconds))
 
 
-def translate_chunk_google(chunk: str, source_lang: str, target_lang: str, retries: int = 4) -> str:
+def translate_chunk_google(chunk: str, source_lang: str, target_lang: str, retries: int = 2) -> str:
     params = {
         "sl": source_lang,
         "tl": target_lang,
@@ -373,7 +405,7 @@ def translate_chunk_google(chunk: str, source_lang: str, target_lang: str, retri
                     "Accept": "text/html",
                 },
             )
-            with urllib.request.urlopen(request, timeout=30) as response:
+            with urllib.request.urlopen(request, timeout=12) as response:
                 payload = response.read().decode("utf-8")
                 final_url = response.geturl()
             if "sorry/index" in final_url:
@@ -407,7 +439,7 @@ def translate_chunk_google(chunk: str, source_lang: str, target_lang: str, retri
     raise last_exc
 
 
-def translate_chunk_mymemory(chunk: str, source_lang: str, target_lang: str, retries: int = 4) -> str:
+def translate_chunk_mymemory(chunk: str, source_lang: str, target_lang: str, retries: int = 2) -> str:
     params = {
         "q": chunk,
         "langpair": f"{source_lang}|{target_lang}",
@@ -425,7 +457,7 @@ def translate_chunk_mymemory(chunk: str, source_lang: str, target_lang: str, ret
                     "Accept": "application/json",
                 },
             )
-            with urllib.request.urlopen(request, timeout=30) as response:
+            with urllib.request.urlopen(request, timeout=12) as response:
                 payload = response.read().decode("utf-8")
             data = json.loads(payload)
             status_raw = data.get("responseStatus")
@@ -448,7 +480,7 @@ def translate_chunk_mymemory(chunk: str, source_lang: str, target_lang: str, ret
 
 
 def translate_chunk_simplytranslate(
-    chunk: str, source_lang: str, target_lang: str, retries: int = 4
+    chunk: str, source_lang: str, target_lang: str, retries: int = 2
 ) -> str:
     body = urllib.parse.urlencode(
         {
@@ -474,7 +506,7 @@ def translate_chunk_simplytranslate(
                     "Accept": "application/json",
                 },
             )
-            with urllib.request.urlopen(request, timeout=30) as response:
+            with urllib.request.urlopen(request, timeout=12) as response:
                 payload = response.read().decode("utf-8")
             data = json.loads(payload)
             translated = data.get("translated_text") or ""
@@ -505,7 +537,7 @@ def translate_chunk_simplytranslate(
     raise last_exc
 
 
-def translate_chunk(chunk: str, source_lang: str, target_lang: str, retries: int = 4) -> str:
+def translate_chunk(chunk: str, source_lang: str, target_lang: str, retries: int = 2) -> str:
     if not chunk:
         return chunk
 

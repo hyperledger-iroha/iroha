@@ -6,103 +6,102 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: a2f89131efc0c79ddf63d71a25c04029014ba58393fb6336e676181322bc5066
 source_last_modified: "2026-01-03T18:08:00.500077+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Docs/DevRel Monthly Sync Agenda
+# جدول أعمال المزامنة الشهرية لـ Docs/DevRel
 
-This agenda formalizes the monthly Docs/DevRel sync that is referenced across
-`roadmap.md` (see “Add localization staffing review to monthly Docs/DevRel
-sync”) and the Android AND5 i18n plan. Use it as the canonical checklist, and
-update it whenever roadmap deliverables add or retire agenda items.
+تضفي هذه الأجندة طابعًا رسميًا على مزامنة Docs/DevRel الشهرية التي يتم الرجوع إليها عبرها
+`roadmap.md` (راجع "إضافة مراجعة طاقم عمل الترجمة إلى Docs/DevRel الشهرية"
+sync") وخطة Android AND5 i18n. استخدمها كقائمة مرجعية أساسية، و
+قم بتحديثه عندما تضيف مخرجات خارطة الطريق عناصر جدول الأعمال أو تحذفها.
 
-## Cadence & Logistics
+## الإيقاع والخدمات اللوجستية
 
-- **Frequency:** monthly (typically the second Thursday, 16:00 UTC)
-- **Duration:** 45 minutes + optional 15 minute hang-back for deep dives
-- **Location:** Zoom (`https://meet.sora.dev/docs-devrel-sync`) with shared
-  notes in HackMD or `docs/source/docs_devrel/minutes/<yyyy-mm>.md`
-- **Audience:** Docs/DevRel manager (chair), Docs engineers, localization
-  program manager, SDK DX TLs (Android, Swift, JS), Product Docs, Release
-  Engineering delegate, Support/QA observers
-- **Facilitator:** Docs/DevRel manager; appoint a rotating scribe who will
-  commit the minutes into the repo within 24 hours
+- **التكرار:** شهريًا (عادةً الخميس الثاني، الساعة 16:00 بالتوقيت العالمي المنسق)
+- **المدة:** 45 دقيقة + 15 دقيقة اختيارية للغوص العميق
+- **الموقع:** تكبير (`https://meet.sora.dev/docs-devrel-sync`) مع المشاركة
+  الملاحظات في HackMD أو `docs/source/docs_devrel/minutes/<yyyy-mm>.md`
+- **الجمهور:** مدير المستندات/DevRel (الرئيس)، مهندسو المستندات، الترجمة
+  مدير البرامج، SDK DX TLs (Android، Swift، JS)، مستندات المنتج، الإصدار
+  مندوب هندسي، مراقبو الدعم/ضمان الجودة
+- **الميسر:** مدير المستندات/DevRel؛ تعيين الكاتب الدوري الذي سوف
+  قم بإيداع الدقائق في الريبو خلال 24 ساعة
 
-## Pre-Work Checklist
+## قائمة مراجعة ما قبل العمل
 
-| Owner | Task | Artefact |
+| المالك | مهمة | قطعة أثرية |
 |-------|------|----------|
-| Scribe | Create the month’s notes file (`docs/source/docs_devrel/minutes/<yyyy-mm>.md`) using the template below. | Notes file |
-| Localization PM | Refresh `docs/source/sdk/android/i18n_plan.md#translation-status` and the staffing log; pre-fill proposed decisions. | i18n plan |
-| DX TLs | Run `ci/check_android_docs_i18n.sh` or `scripts/sync_docs_i18n.py --dry-run` and attach digests for discussion. | CI artefacts |
-| Docs tooling | Export `docs/i18n/manifest.json` digests + outstanding ticket list from `docs/source/sdk/android/i18n_requests/`. | Manifest & ticket summary |
-| Support/Release | Gather any escalations that require Docs/DevRel action (e.g., pending preview invites, blocking reviewer feedback). | Status.md or escalation doc |
+| كاتب | قم بإنشاء ملف ملاحظات الشهر (`docs/source/docs_devrel/minutes/<yyyy-mm>.md`) باستخدام القالب أدناه. | ملف الملاحظات |
+| التعريب PM | قم بتحديث `docs/source/sdk/android/i18n_plan.md#translation-status` وسجل التوظيف؛ تعبئة القرارات المقترحة مسبقًا. | خطة i18n |
+| دي إكس تي إل إس | قم بتشغيل `ci/check_android_docs_i18n.sh` أو `scripts/sync_docs_i18n.py --dry-run` وأرفق الملخصات للمناقشة. | التحف CI |
+| أدوات المستندات | تصدير ملخصات `docs/i18n/manifest.json` + قائمة التذاكر المعلقة من `docs/source/sdk/android/i18n_requests/`. | البيان وملخص التذكرة |
+| الدعم/الإصدار | اجمع أي عمليات تصعيد تتطلب إجراء Docs/DevRel (على سبيل المثال، دعوات المعاينة المعلقة، ومنع تعليقات المراجعين). | Status.md أو مستند التصعيد |
 
-## Agenda Blocks
-
-1. **Roll call & objectives (5 min)**
-   - Confirm quorum, scribe, and logistics.
-   - Highlight any urgent incidents (docs preview outage, localization block).
-2. **Localization staffing review (15 min)**
-   - Review the staffing decision log in
+## كتل جدول الأعمال1. ** الدعوة والأهداف (5 دقائق) **
+   - التأكد من النصاب القانوني والكاتب والخدمات اللوجستية.
+   - قم بتسليط الضوء على أي حوادث عاجلة (انقطاع معاينة المستندات، حظر الترجمة).
+2. **مراجعة التوظيف المحلي (15 دقيقة)**
+   - مراجعة تسجيل دخول قرار التوظيف
      `docs/source/sdk/android/i18n_plan.md#staffing-decision-log`.
-   - Confirm status of open POs (`DOCS-L10N-*`) and interim coverage.
-   - Compare CI freshness output vs. the translation status table; call out any
-     doc whose locale SLA (>5 business days) will be breached before the next
-     sync.
-   - Decide whether escalation is required (Product Ops, Finance, contractor
-     management). Record the decision in both the staffing log and the monthly
-     minutes, including owner + due date.
-   - If staffing is healthy, document the confirmation so the roadmap action can
-     move back to 🈺/🈴 with evidence.
-3. **Docs/roadmap updates (10 min)**
-   - Status of DOCS-SORA portal work, Try-It proxy, and SoraFS publication
-     readiness.
-   - Highlight doc debt or reviewers needed for current release trains.
-4. **SDK highlights (10 min)**
-   - Android AND5/AND7 doc readiness, Swift IOS5 parity, JS GA progress.
-   - Capture shared fixtures or schema diffs that will affect docs.
-5. **Action review & parking lot (5 min)**
-   - Revisit open items from the previous sync; confirm closures.
-   - Record new actions in the notes file with explicit owners and deadlines.
+   - تأكيد حالة أوامر الشراء المفتوحة (`DOCS-L10N-*`) والتغطية المؤقتة.
+   - مقارنة مخرجات نضارة CI مقابل جدول حالة الترجمة؛ استدعاء أي
+     doc الذي سيتم انتهاك اتفاقية مستوى الخدمة المحلية (> 5 أيام عمل) قبل اليوم التالي
+     مزامنة.
+   - قرر ما إذا كان التصعيد مطلوبًا (عمليات المنتج، الشؤون المالية، المقاول
+     الإدارة). سجل القرار في كل من سجل التوظيف والشهري
+     دقائق، بما في ذلك المالك + تاريخ الاستحقاق.
+   - إذا كان التوظيف سليمًا، قم بتوثيق التأكيد حتى يمكن تنفيذ إجراء خارطة الطريق
+     ارجع إلى 🈺/🈴 مع الأدلة.
+3. **تحديثات المستندات/خريطة الطريق (10 دقائق)**
+   - حالة عمل بوابة DOCS-SORA ووكيل Try-It ونشر SoraFS
+     الاستعداد.
+   - قم بتسليط الضوء على ديون المستندات أو المراجعين اللازمين لقطارات الإصدار الحالية.
+4. **أبرز نقاط SDK (10 دقائق)**
+   - جاهزية مستند Android AND5/AND7، وتكافؤ Swift IOS5، وتقدم JS GA.
+   - التقاط التركيبات المشتركة أو اختلافات المخطط التي ستؤثر على المستندات.
+5. **مراجعة الإجراءات وموقف السيارات (5 دقائق)**
+   - إعادة النظر في العناصر المفتوحة من المزامنة السابقة؛ تأكيد الإغلاقات.
+   - تسجيل إجراءات جديدة في ملف الملاحظات مع المالكين والمواعيد النهائية الصريحة.
 
-## Localization Staffing Review Template
+## نموذج مراجعة التوظيف المحلي
 
-Include the following table in each month’s minutes:
+قم بتضمين الجدول التالي في محضر كل شهر:
 
-| Locale | Capacity (FTE) | Commitments & POs | Risks / Escalations | Decision & Owner |
-|--------|----------------|-------------------|---------------------|------------------|
-| JP | e.g., 0.5 contractor + 0.1 Docs backup | PO `DOCS-L10N-4901` (awaiting signature) | “Contract not signed by 2026-03-04” | “Escalate to Product Ops — @docs-devrel, due 2026-03-02” |
-| HE | e.g., 0.1 Docs engineer | Rotation enters PTO 2026-03-18 | “Need backup reviewer” | “@docs-lead to identify backup by 2026-03-05” |
+| لغة | السعة (FTE) | الالتزامات وأوامر الشراء | المخاطر / التصعيد | القرار والمالك |
+|--------|----------------|-----------------------------------|-----|------------------|
+| جي بي | على سبيل المثال، 0.5 مقاول + 0.1 نسخة احتياطية للمستندات | صندوق البريد `DOCS-L10N-4901` (في انتظار التوقيع) | "لم يتم توقيع العقد بتاريخ 04-03-2026" | "التصعيد إلى عمليات المنتج - @docs-devrel، بتاريخ 2026-03-02" |
+| هو | على سبيل المثال، 0.1 مهندس المستندات | يدخل التناوب PTO 2026-03-18 | “بحاجة إلى مراجع احتياطي” | "@docs-lead لتحديد النسخة الاحتياطية بحلول 05-03-2026" |
 
-Also log a short narrative covering:
+قم أيضًا بتسجيل تغطية سردية قصيرة:
 
-- **SLA outlook:** Any doc expected to miss the five-business-day SLA and the
-  mitigation (swap priority, enlist backup vendor, etc.).
-- **Ticket & asset health:** Outstanding entries in
-  `docs/source/sdk/android/i18n_requests/` and whether screenshots/assets are
-  ready for translators.
+- **توقعات اتفاقية مستوى الخدمة:** من المتوقع أن يتخلف أي مستند عن اتفاقية مستوى الخدمة لمدة خمسة أيام عمل و
+  التخفيف (أولوية المبادلة، إدراج بائع النسخ الاحتياطي، وما إلى ذلك).
+- ** صحة التذكرة والأصول: ** الإدخالات المعلقة في
+  `docs/source/sdk/android/i18n_requests/` وما إذا كانت لقطات الشاشة/الأصول موجودة أم لا
+  جاهز للمترجمين.
 
-### Localization Staffing Review Logging
+### تسجيل مراجعة التوظيف المحلي
 
-- **Minutes:** Copy the staffing table + narrative into
-  `docs/source/docs_devrel/minutes/<yyyy-mm>.md` (all locales mirror the
-  English minutes via localized files under the same directory). Link the entry
-  back to the agenda (`docs/source/docs_devrel/monthly_sync_agenda.md`) so
-  governance can trace evidence.
-- **i18n plan:** Update the staffing decision log and translation status table
-  in `docs/source/sdk/android/i18n_plan.md` immediately after the meeting.
-- **Status:** When staffing decisions affect roadmap gates, add a short entry in
-  `status.md` (Docs/DevRel section) referencing the minute file and i18n plan
-  update.
+- **محضر:** انسخ جدول التوظيف + السرد إلى
+  `docs/source/docs_devrel/minutes/<yyyy-mm>.md` (جميع اللغات تعكس ملف
+  دقائق باللغة الإنجليزية عبر ملفات مترجمة ضمن نفس الدليل). ربط الإدخال
+  العودة إلى جدول الأعمال (`docs/source/docs_devrel/monthly_sync_agenda.md`) لذلك
+  يمكن للحكم تتبع الأدلة.
+- **خطة i18n:** تحديث سجل قرارات التوظيف وجدول حالة الترجمة
+  في `docs/source/sdk/android/i18n_plan.md` مباشرة بعد الاجتماع.
+- **الحالة:** عندما تؤثر قرارات التوظيف على بوابات خريطة الطريق، أضف إدخالاً قصيرًا
+  `status.md` (قسم Docs/DevRel) يشير إلى ملف الدقيقة وخطة i18n
+  تحديث.
 
-## Minutes Template
+## قالب المحضر
 
-Copy this skeleton into `docs/source/docs_devrel/minutes/<yyyy-mm>.md`:
+انسخ هذا الهيكل العظمي إلى `docs/source/docs_devrel/minutes/<yyyy-mm>.md`:
 
 ```markdown
 <!-- SPDX-License-Identifier: Apache-2.0 -->
@@ -125,22 +124,20 @@ Copy this skeleton into `docs/source/docs_devrel/minutes/<yyyy-mm>.md`:
 | Item | Owner | Due | Notes |
 |------|-------|-----|-------|
 | JP contractor PO follow-up | @docs-devrel-manager | 2026-03-02 | Example entry |
-```
+```نشر الملاحظات عبر العلاقات العامة بعد الاجتماع مباشرة وربطها من `status.md`
+عند الإشارة إلى المخاطر أو قرارات التوظيف.
 
-Publish the notes via PR soon after the meeting and link them from `status.md`
-when referencing risk or staffing decisions.
+## متابعة التوقعات
 
-## Follow-Up Expectations
+1. **الدقائق الملتزم بها:** خلال 24 ساعة (`docs/source/docs_devrel/minutes/`).
+2. **تم تحديث خطة i18n:** اضبط سجل التوظيف وجدول الترجمة وفقًا لـ
+   تعكس التزامات أو تصعيدات جديدة.
+3. **إدخال Status.md:** قم بتلخيص أي قرارات عالية المخاطر للحفاظ على خريطة الطريق
+   متزامنة.
+4. **عمليات التصعيد المقدمة:** عندما تستدعي المراجعة التصعيد، قم بإنشاء/تحديث
+   التذكرة ذات الصلة (على سبيل المثال، عمليات المنتج، والموافقة المالية، وتأهيل البائع)
+   والإشارة إليه في كل من المحضر وخطة i18n.
 
-1. **Minutes committed:** within 24 hours (`docs/source/docs_devrel/minutes/`).
-2. **i18n plan updated:** adjust the staffing log and translation table to
-   reflect new commitments or escalations.
-3. **Status.md entry:** summarize any high-risk decisions to keep the roadmap
-   in sync.
-4. **Escalations filed:** when the review calls for escalation, create/refresh
-   the relevant ticket (e.g., Product Ops, Finance approval, vendor onboarding)
-   and reference it in both the minutes and the i18n plan.
-
-By following this agenda, the roadmap requirement to include localization
-staffing reviews in the Docs/DevRel monthly sync stays auditable, and downstream
-teams always know where to find the evidence.
+ومن خلال اتباع هذه الأجندة، فإن متطلبات خارطة الطريق تتضمن التعريب
+تظل مراجعات التوظيف في المزامنة الشهرية لـ Docs/DevRel قابلة للتدقيق، وفي النهاية
+تعرف الفرق دائمًا مكان العثور على الأدلة.

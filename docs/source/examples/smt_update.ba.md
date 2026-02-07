@@ -7,51 +7,50 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 788902cfafc6c7db6d52d4237b46ffe78193efd57852bc3427a16d7f3cda2f9c
 source_last_modified: "2025-12-29T18:16:35.954370+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Sparse Merkle Update Example
+# Һирәк Меркл Яңыртыу Миҫал
 
-This worked example illustrates how the FASTPQ Stage 2 trace encodes a
-non-membership witness using the `neighbour_leaf` column. The sparse Merkle tree
-is binary over Poseidon2 field elements. Keys are converted to canonical
-32-byte little-endian strings, hashed to a field element, and the most
-significant bits select the branch at each level.
+Был эшләгән миҫал нисек FASTPQ 2-се этаптағы эҙҙе кодлай.
+ағзаһы булмаған шаһит ҡулланыу `neighbour_leaf` бағана. Һирәк Меркл ағасы
+Poseidon2 ялан элементтары өҫтөндә бинар булып тора. Асҡыстарҙы канонға әйләндерәләр
+32-байтлы аҙ-андиан ептәр, хеш-серь ялан элементы, һәм иң күп
+әһәмиәтле биттар һәр кимәлдәге тармаҡты һайлай.
 
-## Scenario
+## Сценарий
 
-- Pre-state leaves
-  - `asset::alice::rose` -> hashed key `0x12b7...` with value `0x0000_0000_0000_0005`.
-  - `asset::bob::rose`   -> hashed key `0x1321...` with value `0x0000_0000_0000_0003`.
-- Update request: insert `asset::carol::rose` with value 2.
-- The canonical key hash for Carol expands to the 5-bit prefix `0b01011`. The
-  existing neighbours have prefixes `0b01010` (Alice) and `0b01101` (Bob).
+- Штат алдынан китә .
+  - `asset::alice::rose` -> хешэд асҡыс `0x12b7...` ҡиммәте менән `0x0000_0000_0000_0005`.
+  - `asset::bob::rose` -> хешэд асҡыс `0x1321...` хаҡы менән `0x0000_0000_0000_0003`.
+- Яңыртыу запросы: 2-се ҡиммәт менән `asset::carol::rose` индереү.
+- Кэрол өсөн канон төп хеш 5-битлы префикс `0b01011` тиклем киңәйә. 1990 й.
+  ғәмәлдәге күршеләрендә `0b01010` (Элис) һәм `0b01101` (Боб) префикстары бар.
 
-Because there is no leaf whose prefix matches `0b01011`, the prover must provide
-additional evidence that the interval `(alice, bob)` is empty. Stage 2 populates
-the trace row across the columns `path_bit_{level}`, `sibling_{level}`,
-`node_in_{level}`, and `node_out_{level}` (with `level` in `[0, 31]`). All values
-are Poseidon2 field elements encoded in little-endian form:
+Сөнки япраҡ юҡ, уның префикс матчтары `0b01011`, иҫбатлаусы булырға тейеш
+өҫтәмә дәлилдәр, `(alice, bob)` интервалы буш. 2-се этапта халыҡ
+18NI00000014X, `sibling_{level}` бағаналары аша үткән эҙ,
+`node_in_{level}`, һәм `node_out_{level}` (`level` менән `[0, 31]` X). Бөтә ҡиммәттәр
+Poseidon2 ялан элементтары аҙ-андочный формаһында кодланған:
 
-| level | `path_bit_level` | `sibling_level`             | `node_in_level`                      | `node_out_level`                     | Notes |
-| ----- | ---------------- | --------------------------- | ------------------------------------ | ------------------------------------ | ----- |
-| 0 | 1             | `0x241f...` (Alice leaf hash) | `0x0000...`                          | `0x4b12...` (`value_2 = 2`)          | Insert: start from zero, store new value. |
-| 1 | 1             | `0x7d45...` (empty right)     | Poseidon2(`node_out_0`, `sibling_0`) | Poseidon2(`sibling_1`, `node_out_1`) | Follow prefix bit 1. |
-| 2 | 0             | `0x03ae...` (Bob branch)      | Poseidon2(`node_out_1`, `sibling_1`) | Poseidon2(`node_in_2`, `sibling_2`)  | Branch flips because bit = 0. |
-| 3 | 1             | `0x9bc4...`                   | Poseidon2(`node_out_2`, `sibling_2`) | Poseidon2(`sibling_3`, `node_out_3`) | Higher levels continue hashing upward. |
-| 4 | 0             | `0xe112...`                   | Poseidon2(`node_out_3`, `sibling_3`) | Poseidon2(`node_in_4`, `sibling_4`)  | Root level; result is the post-state root. |
+| кимәл | `path_bit_level` | `sibling_level` | `node_in_level` | `node_out_level` | Иҫкәрмәләр |
+| ----- | ----------------- | ----------------------------- | ------------------------------------ | ------------------------------------ | ----- |
+| 0 | 1 | `0x241f...` (Алиса япраҡлы хеш) | `0x0000...` | `0x4b12...` (`value_2 = 2`) | Ҡуйыу: нулдән башлап, яңы ҡиммәт һаҡлағыҙ. |
+| 1 | 1 | `0x7d45...` (буш уң) | Poseidon2(`node_out_0`, `sibling_0`) | Poseidon2(`sibling_1`, `node_out_1`) | 1. |
+| 2 | 0 | `0x03ae...` (Боб филиалы) | Poseidon2(`node_out_1`, `sibling_1`) | Poseidon2(`node_in_2`, `sibling_2`) | Блика flips, сөнки бит = 0. |
+| 3 | 1 | `0x9bc4...` | Poseidon2(`node_out_2`, `sibling_2`) | Poseidon2(`sibling_3`, `node_out_3`) | Юғары кимәлдәге хишлау өҫкә ҡарай дауам итә. |
+| 4 | 0 | `0xe112...` | Poseidon2(`node_out_3`, `sibling_3`) | Poseidon2(`node_in_4`, `sibling_4`) | Тамыр кимәле; һөҙөмтәлә дәүләттән һуңғы тамыр. |
 
-The `neighbour_leaf` column for this row is populated with Bob's leaf
-(`key = 0x1321...`, `value = 3`, `hash = Poseidon2(key, value) = 0x03ae...`). When
-verifying, the AIR checks that:
+Был рәт өсөн `neighbour_leaf` бағанаһы Бобтың япрағы менән тулы.
+(`key = 0x1321...`, `value = 3`, `hash = Poseidon2(key, value) = 0x03ae...`). Ҡасан
+раҫлау, АИР тикшерә, тип:
 
-1. The supplied neighbour corresponds to the sibling used at level 2.
-2. The neighbour key is lexicographically greater than the inserted key and the
-   left sibling (Alice) is lexicographically smaller.
-3. Replacing the inserted leaf with the neighbour reproduces the pre-state root.
-
-Together these checks prove that no leaf existed for the interval `(0b01010,
-0b01101)` before the update. Implementations generating FASTPQ traces can use
-this layout verbatim; the numerical constants above are illustrative. For a full
-JSON witness, emit the columns exactly as they appear in the table above (with
-numeric suffixes per level), using little-endian byte strings serialized with
-Norito JSON helpers.
+1. тәьмин ителгән күрше 2-се кимәлдә ҡулланылған бер туғанға тура килә.
+2. Күрше асҡыс лексикографик ҙурыраҡ индерелгән асҡыс һәм
+   һул туғаны (Алиса) лексикографик яҡтан бәләкәйерәк.
+3. Ҡуйылған япраҡты күршеһе менән алмаштырып, хәлгә тиклемге тамырҙы ҡабатлай.Был тикшерелеүҙәр бергә `(0б01010,
+0б01101)` яңыртыу алдынан. FASTPQ эҙҙәрен генерациялаусы тормошҡа ашырыуҙар ҡуллана ала
+был һүҙмә-һүҙ; өҫтәге һанлы константалар иллюстратив. Тулы өсөн
+JSON шаһиты, бағаналарҙы тап улар өҫтәге таблицала нисек күренгән кеүек сығар
+бер кимәлгә һанлы ялғауҙар), аҙ-анмазиялы байт ептәрен ҡулланып, сериализацияланған
+Norito JSON ярҙамсылары.

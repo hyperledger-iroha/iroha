@@ -7,19 +7,20 @@ generator: scripts/sync_docs_i18n.py
 source_hash: d5dd8e1b666be34bb9101898d355fe5e3c6efc32500c238c72a6ef9228c157f0
 source_last_modified: "2026-01-22T16:26:46.568155+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 # Repo Settlement Runbook
 
-This guide documents the deterministic flow for repo and reverse-repo agreements in Iroha.
-It covers CLI orchestration, SDK helpers, and the expected governance knobs so operators can
-initiate, margin, and unwind agreements without writing raw Norito payloads. For governance
-checklists, evidence capture, and fraud/rollback procedures see
-[`repo_ops.md`](./repo_ops.md), which satisfies roadmap item F1.
+ဤလမ်းညွှန်ချက်သည် Iroha တွင် repo နှင့် reverse-repo သဘောတူညီချက်များအတွက် အဆုံးအဖြတ်စီးဆင်းမှုကို မှတ်တမ်းတင်ထားသည်။
+၎င်းသည် CLI orchestration၊ SDK အကူအညီပေးသူများနှင့် အော်ပရေတာများ လုပ်ဆောင်နိုင်စေရန်အတွက် မျှော်လင့်ထားသော အုပ်ချုပ်မှုခလုတ်များ ပါဝင်သည်။
+အကြမ်း Norito payload များကို မရေးဘဲ အစပြု၊ အနားသတ် နှင့် သဘောတူညီချက်များကို ဖြေလျှော့ပါ။ အုပ်ချုပ်ရေးအတွက်
+စစ်ဆေးစာရင်းများ၊ အထောက်အထားများ ဖမ်းယူခြင်းနှင့် လိမ်လည်မှု/ပြန်လှည့်ခြင်းဆိုင်ရာ လုပ်ထုံးလုပ်နည်းများကို ကြည့်ပါ။
+လမ်းပြမြေပုံပါ အကြောင်းအရာ F1 ကို ကျေနပ်စေသည့် [`repo_ops.md`](./repo_ops.md)။
 
-## CLI commands
+## CLI အမိန့်များ
 
-The `iroha app repo` command groups repo-specific helpers:
+`iroha app repo` command သည် repo-specific helpers များကို အုပ်စုဖွဲ့သည်-
 
 ```bash
 # Stage an initiation instruction without submitting
@@ -57,17 +58,17 @@ iroha --config client.toml repo margin --agreement-id daily_repo
 iroha --config client.toml repo margin-call --agreement-id daily_repo
 ```
 
-* `repo initiate` and `repo unwind` respect `--input/--output` so the generated `InstructionBox`
-  payloads can be piped into other CLI flows or submitted immediately.
-* Pass `--custodian <account>` to route collateral to a tri-party custodian. When omitted, the
-  counterparty receives the pledge directly (bilateral repo).
-* `repo margin` queries the ledger via `FindRepoAgreements` and reports the next expected margin
-  timestamp (in milliseconds) alongside whether a margin callback is currently due.
-* `repo margin-call` appends a `RepoMarginCallIsi` instruction, recording the margin checkpoint and
-  emitting events for all participants. Calls are rejected if the cadence has not elapsed or if the
-  instruction is submitted by a non-participant.
+* `repo initiate` နှင့် `repo unwind` လေးစားမှု `--input/--output` ထို့ကြောင့် ထုတ်လုပ်လိုက်သော `InstructionBox`
+  payload များကို အခြားသော CLI စီးဆင်းမှုများသို့ ပိုက်ထည့်နိုင်သည် သို့မဟုတ် ချက်ချင်းတင်သွင်းနိုင်သည်။
+* သုံးပါတီအုပ်ထိန်းသူထံ အပေါင်ပစ္စည်းပေးဆောင်ရန် `--custodian <account>` ကို ဖြတ်ပါ။ ချန်လှပ်ထားသောအခါ၊
+  မိတ်ဖက်သည် ကတိကဝတ်ကို တိုက်ရိုက်လက်ခံသည် (bilateral repo)။
+* `repo margin` သည် `FindRepoAgreements` မှတစ်ဆင့် လယ်ဂျာကို မေးမြန်းပြီး လာမည့်မျှော်လင့်ထားသောအနားသတ်ကို အစီရင်ခံသည်။
+  အနားသတ်ခေါ်ဆိုမှု လောလောဆယ် ကုန်ဆုံးနေသလား၊ အချိန်တံဆိပ် (မီလီစက္ကန့်အတွင်း)။
+* `repo margin-call` သည် `RepoMarginCallIsi` ညွှန်ကြားချက်ကို ဖြည့်စွက်ပြီး အနားသတ်စစ်ဆေးရေးဂိတ်ကို မှတ်တမ်းတင်ခြင်းနှင့်
+  ပါဝင်သူအားလုံးအတွက် ထုတ်လွှင့်သော ပွဲများ။ အတန်းမပြီးပါက သို့မဟုတ် ခေါ်ဆိုမှုများကို ပယ်ချပါသည်။
+  ညွှန်ကြားချက်ကို ပါဝင်သူမဟုတ်သူတစ်ဦးမှ တင်ပြပါသည်။
 
-## Python SDK helpers
+## Python SDK အကူအညီပေးသူများ
 
 ```python
 from iroha_python import (
@@ -111,13 +112,13 @@ record = RepoAgreementRecord.from_payload(agreements[0])
 next_margin = record.next_margin_check_after(at_timestamp_ms=now_ms)
 ```
 
-* Both helpers normalise numeric quantities and metadata fields before invoking the PyO3 bindings.
-* `RepoAgreementRecord` mirrors the runtime schedule calculation so off-ledger automation can
-  determine when callbacks are due without recomputing the cadence manually.
+* အကူအညီပေးသူနှစ်ဦးစလုံးသည် PyO3 ချိတ်ဆက်မှုများကို မခေါ်ဆိုမီ ကိန်းဂဏန်းပမာဏများနှင့် မက်တာဒေတာအကွက်များကို ပုံမှန်ဖြစ်စေသည်။
+* `RepoAgreementRecord` သည် runtime အချိန်ဇယားတွက်ချက်မှုကို ထင်ဟပ်နေသောကြောင့် off-ledger automation လုပ်နိုင်သည်
+  cadence ကို ကိုယ်တိုင်ပြန်မတွက်ဘဲ ပြန်ခေါ်မည့်အချိန်ကို ဆုံးဖြတ်ပါ။
 
-## DvP / PvP settlements
+## DvP/PvP အခြေချနေထိုင်မှုများ
 
-The `iroha app settlement` command stages delivery-versus-payment and payment-versus-payment instructions:
+`iroha app settlement` ညွှန်ကြားချက်သည် ပေးပို့ခြင်း-ဆန့်ကျင်-ငွေပေးချေမှုနှင့် ငွေပေးချေမှု-ငွေပေးချေမှု ညွှန်ကြားချက်များကို အဆင့်သတ်မှတ်သည်-
 
 ```bash
 # Delivery leg first, then payment
@@ -153,20 +154,20 @@ iroha --config client.toml --output \
   --iso-xml-out trade_pvp.xml
 ```
 
-* Leg quantities accept integral or decimal values and are validated against the asset precision.
-* `--atomicity` accepts `all-or-nothing`, `commit-first-leg`, or `commit-second-leg`. Use these modes
-  with `--order` to express which leg remains committed if subsequent processing fails (`commit-first-leg`
-  keeps the first leg applied; `commit-second-leg` retains the second).
-* CLI invocations emit empty instruction metadata today; use the Python helpers when settlement-level
-  metadata needs to be attached.
-* See [`settlement_iso_mapping.md`](./settlement_iso_mapping.md) for the ISO 20022 field mapping that
-  backs these instructions (`sese.023`, `sese.025`, `colr.007`, `pacs.009`, `camt.054`).
-* Pass `--iso-xml-out <path>` to have the CLI emit a canonical XML preview alongside the Norito
-  instruction; the file follows the mapping above (`sese.023` for DvP, `sese.025` for PvP`). Pair the
-  flag with `--iso-reference-crosswalk <path>` so the CLI verifies `--delivery-instrument-id` against the
-  same snapshot Torii uses during runtime admission.
+* ခြေထောက်ပမာဏများသည် တစ်ပေါင်းတစ်စည်း သို့မဟုတ် ဒဿမတန်ဖိုးများကို လက်ခံပြီး ပိုင်ဆိုင်မှုတိကျမှုနှင့် ကိုက်ညီကြောင်း အတည်ပြုထားသည်။
+* `--atomicity` သည် `all-or-nothing`၊ `commit-first-leg` သို့မဟုတ် `commit-second-leg` ကို လက်ခံသည်။ ဤမုဒ်များကိုသုံးပါ။
+  နောက်ဆက်တွဲလုပ်ဆောင်မှု မအောင်မြင်ပါက မည်သည့်ခြေထောက်ကို ဆက်လက်ကျူးလွန်ကြောင်းဖော်ပြရန် `--order` နှင့် (`commit-first-leg`
+  ပထမခြေထောက်ကို အသုံးချပါ။ `commit-second-leg` သည် ဒုတိယမြောက်) ကို ထိန်းသိမ်းထားသည်။
+* CLI တောင်းခံမှုများသည် ယနေ့တွင် အချည်းနှီးသော ညွှန်ကြားချက် မက်တာဒေတာကို ထုတ်လွှတ်သည်။ ဖြေရှင်းမှုအဆင့်တွင် Python helpers ကိုသုံးပါ။
+  မက်တာဒေတာကို ပူးတွဲထားရန် လိုအပ်သည်။
+* ISO 20022 အကွက်ပုံဖော်ခြင်းအတွက် [`settlement_iso_mapping.md`](./settlement_iso_mapping.md) ကိုကြည့်ပါ
+  ဤညွှန်ကြားချက်များကို ထောက်ခံသည် (`sese.023`၊ `sese.025`၊ `colr.007`၊ `pacs.009`၊ `camt.054`)။
+* CLI သည် Norito နှင့်အတူ Canonical XML အစမ်းကြည့်ရှုမှုအား ထုတ်လွှတ်ရန် `--iso-xml-out <path>` ကို ဖြတ်ပါ။
+  ညွှန်ကြားချက်; ဖိုင်သည် အထက်ဖော်ပြပါ မြေပုံကို လိုက်နာသည် (DvP အတွက် `sese.023`၊ PvP` အတွက် `sese.025`)။ တွဲပါ။
+  `--iso-reference-crosswalk <path>` ဖြင့် အလံပြထားသောကြောင့် CLI သည် `--delivery-instrument-id` နှင့် ဆန့်ကျင်ဘက်ဖြစ်သည်
+  တူညီသောလျှပ်တစ်ပြက်ရိုက်ချက် Torii ကို runtime ဝင်ခွင့်အတွင်းအသုံးပြုသည်။
 
-Python helpers mirror the CLI surface:
+Python အကူအညီပေးသူများသည် CLI မျက်နှာပြင်ကို ထင်ဟပ်စေသည်-
 
 ```python
 from iroha_python import (
@@ -211,21 +212,19 @@ draft.settlement_pvp(
 )
 ```
 
-## Determinism & Governance Expectations
+## အဆုံးအဖြတ်နှင့် အုပ်ချုပ်မှုမျှော်လင့်ချက်များ
 
-Repo instructions rely exclusively on Norito-encoded numeric types and the shared
-`RepoGovernance::with_defaults` logic. Keep the following invariants in mind:
-
-* Quantities are serialised with deterministic `NumericSpec` values: cash legs use
-  `fractional(2)` (two decimal places), collateral legs use `integer()`. Do not submit
-  values with greater precision—runtime guards will reject them and peers would diverge.
-* Tri-party repos persist the custodian account id in `RepoAgreement`. Lifecycle and margin events
-  emit a `RepoAccountRole::Custodian` payload so custodians can subscribe and reconcile inventory.
-* Haircuts are clamped to 10 000 bps (100 %) and margin frequencies are whole seconds. Provide
-  governance parameters in those canonical units to stay aligned with runtime expectations.
-* Timestamps are always unix milliseconds. All helpers forward them unchanged to the Norito
-  payload so peers derive identical schedules.
-* Initiation and unwind instructions reuse the same agreement identifier. The runtime rejects
-  duplicate IDs and unwinds for unknown agreements; CLI/SDK helpers surface those errors early.
-* `repo margin`/`RepoAgreementRecord::next_margin_check_after` return the canonical cadence. Always
-  consult this snapshot before triggering callbacks to avoid replaying stale schedules.
+Repo ညွှန်ကြားချက်များသည် Norito-ကုဒ်လုပ်ထားသော ဂဏန်းအမျိုးအစားများနှင့် မျှဝေထားသည့်အပေါ် မှီခိုနေရသည်
+`RepoGovernance::with_defaults` လော့ဂျစ်။ အောက်ဖော်ပြပါ ပုံစံကွဲများကို သတိပြုပါ။* ပမာဏများကို အဆုံးအဖြတ်ပေးသော `NumericSpec` တန်ဖိုးများဖြင့် အမှတ်စဉ်ထားသည်- ငွေသားခြေထောက်အသုံးပြုမှု
+  `fractional(2)` (ဒဿမနှစ်နေရာ)၊ စရံခြေထောက် `integer()` ကို အသုံးပြုသည်။ မတင်ပြပါနှင့်
+  ပိုမိုတိကျသောတန်ဖိုးများ—runtime guards များသည် ၎င်းတို့ကို ငြင်းပယ်ပြီး ရွယ်တူများ ကွဲပြားသွားမည်ဖြစ်သည်။
+* Tri-party repos သည် `RepoAgreement` တွင် ထိန်းသိမ်းသူအကောင့် ID ကို ဆက်လက်တည်ရှိနေပါသည်။ ဘဝသံသရာနှင့် အနားသတ်ဖြစ်ရပ်များ
+  `RepoAccountRole::Custodian` payload ကို ထုတ်လွှတ်သောကြောင့် ထိန်းသိမ်းသူများသည် စာရင်းသွင်းပြီး စာရင်းကို ညှိနှိုင်းနိုင်ပါသည်။
+* ဆံပင်ညှပ်ခြင်းကို 10000bps (100%) နှင့် အနားသတ်ကြိမ်နှုန်းများသည် စက္ကန့်တိုင်းဖြစ်သည်။ ပေးသည်။
+  runtime မျှော်မှန်းချက်များနှင့် လိုက်လျောညီထွေနေရန် အဆိုပါ canonical ယူနစ်များရှိ အုပ်ချုပ်မှုဘောင်များ။
+* အချိန်တံဆိပ်တုံးများသည် အမြဲတမ်း Unix မီလီစက္ကန့်များဖြစ်သည်။ အကူအညီပေးသူများအားလုံး ၎င်းတို့အား Norito သို့ မပြောင်းလဲဘဲ ပေးပို့သည်။
+  payload ကြောင့် ရွယ်တူများသည် ထပ်တူကျသော အချိန်ဇယားများကို ရယူသည်။
+* အစပြုခြင်း နှင့် ညွှန်ကြားချက်များကို ဖြေလျှော့ပြီး တူညီသော သဘောတူညီချက် သတ်မှတ်စနစ်ကို ပြန်သုံးပါ။ runtime က ငြင်းပယ်ပါတယ်။
+  ID များကိုပွားပြီး အမည်မသိသဘောတူညီချက်များအတွက် ဖြေလျှော့ပါ။ CLI/SDK အကူအညီပေးသူများသည် အဆိုပါအမှားများကို စောစီးစွာဖော်ပြသည်။
+* `repo margin`/`RepoAgreementRecord::next_margin_check_after` သည် canonical cadence ကို ပြန်ပေးသည်။ အမြဲတမ်း
+  ပျက်နေသောအချိန်ဇယားများကို ပြန်လည်ပြသခြင်းမှရှောင်ရှားရန် ဖုန်းခေါ်ဆိုမှုများကို မစတင်မီ ဤလျှပ်တစ်ပြက်ရိုက်ချက်နှင့် တိုင်ပင်ပါ။

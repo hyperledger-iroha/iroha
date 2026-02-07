@@ -7,62 +7,63 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 44f1c681730f1c94d9d00e8f829a0134374ce6cb29f21727a27685e096f0da40
 source_last_modified: "2026-01-17T06:10:29.077000+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 # Merge Ledger Design — Lane Finality and Global Reduction
 
-This note finalises the merge-ledger design for Milestone 5. It explains the
-non-empty block policy, cross-lane QC merge semantics, and the finality workflow
-that binds lane-level execution to the global world state commitment.
+Այս նշումը ավարտում է Milestone 5-ի միաձուլման մատյանների ձևավորումը: Այն բացատրում է
+ոչ դատարկ բլոկների քաղաքականություն, խաչմերուկ QC միաձուլման իմաստաբանություն և վերջնական աշխատանքի ընթացք
+որը կապում է գծի մակարդակի կատարումը համաշխարհային համաշխարհային պետության պարտավորությունների հետ:
 
-The design extends the Nexus architecture described in `nexus.md`. Terms such as
-"lane block", "lane QC", "merge hint", and "merge ledger" inherit their
-definition from that document; this note focuses on behavioural rules and
-implementation guidance that must be enforced by the runtime, storage, and WSV
-layers.
+Դիզայնը ընդլայնում է Nexus ճարտարապետությունը, որը նկարագրված է `nexus.md`-ում: Պայմաններ, ինչպիսիք են
+«lane block», «lane QC», «merge hint» և «merge ledger» ժառանգում են իրենց
+սահմանում այդ փաստաթղթից; այս նշումը կենտրոնանում է վարքի կանոնների վրա և
+իրականացման ուղեցույց, որը պետք է կիրառվի գործարկման ժամանակի, պահեստավորման և WSV-ի կողմից
+շերտերը.
 
-## 1. Non-Empty Block Policy
+## 1. Ոչ դատարկ արգելափակման քաղաքականություն
 
-**Rule (MUST):** A lane proposer issues a block only when the block contains at
-least one executed transaction fragment, time-based trigger, or deterministic
-artifact update (e.g., DA artifact roll-up). Empty blocks are forbidden.
+**Կանոն (ՊԱՐՏԱԴԻՐ):** Գոտի առաջարկողը թողարկում է բլոկ միայն այն դեպքում, երբ բլոկը պարունակում է ժամը
+առնվազն մեկ կատարված գործարքի հատված, ժամանակի վրա հիմնված ձգան կամ որոշիչ
+արտեֆակտի թարմացում (օրինակ՝ DA արտեֆակտի հավաքում): Դատարկ բլոկները արգելված են։
 
-**Implications:**
+**Արդյունքները:**
 
-- Slot keep-alive: when no transaction meets its deterministic commit window,
-the lane emits no block and simply advances to the next slot. The merge ledger
-remains on the previous tip for that lane.
-- Trigger batching: background triggers that produce no state transition (e.g.,
-cron that reaffirms invariants) are considered empty and MUST be skipped or
-bundled with other work before producing a block.
-- Telemetry: `pipeline_detached_merged` and follow-up metrics treat skipped
-slots explicitly—operators can distinguish "no work" from "pipeline stalled".
-- Replay: block storage does not insert synthetic empty placeholders. The Kura
-replay loop simply observes the same parent hash for consecutive slots if no
-block was emitted.
+- Slot keep-live. երբ ոչ մի գործարք չի համապատասխանում իր դետերմինիստական կատարման պատուհանին,
+գոտին չի արտանետում բլոկ և պարզապես անցնում է հաջորդ բնիկ: Միաձուլման մատյան
+մնում է այդ գոտու համար նախորդ հուշում:
+- Տիգերի փաթեթավորում. ֆոնային գործարկիչներ, որոնք վիճակի անցում չեն առաջացնում (օրինակ.
+cron, որը վերահաստատում է ինվարիանտները) համարվում են դատարկ և ՊԵՏՔ Է բաց թողնել կամ
+բլոկ արտադրելուց առաջ միավորված այլ աշխատանքի հետ:
+- Հեռաչափություն.
+հստակորեն. օպերատորները կարող են տարբերակել «առանց աշխատանք»-ը «խողովակաշարի կանգառ»-ից:
+- Replay. բլոկի պահեստը չի տեղադրում սինթետիկ դատարկ տեղապահեր: Քուռը
+Replay loop-ը պարզապես դիտում է նույն մայր հեշը հաջորդական սլոտների համար, եթե ոչ
+բլոկ է արտանետվել.
 
-**Canonical Check:** During block proposal and validation, `ValidBlock::commit`
-asserts that the associated `StateBlock` carries at least one committed overlay
-(delta, artifact, trigger). This aligns with the `StateBlock::is_empty` guard
-that already ensures no-op writes are elided. Enforcement happens before
-signatures are requested so committees never vote on empty payloads.
+**Կանոնական ստուգում.** Բլոկի առաջարկի և վավերացման ժամանակ, `ValidBlock::commit`
+պնդում է, որ կապված `StateBlock`-ը կրում է առնվազն մեկ պարտավորված ծածկույթ
+(դելտա, արտեֆակտ, ձգան): Սա համընկնում է `StateBlock::is_empty` պահակախմբի հետ
+դա արդեն ապահովում է առանց օպերացիոն գրությունների վերացումը: Հարկադրումը տեղի է ունենում նախկինում
+Ստորագրություններ են պահանջվում, որպեսզի հանձնաժողովները երբեք չքվեարկեն դատարկ բեռների վերաբերյալ:
 
 ## 2. Cross-Lane QC Merge Semantics
 
-Each lane block `B_i` finalised by its committee produces:
+Իր հանձնաժողովի կողմից վերջնականացված `B_i` գծի յուրաքանչյուր բլոկ արտադրում է.
 
-- `lane_state_root_i`: Poseidon2-SMT commitment over per-DS state roots touched
-in the block.
-- `merge_hint_root_i`: rolling candidate for the merge ledger (`tag =
-"iroha:merge:candidate:v1\0"`).
-- `lane_qc_i`: aggregated signatures from the lane committee over the
+- `lane_state_root_i`. Poseidon2-SMT-ի հավատարմությունը յուրաքանչյուր DS պետության արմատներին շոշափել է
+բլոկում.
+- `merge_hint_root_i`. միաձուլման մատյանում առաջադրվող թեկնածու (`պիտակ =
+«iroha:merge:candidate:v1\0»`):
+- `lane_qc_i`. համախառն ստորագրություններ գոտիների հանձնաժողովի կողմից
   execution-vote preimage (block hash, `parent_state_root`,
-  `post_state_root`, height/view/epoch, chain_id, and mode tag).
+  `post_state_root`, բարձրություն/տեսք/դարաշրջան, chain_id և ռեժիմի պիտակ):
 
-Merge nodes collect the latest tips `{(B_i, lane_qc_i, merge_hint_root_i)}` for
-all lanes `i ∈ [0, K)`.
+Միաձուլման հանգույցները հավաքում են `{(B_i, lane_qc_i, merge_hint_root_i)}` վերջին խորհուրդները
+բոլոր ուղիները `i ∈ [0, K)`.
 
-**Merge Entry (MUST):**
+** Միաձուլման մուտքագրում (ՊԱՐՏԱԴԻՐ):**
 
 ```
 MergeLedgerEntry {
@@ -72,23 +73,21 @@ MergeLedgerEntry {
     global_state_root: Hash32,
     merge_qc: QuorumCertificate,
 }
-```
+```- `lane_tips[i]`-ը գծի բլոկի հեշն է, գծի միաձուլման մուտքի կնիքները
+  `i`. Եթե նախորդ միաձուլման մուտքագրումից ի վեր գիծը բլոկ չի արտանետել, ապա այս արժեքն է
+  կրկնեց.
+- `merge_hint_root[i]`-ը `merge_hint_root`-ն է համապատասխան գծից
+  արգելափակել. Այն կրկնվում է, երբ `lane_tips[i]` կրկնվում է:
+- `global_state_root` հավասար է `ReduceMergeHints(merge_hint_root[0..K-1])`, ա
+  Poseidon2 fold տիրույթի բաժանման պիտակով
+  `"iroha:merge:reduce:v1\0"`. Կրճատումը դետերմինիստական է և ՊԵՏՔ է
+  վերակառուցել նույն արժեքը հասակակիցների միջև:
+- `merge_qc`-ը BFT քվորումի վկայագիր է միաձուլման հանձնաժողովի կողմից
+  սերիական մուտք.
 
-- `lane_tips[i]` is the hash of the lane block the merge entry seals for lane
-  `i`. If a lane emitted no block since the previous merge entry, this value is
-  repeated.
-- `merge_hint_root[i]` is the `merge_hint_root` from the corresponding lane
-  block. It is repeated when `lane_tips[i]` repeats.
-- `global_state_root` equals `ReduceMergeHints(merge_hint_root[0..K-1])`, a
-  Poseidon2 fold with domain separation tag
-  `"iroha:merge:reduce:v1\0"`. The reduction is deterministic and MUST
-  reconstruct the same value across peers.
-- `merge_qc` is a BFT quorum certificate from the merge committee over the
-  serialized entry.
+**Միավորել QC Payload (ՊԱՐՏԱԴԻՐ):**
 
-**Merge QC Payload (MUST):**
-
-Merge committee members sign a deterministic digest:
+Միաձուլման հանձնաժողովի անդամները ստորագրում են որոշիչ ամփոփագիր.
 
 ```
 merge_qc_digest = blake2b32(
@@ -104,110 +103,106 @@ merge_qc_digest = blake2b32(
 )
 ```
 
-- `view` is the merge-committee view derived from the lane tips (max
-  `view_change_index` across the lane headers sealed by the entry).
-- `chain_id` is the configured chain identifier string (UTF-8 bytes).
-- The payload uses Norito encoding with the field order shown above.
+- `view`-ը միաձուլման հանձնաժողովի տեսակետն է, որը բխում է գոտիների ծայրերից (առավելագույնը
+  `view_change_index` գծի վերնագրերի միջով, որոնք կնքված են մուտքով):
+- `chain_id`-ը կազմաձևված շղթայի նույնացուցիչ տող է (UTF-8 բայթ):
+- Օգտակար բեռը օգտագործում է Norito կոդավորումը՝ վերը նշված դաշտային կարգով:
 
-The resulting digest is stored in `merge_qc.message_digest` and is the message
-verified by BLS signatures.
+Ստացված ամփոփումը պահվում է `merge_qc.message_digest`-ում և հանդիսանում է հաղորդագրություն
+ստուգված BLS ստորագրություններով:
 
-**Merge QC Construction (MUST):**
+** Միաձուլել QC Construction (ՊԱՐՏԱԴԻՐ):**
 
-- The merge committee roster is the current commit-topology validator set.
-- Required quorum = `commit_quorum_from_len(roster_len)`.
-- `merge_qc.signers_bitmap` encodes participating validator indices (LSB-first)
-  in commit-topology order.
-- `merge_qc.aggregate_signature` is the BLS-normal aggregate for the digest
-  above.
+- Միաձուլման հանձնաժողովի անվանացանկը ընթացիկ commit-topology վավերացնող հավաքածուն է:
+- Պահանջվող քվորում = `commit_quorum_from_len(roster_len)`:
+- `merge_qc.signers_bitmap` կոդավորում է մասնակցող վավերացնող ինդեքսները (LSB-առաջին)
+  պարտավորությունների տոպոլոգիայի կարգով:
+- `merge_qc.aggregate_signature`-ը BLS-նորմալ ագրեգատ է մարսողության համար
+  վերևում:
 
-**Validation (MUST):**
+**Վավերացում (ՊԱՐՏԱԴԻՐ):**
 
-1. Verify each `lane_qc_i` against `lane_tips[i]` and confirm the block headers
-   include the matching `merge_hint_root_i`.
-2. Ensure no `lane_qc_i` points to an `Invalid` or unexecuted block. The
-   non-empty policy above ensures the header includes state overlays.
-3. Recompute `ReduceMergeHints` and compare with `global_state_root`.
-4. Recompute the merge QC digest and verify the signer bitmap, quorum threshold,
-   and aggregate signature against the commit-topology roster.
+1. Ստուգեք յուրաքանչյուր `lane_qc_i` `lane_tips[i]`-ի դեմ և հաստատեք բլոկի վերնագրերը
+   ներառել համապատասխան `merge_hint_root_i`:
+2. Համոզվեք, որ `lane_qc_i` կետեր չկան `Invalid` կամ չկատարված բլոկի վրա: Այն
+   Վերևում չդատարկված քաղաքականությունը երաշխավորում է, որ վերնագիրը ներառում է պետական ծածկույթներ:
+3. Վերհաշվարկեք `ReduceMergeHints`-ը և համեմատեք `global_state_root`-ի հետ։
+4. Կրկին հաշվարկեք միաձուլման QC ամփոփումը և ստուգեք ստորագրողի բիթքարտեզը, քվորումի շեմը,
+   և համախառն ստորագրությունը պարտավորությունների տոպոլոգիայի անվանացանկի դեմ:
 
-**Observability:** Merge nodes emit Prometheus counters for
-`merge_entry_lane_repeats_total{i}` to highlight lanes that skipped slots for
-operational visibility.
+**Դիտանելիություն.** Միաձուլման հանգույցները թողարկում են Prometheus հաշվիչներ
+`merge_entry_lane_repeats_total{i}`՝ ընդգծելու այն ուղիները, որոնց համար բաց են թողնվել անցքերը
+գործառնական տեսանելիություն.
 
-## 3. Finality Workflow
+## 3. Վերջնական աշխատանքի ընթացք
 
-### 3.1 Lane-Level Finality
+### 3.1 Գոտի մակարդակի վերջնականություն
 
-1. Transactions are scheduled per lane in deterministic slots.
-2. The executor applies overlays into `StateBlock`, producing deltas and
-artifacts.
-3. Upon validation, the lane committee signs the execution-vote preimage that
-   binds the block hash, state roots, and height/view/epoch. The tuple
-   `(block_hash, lane_qc_i, merge_hint_root_i)` is considered lane-final.
-4. Light clients MAY treat the lane tip as final for DS-limited proofs, but
-must record the associated `merge_hint_root` to reconcile with the merge ledger
-later.
+1. Գործարքները պլանավորվում են յուրաքանչյուր գծի վրա՝ դետերմինիստական սլոտներում:
+2. Կատարողը կիրառում է ծածկույթներ `StateBlock`-ում՝ արտադրելով դելտաներ և
+արտեֆակտներ.
+3. Վավերացումից հետո գոտիների հանձնաժողովը ստորագրում է կատարողական-քվեարկության նախադրյալը, որ
+   կապում է բլոկի հեշը, վիճակի արմատները և բարձրությունը/տեսքը/դարաշրջանը: Բազուկը
+   `(block_hash, lane_qc_i, merge_hint_root_i)`-ը համարվում է վերջնական գոտի:
+4. Թեթև հաճախորդները ԿԱՐՈՂ ԵՆ վերաբերվել գոտու ծայրին որպես վերջնական DS-սահմանափակ ապացույցների համար, բայց
+պետք է գրանցի առնչվող `merge_hint_root`-ը՝ միաձուլման մատյանների հետ հաշտվելու համար
+ավելի ուշ:Lane կոմիտեները յուրաքանչյուր տվյալների տարածության մեջ են և չեն փոխարինում գլոբալ commit-ին
+տոպոլոգիա։ Կոմիտեի չափը ամրագրված է `3f+1`-ում, որտեղ `f`-ը գալիս է
+տվյալների տարածության կատալոգ (`fault_tolerance`): Վավերացնող ֆոնդը տվյալների տարածությունն է
+վավերացնողներ (երթուղու կառավարումը դրսևորվում է ադմինիստրատորի կողմից կառավարվող գոտիների կամ հանրային գոտիների համար
+ցցերի կողմից ընտրված ուղիների ցցերի գրառումները): Հանձնաժողովի անդամակցությունն է
+որոշիչ կերպով նմուշառվել է մեկ դարաշրջանում՝ օգտագործելով VRF դարաշրջանի սերմը, որը կապված է
+`dataspace_id` և `lane_id`: Եթե լողավազանը `3f+1`-ից փոքր է, երթուղու վերջնականությունը
+ընդմիջում է մինչև քվորումը վերականգնվի (շտապ վերականգնումն իրականացվում է առանձին):
 
-Lane committees are per-dataspace and do not replace the global commit
-topology. Committee size is fixed at `3f+1`, where `f` comes from the
-dataspace catalog (`fault_tolerance`). The validator pool is the dataspace's
-validators (lane governance manifests for admin-managed lanes, or public-lane
-staking records for stake-elected lanes). Committee membership is
-deterministically sampled once per epoch using the VRF epoch seed bound with
-`dataspace_id` and `lane_id`. If the pool is smaller than `3f+1`, lane finality
-pauses until quorum is restored (emergency recovery is handled separately).
+### 3.2 Merge-Ledger Վերջնականություն
 
-### 3.2 Merge-Ledger Finality
+1. Միաձուլման հանձնաժողովը հավաքում է վերջին երթուղու խորհուրդները, ստուգում է յուրաքանչյուր `lane_qc_i` և
+կառուցում է `MergeLedgerEntry`-ը, ինչպես սահմանված է վերևում:
+2. Դետերմինիստական կրճատումը ստուգելուց հետո միաձուլման հանձնաժողովը ստորագրում է
+մուտք (`merge_qc`):
+3. Հանգույցները կցում են մուտքը միաձուլման մատյանում և պահպանում այն կողքին
+գոտիների բլոկի հղումներ.
+4. `global_state_root`-ը դառնում է համաշխարհային պետության հեղինակավոր պարտավորությունը
+դարաշրջան / բնիկ. Ամբողջական հանգույցները թարմացնում են իրենց WSV անցակետի մետատվյալները՝ դա արտացոլելու համար
+արժեք; դետերմինիստական ​​կրկնությունը պետք է վերարտադրի նույն կրճատումը:
 
-1. Merge committee collects the latest lane tips, verifies each `lane_qc_i`, and
-constructs the `MergeLedgerEntry` as defined above.
-2. After verifying the deterministic reduction, the merge committee signs the
-entry (`merge_qc`).
-3. Nodes append the entry to the merge ledger log and persist it alongside the
-lane block references.
-4. `global_state_root` becomes the authoritative world state commitment for the
-epoch/slot. Full nodes update their WSV checkpoint metadata to mirror this
-value; deterministic replay must reproduce the same reduction.
+### 3.3 WSV և պահեստավորման ինտեգրում
 
-### 3.3 WSV and Storage Integration
+- `State::commit_merge_entry`-ը գրանցում է յուրաքանչյուր գծի վիճակի արմատները և
+  վերջնական `global_state_root`, կամրջելով գծի կատարումը գլոբալ ստուգիչ գումարի հետ:
+- Kura-ն շարունակում է մնալ `MergeLedgerEntry` գծի բլոկի արտեֆակտներին կից, այնպես որ
+  replay-ը կարող է վերակառուցել ինչպես գծի մակարդակի, այնպես էլ գլոբալ վերջնականության հաջորդականությունը:
+- Երբ գոտին բաց է թողնում անցքը, պահեստը պարզապես պահպանում է նախորդ հուշումը. ոչ
+  տեղապահի միաձուլման գրառումները ստեղծվում են այնքան ժամանակ, մինչև գոնե մեկ գիծ չստեղծի նորը
+  արգելափակել.
+- API մակերևույթները (Torii, հեռաչափություն) բացահայտում են ինչպես երթևեկության եզրերը, այնպես էլ վերջին միաձուլումը
+  մուտք, որպեսզի օպերատորներն ու հաճախորդները կարողանան հաշտեցնել յուրաքանչյուր գոտի և գլոբալ տեսակետները:
 
-- `State::commit_merge_entry` records the per-lane state roots and the
-  final `global_state_root`, bridging lane execution with the global checksum.
-- Kura persists `MergeLedgerEntry` adjacent to the lane block artifacts so a
-  replay can reconstruct both lane-level and global finality sequences.
-- When a lane skips a slot, storage simply retains the previous tip; no
-  placeholder merge entries are created until at least one lane produces a new
-  block.
-- API surfaces (Torii, telemetry) expose both lane tips and the latest merge
-  entry so operators and clients can reconcile per-lane and global views.
-
-## 4. Implementation Notes
-
-- `crates/iroha_core/src/state.rs`: `State::commit_merge_entry` validates the
-  reduction and wires the lane/global metadata into the world state so queries
-  and observers can access the merge hints and the authoritative global hash.
-- `crates/iroha_core/src/kura.rs`: `Kura::store_block_with_merge_entry` enqueues
-  the block and persists the associated merge entry in one step, rolling back
-  the in-memory block when the append fails so storage never records a block
-  without its sealing metadata. The merge-ledger log is pruned in lock-step
-  with the validated block height during startup recovery, and cached in memory
-  with a bounded window (`kura.merge_ledger_cache_capacity`, default 256) to
-  avoid unbounded growth on long-running nodes. Recovery truncates partial or
-  oversized merge-ledger tail entries, and append rejects entries above the
-  maximum payload size guard to cap allocations.
-- `crates/iroha_core/src/block.rs`: block validation rejects blocks without
-  entrypoints (external transactions or time triggers) and without deterministic
-  artifacts such as DA bundles (`BlockValidationError::EmptyBlock`), ensuring
-  the non-empty policy is enforced before signatures are requested and carried
-  into the merge ledger.
-- Deterministic reduction helper lives in the merge service: `reduce_merge_hint_roots`
-  (`crates/iroha_core/src/merge.rs`) implements the Poseidon2 fold described above.
-  Hardware acceleration hooks remain future work, but the scalar path now enforces
-  the canonical reduction deterministically.
-- Telemetry integration: exposing per-lane merge repeats and the
-  `global_state_root` gauge remains tracked in the observability backlog so the
-  dashboard work can ship alongside the merge service rollout.
-- Cross-component tests: golden replay coverage for the merge reduction is
-  tracked with the integration-test backlog to ensure future changes to
-  `reduce_merge_hint_roots` keep the recorded roots stable.
+## 4. Իրականացման նշումներ- `crates/iroha_core/src/state.rs`: `State::commit_merge_entry` վավերացնում է
+  կրճատում և լարում է երթուղու/գլոբալ մետատվյալները համաշխարհային վիճակին, այնպես որ հարցումները
+  և դիտորդները կարող են մուտք գործել միաձուլման ակնարկներ և հեղինակավոր գլոբալ հեշ:
+- `crates/iroha_core/src/kura.rs`: `Kura::store_block_with_merge_entry` հերթագրվում է
+  բլոկը և պահպանում է հարակից միաձուլման մուտքը մեկ քայլով՝ հետ գլորելով
+  հիշողության բլոկը, երբ հավելվածը ձախողվում է, այնպես որ պահեստը երբեք բլոկ չի գրանցում
+  առանց դրա կնքման մետատվյալների: Միաձուլման մատյանն էտվում է կողպեքով
+  գործարկման վերականգնման ընթացքում հաստատված բլոկի բարձրությամբ և հիշողության մեջ պահված
+  սահմանափակ պատուհանով (`kura.merge_ledger_cache_capacity`, լռելյայն 256) դեպի
+  խուսափել երկարատև հանգույցների վրա անսահմանափակ աճից: Վերականգնումը կտրում է մասնակի կամ
+  մեծ չափերի միաձուլման մատյանում պոչի գրառումները և հավելվածը մերժում է վերևում գտնվող գրառումները
+  առավելագույն օգտակար բեռի չափի պաշտպանիչ մինչև գլխարկի հատկացումները:
+- `crates/iroha_core/src/block.rs`. բլոկի վավերացումը մերժում է առանց բլոկների
+  մուտքի կետեր (արտաքին գործարքներ կամ ժամանակային գործարկիչներ) և առանց որոշիչ
+  արտեֆակտներ, ինչպիսիք են DA փաթեթները (`BlockValidationError::EmptyBlock`), ապահովելով
+  չդատարկ քաղաքականությունը կիրառվում է նախքան ստորագրություններ պահանջելը և կրելը
+  միաձուլման մատյանում:
+- Դետերմինիստական նվազեցման օգնականը ապրում է միաձուլման ծառայությունում՝ `reduce_merge_hint_roots`
+  (`crates/iroha_core/src/merge.rs`) իրականացնում է վերը նկարագրված Poseidon2 ծալքը:
+  Սարքավորումների արագացման կեռիկները մնում են ապագա աշխատանք, սակայն սկալյար ուղին այժմ ուժի մեջ է
+  կանոնական կրճատումը դետերմինիստորեն.
+- Հեռուստաչափության ինտեգրում. յուրաքանչյուր գծի միաձուլման կրկնությունների բացահայտում և
+  `global_state_root` չափիչը մնում է հետևված դիտարկելիության հետաձգման մեջ, ուստի
+  վահանակի աշխատանքը կարող է առաքվել միաձուլման ծառայության ներդրմանը զուգահեռ:
+- Խաչաձև բաղադրիչ թեստեր. միաձուլման կրճատման ոսկե կրկնության ծածկույթն է
+  Հետևվում է ինտեգրացիոն թեստի հետքագաղթով` ապահովելու հետագա փոփոխությունները
+  `reduce_merge_hint_roots` գրանցված արմատները կայուն են պահում:

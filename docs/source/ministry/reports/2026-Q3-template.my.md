@@ -10,6 +10,7 @@ translation_last_reviewed: 2026-02-07
 title: Ministry Transparency Report — 2026 Q3 (Template)
 summary: Scaffold for the MINFO-8 quarterly transparency packet; replace all tokens before publication.
 quarter: 2026-Q3
+translator: machine-google-reviewed
 ---
 
 <!--
@@ -19,126 +20,124 @@ quarter: 2026-Q3
     3. Attach supporting artefacts (data appendix, CSVs, manifest, Grafana export) under artifacts/ministry/transparency/<YYYY-Q>/.
 -->
 
-# Executive Summary
+#အမှုဆောင်အကျဉ်းချုပ်
 
-> Provide a one-paragraph summary of moderation accuracy, appeal outcomes, denylist churn, and treasury highlights. Mention whether release met the T+14 deadline.
+> ထိန်းညှိတိကျမှု၊ အယူခံဝင်မှုရလဒ်များ၊ ငြင်းပယ်စာရင်းဝင်ခြင်းနှင့် ဘဏ္ဍာရေးဆိုင်ရာ အသားပေးဖော်ပြချက်များ၏ တစ်ပိုဒ်အကျဉ်းချုပ်ကို ပေးပါ။ ထုတ်ဝေမှု T+14 နောက်ဆုံးရက်ကို ပြည့်မီခြင်း ရှိမရှိ ဖော်ပြပါ။
 
-## Quarter in Review
+## လေးပုံတစ်ပုံ သုံးသပ်ချက်
 
-### Highlights
+### ပေါ်လွင်ချက်များ
 - {{HIGHLIGHT_1}}
 - {{HIGHLIGHT_2}}
 - {{HIGHLIGHT_3}}
 
-### Risks & Mitigations
+### အန္တရာယ်များနှင့် လျော့ပါးရေး
 
-| Risk | Impact | Mitigation | Owner | Status |
-|------|--------|------------|-------|--------|
-| {{RISK_1}} | {{Impact}} | {{Mitigation}} | {{Owner}} | {{Status}} |
-| {{RISK_2}} | {{Impact}} | {{Mitigation}} | {{Owner}} | {{Status}} |
+| အန္တရာယ် | ထိခိုက်မှု | လျော့ပါးရေး | ပိုင်ရှင် | အဆင့်အတန်း |
+|------|--------|------------|------|--------|
+| {{RISK_1}} | {{သက်ရောက်မှု}} | {{လျော့ပါးရေး}} | {{ပိုင်ရှင်}} | {{အဆင့်အတန်း}} |
+| {{RISK_2}} | {{သက်ရောက်မှု}} | {{လျော့ပါးရေး}} | {{ပိုင်ရှင်}} | {{အဆင့်အတန်း}} |
 
-## Metrics Overview
+## မက်ထရစ်များ ခြုံငုံသုံးသပ်ချက်
 
-All metrics originate from `ministry_transparency_builder` (Norito bundle) after the DP sanitizer runs. Attach corresponding CSV slices referenced below.
+DP သန့်စင်ဆေးလည်ပတ်ပြီးနောက် မက်ထရစ်အားလုံးသည် `ministry_transparency_builder` (Norito အတွဲ) မှ ဆင်းသက်လာသည်။ အောက်တွင်ဖော်ပြထားသော သက်ဆိုင်ရာ CSV အချပ်များကို ပူးတွဲပါ ။
 
 ### AI Moderation Accuracy
 
-| Model Profile | Region | FP Rate (Target) | FN Rate (Target) | Drift vs Calibration | Sample Size | Notes |
-|---------------|--------|------------------|------------------|----------------------|-------------|-------|
-| {{profile}} | {{region}} | {{fp_rate}} ({{fp_target}}) | {{fn_rate}} ({{fn_target}}) | {{drift}} | {{samples}} | {{notes}} |
+| မော်ဒယ်ကိုယ်ရေးအကျဉ်း | တိုင်းဒေသကြီး | FP နှုန်း (ပစ်မှတ်) | FN အဆင့် (ပစ်မှတ်) | Drift vs Calibration | နမူနာအရွယ်အစား | မှတ်စုများ |
+|----------------|--------|------------------|--------------------------------|--------------------------------|----------------|--------|
+| {{profile}} | {{ဒေသ}} | {{fp_rate}} ({{fp_target}}) | {{fn_rate}} ({{fn_target}}) | {{ပျံ့}} | {{နမူနာ}} | {{မှတ်စုများ}} |
 
-### Appeals & Panel Activity
+### အယူခံများနှင့် အစုအဖွဲ့ လုပ်ဆောင်ချက်
 
-| Metric | Value | SLA Target | Trend vs Q-1 | Notes |
-|--------|-------|------------|--------------|-------|
-| Appeals received | {{appeals_received}} | {{sla}} | {{delta}} | {{notes}} |
-| Median resolution time | {{median_resolution}} | {{sla}} | {{delta}} | {{notes}} |
-| Reversal rate | {{reversal_rate}} | {{target}} | {{delta}} | {{notes}} |
-| Panel utilization | {{panel_utilization}} | {{target}} | {{delta}} | {{notes}} |
+| မက်ထရစ် | တန်ဖိုး | SLA ပစ်မှတ် | Trend vs Q-1 | မှတ်စုများ |
+|--------|-------|------------|-----------------|--------|
+| အယူခံဝင် | {{appeals_received}} | {{sla}} | {{delta}} | {{မှတ်စုများ}} |
+| အလယ်အလတ်ပြတ်သားမှုအချိန် | {{media_resolution}} | {{sla}} | {{delta}} | {{မှတ်စုများ}} |
+| ပြောင်းပြန်နှုန်း | {{reversal_rate}} | {{ပစ်မှတ်}} | {{delta}} | {{မှတ်စုများ}} |
+| Panel အသုံးချမှု | {{panel_utilization}} | {{ပစ်မှတ်}} | {{delta}} | {{မှတ်စုများ}} |
 
 ### Denylist & Emergency Canon
 
-| Metric | Count | DP Noise (ε) | Emergency Flags | TTL Compliance | Notes |
-|--------|-------|--------------|-----------------|----------------|-------|
-| Hash additions | {{additions}} | {{epsilon_counts}} | {{flags}} | {{ttl_status}} | {{notes}} |
-| Hash removals | {{removals}} | {{epsilon_counts}} | {{flags}} | {{ttl_status}} | {{notes}} |
-| Canon invocations | {{canon_invocations}} | n/a | {{flags}} | {{ttl_status}} | {{notes}} |
+| မက်ထရစ် | ရေတွက် | DP Noise (ε) | အရေးပေါ်အလံများ | TTL လိုက်နာမှု | မှတ်စုများ |
+|--------|-------|-----------------|-----------------|----------------|--------|
+| Hash အပိုများ | {{additions}} | {{epsilon_counts}} | {{အလံများ}} | {{ttl_status}} | {{မှတ်စုများ}} |
+| Hash ဖယ်ရှားခြင်း | {{ဖယ်ရှားမှုများ}} | {{epsilon_counts}} | {{အလံများ}} | {{ttl_status}} | {{မှတ်စုများ}} |
+| Canon ဖိတ်စာများ | {{canon_invocations}} | n/a | {{အလံများ}} | {{ttl_status}} | {{မှတ်စုများ}} |
 
-### Treasury Movements
+### ငွေတိုက်လှုပ်ရှားမှုများ
 
-| Flow | Amount (MINFO) | Source Reference | Notes |
-|------|----------------|------------------|-------|
-| Appeal deposits | {{amount}} | {{tx_ref}} | {{notes}} |
-| Panel rewards | {{amount}} | {{tx_ref}} | {{notes}} |
-| Operational spend | {{amount}} | {{tx_ref}} | {{notes}} |
+| စီးဆင်းမှု | ပမာဏ (MINFO) | အရင်းအမြစ် ကိုးကား | မှတ်စုများ |
+|--------|----------------|---------------------|------|
+| အယူခံသိုက် | {{ပမာဏ}} | {{tx_ref}} | {{မှတ်စုများ}} |
+| Panel ဆုလာဘ် | {{ပမာဏ}} | {{tx_ref}} | {{မှတ်စုများ}} |
+| လုပ်ငန်းလည်ပတ်မှု | {{ပမာဏ}} | {{tx_ref}} | {{မှတ်စုများ}} |
 
-### Volunteer & Outreach Signals
+### စေတနာ့ဝန်ထမ်းနှင့် အဝေးရောက်အချက်ပြမှုများ
 
-| Metric | Value | Target | Notes |
+| မက်ထရစ် | တန်ဖိုး | ပစ်မှတ် | မှတ်စုများ |
 |--------|-------|--------|-------|
-| Volunteer briefs published | {{value}} | {{target}} | {{notes}} |
-| Languages covered | {{value}} | {{target}} | {{notes}} |
-| Governance workshops hosted | {{value}} | {{target}} | {{notes}} |
+| စေတနာ့ဝန်ထမ်း အတိုချုံးများ ထုတ်ဝေခြင်း | {{တန်ဖိုး}} | {{ပစ်မှတ်}} | {{မှတ်စုများ}} |
+| ဘာသာစကားများ | {{တန်ဖိုး}} | {{ပစ်မှတ်}} | {{မှတ်စုများ}} |
+| အုပ်ချုပ်မှုအလုပ်ရုံဆွေးနွေးပွဲများကျင်းပ| {{တန်ဖိုး}} | {{ပစ်မှတ်}} | {{မှတ်စုများ}} |
 
-## Differential Privacy & Sanitization
+## ကွဲပြားသော ကိုယ်ရေးကိုယ်တာနှင့် သန့်ရှင်းရေးပြုလုပ်ခြင်း။
 
-Summarise the sanitizer run and include the RNG commitment.
+သန့်စင်ဆေးရည်လည်ပတ်မှုကို အကျဉ်းချုပ်ပြီး RNG ကတိကဝတ်ကို ထည့်သွင်းပါ။
 
-- Sanitizer job: `{{CI_JOB_URL}}`
-- DP parameters: ε = {{epsilon_total}}, δ = {{delta_total}}
-- RNG commitment: `{{blake3_seed_commitment}}`
-- Buckets suppressed: {{suppressed_buckets}}
-- QA reviewer: {{reviewer}}
+- Sanitizer အလုပ်- `{{CI_JOB_URL}}`
+- DP ကန့်သတ်ချက်များ- ε={{epsilon_total}}၊ δ={{delta_total}}
+- RNG ကတိကဝတ်- `{{blake3_seed_commitment}}`
+- ပုံးများကို ဖိနှိပ်ထားသည်- {{suppressed_buckets}}
+- QA သုံးသပ်သူ- {{သုံးသပ်သူ}}
 
-Attach `artifacts/ministry/transparency/{{Quarter}}/dp_report.json` and note any manual interventions.
+`artifacts/ministry/transparency/{{Quarter}}/dp_report.json` ကို ပူးတွဲပြီး မည်သည့် လက်စွဲပြု ဆောင်ရွက်ချက်များကို မှတ်သားထားပါ။## Data Attachments များ
 
-## Data Attachments
+| Artefact | မဂ် | SHA-256 | SoraFS သို့ အပ်လုဒ်လုပ်မလား။ | မှတ်စုများ |
+|----------|------|---------|---------------------|--------|
+| PDF | အကျဉ်းချုပ် `artifacts/ministry/transparency/{{Quarter}}/summary.pdf` | {{hash}} | {{ဟုတ်/မဟုတ်}} | {{မှတ်စုများ}} |
+| Norito ဒေတာ နောက်ဆက်တွဲ | `artifacts/ministry/transparency/{{Quarter}}/data/appendix.norito` | {{hash}} | {{ဟုတ်/မဟုတ်}} | {{မှတ်စုများ}} |
+| မက်ထရစ်များ CSV အတွဲလိုက် | `artifacts/ministry/transparency/{{Quarter}}/data/csv/` | {{hash}} | {{ဟုတ်/မဟုတ်}} | {{မှတ်စုများ}} |
+| Grafana တင်ပို့ခြင်း | `dashboards/grafana/ministry_transparency_overview.json` | {{hash}} | {{ဟုတ်/မဟုတ်}} | {{မှတ်စုများ}} |
+| သတိပေးစည်းကမ်း | `dashboards/alerts/ministry_transparency_rules.yml` | {{hash}} | {{ဟုတ်/မဟုတ်}} | {{မှတ်စုများ}} |
+| Provenance manifest | `artifacts/ministry/transparency/{{Quarter}}/manifest.json` | {{hash}} | {{ဟုတ်/မဟုတ်}} | {{မှတ်စုများ}} |
+| Manifest လက်မှတ် | `artifacts/ministry/transparency/{{Quarter}}/manifest.json.sig` | {{hash}} | {{ဟုတ်/မဟုတ်}} | {{မှတ်စုများ}} |
 
-| Artefact | Path | SHA-256 | Uploaded to SoraFS? | Notes |
-|----------|------|---------|---------------------|-------|
-| Summary PDF | `artifacts/ministry/transparency/{{Quarter}}/summary.pdf` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Norito data appendix | `artifacts/ministry/transparency/{{Quarter}}/data/appendix.norito` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Metrics CSV bundle | `artifacts/ministry/transparency/{{Quarter}}/data/csv/` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Grafana export | `dashboards/grafana/ministry_transparency_overview.json` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Alert rules | `dashboards/alerts/ministry_transparency_rules.yml` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Provenance manifest | `artifacts/ministry/transparency/{{Quarter}}/manifest.json` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Manifest signature | `artifacts/ministry/transparency/{{Quarter}}/manifest.json.sig` | {{hash}} | {{Yes/No}} | {{notes}} |
+## ထုတ်ဝေမှု မက်တာဒေတာ
 
-## Publication Metadata
-
-| Field | Value |
-|-------|-------|
-| Release quarter | {{Quarter}} |
-| Release timestamp (UTC) | {{timestamp}} |
+| လယ် | တန်ဖိုး |
+|---------|-------|
+| လေးပုံတစ်ပုံ | {{ရပ်ကွက်}} |
+| ထုတ်ဝေချိန်တံဆိပ် (UTC) | {{timestamp}} |
 | SoraFS CID | `{{cid}}` |
-| Governance vote ID | {{vote_id}} |
+| အုပ်ချုပ်ရေးမဲ ID | {{vote_id}} |
 | Manifest digest (`blake2b`) | `{{manifest_digest}}` |
 | Git commit / tag | `{{git_rev}}` |
-| Release owner | {{owner}} |
+| ပိုင်ရှင် | {{ပိုင်ရှင်}} |
 
-## Approvals
+## ခွင့်ပြုချက်
 
-| Role | Name | Decision | Timestamp | Notes |
-|------|------|----------|-----------|-------|
-| Ministry Observability TL | {{name}} | ✅/⚠️ | {{timestamp}} | {{notes}} |
-| Governance Council Liaison | {{name}} | ✅/⚠️ | {{timestamp}} | {{notes}} |
-| Docs/Comms Lead | {{name}} | ✅/⚠️ | {{timestamp}} | {{notes}} |
+| အခန်းကဏ္ဍ | အမည် | ဆုံးဖြတ်ချက် | အချိန်တံဆိပ်ခေါင်း | မှတ်စုများ |
+|------|------|----------|-----------|------|
+| ဓမ္မ Observability TL | {{အမည်}} | ✅/⚠️ | {{timestamp}} | {{မှတ်စုများ}} |
+| အုပ်ချုပ်ရေးကောင်စီ ဆက်ဆံရေးရုံး | {{အမည်}} | ✅/⚠️ | {{timestamp}} | {{မှတ်စုများ}} |
+| Docs/Comms ဦးဆောင် | {{အမည်}} | ✅/⚠️ | {{timestamp}} | {{မှတ်စုများ}} |
 
 ## Changelog & Follow-Ups
 
 - {{CHANGELOG_ITEM_1}}
 - {{CHANGELOG_ITEM_2}}
 
-### Open Action Items
+### လုပ်ဆောင်ချက်အရာများကို ဖွင့်ပါ။
 
-| Item | Owner | Due | Status | Notes |
-|------|-------|-----|--------|-------|
-| {{Action}} | {{Owner}} | {{Due}} | {{Status}} | {{Notes}} |
+| အမျိုးအမည် | ပိုင်ရှင် | စူးစူး | အဆင့်အတန်း | မှတ်စုများ |
+|---|-------|-----|--------|--------|
+| {{လုပ်ဆောင်ချက်}} | {{ပိုင်ရှင်}} | {{Due}} | {{အဆင့်အတန်း}} | {{မှတ်စုများ}} |
 
-### Contact
+### ဆက်သွယ်ရန်
 
-- Primary contact: {{contact_name}} (`{{chat_handle}}`)
-- Escalation path: {{escalation_details}}
-- Distribution list: {{mailing_list}}
+- အဓိကအဆက်အသွယ်- {{contact_name}} (`{{chat_handle}}`)
+- တိုးမြှင့်ခြင်းလမ်းကြောင်း- {{escalation_details}}
+- ဖြန့်ဝေစာရင်း- {{mailing_list}}
 
-_Template version: 2026-03-25. Update the revision date when making structural changes._
+_Template ဗားရှင်း- 2026-03-25။ ဖွဲ့စည်းပုံဆိုင်ရာ အပြောင်းအလဲများ ပြုလုပ်သည့်အခါ တည်းဖြတ်သည့်ရက်စွဲကို အပ်ဒိတ်လုပ်ပါ။_

@@ -6,19 +6,20 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 084add6296c5b884a6d6dc07425aeca9966576f0643f6a7cf555da3fc8586466
 source_last_modified: "2026-01-08T10:01:27.059307+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% FastPQ Transfer Gadget Design
+% تصميم أداة نقل FastPQ
 
-# Overview
+# نظرة عامة
 
-The current FASTPQ planner records every primitive operation involved in a `TransferAsset` instruction, which means each transfer pays for balance arithmetic, hash rounds, and SMT updates separately. To reduce trace rows per transfer we introduce a dedicated gadget that verifies only the minimal arithmetic/commitment checks while the host continues to execute the canonical state transition.
+يسجل مخطط FASTPQ الحالي كل عملية بدائية متضمنة في تعليمات `TransferAsset`، مما يعني أن كل تحويل يدفع مقابل حساب الرصيد وجولات التجزئة وتحديثات SMT بشكل منفصل. لتقليل صفوف التتبع لكل عملية نقل، نقدم أداة مخصصة تتحقق فقط من الحد الأدنى من عمليات التحقق الحسابية/الالتزامات بينما يستمر المضيف في تنفيذ انتقال الحالة الأساسي.
 
-- **Scope**: single transfers and small batches emitted via the existing Kotodama/IVM `TransferAsset` syscall surface.
-- **Goal**: cut FFT/LDE column footprint for high-volume transfers by sharing lookup tables and collapsing per-transfer arithmetic into a compact constraint block.
+- **النطاق**: عمليات النقل الفردية والدفعات الصغيرة المنبعثة عبر سطح استدعاء النظام Kotodama/IVM `TransferAsset` الموجود.
+- **الهدف**: قطع أثر عمود FFT/LDE لعمليات النقل ذات الحجم الكبير من خلال مشاركة جداول البحث وطي العمليات الحسابية لكل عملية نقل إلى كتلة قيود مدمجة.
 
-# Architecture
+#الهندسة المعمارية
 
 ```
 Kotodama builder → IVM syscall (transfer_v1 / transfer_v1_batch)
@@ -33,9 +34,9 @@ Kotodama builder → IVM syscall (transfer_v1 / transfer_v1_batch)
                         └─ Authority digest equality
 ```
 
-## Transcript Format
+## تنسيق النص
 
-The host emits a `TransferTranscript` per syscall invocation:
+يُصدر المضيف `TransferTranscript` لكل استدعاء syscall:
 
 ```rust
 struct TransferTranscript {
@@ -59,55 +60,51 @@ struct TransferDeltaTranscript {
 }
 ```
 
-- `batch_hash` ties the transcript to the transaction entrypoint hash for replay protection.
-- `authority_digest` is the host’s hash over sorted signers/quorum data; the gadget checks equality but does not redo signature verification. Concretely the host Norito-encodes the `AccountId` (which already embeds the canonical multisig controller) and hashes `b"iroha:fastpq:v1:authority|" || encoded_account` with Blake2b-256, storing the resulting `Hash`.
-- `poseidon_preimage_digest` = Poseidon(account_from || account_to || asset || amount || batch_hash); ensures the gadget recomputes the same digest as the host. The preimage bytes are constructed as `norito(from_account) || norito(to_account) || norito(asset_definition) || norito(amount) || batch_hash` using bare Norito encoding before passing them through the shared Poseidon2 helper. This digest is present for single-delta transcripts and omitted for multi-delta batches.
+- يقوم `batch_hash` بربط النص بتجزئة نقطة دخول المعاملة لحماية إعادة التشغيل.
+- `authority_digest` هو تجزئة المضيف على بيانات النصاب/الموقعين المصنفة؛ تتحقق الأداة من المساواة ولكنها لا تعيد التحقق من التوقيع. بشكل ملموس، يقوم المضيف Norito بترميز `AccountId` (الذي يتضمن بالفعل وحدة تحكم multisig الأساسية) ويجزئ `b"iroha:fastpq:v1:authority|" || encoded_account` مع Blake2b-256، مما يؤدي إلى تخزين `Hash` الناتج.
+- `poseidon_preimage_digest` = Poseidon(account_from || account_to || الأصول || المبلغ || Batch_hash); يضمن أن الأداة تقوم بإعادة حساب نفس الملخص مثل المضيف. يتم إنشاء بايتات preimage كـ `norito(from_account) || norito(to_account) || norito(asset_definition) || norito(amount) || batch_hash` باستخدام ترميز Norito المجرد قبل تمريرها عبر مساعد Poseidon2 المشترك. هذا الملخص موجود لنصوص الدلتا الفردية ويتم حذفه للدفعات متعددة الدلتا.
 
-All fields are serialized via Norito so existing determinism guarantees hold.
-Both `from_path` and `to_path` are emitted as Norito blobs using the
-`TransferMerkleProofV1` schema: `{ version: 1, path_bits: Vec<u8>, siblings: Vec<Hash> }`.
-Future versions can extend the schema while the prover enforces the version tag
-before decoding. `TransitionBatch` metadata embeds the Norito-encoded transcript
-vector under the `transfer_transcripts` key so the prover can decode the witness
-without performing out-of-band queries. Public inputs (`dsid`, `slot`, roots,
-`perm_root`, `tx_set_hash`) are carried in `FastpqTransitionBatch.public_inputs`,
-leaving metadata for entry hash/transcript count bookkeeping. Until host plumbing
-lands, the prover synthetically derives proofs from the key/balance pairs so rows
-always include a deterministic SMT path even when the transcript omits the optional fields.
+يتم إجراء تسلسل لجميع الحقول عبر Norito بحيث تظل ضمانات الحتمية الحالية ثابتة.
+يتم إصدار كل من `from_path` و`to_path` كـ Norito النقط باستخدام
+مخطط `TransferMerkleProofV1`: `{ version: 1, path_bits: Vec<u8>, siblings: Vec<Hash> }`.
+يمكن للإصدارات المستقبلية توسيع المخطط بينما يقوم المثبت بفرض علامة الإصدار
+قبل فك التشفير. تتضمن البيانات التعريفية `TransitionBatch` النص المشفر بـ Norito
+المتجه تحت المفتاح `transfer_transcripts` حتى يتمكن المُثبت من فك تشفير الشاهد
+دون إجراء استعلامات خارج النطاق. المدخلات العامة (`dsid`، `slot`، الجذور،
+`perm_root`، `tx_set_hash`) يتم حملها في `FastpqTransitionBatch.public_inputs`،
+ترك البيانات التعريفية لتسجيل دفاتر عدد التجزئة/النسخ. حتى السباكة المضيفة
+الأراضي، يستمد المُثبِّت البراهين بشكل صناعي من أزواج المفاتيح/التوازن وبالتالي الصفوف
+قم دائمًا بتضمين مسار SMT محدد حتى عندما يحذف النص الحقول الاختيارية.
 
-## Gadget Layout
+## تخطيط الأداة
 
-1. **Balance Arithmetic Block**
-   - Inputs: `from_balance_before`, `amount`, `to_balance_before`.
-   - Checks:
-     - `from_balance_before >= amount` (range gadget with shared RNS decomposition).
-     - `from_balance_after = from_balance_before - amount`.
-     - `to_balance_after = to_balance_before + amount`.
-   - Packed into a custom gate so all three equations consume one row group.
+1. ** موازنة الكتلة الحسابية **
+   - المدخلات: `from_balance_before`، `amount`، `to_balance_before`.
+   - الشيكات:
+     - `from_balance_before >= amount` (أداة النطاق مع تحليل RNS المشترك).
+     -`from_balance_after = from_balance_before - amount`.
+     -`to_balance_after = to_balance_before + amount`.
+   - معبأة في بوابة مخصصة بحيث تستهلك المعادلات الثلاث مجموعة صف واحد.2. ** كتلة التزام بوسيدون **
+   - إعادة حساب `poseidon_preimage_digest` باستخدام جدول بحث Poseidon المشترك المستخدم بالفعل في الأدوات الذكية الأخرى. لا توجد جولات بوسيدون لكل عملية نقل في التتبع.
 
-2. **Poseidon Commitment Block**
-   - Recomputes `poseidon_preimage_digest` using the shared Poseidon lookup table already used in other gadgets. No per-transfer Poseidon rounds in the trace.
+3. ** كتلة مسار ميركل **
+   - يعمل على توسيع أداة Kaigi SMT الموجودة من خلال وضع "التحديث المقترن". تشترك ورقتان (المرسل والمستقبل) في نفس العمود للتجزئات الشقيقة، مما يقلل من الصفوف المكررة.
 
-3. **Merkle Path Block**
-   - Extends the existing Kaigi SMT gadget with a "paired update" mode. Two leaves (sender, receiver) share the same column for sibling hashes, reducing duplicated rows.
+4. **التحقق من ملخص الهيئة**
+   - قيد المساواة البسيط بين الملخص المقدم من المضيف وقيمة الشاهد. تظل التوقيعات في أداتهم المخصصة.
 
-4. **Authority Digest Check**
-   - Simple equality constraint between the host-provided digest and the witness value. Signatures remain in their dedicated gadget.
+5. **حلقة الدفعة**
+   - تستدعي البرامج `transfer_v1_batch_begin()` قبل تكرار حلقة منشئي `transfer_asset` و`transfer_v1_batch_end()` بعد ذلك. أثناء نشاط النطاق، يقوم المضيف بتخزين كل عملية نقل مؤقتًا وإعادة تشغيلها كـ `TransferAssetBatch` واحد، مع إعادة استخدام سياق Poseidon/SMT مرة واحدة لكل دفعة. تضيف كل دلتا إضافية فقط العمليات الحسابية والتحقق من ورقتين. يقبل جهاز فك ترميز النصوص الآن دفعات متعددة الدلتا ويظهرها كـ `TransferGadgetInput::deltas` حتى يتمكن المخطط من طي الشهود دون إعادة قراءة Norito. يمكن للعقود التي تحتوي بالفعل على حمولة Norito (على سبيل المثال، CLI/SDKs) تخطي النطاق بالكامل عن طريق الاتصال بـ `transfer_v1_batch_apply(&NoritoBytes<TransferAssetBatch>)`، والذي يسلم المضيف دفعة مشفرة بالكامل في مكالمة نظام واحدة.
 
-5. **Batch Loop**
-   - Programs call `transfer_v1_batch_begin()` before a loop of `transfer_asset` builders and `transfer_v1_batch_end()` afterwards. While the scope is active the host buffers each transfer and replays them as a single `TransferAssetBatch`, reusing the Poseidon/SMT context once per batch. Each additional delta adds only the arithmetic and two leaf checks. The transcript decoder now accepts multi-delta batches and surfaces them as `TransferGadgetInput::deltas` so the planner can fold witnesses without re-reading Norito. Contracts that already have a Norito payload handy (e.g., CLI/SDKs) can skip the scope entirely by calling `transfer_v1_batch_apply(&NoritoBytes<TransferAssetBatch>)`, which hands the host a fully encoded batch in one syscall.
-
-# Host & Prover Changes
-
-| Layer | Changes |
+# تغييرات المضيف والإثبات| طبقة | التغييرات |
 |-------|---------|
-| `ivm::syscalls` | Add `transfer_v1_batch_begin` (`0x29`) / `transfer_v1_batch_end` (`0x2A`) so programs can bracket multiple `transfer_v1` syscalls without emitting intermediate ISIs, plus `transfer_v1_batch_apply` (`0x2B`) for pre-encoded batches. |
-| `ivm::host` & tests | Core/Default hosts treat `transfer_v1` as a batch append while the scope is active, surface `SYSCALL_TRANSFER_V1_BATCH_{BEGIN,END,APPLY}`, and the mock WSV host buffers entries before committing so regression tests can assert deterministic balance updates.【crates/ivm/src/core_host.rs:1001】【crates/ivm/src/host.rs:451】【crates/ivm/src/mock_wsv.rs:3713】【crates/ivm/tests/wsv_host_pointer_tlv.rs:219】【crates/ivm/tests/wsv_host_pointer_tlv.rs:287】
-| `iroha_core` | Emit `TransferTranscript` after the state transition, build `FastpqTransitionBatch` records with explicit `public_inputs` during `StateBlock::capture_exec_witness`, and run the FASTPQ prover lane so both Torii/CLI tooling and the Stage 6 backend receive canonical `TransitionBatch` inputs. `TransferAssetBatch` groups sequential transfers into a single transcript, omitting the poseidon digest for multi-delta batches so the gadget can iterate across entries deterministically. |
-| `fastpq_prover` | `gadgets::transfer` now validates multi-delta transcripts (balance arithmetic + Poseidon digest) and surfaces structured witnesses (including placeholder paired SMT blobs) for the planner (`crates/fastpq_prover/src/gadgets/transfer.rs`). `trace::build_trace` decodes those transcripts out of batch metadata, rejects transfer batches missing the `transfer_transcripts` payload, attaches the validated witnesses to `Trace::transfer_witnesses`, and `TracePolynomialData::transfer_plan()` keeps the aggregated plan alive until the planner consumes the gadget (`crates/fastpq_prover/src/trace.rs`). The row-count regression harness now ships via `fastpq_row_bench` (`crates/fastpq_prover/src/bin/fastpq_row_bench.rs:1`), covering scenarios up to 65 536 padded rows, while the paired SMT wiring remains behind the TF-3 batch-helper milestone (placeholders keep the trace layout stable until that swap lands). |
-| Kotodama | Lowers the `transfer_batch((from,to,asset,amount), …)` helper into `transfer_v1_batch_begin`, sequential `transfer_asset` calls, and `transfer_v1_batch_end`. Each tuple argument must follow the `(AccountId, AccountId, AssetDefinitionId, int)` shape; single transfers keep the existing builder. |
+| `ivm::syscalls` | أضف `transfer_v1_batch_begin` (`0x29`) / `transfer_v1_batch_end` (`0x2A`) حتى تتمكن البرامج من مكالمات نظام `transfer_v1` المتعددة دون انبعاث ISIs المتوسطة، بالإضافة إلى `transfer_v1_batch_apply` (`0x2B`) للدفعات المشفرة مسبقًا. |
+| `ivm::host` والاختبارات | يتعامل المضيفون الأساسيون/الافتراضيون مع `transfer_v1` كملحق دفعة بينما يكون النطاق نشطًا، والسطح `SYSCALL_TRANSFER_V1_BATCH_{BEGIN,END,APPLY}`، ويقوم مضيف WSV الوهمي بتخزين الإدخالات مؤقتًا قبل الالتزام حتى تتمكن اختبارات الانحدار من تأكيد التوازن الحتمي التحديثات.[الصناديق/ivm/src/core_host.rs:1001] 【الصناديق/ivm/src/host.rs:451】الصناديق/ivm/src/mock_wsv.rs :3713】[صناديق/ivm/tests/wsv_host_pointer_tlv.rs:219] 【صناديق/ivm/tests/wsv_host_pointer_tlv.rs:287】
+| `iroha_core` | قم بإصدار `TransferTranscript` بعد انتقال الحالة، وقم بإنشاء سجلات `FastpqTransitionBatch` باستخدام `public_inputs` الصريح أثناء `StateBlock::capture_exec_witness`، وقم بتشغيل مسار إثبات FASTPQ بحيث تتلقى كل من أدوات Torii/CLI والواجهة الخلفية Stage6 البيانات الأساسية المدخلات `TransitionBatch`. يقوم `TransferAssetBatch` بتجميع عمليات النقل المتسلسلة في نسخة واحدة، مع حذف ملخص بوسيدون لدفعات متعددة الدلتا حتى يتمكن الجهاز من التكرار عبر الإدخالات بشكل حتمي. |
+| `fastpq_prover` | يقوم `gadgets::transfer` الآن بالتحقق من صحة نصوص الدلتا المتعددة (حساب التوازن + ملخص Poseidon) وأسطح الشهود المنظمة (بما في ذلك نقاط SMT المقترنة بالعنصر النائب) للمخطط (`crates/fastpq_prover/src/gadgets/transfer.rs`). يقوم `trace::build_trace` بفك تشفير هذه النصوص من بيانات تعريف الدفعة، ويرفض دفعات النقل التي تفتقد الحمولة `transfer_transcripts`، ويرفق الشهود الذين تم التحقق من صحتهم بـ `Trace::transfer_witnesses`، ويبقي `TracePolynomialData::transfer_plan()` الخطة المجمعة حية حتى يستهلك المخطط الأداة (`crates/fastpq_prover/src/trace.rs`). يتم الآن شحن مجموعة انحدار عدد الصفوف عبر `fastpq_row_bench` (`crates/fastpq_prover/src/bin/fastpq_row_bench.rs:1`)، والتي تغطي سيناريوهات تصل إلى 65536 صفًا مبطنًا، بينما تظل أسلاك SMT المقترنة خلف معلم مساعد الدُفعة TF-3 (العناصر النائبة تحافظ على استقرار تخطيط التتبع حتى تصل هذه المبادلة). |
+| Kotodama | يخفض المساعد `transfer_batch((from,to,asset,amount), …)` إلى `transfer_v1_batch_begin`، واستدعاءات `transfer_asset` المتسلسلة، و`transfer_v1_batch_end`. يجب أن تتبع كل وسيطة صف الشكل `(AccountId, AccountId, AssetDefinitionId, int)`؛ عمليات النقل الفردية تحافظ على المنشئ الحالي. |
 
-Example Kotodama usage:
+مثال لاستخدام Kotodama:
 
 ```text
 fn pay(a: AccountId, b: AccountId, asset: AssetDefinitionId, x: int) {
@@ -115,11 +112,11 @@ fn pay(a: AccountId, b: AccountId, asset: AssetDefinitionId, x: int) {
 }
 ```
 
-`TransferAssetBatch` executes the same permission and arithmetic checks as individual `Transfer::asset_numeric` calls, but records all deltas inside a single `TransferTranscript`. Multi-delta transcripts elide the poseidon digest until per-delta commitments land in a follow-up. The Kotodama builder now emits the begin/end syscalls automatically, so contracts can deploy batched transfers without hand-encoding Norito payloads.
+ينفذ `TransferAssetBatch` نفس الأذونات وعمليات التحقق الحسابية مثل مكالمات `Transfer::asset_numeric` الفردية، ولكنه يسجل جميع الدلتا داخل `TransferTranscript` واحد. تحذف نصوص الدلتا المتعددة ملخص بوسيدون حتى تصل التزامات كل دلتا إلى المتابعة. يقوم منشئ Kotodama الآن بإصدار مكالمات النظام للبداية/النهاية تلقائيًا، لذلك يمكن للعقود نشر عمليات النقل المجمعة دون تشفير حمولات Norito يدويًا.
 
-## Row-count Regression Harness
+## أداة انحدار عدد الصفوف
 
-`fastpq_row_bench` (`crates/fastpq_prover/src/bin/fastpq_row_bench.rs:1`) synthesizes FASTPQ transition batches with configurable selector counts and reports the resulting `row_usage` summary (`total_rows`, per-selector counts, ratio) alongside the padded length/log₂. Capture benchmarks for the 65 536-row ceiling with:
+يقوم `fastpq_row_bench` (`crates/fastpq_prover/src/bin/fastpq_row_bench.rs:1`) بتجميع دفعات انتقال FASTPQ مع أعداد المحددات القابلة للتكوين ويبلغ عن ملخص `row_usage` الناتج (`total_rows`، عدد كل محدد، النسبة) إلى جانب الطول/السجل المبطن. احصل على معايير لسقف 65536 صفًا باستخدام:
 
 ```bash
 cargo run -p fastpq_prover --bin fastpq_row_bench -- \
@@ -128,22 +125,20 @@ cargo run -p fastpq_prover --bin fastpq_row_bench -- \
   --burn-rows 128 \
   --pretty \
   --output fastpq_row_usage_max.json
-```
+```يعكس JSON المنبعث عناصر مجموعة FASTPQ التي ينبعثها `iroha_cli audit witness` الآن بشكل افتراضي (امرر `--no-fastpq-batches` لمنعها)، لذلك يمكن لـ `scripts/fastpq/check_row_usage.py` وبوابة CI تمييز عمليات التشغيل الاصطناعية مقابل اللقطات السابقة عند التحقق من صحة تغييرات المخطط.
 
-The emitted JSON mirrors the FASTPQ batch artifacts that `iroha_cli audit witness` now emits by default (pass `--no-fastpq-batches` to suppress them), so `scripts/fastpq/check_row_usage.py` and the CI gate can diff the synthetic runs against prior snapshots when validating planner changes.
+#خطة الطرح
 
-# Rollout Plan
+1. **TF-1 (السباكة النصية)**: ✅ يُصدر `StateTransaction::record_transfer_transcripts` الآن نصوص Norito لكل `TransferAsset`/دفعة، ويقوم `sumeragi::witness::record_fastpq_transcript` بتخزينها داخل الشاهد العالمي، ويقوم `StateBlock::capture_exec_witness` ببناء `fastpq_batches` باستخدام `public_inputs` صريح للمشغلين ومسار الإثبات (استخدم `--no-fastpq-batches` إذا كنت بحاجة إلى جهاز أنحف Output).[crates/iroha_core/src/state.rs:8801] 【crates/iroha_core/src/sumeragi/witness.rs:280】【crates/iroha_core/src/fastpq/mod.rs:157】[crates/iroha_cli/src/audit.rs:185]
+2. **TF-2 (تنفيذ الأداة)**: ✅ `gadgets::transfer` يتحقق الآن من صحة النصوص متعددة الدلتا (حساب التوازن + ملخص Poseidon)، ويجمع أدلة SMT المقترنة عندما يحذفها المضيفون، ويكشف الشهود المنظمين عبر `TransferGadgetPlan`، ويقوم `trace::build_trace` بإدخال هؤلاء الشهود في `Trace::transfer_witnesses` أثناء تعبئة أعمدة SMT من البروفات. يلتقط `fastpq_row_bench` مجموعة أدوات الانحدار المكونة من 65536 صفًا حتى يتمكن المخططون من تتبع استخدام الصف دون إعادة تشغيل Norito الحمولات.[الصناديق/fastpq_prover/src/gadgets/transfer.rs:1] 【الصناديق/fastpq_prover/src/trace.rs:1】[الصناديق/fastpq_prover/src/bin/fastpq_row_bench.rs:1]
+3. **TF-3 (مساعد الدفعة)**: قم بتمكين منشئ syscall + Kotodama، بما في ذلك التطبيق المتسلسل على مستوى المضيف وحلقة الأداة الذكية.
+4. **TF-4 (القياس عن بعد والمستندات)**: قم بتحديث مخططات `fastpq_plan.md` و`fastpq_migration_guide.md` ولوحة المعلومات للتخصيص السطحي لصفوف النقل مقابل الأدوات الذكية الأخرى.
 
-1. **TF-1 (Transcript plumbing)**: ✅ `StateTransaction::record_transfer_transcripts` now emits Norito transcripts for every `TransferAsset`/batch, `sumeragi::witness::record_fastpq_transcript` stores them inside the global witness, and `StateBlock::capture_exec_witness` builds `fastpq_batches` with explicit `public_inputs` for operators and the prover lane (use `--no-fastpq-batches` if you need a slimmer output).【crates/iroha_core/src/state.rs:8801】【crates/iroha_core/src/sumeragi/witness.rs:280】【crates/iroha_core/src/fastpq/mod.rs:157】【crates/iroha_cli/src/audit.rs:185】
-2. **TF-2 (Gadget implementation)**: ✅ `gadgets::transfer` now validates multi-delta transcripts (balance arithmetic + Poseidon digest), synthesises paired SMT proofs when hosts omit them, exposes structured witnesses via `TransferGadgetPlan`, and `trace::build_trace` threads those witnesses into `Trace::transfer_witnesses` while populating SMT columns from the proofs. `fastpq_row_bench` captures the 65 536-row regression harness so planners track row usage without replaying Norito payloads.【crates/fastpq_prover/src/gadgets/transfer.rs:1】【crates/fastpq_prover/src/trace.rs:1】【crates/fastpq_prover/src/bin/fastpq_row_bench.rs:1】
-3. **TF-3 (Batch helper)**: Enable the batch syscall + Kotodama builder, including host-level sequential application and gadget loop.
-4. **TF-4 (Telemetry & docs)**: Update `fastpq_plan.md`, `fastpq_migration_guide.md`, and dashboard schemas to surface allocation of transfer rows vs other gadgets.
+# أسئلة مفتوحة
 
-# Open Questions
-
-- **Domain limits**: current FFT planner panics for traces beyond 2¹⁴ rows. TF-2 should either raise the domain size or document a reduced benchmark target.
-- **Multi-asset batches**: initial gadget assumes the same asset ID per delta. If we need heterogeneous batches, we must ensure the Poseidon witness includes the asset each time to prevent cross-asset replay.
-- **Authority digest reuse**: long term we can reuse the same digest for other permissioned operations to avoid recomputing signer lists per syscall.
+- **حدود النطاق**: ذعر مخطط FFT الحالي للتتبعات التي تتجاوز صفين¹⁴. يجب أن يقوم فريق TF-2 إما برفع حجم النطاق أو توثيق هدف مرجعي مخفض.
+- **دفعات متعددة الأصول**: تفترض الأداة الأولية نفس معرف الأصل لكل دلتا. إذا كنا بحاجة إلى دفعات غير متجانسة، فيجب علينا التأكد من أن شاهد Poseidon يتضمن الأصل في كل مرة لمنع إعادة العرض عبر الأصول.
+- **إعادة استخدام ملخص السلطة**: يمكننا على المدى الطويل إعادة استخدام نفس الملخص للعمليات الأخرى المسموح بها لتجنب إعادة حساب قوائم الموقعين لكل مكالمة نظام.
 
 
-This document tracks design decisions; keep it in sync with roadmap entries when milestones land.
+تتتبع هذه الوثيقة قرارات التصميم؛ اجعلها متزامنة مع إدخالات خريطة الطريق عندما تصل المعالم.

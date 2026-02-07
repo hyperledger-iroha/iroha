@@ -6,32 +6,33 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 6feb2b03bd8f6a41de693a0c3f3c4ffc058072bc7942e2bc50b3fd9770aa56d4
 source_last_modified: "2026-01-03T18:08:01.368173+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Genesis Bootstrap from Trusted Peers
+قابل اعتماد ساتھیوں سے # جینیس بوٹسٹریپ
 
-Iroha peers without a local `genesis.file` can fetch a signed genesis block from trusted peers
-using the Norito-encoded bootstrap protocol.
+Iroha مقامی `genesis.file` کے بغیر ہم خیال افراد قابل اعتماد ساتھیوں سے دستخط شدہ جینیس بلاک لاسکتے ہیں
+Norito-encoded بوٹسٹریپ پروٹوکول کا استعمال کرتے ہوئے۔
 
-- **Protocol:** peers exchange `GenesisRequest` (`Preflight` for metadata, `Fetch` for payload) and
-  `GenesisResponse` frames keyed by `request_id`. Responders include the chain id, signer pubkey,
-  hash, and an optional size hint; payloads are returned only on `Fetch`, and duplicate request ids
-  receive `DuplicateRequest`.
-- **Guards:** responders enforce an allowlist (`genesis.bootstrap_allowlist` or the trusted peers
-  set), chain-id/pubkey/hash matching, rate limits (`genesis.bootstrap_response_throttle`), and a
-  size cap (`genesis.bootstrap_max_bytes`). Requests outside the allowlist receive `NotAllowed`, and
-  payloads signed by the wrong key receive `MismatchedPubkey`.
-- **Requester flow:** when storage is empty and `genesis.file` is unset (and
-  `genesis.bootstrap_enabled=true`), the node preflights trusted peers with the optional
-  `genesis.expected_hash`, then fetches the payload, validates signatures via `validate_genesis_block`,
-  and persists `genesis.bootstrap.nrt` alongside Kura before applying the block. Bootstrap retries
-  honor `genesis.bootstrap_request_timeout`, `genesis.bootstrap_retry_interval`, and
-  `genesis.bootstrap_max_attempts`.
-- **Failure modes:** requests are rejected for allowlist misses, chain/pubkey/hash mismatches, size
-  cap violations, rate limits, missing local genesis, or duplicate request ids. Conflicting hashes
-  across peers abort the fetch; no responders/timeouts fall back to local configuration.
-- **Operator steps:** ensure at least one trusted peer is reachable with a valid genesis, configure
-  `bootstrap_allowlist`/`bootstrap_max_bytes`/`bootstrap_response_throttle` and the retry knobs, and
-  optionally pin `expected_hash` to avoid accepting mismatched payloads. Persisted payloads can be
-  reused on subsequent boots by pointing `genesis.file` to `genesis.bootstrap.nrt`.
+۔
+  `GenesisResponse` فریم `request_id` کے ذریعہ کلیدی۔ جواب دہندگان میں چین کی شناخت ، دستخط کنندہ پبکی شامل ہیں ،
+  ہیش ، اور اختیاری سائز کا اشارہ۔ پے لوڈ صرف `Fetch` پر واپس کیے جاتے ہیں ، اور ڈپلیکیٹ درخواست IDs
+  `DuplicateRequest` وصول کریں۔
+- ** گارڈز: ** جواب دہندگان ایک اجازت فہرست (`genesis.bootstrap_allowlist` یا قابل اعتماد ساتھیوں کو نافذ کرتے ہیں
+  سیٹ) ، چین-آئی ڈی/پبکی/ہیش مماثل ، شرح کی حد (`genesis.bootstrap_response_throttle`) ، اور a
+  سائز کیپ (`genesis.bootstrap_max_bytes`)۔ اجازت کی فہرست سے باہر کی درخواستیں `NotAllowed` وصول کرتی ہیں ، اور
+  غلط کلید کے ذریعہ دستخط شدہ پے لوڈ `MismatchedPubkey` وصول کریں۔
+- ** مطلوبہ بہاؤ: ** جب اسٹوریج خالی ہو اور `genesis.file` غیر سیٹ ہو (اور
+  `genesis.bootstrap_enabled=true`) ، نوڈ اختیاری کے ساتھ قابل اعتماد ساتھیوں کو پیش کرتا ہے
+  `genesis.expected_hash` ، پھر پے لوڈ کو لاتا ہے ، `validate_genesis_block` کے ذریعے دستخطوں کی توثیق کرتا ہے ،
+  اور بلاک لگانے سے پہلے کورا کے ساتھ ساتھ `genesis.bootstrap.nrt` بھی برقرار رہتا ہے۔ بوٹسٹریپ دوبارہ کوشش کرتا ہے
+  اعزاز `genesis.bootstrap_request_timeout` ، `genesis.bootstrap_retry_interval` ، اور
+  `genesis.bootstrap_max_attempts`۔
+- ** ناکامی کے طریقوں: ** اجازت دی گئی لسٹ لسٹ مسز ، چین/پبکی/ہیش مماثل ، سائز
+  CAP کی خلاف ورزی ، شرح کی حدود ، مقامی پیدائش سے محروم ، یا ڈپلیکیٹ درخواست IDs۔ متضاد ہیش
+  ساتھیوں کے پار بازیافت کا خاتمہ ؛ کوئی جواب دہندگان/ٹائم آؤٹ مقامی ترتیب میں واپس نہیں آتا ہے۔
+- ** آپریٹر اقدامات: ** یقینی بنائیں کہ کم از کم ایک قابل اعتماد ہم مرتبہ ایک درست جینیسس ، تشکیل کے ساتھ قابل رسائ ہے
+  `bootstrap_allowlist`/`bootstrap_max_bytes`/`bootstrap_response_throttle` اور دوبارہ کوشش کرنا ، اور
+  مماثل پے لوڈ کو قبول کرنے سے بچنے کے لئے اختیاری طور پر `expected_hash` کو پن کریں۔ مستقل پے لوڈ ہوسکتا ہے
+  `genesis.file` کو `genesis.bootstrap.nrt` کی طرف اشارہ کرکے بعد کے جوتے پر دوبارہ استعمال کیا گیا۔

@@ -11,188 +11,187 @@
 #+TITLE: On selecting versions as LTS candidates
 #+AUTHOR: Aleksandr Petrosyan
 #+DATE: 12-08-2023
-* About
+#+TRANSLATOR: machine-google-reviewed
 
-In the interest of preserving the engineering resources, it is in our
-interests to limit the scope of post-release support. If one has
-several versions of Iroha running in parallel, they might need to
-replicate the support work as many times as there are parallel
-versions.
+#+TITLE: On selecting versions as LTS candidates
+#+AUTHOR: Aleksandr Petrosyan
+#+DATE: 12-08-2023
+* Турала
 
-Instead of attempting to support multiple versions badly, we try to
-cater to 80% of use cases with 20% of the effort and reach a
-compromise between supporting every released version equally and only
-supporting the latest stable version.
+Инженер ресурстарын һаҡлау мәнфәғәтендә, ул беҙҙең .
+ҡыҙыҡһыныуҙары сикләү өсөн даирәһен пост-релиз ярҙам. Әгәр ҙә берәүһе бар икән .
+бер нисә версияһы Iroha параллель эшләй, улар кәрәк булыуы мөмкин
+терәк эшен ҡабат параллель булған кеүек күп тапҡыр ҡабатлай
+версиялары.
 
-Specifically, we support the latest =stable= release. Often this
-release is either not as well-tested, well-documented, or
-well-supported by the SDKs, in addition to often changing in terms of
-thus have a monthly release cadence and one release per year is chosen
-to be the target of long-term support and development.
+Бер нисә версияны насар ярҙам итергә тырышыу урынына, беҙ тырышабыҙ
+80% ҡулланыу осраҡтары 20% тырышлыҡ һәм етергә
+компромисс араһында ярҙам итеү һәр сығарылған версия тигеҙ һәм тик
+һуңғы тотороҡло версияһын яҡлау.
 
-* LTS selection criteria
+Атап әйткәндә, беҙ һуңғы =stable= релизын хуплайбыҙ. Йыш ҡына был
+сығарыу йәки шул тиклем яҡшы һыналған, яҡшы документлаштырылған, йәки
+яҡшы ярҙам SDKs, өҫтәүенә, йыш ҡына үҙгәртеү йәһәтенән .
+шулай итеп, ай һайын сығарыу каденцияһы һәм йылына бер сығарыу һайлана
+оҙайлы ярҙам һәм үҫеш маҡсаты булып тора.
 
-The following is a non-exhaustive list of recommended considerations
-for selecting a particular version as an LTS candidate
+* ЛТС һайлау критерийҙары
 
-1. The release should be /unlikely/ to contain major /known/ issues which
-   would preclude it from being useful.
+Түбәндәге тәҡдим ителгән ҡараштар исемлегенең ныҡлы булмаған исемлеге .
+айырым версияны һайлау өсөн ЛТС кандидаты булараҡ
 
-   More specifically, the release should have a good coverage of a
-   basic use-case, for example, (Pre-)RC-6[fn:1] was the last release which
-   contained the old consensus engine. Given that the actor-based
-   consensus had a maximum stable throughput of 10 TPS, (Pre-)RC-6 was
-   not labelled as an LTS, despite being used as one.
+1. Релиз булырға тейеш /ихтимал түгел/ ҙур /билдәле/ мәсьәләләрҙе үҙ эсенә ала, улар
+   уны файҙалы булыуҙан тыйыр ине.
 
-   RC-9 contained all the necessary features for running an Iroha node
-   on the new consensus, some changes to the structure of the
-   configuration and a few fixes to the =p2p= subsystem. It could have
-   filled all the possible niches of any projects based on Iroha, and
-   as such it was labelled as an LTS release despite being less-well
-   tested.
+   Атап әйткәндә, релиз яҡшы яҡтыртыу тейеш а
+   төп ҡулланыу-осраҡ, мәҫәлән, (Пре-)РК-6[fn:1] һуңғы релиз булды, улар
+   иҫке консенсус двигателе булған. Шуны иҫәпкә алып, актер-нигеҙендә
+   консенсус максималь тотороҡло үткәреүсәнлеге 10 ТПС, (Пре-)РК-6 булды
+   тип маркировка түгел, тип LTS, ҡарамаҫтан, бер ҡулланыла.
 
-   Releases RC8, RC12, RC13 and RC17 were disqualified based on this
-   criterion.
+   RC-9 Iroha төйөнһөн эшләү өсөн бөтә кәрәкле функцияларҙы үҙ эсенә ала.
+   яңы консенсус буйынса ҡайһы бер үҙгәрештәр структураһына
+   конфигурация һәм бер нисә төҙәтеүҙәр =p2p= подсистемаһы. Ул була ала
+   Iroha нигеҙендә теләһә ниндәй проекттарҙағы мөмкин булған бөтә нишаларҙы тултырҙы, ә
+   шундай булараҡ, ул LTS релиз тип маркировкаланған, ҡарамаҫтан, аҙ-яҡшы
+   һыналған.
 
-2. If there is a large feature that entails an API breakage, the
-   release that has the most stable version of the "old way of doing
-   things" should be prioritised as an LTS candidate.
+   RC8, RC12, RC13 һәм RC17 сығарыу был нигеҙендә дисквалификацияланған
+   критерийы.
 
-   For example, RC12 and RC13, were the last versions of Iroha that
-   still used a hard-coded permission validator. Them being labelled
-   as an LTS candidate was precluded by the major known issues,
-   particularly with stability, poor coverage, and because releasing
-   an LTS after RC9 would have split the development resources off
-   from fixing the issue of rigid un-modifiable permission validators.
+2. Әгәр ҙур функция бар, тип үҙ эсенә ала API өҙөлгән, был
+   релиз, тип иң тотороҡло версияһы бар "иҫке ысул менән эшләү
+   әйберҙәр" ЛТС кандидаты булараҡ өҫтөнлөклө булырға тейеш.
 
-   RC14 and RC15 on the other hand, were in the process of a slow
-   migration of features. As such, the latter versions would be
-   considered direct upgrades over the previous one, having more
-   optimisations and better feature coverage.
+   Мәҫәлән, RC12 һәм RC13, Iroha-тың һуңғы версиялары булды, тип
+   һаман да ҡаты кодлы рөхсәт валитаторы ҡулланған. Уларҙы тамғалау
+   тип аталған ЛТС кандидаты булараҡ, ҙур билдәле мәсьәләләр тыйылған,
+   бигерәк тә тотороҡлолоҡ, насар яҡтыртыу һәм сөнки сығарыу
+   RC9 һуң LTS үҫеш ресурстарын бүлергә ине
+   ҡаты мәсьәләне хәл итеүҙән ҡаты булмаған үҙгәртелмәгән рөхсәт валидаторҙары.
 
-3. The release must be feature complete for a use-case.
+   RC14 һәм RC15, икенсе яҡтан, яй процесында булды .
+   үҙенсәлектәрҙең күсеүе. Шулай итеп, һуңғы версиялар булыр ине
+   туранан-тура яңыртыуҙы ҡараған, был алдағыһы өҫтөндә, күберәк булған
+   оптимизациялар һәм яҡшыраҡ функциялар яҡтыртыу.
 
-   This is different to point 1, because while RC10 and RC13 were free
-   from major problems, they did not offer sufficiently full coverage
-   of the features required for the major project stakeholders.
+3. Релиз тейеш функцияһы тулы өсөн ҡулланыу-осраҡ.Был 1-се нөктәгә айырыла, сөнки RC10 һәм RC13 бушлай булһа ла,
+   ҙур проблемаларҙан, улар етерлек тулы яҡтыртыу тәҡдим итмәне
+   ҙур проект ҡатнашыусылары өсөн кәрәкле функцияларҙан.
 
-4. The release must be supported by all SDKs.
+4. Релиз бөтә СДК-лар ярҙамында ла ярҙам итергә тейеш.
 
-   While the support in Iroha Python is largely confined to LTS
-   candidates, creating a catch 22 situation, it is an exception. The
-   two other major SDKs, namely Kotlin, and TypeScript must support
-   the LTS candidate. If the SDK cannot be made to support the
-   candidate, the candidate release is disqualified.
+   Әммә ярҙам Iroha Python күп осраҡта LTS менән сикләнгән .
+   кандидаттар, тотоу 22 хәл булдырыу, был айырма. 1990 й.
+   тағы ике ҙур SDK, атап әйткәндә, Котлин, һәм TypeScript ярҙам итергә тейеш
+   ЛТС кандидаты. Әгәр SDK эшләй алмай, тип раҫлау өсөн
+   кандидат, кандидат сығарыу дисквалификациялана.
 
-5. The release must be well-tested.
+5. Релиз яҡшы һыналған булырға тейеш.
 
-   This point supplements point 1, in that lack of known features
-   coupled with bad test coverage does not, in fact, mean freedom from
-   major problems.
+   Был нөктә 1-се нөктәне тулыландыра, был билдәле үҙенсәлектәрҙең булмауында
+   насар һынау ҡаплау менән бергә түгел, ысынында, тигәнде аңлата азатлыҡ .
+   ҙур проблемалар.
 
-   This generally applies to all releases after RC6 and until RC17, as
-   the development team was told of a way of restructuring the
-   integration tests, but the process only ended with RC17 and the
-   introduction of the =pytest= framework.
+   Был, ғөмүмән, бөтә релиздарға ҡағыла RC6 һәм тиклем RC17, тип
+   үҫеш командаһына үҙгәртеп ҡороу юлы тураһында һөйләнеләр
+   интеграция һынауҙары, әммә процесы тик RC17 һәм .
+   =pytest= рамкаһын индереү.
 
-   While passing integration tests is necessary it is not sufficient,
-   the following minimal testing is required to qualify a release as
-   an LTS candidate
+   Интеграция һынауҙары үткәреү кәрәк булһа ла, ул етерлек түгел,
+   түбәндәге минималь һынау кәрәк, тип квалификациялы релиз кеүек
+   ЛТС кандидаты
 
-   1. Unit and Integration testing. One must take care to run all
-      integration tests, including the long and flaky ones. If tests
-      are unusually flaky that is indicative of a problem, and the
-      release should be disqualified (see [[../../flakyness.org]]).
+   1. Берәмек һәм интеграция һынау. Бер ҡайғыртыу өсөн бөтә йүгерергә
+      интеграция һынауҙары, шул иҫәптән оҙон һәм ҡойроҡлолар. Әгәр ҙә һынауҙар .
+      ғәҙәттән тыш ҡойроҡ, тип күрһәтә, проблема, һәм был
+      сығарыу дисквалификацияланырға тейеш (ҡара: [[../../flakyness.org]]).
 
-   2. =pytest= tests, which technically qualify as integration
-      tests.
+   2. =pytest= һынауҙары, улар техник яҡтан интеграция булараҡ квалификациялы
+      һынауҙары.
 
-   3. Longevity testing. The candidate must be tested for at least two
-      weeks to qualify. If the candidate is accepted as an LTS, the
-      longevity testing should be conducted for at least four weeks.
+   3. Оҙайлы ғүмер һынауы. Кандидат һынау үтергә тейеш, кәмендә ике .
+      аҙна квалификацияһы өсөн. Әгәр кандидат ЛТС булараҡ ҡабул ителә, тип
+      оҙайлы ғүмерле һынауҙар үткәрергә кәрәк, кәмендә дүрт аҙна.
 
-   4. Load testing. The LTS candidate must satisfy all of the criteria
-      set out by the QA team as operational and developmental
-      requirements under load (also known as extra-functional, and
-      mistakenly as non-functional). Failure to produce blocks in a
-      timely fashion is an automatic disqualification. Other
-      disqualifying criteria are left up to the discretion of the QA
-      team.
+   4. Йөк һынау. ЛТС кандидаты бөтә критерийҙарҙы ҡәнәғәтләндерергә тейеш .
+      оператив һәм үҫеш булараҡ QA командаһы тарафынан билдәләнгән
+      йөк аҫтында талаптар (шулай уҡ тыш функциональ тип атала, һәм
+      яңылыш функциональ булмаған тип атала). Блоктар етештерә алмауҙа
+      ваҡытында мода автоматик дисквалификация. Икенсе
+      дисквалификациялау критерийҙары QA ҡарары буйынса ҡалдырыла
+      команда.
 
-   5. It must be deployed as a =development= container in at least one
-      project for at least two weeks, with no major problems. RC9 did
-      not pass this test and would have been disqualified with the
-      updated criteria listed in the present document.
+   5. Ул =development= контейнеры булараҡ, кәмендә бер .
+      проекты кәмендә ике аҙна, ҙур проблемалар юҡ. RC9 эшләне
+      был һынауҙы үтмәй һәм дисквалификацияланған булыр ине, тип
+      яңыртылған критерийҙар хәҙерге документта күрһәтелгән.
 
-6. The release must be well-documented.
+6. Релиз яҡшы документлаштырылған булырға тейеш.
 
-   It should not contain multiple new features that lack
-   documentation. Any shortfall in terms of documentation coverage
-   must be fixable within the time-frame of at most the release window
-   for the candidate. Failure to do so is an automatic disqualification.
+   Ул тейеш түгел, бер нисә яңы функциялары, улар етешмәй
+   документацияһы. Документацияны яҡтыртыу йәһәтенән ниндәй ҙә булһа етешһеҙлек
+   тейеш, тип, ваҡыт эсендә фиксироваться-кадрында күпселек сығарыу тәҙрәһе
+   кандидат өсөн. Быны эшләмәү – автоматик дисквалификация.
 
-In addition to the regular release procedure outlined in
-[[release_procedure.org]], the LTS must adhere to the following additional
-steps.
+Бынан тыш, даими сығарыу процедураһы 2012 йылда һүрәтләнгән.
+[[release_procedure.org]], ЛТС түбәндәге өҫтәмәләрҙе үтәргә тейеш
+аҙымдар./өҫтәү/ даими рәүештә сығарыу өсөн башҡарыу, айырым PR менән
+=[release]: <semver> LTS= риүәйәте ҡайҙа =<semver>= семантик
+версияһы кодтың үҫеш тармағынан булдырылырға тейеш. 1990 й.
+даими тикшерелгән исемлектән ҡасып китергә кәрәк, ә уның урынына тартылыу үтенесе булырға тейеш
+ҡарап һәм шул уҡ кадрҙар, тип ҡарап һәм раҫланы
+Iroha релиз. Күпселек ике отзыв кәрәк, тип тәьмин итеү өсөн, бөтә
+үҙгәрештәр дөрөҫ тәртиптә үтәсәк һәм был юҡ
+документһыҙ мәсьәләләр аша тайпылды.
 
-In /addition/ to performing a regular release, a separate PR with the
-title =[release]: <semver> LTS= where =<semver>= is the semantic
-version of the code from the development branch must be created. The
-regular checklist must be eschewed, and instead the Pull Request must
-be reviewed by the same personnel that reviewed and approved the
-=stable= release. At most two reviews are needed, to ensure that all
-the changes will take place in the correct order and that no
-undocumented issues slipped through.
+Бер тапҡыр LTS сығарыу эшләнә, CI етештерәсәк docker контейнер .
+Alpine Linux платформаһында һәм Ubuntu Linux-та LTS релизы менән,
+платформа-тыуған версияһын ҡулланып, =glibc=. CI шулай уҡ етештерергә тейеш
+бөтә ярҙам пакеттар, һәм уларҙы үҙҙәренең тейешле .
+һаҡлағыстар. Тимәк, мәҫәлән, AUR пакеты яңыртыла
+тартыу запросы берләштерелгәндән һуң һәм дөрөҫ пакет етештерә. 1990 й.
+GitHub релиз битендә айырым релиз менән тултырырға кәрәк, тип аталған
+ЛТС һәм бер файл =AppImage=. Был релиздар тейеш
+айырым пакеттар булып килә, улар менән бергә ҡуйылмаған тип билдәләнгән
+тотороҡло версия.
 
-Once the LTS release is made, the CI will produce a docker container
-with the LTS release on the Alpine Linux platform and on Ubuntu Linux,
-using the platform-native version of =glibc=. The CI must also produce
-all of the supported packages, and publish them to their respective
-repositories. This means, for example, that the AUR package is updated
-after the pull request is merged and produces the correct package. The
-GitHub release page must be populated with a separate release entitled
-LTS and containing the single-file =AppImage=. These releases must
-come as separate packages that are marked as not installable alongside the
-stable version.
+* Арҡа-портлау сәйәсәте
 
-* Back-porting policy
+Ғөмүмән, кире-портлау инә LTS күңелһеҙ. Түбәндәге
+кире портлау сәбәптәре ҡабул итеүгә яраҡлы тип иҫәпләнә:
+1. Iroha API-ға бәйләнмәгән өҫтәмә, мәҫәлән. генерал .
+   ярҙамсы инструмент һәм/йәки документация.
+2. Ҙур хәүефһеҙлек һиҙгерлеген төҙәтеү.
+3. Ҙур хатаны төҙәтеү.
+4. Төп дизайн күҙәтеүен төҙәтеү, был ҡулланыуҙы тыя, был шартта, тип
+   төп ҡатнашыусылар/ҡулланыусылар хәҙерге ЛТС телдән бар
+   сертификатлы, тип, кире порт өҫтөнлөклө хәл итеү.
 
-Generally, back-porting into the LTS is discouraged. The following
-back-porting reasons are considered acceptable:
-1. Addition that is not tied to the Iroha API, like e.g. a general
-   helper tool and/or documentation.
-2. Fixing a major security vulnerability.
-3. Fixing a major bug.
-4. Fixing a major design oversight that precludes usage, provided that
-   the key stakeholders/users of the current LTS have verbally
-   certified that a backport is a preferable solution.
+Арҡа-порттар шул уҡ каналдар аша иғлан ителергә тейеш, тип релиз
+үҙе. Кәрәкле үҙгәрештәр тейеш, тип ярлыҡланған, тип, икеһе лә кире портировать
+өҫкө ағымда улар нығытылған һәм версияһы, унда
+улар кире портированный булған.
 
-Back-ports must be announced through the same channels, as the release
-itself. Required changes must be labelled as backported in both the
-upstream release in which they were fixed and the version into which
-they have been back-ported.
+Иғлан аңлатырға тейеш
+1. Ни өсөн кире порт һайланған (ҡара: сәбәптәр буйынса)
+2. Ҡайтып порттың ниндәй йоғонтоһо булырға тейеш
+3. Функциональ, интеграция һәм
+   йөк/оҙайлы ғүмер һынау.
 
-The announcement must explain
-1. Why the backport was chosen (see above reasons)
-2. What the impact of the backport must be
-3. What is the current status of functional, integration and
-   load/longevity testing.
+* Ҡулланыу мөмкинлеге
 
-* Applicability
+LTS/стабиль релиз сәйәсәте ҡабаттан ҡарарға тейеш, тиҙ генә беренсе булып .
+Iroha-тың функция-тулы версияһы иғлан ителә (v2.0.0). Башҡа юҡ, тип иҫәпкә алып
+әүҙем үҫеш, төп үҫеш командаһы мөмкин (һәм тейеш) мөмкин
+диверсинг версияларының ярҙамына күберәк иғтибар йүнәлтергә.
 
-The LTS/stable release policy should be revised as soon as the first
-feature-complete version of Iroha is announced (v2.0.0). Given no more
-active development, the core development team can (and should) be able
-to focus more on the support of the diverging versions.
-
-* Footnotes
-
-[fn:1] The naming convention was stabilised long before any plan to
-release a version of Iroha was made.  As such calling any version of
-Iroha a release candidate has some implications.  Calling them pre
-release candidates is a similar type of misnomer, but less egregious,
-because rather than a misapplication of an existing term, this is an
-invention of a term that /could/ have subtle differences from a
-release candidate.  In reality these should have been called
-*development snapshots*.  But in order not to break continuity too
-much with the existing SDKs a compromise was chosen.
+* Һүрәткә иҫкәрмәләр .[fn:1] Исем ҡушыу конвенцияһы тотороҡландырылған күптән ниндәй ҙә булһа планға тиклем .
+Iroha версияһын сығарыу эшләнгән.  Шулай итеп, теләһә ниндәй версия тип атау .
+Iroha релиз кандидаты ҡайһы бер эҙемтәләргә килтерә.  Уларҙы алдан атау алдынан
+релиз кандидаттар оҡшаш типтағы дөрөҫ булмаған исем, әммә аҙыраҡ эгрегиоз,
+сөнки ғәмәлдәге терминды дөрөҫ ҡулланмау урынына, был
+уйлап табыу термины, тип /мөмкин/ мөмкин нескә айырмалар а.
+релиз кандидат.  Ысынбарлыҡта был тип аталған булырға тейеш ине .
+*үҫеш снимоктары*.  Әммә өҙлөкһөҙлөктө лә өҙөү өсөн
+күп нәмә менән булған SDKs компромисс һайланды.

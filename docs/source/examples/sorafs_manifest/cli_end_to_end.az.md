@@ -8,25 +8,26 @@ source_hash: a8209e602132efb6c29962bf09aea8cd74f972fa956ea8a7a1dbac08a7f6f00f
 source_last_modified: "2026-01-05T09:28:12.006380+00:00"
 translation_last_reviewed: 2026-02-07
 title: "SoraFS Manifest CLI End-to-End Example"
+translator: machine-google-reviewed
 ---
 
-# SoraFS Manifest CLI End-to-End Example
+# SoraFS Manifest CLI Başdan-Uca Nümunə
 
-This example walks through publishing a documentation build to SoraFS using the
-`sorafs_manifest_stub` CLI together with the deterministic chunking fixtures
-described in the SoraFS Architecture RFC. The flow covers manifest generation,
-expectation checks, fetch-plan validation, and proof-of-retrieval rehearsal so
-teams can embed the same steps in CI.
+Bu misal istifadə edərək SoraFS-ə sənədləşmənin dərc edilməsini göstərir.
+`sorafs_manifest_stub` CLI deterministik parçalanma qurğuları ilə birlikdə
+SoraFS Arxitektura RFC-də təsvir edilmişdir. Axın açıq-aşkar nəsli əhatə edir,
+gözləntilərin yoxlanılması, planın təsdiqlənməsi və axtarışın sübutu üçün sınaq
+komandalar eyni addımları CI-də yerləşdirə bilər.
 
-## Prerequisites
+## İlkin şərtlər
 
-- Workspace cloned and toolchain ready (`cargo`, `rustc`).
-- Fixtures from `fixtures/sorafs_chunker` available so expectation values can be
-  derived (for production runs, pull the values from the migration ledger entry
-  associated with the artifact).
-- Sample payload directory to publish (this example uses `docs/book`).
+- İş sahəsi klonlanmış və alətlər silsiləsi hazırdır (`cargo`, `rustc`).
+- `fixtures/sorafs_chunker`-dən armaturlar mövcuddur, beləliklə gözlənilən dəyərlər ola bilər
+  əldə edilmişdir (istehsal əməliyyatları üçün miqrasiya kitabçası girişindən dəyərləri çəkin
+  artefaktla əlaqələndirilir).
+- Dərc etmək üçün nümunə yükü kataloqu (bu nümunə `docs/book` istifadə edir).
 
-## Step 1 — Generate manifest, CAR, signatures, and fetch plan
+## Addım 1 — Manifest, CAR, imzalar yaradın və plan gətirin
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
@@ -41,15 +42,15 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
   --chunker-profile=sorafs.sf1@1.0.0
 ```
 
-The command:
+Əmr:
 
-- Streams the payload through `ChunkProfile::DEFAULT`.
-- Emits a CARv2 archive plus chunk-fetch plan.
-- Builds a `ManifestV1` record, verifies manifest signatures (if provided), and
-  writes the envelope.
-- Enforces expectation flags so the run fails if bytes drift.
+- `ChunkProfile::DEFAULT` vasitəsilə faydalı yükü ötürür.
+- CARv2 arxivi üstəgəl yığın gətirmə planı verir.
+- `ManifestV1` qeydini qurur, açıq imzaları yoxlayır (əgər təmin edilirsə) və
+  zərfi yazır.
+- Gözləmə bayraqlarını tətbiq edir ki, baytların sürüşməsi halında qaçış uğursuz olsun.
 
-## Step 2 — Verify outputs with chunk store + PoR rehearsal
+## Addım 2 — Çıxışları yığın mağazası + PoR məşqi ilə yoxlayın
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
@@ -59,11 +60,11 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   --por-json-out target/sorafs/docs.por.json
 ```
 
-This replays the CAR through the deterministic chunk store, derives the
-Proof-of-Retrievability sampling tree, and emits a manifest report suitable for
-governance review.
+Bu, deterministik yığın mağazası vasitəsilə CAR-ı təkrarlayır, əldə edir
+Proof-of-Retrievability nümunə ağacı və uyğun açıq hesabat yayır
+idarəetmənin nəzərdən keçirilməsi.
 
-## Step 3 — Simulate multi-provider retrieval
+## Addım 3 — Çox provayder axtarışını simulyasiya edin
 
 ```bash
 cargo run -p sorafs_car --bin sorafs_fetch -- \
@@ -73,21 +74,21 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
   --json-out=target/sorafs/docs.fetch_report.json
 ```
 
-For CI environments, provide separate payload paths per provider (e.g., mounted
-fixtures) to exercise range scheduling and failure handling.
+CI mühitləri üçün hər provayder üçün ayrı yük yolları təmin edin (məsələn, quraşdırılmış
+qurğular) diapazonun planlaşdırılması və nasazlıqların aradan qaldırılması üçün məşq etmək.
 
-## Step 4 — Record ledger entry
+## Addım 4 — Mühasibat dəftərinə girişi qeyd edin
 
-Log the publication in `docs/source/sorafs/migration_ledger.md`, capturing:
+Nəşri `docs/source/sorafs/migration_ledger.md`-də qeyd edin, qeyd edin:
 
-- Manifest CID, CAR digest, and council signature hash.
-- Status (`Draft`, `Staging`, `Pinned`).
-- Links to CI runs or governance tickets.
+- Manifest CID, CAR həzm və şura imza hash.
+- Vəziyyət (`Draft`, `Staging`, `Pinned`).
+- CI yarışlarına və ya idarəetmə biletlərinə keçidlər.
 
-## Step 5 — Pin via governance tooling (when registry is live)
+## Addım 5 — İdarəetmə alətləri vasitəsilə pin edin (reyestr canlı olduqda)
 
-Once the Pin Registry is deployed (Milestone M2 in the migration roadmap),
-submit the manifest through the CLI:
+Pin Qeydiyyatı yerləşdirildikdən sonra (miqrasiya yol xəritəsində Milestone M2),
+CLI vasitəsilə manifest təqdim edin:
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
@@ -102,11 +103,11 @@ cargo run -p sorafs_cli --bin sorafs_pin -- propose \
   --manifest-signatures target/sorafs/docs.manifest_signatures.json
 ```
 
-The proposal identifier and subsequent approval transaction hashes should be
-captured in the migration ledger entry for auditability.
+Təklif identifikatoru və sonrakı təsdiq əməliyyatı hashləri olmalıdır
+yoxlanıla bilməsi üçün miqrasiya kitabçasına daxil edilmişdir.
 
-## Cleanup
+## Təmizləmə
 
-Artifacts under `target/sorafs/` can be archived or uploaded to staging nodes.
-Keep the manifest, signatures, CAR, and fetch plan together so downstream
-operators and SDK teams can validate the deployment deterministically.
+`target/sorafs/` altında olan artefaktlar arxivləşdirilə və ya quruluş qovşaqlarına yüklənə bilər.
+Manifest, imzalar, CAR və gətirmə planını bir yerdə saxlayın
+operatorlar və SDK komandaları yerləşdirməni qəti şəkildə təsdiq edə bilər.

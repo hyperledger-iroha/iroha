@@ -7,51 +7,50 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 788902cfafc6c7db6d52d4237b46ffe78193efd57852bc3427a16d7f3cda2f9c
 source_last_modified: "2025-12-29T18:16:35.954370+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Sparse Merkle Update Example
+# Sparse Merkle шинэчлэлтийн жишээ
 
-This worked example illustrates how the FASTPQ Stage 2 trace encodes a
-non-membership witness using the `neighbour_leaf` column. The sparse Merkle tree
-is binary over Poseidon2 field elements. Keys are converted to canonical
-32-byte little-endian strings, hashed to a field element, and the most
-significant bits select the branch at each level.
+Энэхүү ажилласан жишээ нь FASTPQ 2-р шатны мөрийг хэрхэн кодлодог болохыг харуулж байна
+`neighbour_leaf` баганыг ашиглан гишүүн бус гэрч. сийрэг Мерклийн мод
+нь Poseidon2 талбарын элементүүд дээр хоёртын систем юм. Түлхүүрүүдийг каноник болгон хувиргадаг
+Талбайн элемент рүү хэшлэгдсэн 32 байт бага эндиан мөрүүд ба хамгийн их
+чухал битүүд нь түвшин тус бүрийн салбарыг сонгоно.
 
-## Scenario
+## Хувилбар
 
-- Pre-state leaves
-  - `asset::alice::rose` -> hashed key `0x12b7...` with value `0x0000_0000_0000_0005`.
-  - `asset::bob::rose`   -> hashed key `0x1321...` with value `0x0000_0000_0000_0003`.
-- Update request: insert `asset::carol::rose` with value 2.
-- The canonical key hash for Carol expands to the 5-bit prefix `0b01011`. The
-  existing neighbours have prefixes `0b01010` (Alice) and `0b01101` (Bob).
+- Урьдчилсан төлөв навч
+  - `asset::alice::rose` -> `0x0000_0000_0000_0005` утгатай `0x12b7...` хэшлэгдсэн түлхүүр.
+  - `asset::bob::rose` -> `0x0000_0000_0000_0003` утгатай `0x1321...` хэшлэгдсэн түлхүүр.
+- Шинэчлэх хүсэлт: 2 утгатай `asset::carol::rose` оруулна уу.
+- Каролд зориулсан каноник түлхүүрийн хэш нь 5 битийн `0b01011` угтвар болж өргөждөг. The
+  Одоо байгаа хөршүүд нь `0b01010` (Алис) ба `0b01101` (Боб) угтвартай.
 
-Because there is no leaf whose prefix matches `0b01011`, the prover must provide
-additional evidence that the interval `(alice, bob)` is empty. Stage 2 populates
-the trace row across the columns `path_bit_{level}`, `sibling_{level}`,
-`node_in_{level}`, and `node_out_{level}` (with `level` in `[0, 31]`). All values
-are Poseidon2 field elements encoded in little-endian form:
+Угтвар нь `0b01011`-тэй таарч байгаа хуудас байхгүй тул судлаач үүнийг өгөх ёстой.
+`(alice, bob)` интервал хоосон байгаагийн нэмэлт нотолгоо. 2-р шат нь хүн амтай
+`path_bit_{level}`, `sibling_{level}` баганын дагуух мөр,
+`node_in_{level}`, болон `node_out_{level}` (`level`-тэй `[0, 31]`). Бүх үнэт зүйлс
+Poseidon2 талбарын элементүүд нь жижиг-эндиан хэлбэрээр кодлогдсон:
 
-| level | `path_bit_level` | `sibling_level`             | `node_in_level`                      | `node_out_level`                     | Notes |
-| ----- | ---------------- | --------------------------- | ------------------------------------ | ------------------------------------ | ----- |
-| 0 | 1             | `0x241f...` (Alice leaf hash) | `0x0000...`                          | `0x4b12...` (`value_2 = 2`)          | Insert: start from zero, store new value. |
-| 1 | 1             | `0x7d45...` (empty right)     | Poseidon2(`node_out_0`, `sibling_0`) | Poseidon2(`sibling_1`, `node_out_1`) | Follow prefix bit 1. |
-| 2 | 0             | `0x03ae...` (Bob branch)      | Poseidon2(`node_out_1`, `sibling_1`) | Poseidon2(`node_in_2`, `sibling_2`)  | Branch flips because bit = 0. |
-| 3 | 1             | `0x9bc4...`                   | Poseidon2(`node_out_2`, `sibling_2`) | Poseidon2(`sibling_3`, `node_out_3`) | Higher levels continue hashing upward. |
-| 4 | 0             | `0xe112...`                   | Poseidon2(`node_out_3`, `sibling_3`) | Poseidon2(`node_in_4`, `sibling_4`)  | Root level; result is the post-state root. |
+| түвшин | `path_bit_level` | `sibling_level` | `node_in_level` | `node_out_level` | Тэмдэглэл |
+| ----- | ---------------- | ----------------------------------- | ----------------------------------- | ----------------------------------- | ----- |
+| 0 | 1 | `0x241f...` (Алиса навчны хэш) | `0x0000...` | `0x4b12...` (`value_2 = 2`) | Оруулах: тэгээс эхэлж, шинэ утгыг хадгална. |
+| 1 | 1 | `0x7d45...` (баруун талд хоосон) | Посейдон2(`node_out_0`, `sibling_0`) | Посейдон2(`sibling_1`, `node_out_1`) | Угтвар бит 1-ийг дагаж мөрдөөрэй. |
+| 2 | 0 | `0x03ae...` (Боб салбар) | Посейдон2(`node_out_1`, `sibling_1`) | Посейдон2(`node_in_2`, `sibling_2`) | Бит = 0 учраас салбар эргэлддэг. |
+| 3 | 1 | `0x9bc4...` | Посейдон2(`node_out_2`, `sibling_2`) | Посейдон2(`sibling_3`, `node_out_3`) | Дээд түвшин дээшээ хэшгээ үргэлжлүүлсээр байна. |
+| 4 | 0 | `0xe112...` | Посейдон2(`node_out_3`, `sibling_3`) | Посейдон2(`node_in_4`, `sibling_4`) | Үндэс түвшин; үр дүн нь төлөвийн дараах үндэс юм. |
 
-The `neighbour_leaf` column for this row is populated with Bob's leaf
-(`key = 0x1321...`, `value = 3`, `hash = Poseidon2(key, value) = 0x03ae...`). When
-verifying, the AIR checks that:
+Энэ мөрийн `neighbour_leaf` баганыг Бобын навчаар дүүргэсэн
+(`key = 0x1321...`, `value = 3`, `hash = Poseidon2(key, value) = 0x03ae...`). Хэзээ
+баталгаажуулахын тулд AIR дараахь зүйлийг шалгана.
 
-1. The supplied neighbour corresponds to the sibling used at level 2.
-2. The neighbour key is lexicographically greater than the inserted key and the
-   left sibling (Alice) is lexicographically smaller.
-3. Replacing the inserted leaf with the neighbour reproduces the pre-state root.
-
-Together these checks prove that no leaf existed for the interval `(0b01010,
-0b01101)` before the update. Implementations generating FASTPQ traces can use
-this layout verbatim; the numerical constants above are illustrative. For a full
-JSON witness, emit the columns exactly as they appear in the table above (with
-numeric suffixes per level), using little-endian byte strings serialized with
-Norito JSON helpers.
+1. Нийлүүлсэн хөрш нь 2-р түвшинд хэрэглэгддэг ах дүүтэй тохирч байна.
+2. Хөршийн түлхүүр нь оруулсан түлхүүрээс үг зүйн хувьд том байна
+   зүүн ах (Алис) нь үг хэллэгийн хувьд бага юм.
+3. Оруулсан навчийг хөрштэй нь солих нь өмнөх төлөвийн үндэсийг үржүүлдэг.Эдгээр шалгалтууд нийлээд `(0b01010,
+0b01101)` шинэчлэхээс өмнө. FASTPQ ул мөр үүсгэгч хэрэгжүүлэлтүүдийг ашиглаж болно
+энэ зохион байгуулалт үгчлэн; Дээрх тоон тогтмолууд нь жишээ юм. Бүрэн хэмжээний хувьд
+JSON гэрч ээ, дээрх хүснэгтэд байгаа баганыг яг адилхан ялгаруулна уу (хамт
+түвшин тус бүрийн тоон дагавар), -аар цувуулсан жижиг эндиан байт мөрүүдийг ашиглана
+Norito JSON туслахууд.

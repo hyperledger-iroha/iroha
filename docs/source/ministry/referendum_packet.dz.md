@@ -9,30 +9,31 @@ source_last_modified: "2025-12-29T18:16:35.980526+00:00"
 translation_last_reviewed: 2026-02-07
 title: Referendum Packet Workflow (MINFO-4)
 summary: Produce the complete referendum dossier (`ReferendumPacketV1`) combining the proposal, neutral summary, sortition artefacts, and impact report.
+translator: machine-google-reviewed
 ---
 
-# Referendum Packet Workflow (MINFO-4)
+# རི་ཕེ་ཧྥེ་རེཌ་ པེ་ཀེཊི་ ལཱ་གི་རྒྱུན་རིམ་ (MINFO-4).
 
-Roadmap item **MINFO-4 — In Review panel & referendum synthesizer** is now
-fulfilled by the new `ReferendumPacketV1` Norito schema plus the CLI helpers
-described below. The workflow bundles every artefact required for policy-jury
-votes into a single JSON document so governance, auditors, and transparency
-portals can replay the evidence deterministically.
+ལམ་སྟོན་རྣམ་གྲངས་ **MINFO-4 — བསྐྱར་ཞིབ་ཚོགས་ཆུང་དང་འོས་འཚམ་གྱི་ མཉམ་སྦྱོར་འཕྲུལ་ཆས་ནང་** ད་ལྟོ་འདི་ཨིན།
+`ReferendumPacketV1` Norito འཆར་གཞི་གསརཔ་གིས་ གྲུབ་ཡོདཔ་ཨིན།
+གཤམ་གསལ་གྱི་འགྲེལ་བཤད་ནང་། ལཱ་གི་རྒྱུན་རིམ་འདི་གིས་ སྲིད་བྱུས་ཁྲིམས་དཔོན་གྱི་དོན་ལས་ དགོ་པའི་ ཅ་ཆས་ཚུ་ མཉམ་སྡེབ་འབདཝ་ཨིན།
+ཚོགས་རྒྱན་ཚུ་ རྩིས་ཞིབ་པ་དང་ དྭངས་གསལ་གྱི་ JSON ཡིག་ཆ་ཅིག་ལུ་ ཚོགས་རྒྱན་བཙུགས་ནི།
+དྲྭ་ཚིགས་ཚུ་གིས་ སྒྲུབ་བྱེད་ཚུ་ གཏན་འབེབས་བཟོ་ཚུགས།
 
-## Inputs
+## ཨིན་པུཊི་ཚུ།
 
-1. **Agenda proposal** — same JSON used for `cargo xtask ministry-agenda validate`.
-2. **Volunteer briefs** — the curated dataset produced after linting via
+1. **Agenda གྲོས་འཆར་** — དེ་དང་འདྲ་བར་ `cargo xtask ministry-agenda validate` གི་དོན་ལུ་ལག་ལེན་འཐབ་ཡོདཔ་ཨིན།
+2. **volunteer flues** — བརྒྱུད་དེ་ linking གི་ཤུལ་ལས་ བཏོན་མི་ གནས་སྡུད་ཆ་ཚན་འདི།
    `cargo xtask ministry-transparency volunteer-validate`.
-3. **AI moderation manifest** — governance-signed `ModerationReproManifestV1`.
-4. **Sortition summary** — deterministic artefact emitted by
-   `cargo xtask ministry-agenda sortition`. The JSON follows
-   [`PolicyJurySortitionV1`](./policy_jury_ballots.md) so governance can
-   reproduce the POP snapshot digest and waitlist/failover wiring.
-5. **Impact report** — hash-family/report generated via
+3. **ཚད་གཞིའི་གསལ་སྟོན་** — གཞུང་སྐྱོང་གིས་མིང་རྟགས་བཀོད་ཡོདཔ། `ModerationReproManifestV1`.
+4. **དབྱེ་འབྱེད་བཅུད་དོན།** — གཏན་འབེབས་ཀྱི་ཅ་ལག་བཏོན་ཡོད།
+   `cargo xtask ministry-agenda sortition`. JSON འདི་གཤམ་གསལ་ལྟར།
+   [`PolicyJurySortitionV1`](./policy_jury_ballots.md) དེ་གཞུང་སྐྱོང་ཅན།
+   POP གི་པར་བཞུ་དང་ བསྒུག་ཐོ་/འཐུས་ཤོར་གྱི་གློག་ཐག་འདི་ ལོག་བཏོན་དགོ།
+༥. **གནོད་པའི་སྙན་ཞུ་** — བརྒྱུད་དེ་ ཧེཤ་-བཟའ་ཚང་/སྙན་ཞུ་བཟོ་བཏོན་འབད་ཡོདཔ།
    `cargo xtask ministry-agenda impact`.
 
-## CLI usage
+## ཀླད་ཀོར་ལག་ལེན།
 
 ```bash
 cargo xtask ministry-panel packet \
@@ -46,30 +47,40 @@ cargo xtask ministry-panel packet \
   --output artifacts/ministry/referendum_packets/AC-2026-001.json
 ```
 
-The `packet` subcommand runs the neutral-summary synthesizer (MINFO-4a), reuses
-the existing volunteer fixtures, and enriches the output with:
+`packet` བརྡ་བཀོད་འོག་མ་འདི་གིས་ བར་ལམ་གྱི་བཅུད་བསྡུས་ (MINFO-4a), ལོག་ལག་ལེན་འཐབ་ཨིན།
+ད་ལྟོ་ཡོད་པའི་ཁས་བླངས་པའི་སྒྲིག་བཀོད་ཚུ་གིས་ ཐོན་འབྲས་འདི་ མཐོ་དྲགས་བཟོཝ་ཨིན།
 
-- `ReferendumSortitionEvidence` — algorithm, seed, and roster digests from the
-  sortition artefact.
-- `ReferendumPanelist[]` — each selected council member plus the Merkle proof
-  needed to audit their draw.
-- `ReferendumImpactSummary` — per-hash-family totals and conflict listings from
-  the impact report.
+- `ReferendumSortitionEvidence` — ཨེལ་ཨཱལ་གོ་རི་དམ་དང་ སོན་དང་ རོ་སི་ཊར་ཚུ་ ནང་ལས་ བཞུ་བཅུགཔ་ཨིན།
+  དབྱེ་སེལ་གྱི་ཅ་ཆས།
+- `ReferendumPanelist[]` — གདམ་འཐུ་འབད་མི་ཚོགས་སྡེའི་འཐུས་མི་རེ་རེ་དང་ Merkle བདེན་དཔང་།
+  ཁོང་གི་རི་མོ་རྩིས་ཞིབ་འབད་དགོཔ།
+- `ReferendumImpactSummary` — ཧཤ་བཟའ་ཚང་རེ་ལུ་བསྡོམས་རྩིས་དང་ འཁྲུག་རྩོད་ཀྱི་ཐོ་འགོད་ཚུ།
+  གནོད་སྐྱོན་སྙན་ཞུ།
 
-Use `--summary-out` when you still need the standalone `ReviewPanelSummaryV1`
-file; otherwise the packet embeds the summary under `review_summary`.
+ཁྱོད་ལུ་ད་ལྟོ་ཡང་ རང་དབང་གི་ `ReviewPanelSummaryV1` དགོ་པའི་སྐབས་ `--summary-out` ལག་ལེན་འཐབ།
+ཡིག༌སྣོད; དེ་མེན་པ་ཅིན་ སྦུང་ཚན་འདི་གིས་ `review_summary` གི་འོག་ལུ་ བཅུད་བསྡུས་འདི་བཙུགས་ཡོདཔ་ཨིན།
 
-## Output structure
+## ཐོན་འབྲས་གཞི་བཀོད།
 
-`ReferendumPacketV1` lives in
-`crates/iroha_data_model/src/ministry/mod.rs` and is available across SDKs.
-Key sections include:
+```bash
+cargo xtask ministry-panel packet \
+  --proposal artifacts/ministry/proposals/AC-2026-001.json \
+  --volunteer artifacts/ministry/volunteer_briefs.json \
+  --ai-manifest artifacts/ministry/ai_manifest.json \
+  --panel-round RP-2026-05 \
+  --sortition artifacts/ministry/agenda_sortition_2026Q1.json \
+  --impact artifacts/ministry/impact/AC-2026-001.json \
+  --summary-out artifacts/ministry/review_panel_summary.json \
+  --output artifacts/ministry/referendum_packets/AC-2026-001.json
+``` 2 2013 བར་ན།
+`crates/iroha_data_model/src/ministry/mod.rs` དང་ SDKs ཚུ་ནང་ འཐོབ་ཚུགས།
+ལྡེ་མིག་དབྱེ་ཚན་ཚུ་ནང་།
 
-- `proposal` — the original `AgendaProposalV1` object.
-- `review_summary` — the balanced summary emitted by MINFO-4a.
-- `sortition` / `panelists` — reproducible proofs for the seated council.
-- `impact_summary` — duplicate/policy conflict evidence per hash family.
+- `proposal` — `AgendaProposalV1` དངོས་པོ་ངོ་མ།
+- `review_summary` — MINFO-4a གིས་བཏོན་མི་ འདྲ་མཉམ་གྱི་བཅུད་བསྡུས་འདི་ཨིན།
+- `sortition` / `panelists` — སྡོད་གནས་ཀྱི་ཚོགས་སྡེ་གི་དོན་ལུ་ བསྐྱར་བཟོ་འབད་བཏུབ་པའི་བདེན་ཁུངས་ཚུ།
+- `impact_summary` — ཧ་ཤི་བཟའ་ཚང་རེ་ལུ་ སྲིད་བྱུས་/སྲིད་དོན་གྱི་འཁྲུག་རྩོད་ཀྱི་སྒྲུབ་བྱེད་ཨིན།
 
-See `docs/examples/ministry/referendum_packet_example.json` for a full sample.
-Attach the generated packet to every referendum dossier alongside the signed AI
-manifest and transparency artefacts referenced by the highlights section.
+དཔེ་ཚད་ཆ་ཚང་ཅིག་གི་དོན་ལུ་ `docs/examples/ministry/referendum_packet_example.json` ལུ་བལྟ།
+མཚན་རྟགས་བཀོད་ཡོད་པའི་ཨེ་ཨའི་དང་གཅིག་ཁར་ འོས་འདེམས་ཀྱི་ཡིག་ཆ་ག་ར་ལུ་ བཟོ་བཏོན་འབད་ཡོད་པའི་སྦུང་ཚན་འདི་ མཉམ་སྦྲགས་འབད།
+འོད་རྟགས་དབྱེ་ཚན་གྱིས་ གཞི་བསྟུན་འབད་ཡོད་པའི་ གསལ་སྟོན་དང་ དྭངས་གསལ་ཅན་གྱི་ ཅ་རྙིང་ཚུ།

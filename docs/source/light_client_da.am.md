@@ -7,27 +7,28 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 6561551b6f00fb37b8e41fc5ade61206d7bd9323ab8e089f3dd5d5cfdfc0fd53
 source_last_modified: "2025-12-29T18:16:35.975661+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Light Client Data Availability Sampling
+# ቀላል የደንበኛ ውሂብ ተገኝነት ናሙና
 
-The Light Client Sampling API allows authenticated operators to retrieve
-Merkle-authenticated RBC chunk samples for an in-flight block. Light clients
-can issue random sampling requests, verify the returned proofs against the
-advertised chunk root, and build confidence that data is available without
-fetching the entire payload.
+የብርሃን ደንበኛ ናሙና ኤፒአይ የተረጋገጡ ኦፕሬተሮችን እንዲያነሱ ያስችላቸዋል
+በበረራ ውስጥ ላለ ማገጃ በመርክል የተረጋገጠ የ RBC ቁራጭ ናሙናዎች። ቀላል ደንበኞች
+የዘፈቀደ የናሙና ጥያቄዎችን ማቅረብ ይችላል ፣ የተመለሱትን ማስረጃዎች በ
+ቸንክ ሩት አስተዋውቋል፣ እና ያለሱ ውሂብ እንደሚገኝ እምነት ገንቡ
+ሙሉውን ጭነት በማምጣት ላይ።
 
-## Endpoint
+## የመጨረሻ ነጥብ
 
 ```
 POST /v1/sumeragi/rbc/sample
 ```
 
-The endpoint requires an `X-API-Token` header matching one of the configured
-Torii API tokens. Requests are additionally rate-limited and subject to a daily
-per-caller byte budget; exceeding either returns HTTP 429.
+የመጨረሻው ነጥብ ከተዋቀረው አንዱን የሚዛመድ `X-API-Token` ራስጌ ያስፈልገዋል
+Torii ኤፒአይ ማስመሰያዎች። ጥያቄዎች በተጨማሪ በታሪፍ የተገደቡ እና ለዕለታዊ ተገዢ ናቸው።
+በእያንዳንዱ ደዋይ ባይት በጀት; ከሁለቱም በላይ HTTP 429 ይመልሳል።
 
-### Request Body
+### የጥያቄ አካል
 
 ```json
 {
@@ -39,12 +40,12 @@ per-caller byte budget; exceeding either returns HTTP 429.
 }
 ```
 
-* `block_hash` – target block hash in hex.
-* `height`, `view` – identifying tuple for the RBC session.
-* `count` – desired number of samples (defaults to 1, capped by configuration).
-* `seed` – optional deterministic RNG seed for reproducible sampling.
+* `block_hash` - ዒላማ እገዳ ሃሽ በሄክስ።
+* `height`፣ `view` - ለ RBC ክፍለ ጊዜ ቱፕል መለየት።
+* `count` - የሚፈለጉት የናሙናዎች ብዛት (ነባሪ ወደ 1 ፣ በማዋቀር የተከለለ)።
+* `seed` - አማራጭ የሚወስን RNG ዘር እንደገና ሊባዛ ለሚችል ናሙና።
 
-### Response Body
+### ምላሽ ሰጪ አካል
 
 ```json
 {
@@ -69,29 +70,29 @@ per-caller byte budget; exceeding either returns HTTP 429.
 }
 ```
 
-Each sample entry contains the chunk index, payload bytes (hex), SHA-256 leaf
-digest, and a Merkle inclusion proof (with optional siblings encoded as hex
-strings). Clients can verify proofs using the `chunk_root` field.
+እያንዳንዱ የናሙና ግቤት የ chunk ኢንዴክስ፣ ሎድ ባይት (ሄክስ)፣ SHA-256 ቅጠል ይዟል
+መፈጨት፣ እና የመርክል ማካተት ማረጋገጫ (ከአማራጭ ወንድሞች እና እህቶች ጋር እንደ ሄክስ ኮድ
+ሕብረቁምፊዎች). ደንበኞች የ`chunk_root` መስክን በመጠቀም ማረጋገጫዎችን ማረጋገጥ ይችላሉ።
 
-## Limits and Budgets
+## ገደቦች እና በጀት
 
-* **Max samples per request** – configurable via `torii.rbc_sampling.max_samples_per_request`.
-* **Max bytes per request** – enforced using `torii.rbc_sampling.max_bytes_per_request`.
-* **Daily byte budget** – tracked per caller through `torii.rbc_sampling.daily_byte_budget`.
-* **Rate limiting** – enforced using a dedicated token bucket (`torii.rbc_sampling.rate_per_minute`).
+* ** ከፍተኛ ናሙናዎች በጥያቄ *** - በ `torii.rbc_sampling.max_samples_per_request` በኩል ሊዋቀር ይችላል።
+* ** ከፍተኛ ባይት በጥያቄ *** - `torii.rbc_sampling.max_bytes_per_request` በመጠቀም ተፈጻሚ ነው።
+** ዕለታዊ ባይት በጀት** - በአንድ ደዋይ በ`torii.rbc_sampling.daily_byte_budget` በኩል ክትትል የሚደረግበት።
+** ተመን መገደብ ** - የተወሰነ ማስመሰያ ባልዲ (`torii.rbc_sampling.rate_per_minute`) በመጠቀም ተፈጻሚ ነው።
 
-Requests exceeding any limit return HTTP 429 (CapacityLimit). When the chunk
-store is unavailable or the session is missing payload bytes the endpoint
-returns HTTP 404.
+ከማንኛውም ገደብ ያለፈ ጥያቄዎች HTTP 429 (የአቅም ገደብ) መመለስ። መቼ ቁርጥራጭ
+መደብር አይገኝም ወይም ክፍለ-ጊዜው የሚጫነው ባይት የመጨረሻው ነጥብ ይጎድላል
+HTTP 404 ይመልሳል።
 
-## SDK Integration
+## የኤስዲኬ ውህደት
 
-### JavaScript
+### ጃቫስክሪፕት
 
-`@iroha/iroha-js` exposes the `ToriiClient.sampleRbcChunks` helper so data
-availability verifiers can call the endpoint without rolling their own fetch
-logic. The helper validates the hex payloads, normalises integers, and returns
-typed objects that mirror the response schema above:
+`@iroha/iroha-js` የ`ToriiClient.sampleRbcChunks` ረዳትን ያጋልጣል ስለዚህ መረጃ
+የመገኘት አረጋጋጮች የራሳቸውን ሣያሽከረክሩ የመጨረሻውን ነጥብ መጥራት ይችላሉ።
+አመክንዮ ረዳቱ የሄክስ ጭነቶችን ያረጋግጣል፣ ኢንቲጀሮችን መደበኛ ያደርጋል እና ይመለሳል
+ከላይ ያለውን የምላሽ ንድፍ የሚያንፀባርቁ የተተየቡ ነገሮች፡-
 
 ```js
 import { ToriiClient } from "@iroha/iroha-js";
@@ -117,8 +118,8 @@ for (const { digestHex, proof } of sample.samples) {
 }
 ```
 
-The helper throws when the server returns malformed data, helping JS-04 parity
-tests detect regressions alongside the Rust and Python SDKs. Rust
-(`iroha_client::ToriiClient::sample_rbc_chunks`) and Python
-(`IrohaToriiClient.sample_rbc_chunks`) ship equivalent helpers; use whichever
-matches your sampling harness.
+JS-04 ን በማገዝ አገልጋዩ የተሳሳተ መረጃ ሲመልስ ረዳቱ ይጥላል
+ሙከራዎች ከሩስት እና ፓይዘን ኤስዲኬዎች ጎን ለጎን መመለሻዎችን ይገነዘባሉ። ዝገት
+(`iroha_client::ToriiClient::sample_rbc_chunks`) እና Python
+(`IrohaToriiClient.sample_rbc_chunks`) የመርከብ ተመጣጣኝ ረዳቶች; የትኛውንም ተጠቀም
+ከእርስዎ የናሙና መታጠቂያ ጋር ይዛመዳል።

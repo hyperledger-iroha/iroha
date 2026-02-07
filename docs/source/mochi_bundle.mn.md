@@ -7,47 +7,48 @@ generator: scripts/sync_docs_i18n.py
 source_hash: f2dd292b7d15b449f3cec1b79343387a8c23beef3a163367bd5fa8ced8593aae
 source_last_modified: "2025-12-29T18:16:35.986892+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# MOCHI Bundle Tooling
+# MOCHI багц хэрэгсэл
 
-MOCHI ships with a lightweight packaging workflow so developers can produce a
-portable desktop bundle without wiring bespoke CI scripts. The `xtask`
-subcommand handles compilation, layout, hashing, and (optionally) archive
-creation in one shot.
+MOCHI нь хөнгөн сав баглаа боодлын ажлын урсгалтай тул хөгжүүлэгчид нь
+Захиалгат CI скриптүүдийг холбохгүйгээр зөөврийн ширээний багц. `xtask`
+дэд команд нь эмхэтгэх, зохион байгуулалт, хэшлэх, (заавал биш) архивыг зохицуулдаг
+нэг цохилтоор бүтээх.
 
-## Generating a bundle
+## Багц үүсгэж байна
 
 ```bash
 cargo xtask mochi-bundle
 ```
 
-By default the command builds release binaries, assembles the bundle under
-`target/mochi-bundle/`, and emits a `mochi-<os>-<arch>-release.tar.gz` archive
-alongside a deterministic `manifest.json`. The manifest lists every file with
-its size and SHA-256 hash so CI pipelines can re-run verification or publish
-attestations. The helper ensures both the `mochi` desktop shell and the
-workspace `kagami` binary are present so genesis generation works out of the
-box.
+Анхдагч байдлаар тушаал нь хувилбарын хоёртын файлуудыг бүтээж, багцыг доор нь угсардаг
+`target/mochi-bundle/`, `mochi-<os>-<arch>-release.tar.gz` архивыг гаргадаг
+тодорхойлогч `manifest.json`-ийн хажууд. Манифест нь файл бүрийг жагсаадаг
+түүний хэмжээ болон SHA-256 хэш нь CI дамжуулах хоолой нь дахин баталгаажуулалт хийх эсвэл нийтлэх боломжтой
+гэрчлэл. Туслах нь `mochi` ширээний бүрхүүл болон
+Ажлын талбар нь `kagami` хоёртын систем байдаг тул генези нь дараах байдлаар ажилладаг.
+хайрцаг.
 
-### Flags
+### Тугнууд
 
-| Flag                | Description                                                                 |
-|---------------------|-----------------------------------------------------------------------------|
-| `--out <dir>`       | Override the output directory (defaults to `target/mochi-bundle`).         |
-| `--profile <name>`  | Build with a specific Cargo profile (e.g., `debug` for tests).              |
-| `--no-archive`      | Skip the `.tar.gz` archive, leaving only the prepared folder.               |
-| `--kagami <path>`   | Use an explicit `kagami` binary instead of building `iroha_kagami`.         |
-| `--matrix <path>`   | Append bundle metadata to a JSON matrix for CI provenance tracking.         |
-| `--smoke`           | Run `mochi --help` from the packaged bundle as a basic execution gate.      |
-| `--stage <dir>`     | Copy the finished bundle (and archive, when present) into a staging folder. |
+| Туг | Тодорхойлолт |
+|--------------------|-----------------------------------------------------------------------------|
+| `--out <dir>` | Гаралтын лавлахыг дарах (өгөгдмөл нь `target/mochi-bundle`).         |
+| `--profile <name>` | Тодорхой ачааны профайлаар бүтээх (жишээ нь, туршилтын хувьд `debug`).              |
+| `--no-archive` | `.tar.gz` архивыг алгасаад зөвхөн бэлтгэсэн хавтасаа үлдээнэ үү.               |
+| `--kagami <path>` | `iroha_kagami` бүтээхийн оронд тодорхой `kagami` хоёртын файлыг ашигла.         |
+| `--matrix <path>` | CI гарал үүслийг хянахын тулд багцын мета өгөгдлийг JSON матрицад хавсаргана уу.         |
+| `--smoke` | `mochi --help`-г багцалсан багцаас үндсэн гүйцэтгэлийн хаалга болгон ажиллуул.      |
+| `--stage <dir>` | Дууссан багцыг (болон байгаа бол архив) үе шаттай хавтас руу хуулна уу. |
 
-`--stage` is intended for CI pipelines where each build agent uploads its
-artefacts to a shared location. The helper recreates the bundle directory and
-copies the generated archive into the staging directory so publish jobs can
-collect platform-specific outputs without shell scripting.
+`--stage` нь CI дамжуулах хоолойд зориулагдсан бөгөөд угсралтын агент тус бүр өөрийн мэдээллийг байршуулдаг.
+олдворуудыг хуваалцсан байршилд . Туслагч нь багцын лавлах болон
+үүсгэсэн архивыг үе шатлалын лавлах руу хуулж, ажлын байрыг нийтлэх боломжтой
+бүрхүүлийн скриптгүйгээр платформд зориулсан гаралтыг цуглуулах.
 
-The layout inside the bundle is intentionally simple:
+Багц доторх зохион байгуулалт нь санаатайгаар энгийн:
 
 ```
 bin/mochi              # egui desktop executable
@@ -58,11 +59,11 @@ LICENSE                # repository licence
 manifest.json          # generated file manifest with SHA-256 digests
 ```
 
-### Runtime overrides
+### Ажиллах хугацааг хүчингүй болгодог
 
-The packaged `mochi` executable accepts command-line overrides for the most
-common supervisor settings. Use these flags instead of editing
-`config/local.toml` when experimenting:
+Савласан `mochi` программ нь командын мөрийг дарж бичихийг хамгийн их хугацаанд хүлээн зөвшөөрдөг.
+ерөнхий удирдагчийн тохиргоо. Засварлахын оронд эдгээр тугуудыг ашигла
+`config/local.toml` туршилт хийхдээ:
 
 ```
 ./bin/mochi --data-root ./data --profile four-peer-bft \
@@ -70,16 +71,16 @@ common supervisor settings. Use these flags instead of editing
     --irohad /path/to/irohad --kagami /path/to/kagami
 ```
 
-Any CLI value takes precedence over `config/local.toml` entries and environment
-variables.
+Аливаа CLI утга нь `config/local.toml` оруулгууд болон орчноос давуу эрхтэй
+хувьсагч.
 
-## Snapshot automation
+## Зургийн автоматжуулалт
 
-`manifest.json` records the generation timestamp, target triple, Cargo profile,
-and the complete file inventory. Pipelines can diff the manifest to detect when
-new artefacts appear, upload the JSON alongside release assets, or audit the
-hashes before promoting a bundle to operators.
+`manifest.json` нь үүсгэх цагийн тэмдэг, зорилтот гурвалсан, ачааны профайл,
+болон файлын бүрэн нөөц. Дамжуулах хоолой нь хэзээ болохыг илрүүлэхийн тулд манифестыг өөрчилдөг
+шинэ олдворууд гарч ирэх, JSON-г гаргах хөрөнгийн хажууд байршуулах эсвэл аудит хийх
+операторуудад багцыг сурталчлахын өмнө хэш.
 
-The helper is idempotent: re-running the command updates the manifest and
-overwrites the previous archive, keeping `target/mochi-bundle/` as the single
-source of truth for the latest bundle on the current machine.
+Туслагч нь idempotent байна: тушаалыг дахин ажиллуулснаар манифест болон
+өмнөх архивыг дарж бичиж, `target/mochi-bundle/`-г сингл болгон хадгалдаг
+Одоогийн машин дээрх хамгийн сүүлийн багцын үнэний эх сурвалж.
