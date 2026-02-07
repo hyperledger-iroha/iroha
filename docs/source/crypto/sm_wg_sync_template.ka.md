@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c5fe52a907606a67a09e0ff229adb94f91dda73d809d8a8344166862dc62def9
 source_last_modified: "2025-12-29T18:16:35.947414+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Template for recording SM rollout decisions during Crypto WG syncs.
+//! Crypto WG სინქრონიზაციის დროს SM-ის გადაწყვეტილების ჩაწერის შაბლონი.
 
-# SM Rollout – WG Sync Notes (Template)
+# SM Rollout – WG Sync Notes (თარგი)
 
-- **Date:** 2025-__-__
-- **Participants:** Crypto WG core, Release Eng, Security Review, SDK leads
-- **Facilitator:** ___________________
+- **თარიღი:** 2025-__-__
+- ** მონაწილეები: ** Crypto WG ბირთვი, გამოშვების ინჟინერი, უსაფრთხოების მიმოხილვა, SDK ლიდერები
+- ** ფასილიტატორი: ** __________________
 
-## Agenda
-1. Lock refresh approval (`sm_lock_refresh_plan.md`)
-2. Deterministic policy & config knobs (SM-1/SM-3 tasks)
-3. Compliance brief status (SM-6a complete) & operator checklist updates (SM-6b)
-4. Dependency audit reviewers for `sm2`, `sm3`, `sm4`, `rfc6979`
+## დღის წესრიგი
+1. საკეტის განახლების დამტკიცება (`sm_lock_refresh_plan.md`)
+2. დეტერმინისტული პოლიტიკა და კონფიგურაციის ღილაკები (SM-1/SM-3 ამოცანები)
+3. შესაბამისობის მოკლე სტატუსი (SM-6a დასრულებულია) და ოპერატორის საკონტროლო სიის განახლებები (SM-6b)
+4. დამოკიდებულების აუდიტის მიმომხილველები `sm2`, `sm3`, `sm4`, `rfc6979`
 
-## Decisions
-- [ ] Lock refresh approved? Details:
-- [ ] Deterministic policy affirmed? Notes:
-- [ ] Compliance brief owner + due date:
-- [ ] Audit reviewers assigned:
+## გადაწყვეტილებები
+- [ ] საკეტის განახლება დამტკიცებულია? დეტალები:
+- [ ] დეტერმინისტული პოლიტიკა დადასტურდა? შენიშვნები:
+- [ ] შესაბამისობის მოკლე მფლობელი + ვადა:
+- [ ] აუდიტის მიმომხილველები დანიშნულია:
 
-## Action Items
-| Item | Owner | Due | Status |
+## მოქმედების ელემენტი
+| ნივთი | მფლობელი | ვადა | სტატუსი |
 |------|-------|-----|--------|
-| Prepare Cargo.lock PR after approval | Release Eng | ████ | ☐ |
-| Verify Annex D OpenSSL checks | Crypto WG | ████ | ☐ |
-| Track compliance brief revisions & operator checklist addenda | Docs/Legal | ████ | ☐ |
+| მოამზადეთ Cargo.lock PR დამტკიცების შემდეგ | გამოშვება Eng | ████ | ☐ |
+| შეამოწმეთ დანართი D OpenSSL ამოწმებს | Crypto WG | ████ | ☐ |
+| თვალყური ადევნეთ შესაბამისობის მოკლე შესწორებებს და ოპერატორის საკონტროლო სიის დამატებებს | Docs/Legal | ████ | ☐ |
 
-## Notes / Risks
-- _______________________________
-- _______________________________
+## შენიშვნები / რისკები
+- _________________________________
+- _________________________________
 
-## Follow-up
-- Next review date:
-- Reporting back channel:
+## შემდგომი
+- შემდეგი განხილვის თარიღი:
+- არხის მოხსენება:

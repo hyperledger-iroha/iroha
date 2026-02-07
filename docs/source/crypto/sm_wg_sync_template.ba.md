@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c5fe52a907606a67a09e0ff229adb94f91dda73d809d8a8344166862dc62def9
 source_last_modified: "2025-12-29T18:16:35.947414+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Template for recording SM rollout decisions during Crypto WG syncs.
+//! Ҡалып өсөн теркәү өсөн SM ҡарарҙар ҡабул итеү ваҡытында Crypto WG синхронизация.
 
-# SM Rollout – WG Sync Notes (Template)
+# SM рулет – WG синхронизация иҫкәрмәләр (Ҡалып)
 
-- **Date:** 2025-__-__
-- **Participants:** Crypto WG core, Release Eng, Security Review, SDK leads
-- **Facilitator:** ___________________
+- **Дата:** 2025-____
+- **Ҡатнашыусылар:** Крипто WG ядроһы, Релиз Энг, Хәүефһеҙлек тикшерелеүе, SDK етәкселек итә
+- **Тәғәтсе:** ___________________
 
-## Agenda
-1. Lock refresh approval (`sm_lock_refresh_plan.md`)
-2. Deterministic policy & config knobs (SM-1/SM-3 tasks)
-3. Compliance brief status (SM-6a complete) & operator checklist updates (SM-6b)
-4. Dependency audit reviewers for `sm2`, `sm3`, `sm4`, `rfc6979`
+## Көн тәртибе
+1. Блокада яңыртыу раҫлау (`sm_lock_refresh_plan.md`)
+2. Детерминистик сәйәсәт & конфигурация ручкалар (SM-1/SM-3 бурыстары)
+3. Ҡыҫҡаса ҡыҫҡа статусы (SM-6a тулы) & оператор тикшерелгән исемлек яңыртыу (SM-6b)
+4. `sm2`, `sm3`, `sm4`, `rfc6979` өсөн бәйле аудит рецензенттары.
 
-## Decisions
-- [ ] Lock refresh approved? Details:
-- [ ] Deterministic policy affirmed? Notes:
-- [ ] Compliance brief owner + due date:
-- [ ] Audit reviewers assigned:
+## ҡарарҙары
+- [ ] Бикслы яңыртыу раҫланған? Тулыраҡ мәғлүмәт:
+- [ ] Детерминистик сәйәсәт раҫланды? Иҫкәрмәләр:
+- [ ] Ҡабул итеү ҡыҫҡа хужаһы + тейешле дата:
+- [ ] Аудит рецензенттары тәғәйенләнгән:
 
-## Action Items
-| Item | Owner | Due | Status |
-|------|-------|-----|--------|
-| Prepare Cargo.lock PR after approval | Release Eng | ████ | ☐ |
-| Verify Annex D OpenSSL checks | Crypto WG | ████ | ☐ |
-| Track compliance brief revisions & operator checklist addenda | Docs/Legal | ████ | ☐ |
+## Эш әйберҙәре
+| Элемент | Хужа | Ауыр | Статус |
+|-----|-------|-----|---------|
+| Әҙерләү Cargo.lock PR раҫлауҙан һуң | Энгты сығарыу | ████ | ☐ |
+| Ҡушымта D OpenSSL чектарын тикшерергә | Крипто WG | ████ | ☐ |
+| Ҡыҫҡаса ҡыҫҡаса үҙгәрештәр индереү & оператор тикшерелгән исемлек өҫтәмә | Док/Юридик | ████ | ☐ |
 
-## Notes / Risks
-- _______________________________
-- _______________________________
+## Иҫкәрмәләр / Хәүефтәр
+- ______________________________
+- ______________________________
 
-## Follow-up
-- Next review date:
-- Reporting back channel:
+## Артынан эйәрерга
+- Киләһе тикшерелеү көнө:
+- Арҡа канал отчет:

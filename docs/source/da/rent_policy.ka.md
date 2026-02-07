@@ -7,37 +7,38 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c7cdc46bcd87af7924817a94900c8fad2c23570607f4065f19d8a42d259fe83f
 source_last_modified: "2026-01-22T14:35:37.691079+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Data Availability Rent & Incentive Policy (DA-7)
+# მონაცემთა ხელმისაწვდომობის ქირავნობა და წახალისების პოლიტიკა (DA-7)
 
-_Status: Drafting — Owners: Economics WG / Treasury / Storage Team_
+_ სტატუსი: შედგენა - მფლობელები: Economics WG / Treasury / Storage Team_
 
-Roadmap item **DA-7** introduces an explicit XOR-denominated rent for every blob
-submitted to `/v1/da/ingest`, plus bonuses that reward PDP/PoTR execution and
-egress served to fetch clients. This document defines the initial parameters,
-their data-model representation, and the calculation workflow used by Torii,
-SDKs, and Treasury dashboards.
+საგზაო რუქის პუნქტი **DA-7** წარმოგიდგენთ XOR-ის გამოკვეთილ ქირას ყოველი ბლომისთვის
+გაგზავნილია `/v1/da/ingest`-ზე, პლუს ბონუსები, რომლებიც აჯილდოვებენ PDP/PoTR შესრულებას და
+გამოსვლა ემსახურებოდა კლიენტების მოზიდვას. ეს დოკუმენტი განსაზღვრავს საწყის პარამეტრებს,
+მათი მონაცემთა მოდელის წარმოდგენა და Torii-ის მიერ გამოყენებული გაანგარიშების სამუშაო პროცესი,
+SDK-ები და სახაზინო დაფები.
 
-## Policy structure
+## პოლიტიკის სტრუქტურა
 
-The policy is encoded as [`DaRentPolicyV1`](/crates/iroha_data_model/src/da/types.rs)
-within the data model. Torii and governance tooling persist the policy in
-Norito payloads so that rent quotes and incentive ledgers can be recomputed
-deterministically. The schema exposes five knobs:
+პოლიტიკა დაშიფრულია როგორც [`DaRentPolicyV1`](/crates/iroha_data_model/src/da/types.rs)
+მონაცემთა მოდელის ფარგლებში. Torii და მმართველობის ინსტრუმენტები აგრძელებს პოლიტიკას
+Norito ტვირთამწეობა ისე, რომ იჯარის შეთავაზებები და წამახალისებელი წიგნები შეიძლება ხელახლა გამოითვალოს
+დეტერმინისტულად. სქემა ასახავს ხუთ სახელურს:
 
-| Field | Description | Default |
+| ველი | აღწერა | ნაგულისხმევი |
 |-------|-------------|---------|
-| `base_rate_per_gib_month` | XOR charged per GiB per month of retention. | `250_000` micro-XOR (0.25 XOR) |
-| `protocol_reserve_bps` | Share of the rent routed to the protocol reserve (basis points). | `2_000` (20 %) |
-| `pdp_bonus_bps` | Bonus percentage per successful PDP evaluation. | `500` (5 %) |
-| `potr_bonus_bps` | Bonus percentage per successful PoTR evaluation. | `250` (2.5 %) |
-| `egress_credit_per_gib` | Credit paid when a provider serves 1 GiB of DA data. | `1_500` micro-XOR |
+| `base_rate_per_gib_month` | XOR ირიცხება თითო გიბაიტზე შენახვის თვეში. | `250_000` მიკრო-XOR (0.25 XOR) |
+| `protocol_reserve_bps` | პროტოკოლის რეზერვში გადაცემული ქირის წილი (საბაზისო პუნქტები). | `2_000` (20%) |
+| `pdp_bonus_bps` | ბონუსის პროცენტი PDP-ის წარმატებულ შეფასებაზე. | `500` (5%) |
+| `potr_bonus_bps` | ბონუსის პროცენტი წარმატებულ PoTR შეფასებაზე. | `250` (2.5%) |
+| `egress_credit_per_gib` | კრედიტი გადახდილია, როდესაც პროვაიდერი ემსახურება DA მონაცემთა 1 გიბაიტს. | `1_500` მიკრო-XOR |
 
-All basis-point values are validated against `BASIS_POINTS_PER_UNIT` (10 000).
-Policy updates must travel through governance, and every Torii node exposes the
-active policy via the `torii.da_ingest.rent_policy` configuration section
-(`iroha_config`). Operators can override the defaults in `config.toml`:
+ყველა საბაზისო მნიშვნელობა დამოწმებულია `BASIS_POINTS_PER_UNIT`-ის (10000) მიმართ.
+პოლიტიკის განახლებები უნდა გაიაროს მმართველობით და ყოველი Torii კვანძი ავლენს
+აქტიური პოლიტიკა `torii.da_ingest.rent_policy` კონფიგურაციის განყოფილების მეშვეობით
+(`iroha_config`). ოპერატორებს შეუძლიათ გადალახონ ნაგულისხმევი პარამეტრები `config.toml`-ში:
 
 ```toml
 [torii.da_ingest.rent_policy]
@@ -48,28 +49,28 @@ potr_bonus_bps = 250                          # 2.5% PoTR bonus
 egress_credit_per_gib_micro = 1500            # 0.0015 XOR/GiB egress credit
 ```
 
-CLI tooling (`iroha app da rent-quote`) accepts the same Norito/JSON policy inputs
-and emits artefacts that mirror the active `DaRentPolicyV1` without reaching
-back into Torii state. Supply the policy snapshot used for an ingest run so the
-quote remains reproducible.
+CLI tooling (`iroha app da rent-quote`) იღებს იგივე Norito/JSON პოლიტიკის შეყვანას
+და ასხივებს არტეფაქტებს, რომლებიც ასახავს აქტიურ `DaRentPolicyV1`-ს მიუწვდომლად
+დაუბრუნდით Torii მდგომარეობას. მიაწოდეთ პოლიტიკის სნეპშოტი, რომელიც გამოიყენება ჩასვლისთვის, ასე რომ
+ციტატა რჩება რეპროდუცირებადი.
 
-### Persisting rent quote artefacts
+### მუდმივი ქირავნობის ციტირების არტეფაქტები
 
-Run `iroha app da rent-quote --gib <size> --months <months> --quote-out <path>` to
-emit both the on-screen summary and a pretty-printed JSON artefact. The file
-records `policy_source`, the inlined `DaRentPolicyV1` snapshot, the computed
-`DaRentQuote`, and a derived `ledger_projection` (serialized via
-[`DaRentLedgerProjection`](/crates/iroha_data_model/src/da/types.rs)) making it suitable for treasury dashboards and ledger ISI
-pipelines. When `--quote-out` points at a nested directory the CLI creates any
-missing parents, so operators can standardise locations such as
-`artifacts/da/rent_quotes/<timestamp>.json` alongside other DA evidence bundles.
-Attach the artefact to rent approvals or reconciliation runs so the XOR
-breakdown (base rent, reserve, PDP/PoTR bonuses, and egress credits) is
-reproducible. Pass `--policy-label "<text>"` to override the automatically
-derived `policy_source` description (file paths, embedded default, etc.) with a
-human-readable tag such as a governance ticket or manifest hash; the CLI trims
-this value and rejects empty/whitespace-only strings so the recorded evidence
-remains auditable.
+გაუშვით `iroha app da rent-quote --gib <size> --months <months> --quote-out <path>`-ზე
+გამოსცემს როგორც ეკრანზე რეზიუმეს, ასევე ლამაზად დაბეჭდილ JSON არტეფაქტს. ფაილი
+ჩაწერს `policy_source`, ჩასმული `DaRentPolicyV1` სნეპშოტს, გამოთვლილ
+`DaRentQuote` და მიღებული `ledger_projection` (სერიული
+[`DaRentLedgerProjection`](/crates/iroha_data_model/src/da/types.rs)) შესაფერისს ხდის სახაზინო დაფებს და წიგნის ISI-ს
+მილსადენები. როდესაც `--quote-out` მიუთითებს ჩადგმულ დირექტორიაზე, CLI ქმნის ნებისმიერს
+დაკარგული მშობლები, ამიტომ ოპერატორებს შეუძლიათ ისეთი ადგილების სტანდარტიზაცია, როგორიცაა
+`artifacts/da/rent_quotes/<timestamp>.json` სხვა DA მტკიცებულებათა პაკეტებთან ერთად.
+მიამაგრეთ არტეფაქტი ქირავნობის მოწონებებს ან შერიგების ოპერაციებს ისე, რომ XOR
+ავარია (საბაზისო ქირა, რეზერვი, PDP/PoTR ბონუსები და გასვლის კრედიტები) არის
+გამრავლებადი. გაიარეთ `--policy-label "<text>"` ავტომატურად გადასალახად
+მიღებული `policy_source` აღწერა (ფაილის ბილიკები, ჩაშენებული ნაგულისხმევი და ა.შ.)
+ადამიანისთვის წასაკითხი თეგი, როგორიცაა მმართველობის ბილეთი ან მანიფესტ ჰეში; CLI მორთვები
+ეს მნიშვნელობა და უარყოფს ცარიელ/მხოლოდ უფსკრული სტრიქონებს, რათა ჩაწერილი მტკიცებულება იყოს
+რჩება აუდიტორული.
 
 ```json
 {
@@ -87,21 +88,19 @@ remains auditable.
     "egress_credit_per_gib": { "micro": 1500 }
   }
 }
-```
+```წიგნის პროექციის განყოფილება იკვებება უშუალოდ DA ქირის წიგნის ISI-ებში: ის
+განსაზღვრავს XOR დელტას, რომელიც განკუთვნილია პროტოკოლის რეზერვისთვის, პროვაიდერის გადახდებისთვის და
+თითო მტკიცებულების ბონუსები, შეკვეთილი საორკესტრო კოდის მოთხოვნის გარეშე.
 
-The ledger projection section feeds directly into the DA rent ledger ISIs: it
-defines the XOR deltas destined for the protocol reserve, provider payouts, and
-the per-proof bonus pools without requiring bespoke orchestration code.
+### იჯარის წიგნის გეგმების გენერირება
 
-### Generating rent ledger plans
-
-Run `iroha app da rent-ledger --quote <path> --payer-account <id> --treasury-account <id> --protocol-reserve-account <id> --provider-account <id> --pdp-bonus-account <id> --potr-bonus-account <id> --asset-definition xor#sora`
-to convert a persisted rent quote into executable ledger transfers. The command
-parses the embedded `ledger_projection`, emits Norito `Transfer` instructions
-that collect the base rent into the treasury, routes the reserve/provider
-portions, and pre-funds the PDP/PoTR bonus pools directly from the payer. The
-output JSON mirrors the quote metadata so CI and treasury tooling can reason
-about the same artefact:
+გაუშვით `iroha app da rent-ledger --quote <path> --payer-account <id> --treasury-account <id> --protocol-reserve-account <id> --provider-account <id> --pdp-bonus-account <id> --potr-bonus-account <id> --asset-definition xor#sora`
+მუდმივი ქირავნობის კვოტის გადაქცევა შესრულებად წიგნში გადარიცხვებად. ბრძანება
+აანალიზებს ჩაშენებულ `ledger_projection`-ს, გამოსცემს Norito `Transfer` ინსტრუქციებს
+რომელიც აგროვებს საბაზისო ქირას ხაზინაში, მარშრუტებს რეზერვს/პროვაიდერს
+ნაწილებს და წინასწარ აფინანსებს PDP/PoTR ბონუს აუზებს პირდაპირ გადამხდელისგან. The
+გამომავალი JSON ასახავს ციტატის მეტამონაცემებს, ასე რომ CI და ხაზინის ინსტრუმენტები შეიძლება მსჯელობდნენ
+იგივე არტეფაქტის შესახებ:
 
 ```json
 {
@@ -122,11 +121,11 @@ about the same artefact:
 }
 ```
 
-The final `egress_credit_per_gib_micro_xor` field lets dashboards and payout
-schedulers align egress reimbursements with the rent policy that produced the
-quote without recomputing the policy math in scripting glue.
+საბოლოო `egress_credit_per_gib_micro_xor` ველი საშუალებას იძლევა დაფები და გადახდა
+განრიგები უერთდებიან გასვლის ანაზღაურებას ქირავნობის პოლიტიკასთან, რომელიც წარმოებული იყო
+ციტატა პოლიტიკის მათემატიკის ხელახალი გამოთვლის გარეშე სკრიპტირების წებოში.
 
-## Example quote
+## ციტატის მაგალითი
 
 ```rust
 use iroha_data_model::da::types::DaRentPolicyV1;
@@ -143,64 +142,62 @@ assert_eq!(quote.potr_bonus.as_micro(), 187_500);         // PoTR success bonus
 assert_eq!(quote.egress_credit_per_gib.as_micro(), 1_500);
 ```
 
-The quote is reproducible across Torii nodes, SDKs, and Treasury reports because
-it uses deterministic Norito structures instead of ad-hoc math. Operators can
-attach the JSON/CBOR encoded `DaRentPolicyV1` to governance proposals or rent
-audits to prove which parameters were in force for any given blob.
+ციტატა რეპროდუცირებადია Torii კვანძებში, SDK-ებსა და Treasury ანგარიშებში, რადგან
+ის იყენებს განმსაზღვრელ Norito სტრუქტურებს ad-hoc მათემატიკის ნაცვლად. ოპერატორებს შეუძლიათ
+დაურთოთ JSON/CBOR კოდირებული `DaRentPolicyV1` მმართველობის წინადადებებს ან დაქირავებას
+აუდიტი იმის დასამტკიცებლად, თუ რომელი პარამეტრები იყო ძალაში მოცემული ბლომისთვის.
 
-## Bonuses and reserves
+## ბონუსები და რეზერვები
 
-- **Protocol reserve:** `protocol_reserve_bps` funds the XOR reserve that backs
-  emergency re-replication and slashing refunds. Treasury tracks this bucket
-  separately to ensure ledger balances match the configured rate.
-- **PDP/PoTR bonuses:** Each successful proof evaluation receives an additional
-  payout derived from `base_rent × bonus_bps`. When the DA scheduler emits proof
-  receipts it includes the basis-point tags so incentives can be replayed.
-- **Egress credit:** Providers record GiB served per manifest, multiply by
-  `egress_credit_per_gib`, and submit the receipts via `iroha app da prove-availability`.
-  The rent policy keeps the per-GiB amount in sync with governance.
+- **პროტოკოლის რეზერვი:** `protocol_reserve_bps` აფინანსებს XOR რეზერვს, რომელიც მხარს უჭერს
+  გადაუდებელი ხელახალი გამეორება და თანხის შემცირება. ხაზინა აკონტროლებს ამ ვედროს
+  ცალკე, რათა დავრწმუნდეთ, რომ წიგნის ნაშთები ემთხვევა კონფიგურირებულ განაკვეთს.
+- **PDP/PoTR ბონუსები:** ყოველი წარმატებული მტკიცებულების შეფასება იღებს დამატებით
+  გადახდა მიღებული `base_rent × bonus_bps`-დან. როდესაც DA განრიგი გამოსცემს მტკიცებულებას
+  ქვითრები მოიცავს საბაზისო პუნქტის ტეგებს, ასე რომ, წახალისების ხელახლა თამაშია შესაძლებელი.
+- **Egress კრედიტი:** პროვაიდერები აღრიცხავენ GiB-ს მოწოდებულ მანიფესტზე, გაამრავლეთ
+  `egress_credit_per_gib` და გაგზავნეთ ქვითრები `iroha app da prove-availability`-ის საშუალებით.
+  ქირავნობის პოლიტიკა ინარჩუნებს თითო გიბ თანხას მმართველობასთან სინქრონში.
 
-## Operational flow
+## ოპერატიული ნაკადი
 
-1. **Ingest:** `/v1/da/ingest` loads the active `DaRentPolicyV1`, quotes rent
-   based on blob size and retention, and embeds the quote into the Norito
-   manifest. The submitter signs a statement that references the rent hash and
-   the storage ticket id.
-2. **Accounting:** Treasury ingest scripts decode the manifest, call
-   `DaRentPolicyV1::quote`, and populate rent ledgers (base rent, reserve,
-   bonuses, and expected egress credits). Any discrepancy between recorded rent
-   and recomputed quotes fails CI.
-3. **Proof rewards:** When PDP/PoTR schedulers mark a success they emit a receipt
-   containing the manifest digest, proof kind, and the XOR bonus derived from
-   the policy. Governance can audit the payouts by recomputing the same quote.
-4. **Egress reimbursement:** Fetch orchestrators submit signed egress summaries.
-   Torii multiplies the GiB count by `egress_credit_per_gib` and issues payment
-   instructions against the rent escrow.
+1. **ჩაღება:** `/v1/da/ingest` ატვირთავს აქტიურ `DaRentPolicyV1`-ს, ქირავდება ციტირებით
+   ბლოკის ზომაზე და შეკავებაზე დაფუძნებული და ციტატას ათავსებს Norito-ში
+   მანიფესტი. წარმდგენი ხელს აწერს განცხადებას, რომელიც მიუთითებს ქირის ჰეშზე და
+   შენახვის ბილეთის ID.
+2. **ბუღალტრული აღრიცხვა:** სახაზინო ინსტალაციის სკრიპტები დეკოდირდება მანიფესტი, ზარი
+   `DaRentPolicyV1::quote` და შეავსეთ ქირავნობის დავთარი (საბაზისო ქირა, რეზერვი,
+   ბონუსები და მოსალოდნელი გასვლის კრედიტები). ნებისმიერი შეუსაბამობა აღრიცხულ ქირას შორის
+   და ხელახლა გამოთვლილი ციტატები ცდება CI.
+3. **დამტკიცების ჯილდოები:** როდესაც PDP/PoTR განრიგები აღნიშნავენ წარმატებას, ისინი აგზავნიან ქვითარს
+   შეიცავს მანიფესტის დაიჯესტს, მტკიცებულების ტიპს და XOR ბონუსს, რომელიც მიღებულია
+   პოლიტიკა. მმართველობას შეუძლია გადახდების აუდიტი იგივე ციტატის ხელახალი გამოთვლით.
+4. **გასვლის ანაზღაურება:** ორკესტრატორები წარადგენენ ხელმოწერილი გასვლის რეზიუმეს.
+   Torii ამრავლებს GiB-ის რაოდენობას `egress_credit_per_gib`-ზე და გასცემს გადახდას
+   ინსტრუქციები ქირავნობის ესქროს წინააღმდეგ.
 
-## Telemetry
-
-Torii nodes expose rent usage via the following Prometheus metrics (labels:
+## ტელემეტრიაTorii კვანძები ავლენენ ქირის გამოყენებას შემდეგი Prometheus მეტრიკის საშუალებით (ეტიკეტები:
 `cluster`, `storage_class`):
 
-- `torii_da_rent_gib_months_total` — GiB-months quoted by `/v1/da/ingest`.
-- `torii_da_rent_base_micro_total` — base rent (micro XOR) accrued at ingest.
-- `torii_da_protocol_reserve_micro_total` — protocol reserve contributions.
-- `torii_da_provider_reward_micro_total` — provider-side rent payouts.
-- `torii_da_pdp_bonus_micro_total` and `torii_da_potr_bonus_micro_total` —
-  PDP/PoTR bonus pools sourced from the ingest quote.
+- `torii_da_rent_gib_months_total` — გიბ-თვეები ციტირებული `/v1/da/ingest`-ის მიერ.
+- `torii_da_rent_base_micro_total` — საბაზისო ქირა (მიკრო XOR) დარიცხული მიღებისას.
+- `torii_da_protocol_reserve_micro_total` — პროტოკოლის სარეზერვო შენატანები.
+- `torii_da_provider_reward_micro_total` — პროვაიდერის მხრიდან ქირის გადახდები.
+- `torii_da_pdp_bonus_micro_total` და `torii_da_potr_bonus_micro_total` —
+  PDP/PoTR ბონუს აუზები, რომლებიც მიღებულია ჩასვლის ციტატიდან.
 
-Economics dashboards rely on these counters to ensure ledger ISIs, reserve taps,
-and PDP/PoTR bonus schedules all match the policy parameters in force for each
-cluster and storage class. The SoraFS Capacity Health Grafana board
-(`dashboards/grafana/sorafs_capacity_health.json`) now renders dedicated panels
-for rent distribution, PDP/PoTR bonus accrual, and GiB-month capture, allowing
-Treasury to filter by Torii cluster or storage class when reviewing ingest
-volume and payouts.
+ეკონომიკის საინფორმაციო დაფები ეყრდნობა ამ მრიცხველებს, რათა უზრუნველყონ წიგნის ISI-ები, სარეზერვო ონკანები,
+და PDP/PoTR ბონუს გრაფიკები ყველა ემთხვევა თითოეულისთვის მოქმედ პოლიტიკის პარამეტრებს
+კლასტერი და შენახვის კლასი. SoraFS Capacity Health Grafana დაფა
+(`dashboards/grafana/sorafs_capacity_health.json`) ახლა გამოყოფს სპეციალურ პანელებს
+ქირავნობის განაწილებისთვის, PDP/PoTR ბონუსების დარიცხვისთვის და GiB-თვეში დაჭერისთვის, რაც საშუალებას იძლევა
+ხაზინა უნდა გაფილტრულიყო Torii კლასტერის ან შენახვის კლასის მიხედვით, შეყვანის განხილვისას
+მოცულობა და გადახდები.
 
-## Next steps
+## შემდეგი ნაბიჯები
 
-- ✅ `/v1/da/ingest` receipts now embed `rent_quote` and the CLI/SDK surfaces display the quoted
-  base rent, reserve share, and PDP/PoTR bonuses so submitters can review the XOR obligations before
-  committing payloads.
-- Integrate the rent ledger with the forthcoming DA reputation/order-book feeds
-  to prove that high-availability providers are receiving the correct payouts.
+- ✅ `/v1/da/ingest` ქვითრები ახლა ჩაშენებულია `rent_quote` და CLI/SDK ზედაპირებზე ნაჩვენებია ციტირებული
+  საბაზისო ქირა, სარეზერვო წილი და PDP/PoTR ბონუსები, რათა წარმდგენებმა შეძლონ XOR-ის ვალდებულებების განხილვა მანამდე
+  ტვირთის ჩადენა.
+- გააერთიანეთ ქირავნობის წიგნი მომავალი DA რეპუტაციის/შეკვეთის წიგნის არხებთან
+  იმის დასამტკიცებლად, რომ მაღალი ხელმისაწვდომობის პროვაიდერები იღებენ სწორ გადახდებს.

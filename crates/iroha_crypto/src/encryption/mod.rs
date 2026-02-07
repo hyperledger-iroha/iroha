@@ -20,7 +20,7 @@
 
 use std::{convert::TryFrom, mem, vec::Vec};
 
-use aead::{Aead, AeadCore, AeadInPlace, KeyInit, Payload};
+use aead::{Aead, AeadCore, AeadInOut, KeyInit, Payload};
 pub use chacha20poly1305::ChaCha20Poly1305;
 use displaydoc::Display;
 use rand::rngs::OsRng;
@@ -136,7 +136,7 @@ where
         out: &'a mut Vec<u8>,
     ) -> Result<&'a [u8], Error>
     where
-        E: AeadInPlace,
+        E: AeadInOut,
     {
         let nonce = random_nonce::<E>()?;
         let nonce_bytes: &[u8] = nonce.as_ref();
@@ -214,7 +214,7 @@ where
         out: &'a mut Vec<u8>,
     ) -> Result<&'a [u8], Error>
     where
-        E: AeadInPlace,
+        E: AeadInOut,
     {
         let data = ciphertext.as_ref();
         let nonce_len = mem::size_of::<aead::Nonce<E>>();

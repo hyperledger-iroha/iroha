@@ -220,6 +220,11 @@ fn insert_validated_pending(actor: &mut Actor, block: SignedBlock) -> HashOf<Blo
     let block_hash = block.hash();
     let height = block.header().height().get();
     let view = block.header().view_change_index();
+    let committed_height = u64::try_from(actor.state.view().height()).unwrap_or(u64::MAX);
+    assert!(
+        committed_height < height,
+        "test requires pending block height above committed height (committed={committed_height}, pending={height})"
+    );
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     let mut pending = PendingBlock::new(block, payload_hash, height, view);
     pending.validation_status = ValidationStatus::Valid;
@@ -10867,7 +10872,10 @@ async fn commit_pipeline_uses_commit_qc_roster_for_validation() {
         "test needs at least two validators to rotate roster"
     );
     let mut history_roster = active_roster.clone();
-    history_roster.rotate_left(1);
+    let rotate_at = super::network_topology::commit_quorum_from_len(history_roster.len());
+    if rotate_at > 0 {
+        history_roster[..rotate_at].rotate_right(1);
+    }
     assert_ne!(
         history_roster, active_roster,
         "history roster should differ from active roster"

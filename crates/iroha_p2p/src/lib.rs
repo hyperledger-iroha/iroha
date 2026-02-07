@@ -70,7 +70,7 @@ pub mod boilerplate {
     //! Module containing trait shorthands. Remove when trait aliases
     //! are stable <https://github.com/rust-lang/rust/issues/41517>
 
-    use aead::{Aead, AeadInPlace, KeyInit};
+    use aead::{Aead, AeadInOut, KeyInit};
     use iroha_crypto::kex::KeyExchangeScheme;
 
     use super::*;
@@ -90,8 +90,8 @@ pub mod boilerplate {
     impl<T> Kex for T where T: KeyExchangeScheme + Send + 'static {}
 
     /// Shorthand for traits required for encryptor type marker.
-    pub trait Enc: Aead + AeadInPlace + KeyInit + Clone + Send + 'static {}
-    impl<T> Enc for T where T: Aead + AeadInPlace + KeyInit + Clone + Send + 'static {}
+    pub trait Enc: Aead + AeadInOut + KeyInit + Clone + Send + 'static {}
+    impl<T> Enc for T where T: Aead + AeadInOut + KeyInit + Clone + Send + 'static {}
 }
 
 /// Errors used in [`crate`].

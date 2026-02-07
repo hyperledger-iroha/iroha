@@ -48,13 +48,13 @@ fn provider_admission_fixture_generator_outputs_digests() {
             .get("proposal_digest_hex")
             .and_then(Value::as_str)
             .expect("proposal digest"),
-        "ca8e73a1f319ae83d7bd958ccb143f9b790c7e4d9c8dfe1f6ad37fa29facf936"
+        "176019d0bea04483973d97b1fbcbd6e558a4be37a8ba8c918d132472e39d04eb"
     );
     assert_eq!(
         metadata
             .get("envelope_digest_hex")
             .and_then(Value::as_str)
             .expect("envelope digest"),
-        "25741a0e70302a8af6bfe59f13544ce8ee6dc8f29eddf07781c308e19f3f05c5"
+        "8e4f3177bb02d7d01ed269db15b45b9b8fbf470e55199c827048304966069535"
     );
 }

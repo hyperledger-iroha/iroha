@@ -453,13 +453,13 @@ impl Topology {
 
     /// Update topology after a block has been committed.
     ///
-    /// Set A is rotated and membership is refreshed.
+    /// Membership is refreshed while preserving canonical ordering for subsequent
+    /// per-view role derivation.
     pub fn block_committed(
         &mut self,
         new_peers: impl IntoIterator<Item = PeerId>,
         _prev_block_hash: HashOf<BlockHeader>,
     ) {
-        self.rotate_set_a();
         self.update_peer_list(new_peers);
         self.1 = 0;
     }
@@ -1494,8 +1494,8 @@ mod tests {
     }
 
     #[test]
-    fn collectors_k3_follow_block_committed_rotation() {
-        // After a commit, Set A rotates left by one and collector indices follow that order.
+    fn collectors_k3_follow_block_committed_membership_refresh() {
+        // After a commit, collector indices keep the same canonical ordering.
         let peers = test_peers(7);
         let mut topo = Topology::new(peers.clone());
         let idxs_before = topo.collector_indices_k(3);
@@ -1509,14 +1509,11 @@ mod tests {
         topo.block_committed(peers.clone(), prev_hash);
         let idxs_after = topo.collector_indices_k(3);
         let cs_after: Vec<_> = idxs_after.iter().map(|&i| topo.0[i].clone()).collect();
-        assert_eq!(
-            cs_after,
-            vec![peers[0].clone(), peers[5].clone(), peers[6].clone()]
-        );
+        assert_eq!(cs_after, cs_before);
     }
 
     #[test]
-    fn block_committed_rotates_set_a_and_preserves_membership_order() {
+    fn block_committed_preserves_membership_order() {
         let mut peers = test_peers(4);
         peers.reverse();
         let mut topo = Topology::new(peers.clone());
@@ -1524,15 +1521,7 @@ mod tests {
 
         topo.block_committed(peers.clone(), prev_hash);
 
-        assert_eq!(
-            topo.as_ref(),
-            &[
-                peers[1].clone(),
-                peers[2].clone(),
-                peers[0].clone(),
-                peers[3].clone()
-            ]
-        );
+        assert_eq!(topo.as_ref(), peers.as_slice());
     }
 
     #[test]
@@ -1577,8 +1566,8 @@ mod tests {
     }
 
     #[test]
-    fn collectors_k2_follow_block_committed_canonical_order_n4() {
-        // N=4 -> min_votes=3 -> canonicalized ordering only.
+    fn collectors_k2_follow_block_committed_rotation_n4() {
+        // N=4 -> min_votes=3 -> block_committed rotates Set A by one.
         let peers = test_peers(4);
         let mut topo = Topology::new(peers.clone());
         let idxs_before = topo.collector_indices_k(2);
@@ -1588,7 +1577,7 @@ mod tests {
         topo.block_committed(peers.clone(), prev_hash);
         let idxs_after = topo.collector_indices_k(2);
         let cs_after: Vec<_> = idxs_after.iter().map(|&i| topo.0[i].clone()).collect();
-        assert_eq!(cs_after, cs_before);
+        assert_eq!(cs_after, vec![peers[0].clone(), peers[3].clone()]);
     }
 
     #[test]
@@ -1614,8 +1603,8 @@ mod tests {
     }
 
     #[test]
-    fn collectors_k3_follow_block_committed_canonical_order_n5() {
-        // N=5 -> min_votes=3 -> canonicalized ordering only.
+    fn collectors_k3_follow_block_committed_rotation_n5() {
+        // N=5 -> min_votes=3 -> block_committed rotates Set A by one.
         let peers = test_peers(5);
         let mut topo = Topology::new(peers.clone());
         let idxs_before = topo.collector_indices_k(3);
@@ -1628,7 +1617,10 @@ mod tests {
         topo.block_committed(peers.clone(), prev_hash);
         let idxs_after = topo.collector_indices_k(3);
         let cs_after: Vec<_> = idxs_after.iter().map(|&i| topo.0[i].clone()).collect();
-        assert_eq!(cs_after, cs_before);
+        assert_eq!(
+            cs_after,
+            vec![peers[0].clone(), peers[3].clone(), peers[4].clone()]
+        );
     }
 
     #[test]
